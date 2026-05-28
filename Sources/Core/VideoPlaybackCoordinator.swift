@@ -166,6 +166,9 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// All videos in the app (ordered by feed, then attachmentIndex).
     private var allVideos: [VideoPlaybackInfo] = []
+    /// Tweet IDs that have feed-visible videos. Rebuilt with allVideos so scroll
+    /// visibility updates do not scan the full feed on every geometry pass.
+    private var feedVisibleVideoTweetIds: Set<String> = []
 
     /// Store current tweet list for embedded tweet lookup
     private var currentTweets: [Tweet] = []
@@ -176,6 +179,8 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Actively tracked directional video preloads — explicitly managed on scroll stop.
     private var activePreloadMids: Set<String> = []
+    private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
+    private let directionalPreloadRefreshInterval: CFTimeInterval = 0.35
 
     /// Timer: when scroll starts, gives in-flight preloads a brief grace period to finish.
     /// If scroll is still active after the delay, cancel off-screen directional preloads.
@@ -276,6 +281,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func invalidateVisibleVideoCache() {
         _visibleVideoCacheKey = ""
         _cachedVisibleVideos.removeAll()
+    }
+
+    private func setVideoList(_ videos: [VideoPlaybackInfo]) {
+        allVideos = videos
+        feedVisibleVideoTweetIds = Set(videos.filter { $0.isInVisibleMediaRange }.map { $0.cellTweetId })
+        invalidateVisibleVideoCache()
     }
 
     /// Compute the user-visible rect using adjustedContentInset (accounts for nav bar, toolbar, tab bar).
@@ -492,8 +503,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             Task {
                 let newVideos = await self.buildVideoListAsync(tweets: self.currentTweets, pinnedTweets: [])
                 await MainActor.run {
-                    self.allVideos = newVideos
-                    self.invalidateVisibleVideoCache()
+                    self.setVideoList(newVideos)
                 }
             }
 
@@ -528,8 +538,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             Task {
                 let newVideos = await self.buildVideoListAsync(tweets: self.currentTweets, pinnedTweets: [])
                 await MainActor.run {
-                    self.allVideos = newVideos
-                    self.invalidateVisibleVideoCache()
+                    self.setVideoList(newVideos)
                 }
             }
         }
@@ -631,11 +640,10 @@ class VideoPlaybackCoordinator: ObservableObject {
 
             // Update state on main actor
             await MainActor.run {
-                self.allVideos = videos
+                self.setVideoList(videos)
 
                 // Clear caches when video list is rebuilt
                 self.cachedVisibilityRatios.removeAll()
-                self.invalidateVisibleVideoCache()
                 self.clearPreloadedTracking()
                 self.initialPreloadDone = false
                 self.primaryBelowContinueIdentifier = nil
@@ -825,6 +833,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             playableIdentifiers,
             continuePlaybackIdentifiers: continuePlaybackIdentifiers
         )
+        refreshDirectionalPreloads(reason: "viewport", throttle: true)
 
         reconcilePlaybackForCurrentVisibility()
     }
@@ -862,8 +871,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     private func updateFeedVisibleTweets(_ tweetIds: Set<String>) {
         // Only consider feed-visible video entries (MediaGrid only shows first 4 attachments)
-        let tweetsWithFeedVideos = Set(allVideos.filter { $0.isInVisibleMediaRange }.map { $0.cellTweetId })
-        let filteredTweetIds = tweetIds.intersection(tweetsWithFeedVideos)
+        let filteredTweetIds = tweetIds.intersection(feedVisibleVideoTweetIds)
 
         self.visibleTweetIds = filteredTweetIds
         self.isScrolling = true
@@ -1338,6 +1346,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Clear preloaded video tracking (called when video list is rebuilt)
     private func clearPreloadedTracking() {
         activePreloadMids.removeAll()
+        lastDirectionalPreloadRefreshTime = 0
         SharedAssetCache.shared.updateProtectedPreloadMids([])
         scrollCancelTimer?.invalidate()
         scrollCancelTimer = nil
@@ -1359,10 +1368,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         let timer = Timer(timeInterval: 1.0, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.isScrolling else { return }
-                self.cancelTrackedPreloads(
-                    except: self.currentOnScreenVideoMids(),
-                    reason: "scroll still active"
-                )
+                self.refreshDirectionalPreloads(reason: "scroll still active", throttle: false)
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -1375,6 +1381,15 @@ class VideoPlaybackCoordinator: ObservableObject {
         scrollCancelTimer?.invalidate()
         scrollCancelTimer = nil
         onScrollStopped()
+        refreshDirectionalPreloads(reason: "scroll stop", throttle: false)
+    }
+
+    private func refreshDirectionalPreloads(reason: String, throttle: Bool) {
+        if throttle {
+            let now = CACurrentMediaTime()
+            guard now - lastDirectionalPreloadRefreshTime >= directionalPreloadRefreshInterval else { return }
+            lastDirectionalPreloadRefreshTime = now
+        }
 
         let nextVideos = getNextVideosInScrollDirection(count: 2)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
@@ -1382,7 +1397,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Keep on-screen work alive, then cancel any older directional preloads.
         let onScreenMids = currentOnScreenVideoMids()
         let newAll = newPreloadMids.union(onScreenMids)
-        cancelTrackedPreloads(except: newAll, reason: "scroll stop")
+        cancelTrackedPreloads(except: newAll, reason: reason)
 
         activePreloadMids = newPreloadMids
         SharedAssetCache.shared.updateProtectedPreloadMids(newPreloadMids)
@@ -1392,7 +1407,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         if !newPreloadMids.isEmpty {
-            print("🎬 [COORD] Scroll stop: preloading \(newPreloadMids.count) directional players")
+            print("🎬 [COORD] \(reason): preloading \(newPreloadMids.count) directional players")
         }
     }
 
@@ -1538,6 +1553,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // No need to cancel preload downloads here.
 
         delegate.shouldPlayVideo(withMid: primary.videoMid)
+        refreshDirectionalPreloads(reason: "primary selected", throttle: false)
     }
 
     /// Identify the primary video based on scroll direction.

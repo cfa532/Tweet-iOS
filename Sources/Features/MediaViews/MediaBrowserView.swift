@@ -46,6 +46,27 @@ struct MediaBrowserView: View {
         }
     }
 
+    private static func visualAttachmentIndex(in tweet: Tweet, originalIndex: Int, mid: String?) -> Int {
+        let allAttachments = tweet.attachments ?? []
+        let visualAttachments = allAttachments.filter {
+            $0.type == .image || $0.type == .video || $0.type == .hls_video
+        }
+
+        if let mid,
+           let visualIndex = visualAttachments.firstIndex(where: { $0.mid == mid }) {
+            return visualIndex
+        }
+
+        if allAttachments.indices.contains(originalIndex) {
+            let originalAttachment = allAttachments[originalIndex]
+            if let visualIndex = visualAttachments.firstIndex(where: { $0.mid == originalAttachment.mid }) {
+                return visualIndex
+            }
+        }
+
+        return min(max(originalIndex, 0), max(visualAttachments.count - 1, 0))
+    }
+
     private var baseUrl: URL {
         // Use author's baseUrl if available, otherwise use appUser's baseUrl
         // If both are nil, use real IP from HproseInstance (resolved at app start)
@@ -55,15 +76,14 @@ struct MediaBrowserView: View {
     }
 
     init(tweet: Tweet, initialIndex: Int, cellTweetId: String? = nil) {
-        let visualAttachments = (tweet.attachments ?? []).filter {
-            $0.type == .image || $0.type == .video || $0.type == .hls_video
-        }
         let initialAttachment = tweet.attachments?.indices.contains(initialIndex) == true
             ? tweet.attachments?[initialIndex]
             : nil
-        let browserIndex = initialAttachment.flatMap { attachment in
-            visualAttachments.firstIndex(where: { $0.mid == attachment.mid })
-        } ?? min(max(initialIndex, 0), max(visualAttachments.count - 1, 0))
+        let browserIndex = Self.visualAttachmentIndex(
+            in: tweet,
+            originalIndex: initialIndex,
+            mid: initialAttachment?.mid
+        )
 
         self.tweet = tweet
         self.initialIndex = initialIndex
@@ -116,7 +136,7 @@ struct MediaBrowserView: View {
                 FullScreenVideoManager.shared.activateForFullscreen()
                 FullScreenVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
                 setupFullScreenManager()
-                OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
+                OverlayVisibilityCoordinator.shared.beginOverlayIfNeeded(id: "mediaBrowserView", source: "MediaBrowserView")
 
                 // NOTE: Don't broadcast stopAllVideos here.
                 // MediaCell videos will pause via overlay visibility detection once the fullscreen cover is presented.
@@ -157,10 +177,17 @@ struct MediaBrowserView: View {
                 // Wait for slide-out to complete
                 try? await Task.sleep(nanoseconds: 125_000_000) // 0.125 seconds (halfway)
                 
+                var nextBrowserIndex = 0
+
                 // Load the next video
                 if let attachments = nextTweet.attachments,
                    videoIndex < attachments.count {
                     let attachment = attachments[videoIndex]
+                    nextBrowserIndex = Self.visualAttachmentIndex(
+                        in: nextTweet,
+                        originalIndex: videoIndex,
+                        mid: attachment.mid
+                    )
                     let baseUrl = nextTweet.author?.baseUrl 
                         ?? HproseInstance.shared.appUser.baseUrl 
                         ?? HproseInstance.baseUrl
@@ -181,8 +208,8 @@ struct MediaBrowserView: View {
                 self.currentTweet = nextTweet
                 // Don't animate this index change; TabView will otherwise page horizontally.
                 withAnimation(.none) {
-                    self.currentIndex = videoIndex
-                    self.previousIndex = videoIndex
+                    self.currentIndex = nextBrowserIndex
+                    self.previousIndex = nextBrowserIndex
                 }
                 self.currentCellTweetId = nextSourceTweetId
                 self.imageStates = [:]
@@ -365,7 +392,7 @@ struct MediaBrowserView: View {
                                         tweet: currentTweet,
                                         isInDetailView: true,
                                         isFullScreen: true,
-                                        currentMediaIndex: currentIndex,
+                                        currentMediaIndex: originalAttachmentIndex(forVisualIndex: currentIndex),
                                         onShareVisibilityChange: { isVisible in
                                             // Forward share visibility changes to outer view
                                             onShareVisibilityChange(isVisible)
@@ -421,6 +448,12 @@ struct MediaBrowserView: View {
         private func isVideoAttachment(_ attachment: MimeiFileType) -> Bool {
             attachment.type == .video || attachment.type == .hls_video
         }
+
+        private func originalAttachmentIndex(forVisualIndex index: Int) -> Int {
+            guard attachments.indices.contains(index) else { return index }
+            let attachment = attachments[index]
+            return (currentTweet.attachments ?? []).firstIndex(where: { $0.mid == attachment.mid }) ?? index
+        }
         
         private func isAudioAttachment(_ attachment: MimeiFileType) -> Bool {
             attachment.type == .audio
@@ -453,7 +486,7 @@ struct MediaBrowserView: View {
                 mid: attachment.mid,
                 tweetId: currentTweet.mid,
                 cellTweetId: currentCellTweetId,
-                videoIndex: currentIndex,
+                videoIndex: originalAttachmentIndex(forVisualIndex: currentIndex),
                 mediaType: attachment.type
             )
         }
@@ -474,13 +507,14 @@ struct MediaBrowserView: View {
         
         private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
             let shouldAutoPlay = index == currentIndex
+            let originalIndex = originalAttachmentIndex(forVisualIndex: index)
             
             return SingletonVideoPlayerView(
                 url: url,
                 mid: attachment.mid,
                 tweetId: currentTweet.mid,
                 cellTweetId: currentCellTweetId,
-                videoIndex: index,
+                videoIndex: originalIndex,
                 mediaType: attachment.type,
                 aspectRatio: attachment.aspectRatio,
                 shouldAutoPlay: shouldAutoPlay,
@@ -502,7 +536,7 @@ struct MediaBrowserView: View {
                         mid: attachment.mid,
                         tweetId: currentTweet.mid,
                         cellTweetId: currentCellTweetId,
-                        videoIndex: index,
+                        videoIndex: originalIndex,
                         mediaType: attachment.type
                     )
                 }
@@ -521,7 +555,7 @@ struct MediaBrowserView: View {
                         mid: attachment.mid,
                         tweetId: currentTweet.mid,
                         cellTweetId: currentCellTweetId,
-                        videoIndex: index,
+                        videoIndex: originalIndex,
                         mediaType: attachment.type
                     )
                 }
@@ -1043,8 +1077,20 @@ struct SingletonVideoPlayerView: View {
                 }
                 .onChange(of: manager.singletonPlayer?.currentItem) { _, newItem in
                     // Reset reload flag when player item is cleared so a failed load can retry.
-                    if newItem == nil && manager.currentVideoMid == nil {
+                    if newItem == nil && (manager.currentVideoMid == nil || manager.currentVideoMid == mid) {
                         hasAttemptedReload = false
+                        guard shouldAutoPlay else { return }
+                        guard manager.isFullscreenActive else { return }
+                        DispatchQueue.main.async {
+                            manager.loadVideo(
+                                url: url,
+                                mid: mid,
+                                tweetId: tweetId,
+                                cellTweetId: cellTweetId,
+                                videoIndex: videoIndex,
+                                mediaType: mediaType
+                            )
+                        }
                     }
                 }
             }

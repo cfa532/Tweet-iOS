@@ -35,7 +35,6 @@ class MediaGridUIView: UIView {
     // Track whether layout needs recalculation
     private var needsFrameRecalculation: Bool = false
     private var lastLayoutWidth: CGFloat = 0
-    private let playerAcquireVisibilityThreshold: CGFloat = 0.35
     private let playbackContinueVisibilityThreshold: CGFloat = 0.70
 
     var isGridVisible: Bool = false {
@@ -124,15 +123,6 @@ class MediaGridUIView: UIView {
         needsFrameRecalculation = true
         setNeedsLayout()
 
-        // Empty tap gesture to prevent propagation to parent tweet
-        if gestureRecognizers?.isEmpty ?? true {
-            let tap = UITapGestureRecognizer(target: self, action: #selector(gridTapped))
-            addGestureRecognizer(tap)
-        }
-    }
-
-    @objc private func gridTapped() {
-        // Consume tap to prevent propagation
     }
 
     private func originalAttachmentIndex(_ displayIndex: Int) -> Int {
@@ -439,7 +429,7 @@ class MediaGridUIView: UIView {
     }
 
     /// Updates per-media visibility.
-    /// `loadVisible` uses a low threshold so any on-screen media starts loading.
+    /// `loadVisible` uses a low threshold so any on-screen media starts loading a cover frame.
     /// `continuePlayback` is stricter than `playable`: the current feed video stops once it drops below this threshold.
     /// `playable` keeps the 50% threshold used by the video coordinator for new autoplay candidates.
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
@@ -455,8 +445,7 @@ class MediaGridUIView: UIView {
 
             // Keep loading tied to actual media-cell geometry, not just table-row visibility.
             let isLoadVisible = isGridVisible && ratio > 0.05
-            let shouldAcquirePlayer = ratio >= playerAcquireVisibilityThreshold
-            cellView.setVisible(isLoadVisible, shouldAcquirePlayer: shouldAcquirePlayer)
+            cellView.setVisible(isLoadVisible, shouldAcquirePlayer: isLoadVisible)
 
             guard cellView.isVideoAttachment,
                   let identifier = cellView.videoIdentifier else { continue }

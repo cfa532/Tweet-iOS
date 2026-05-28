@@ -32,6 +32,12 @@ class SharedAssetCache: ObservableObject {
     // Track preloaded players (next videos in scroll direction) — protected from LRU eviction
     private var preloadedPlayerMids: Set<String> = []
 
+    // Keep just-finished directional preloads alive through short list rebuilds/pagination churn.
+    // Without this grace window, a preload can complete, then be unprotected before its cell
+    // scrolls into view, producing a black first paint.
+    private var preloadedPlayerGraceExpirations: [String: Date] = [:]
+    private let preloadedPlayerGraceInterval: TimeInterval = 12
+
     // Track media IDs that are intentional off-screen preload targets. These may not
     // have a cached player yet, but their in-flight loads should survive visibility cleanup.
     private var protectedPreloadMids: Set<String> = []
@@ -728,9 +734,11 @@ class SharedAssetCache: ObservableObject {
     /// Includes visible videos plus current scroll-direction preload targets.
     private var foregroundProtectedMids: Set<String> {
         guard isAppInForeground else { return [] }
+        expirePreloadGrace()
         var protected = visibleVideoMids
         // Protect preloaded players (next videos in scroll direction)
         protected.formUnion(preloadedPlayerMids)
+        protected.formUnion(preloadedPlayerGraceExpirations.keys)
         // Protect current preload targets before their players are cached.
         protected.formUnion(protectedPreloadMids)
         protected.formUnion(preloadTasks.keys)
@@ -749,15 +757,29 @@ class SharedAssetCache: ObservableObject {
     /// queued preload must not protect itself, otherwise stale loads survive scrolling.
     private var outOfSightCancellationProtectedMids: Set<String> {
         guard isAppInForeground else { return [] }
+        expirePreloadGrace()
         var protected = visibleVideoMids
         protected.formUnion(protectedPreloadMids)
         protected.formUnion(preloadedPlayerMids)
+        protected.formUnion(preloadedPlayerGraceExpirations.keys)
         return protected
+    }
+
+    private func expirePreloadGrace(now: Date = Date()) {
+        preloadedPlayerGraceExpirations = preloadedPlayerGraceExpirations.filter { mediaID, expiry in
+            expiry > now && playerCache[mediaID] != nil
+        }
+    }
+
+    private func protectPreloadedPlayerBriefly(_ mediaID: String, now: Date = Date()) {
+        guard playerCache[mediaID] != nil else { return }
+        preloadedPlayerGraceExpirations[mediaID] = now.addingTimeInterval(preloadedPlayerGraceInterval)
     }
 
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
     /// Called by VideoPlaybackCoordinator when the directional preload set changes and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
+        protectPreloadedPlayerBriefly(mediaID)
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerMids.remove(mediaID)
 
@@ -1795,7 +1817,13 @@ class SharedAssetCache: ObservableObject {
 
         // Skip if player already cached
         if let player = playerCache[mediaID] {
+            preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
             preloadedPlayerMids.insert(mediaID)
+            NotificationCenter.default.post(
+                name: .videoPlayerPreloaded,
+                object: self,
+                userInfo: ["mediaID": mediaID]
+            )
             if !visibleVideoMids.contains(mediaID), player.rate == 0 {
                 player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             }
@@ -1837,7 +1865,13 @@ class SharedAssetCache: ObservableObject {
                         player.pause()
                         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                     }
+                    self.preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
                     self.preloadedPlayerMids.insert(mediaID)
+                    NotificationCenter.default.post(
+                        name: .videoPlayerPreloaded,
+                        object: self,
+                        userInfo: ["mediaID": mediaID]
+                    )
                 }
 
                 if let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID),
@@ -1884,11 +1918,16 @@ class SharedAssetCache: ObservableObject {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 480, height: 480)
-        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
-        generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, result, _ in
+        generator.requestedTimeToleranceBefore = .positiveInfinity
+        generator.requestedTimeToleranceAfter = .positiveInfinity
+        let times = [0.0, 0.1, 0.5, 1.0].map {
+            NSValue(time: CMTime(seconds: $0, preferredTimescale: 600))
+        }
+        generator.generateCGImagesAsynchronously(forTimes: times) { _, cgImage, _, result, _ in
             guard result == .succeeded, let cgImage else { return }
             let image = UIImage(cgImage: cgImage)
             Task { @MainActor in
+                guard self.cachedThumbnail(for: mediaID) == nil else { return }
                 self.storeCachedThumbnail(image, for: mediaID, source: "preload")
             }
         }
@@ -1915,11 +1954,16 @@ class SharedAssetCache: ObservableObject {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 480, height: 480)
-        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
-        generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, result, _ in
+        generator.requestedTimeToleranceBefore = .positiveInfinity
+        generator.requestedTimeToleranceAfter = .positiveInfinity
+        let times = [0.0, 0.1, 0.5, 1.0].map {
+            NSValue(time: CMTime(seconds: $0, preferredTimescale: 600))
+        }
+        generator.generateCGImagesAsynchronously(forTimes: times) { _, cgImage, _, result, _ in
             guard result == .succeeded, let cgImage else { return }
             let image = UIImage(cgImage: cgImage)
             Task { @MainActor in
+                guard self.cachedThumbnail(for: mediaID) == nil else { return }
                 self.storeCachedThumbnail(image, for: mediaID, source: "cached-asset")
                 completion(image)
             }
@@ -1943,12 +1987,19 @@ class SharedAssetCache: ObservableObject {
     /// Protects active directional player preloads from generic visibility cleanup.
     /// NodeConnectionPool manages their bandwidth.
     func updateProtectedPreloadMids(_ mids: Set<String>) {
+        let now = Date()
+        expirePreloadGrace(now: now)
         let previousProtectedCount = protectedPreloadMids.count
+        let previousDirectionalCachedMids = protectedPreloadMids.intersection(playerCache.keys)
         protectedPreloadMids = mids
 
         let newSet = mids.intersection(playerCache.keys)
+        for mediaID in previousDirectionalCachedMids.subtracting(newSet) {
+            protectPreloadedPlayerBriefly(mediaID, now: now)
+        }
+
         let previousCount = preloadedPlayerMids.count
-        preloadedPlayerMids = newSet
+        preloadedPlayerMids = newSet.union(preloadedPlayerGraceExpirations.keys)
         let newCount = preloadedPlayerMids.count
         if newCount != previousCount || protectedPreloadMids.count != previousProtectedCount {
             print("🔮 [PLAYER PRELOAD] Protected targets: \(protectedPreloadMids.count), cached players: \(newCount) (was \(previousCount))")

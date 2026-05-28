@@ -106,6 +106,7 @@ class TweetTableViewController: UITableViewController {
     private var isCompensatingForBarAppearance: Bool = false  // Compensate contentOffset when header expands
     private var compensationBaseOriginY: CGFloat?
     private var lastHeaderHeight: CGFloat = 0
+    private var lastHeaderLayoutWidth: CGFloat = 0
     private var lastFooterHeight: CGFloat = 0
     
     // Notification observer for scroll to top
@@ -130,12 +131,11 @@ class TweetTableViewController: UITableViewController {
     
     // Track scroll direction for height caching strategy
     private var isScrollingBackward: Bool = false
-    private var lastDirectionalImagePreloadTime: CFTimeInterval = 0
-    private let directionalImagePreloadThrottleInterval: CFTimeInterval = 0.25
     private let directionalPreloadRowCount = 2
     private let oppositeStopPreloadRowCount = 1
     private let maxDirectionalImagePreloadsInFlight = 4
     private var activeDirectionalImagePreloadTasks: [String: Task<Void, Never>] = [:]
+    private var didScheduleInitialVisibilityRefresh = false
 
     // Scroll state tracking to prevent direction detection jitter during deceleration
     private var isUserDragging: Bool = false
@@ -570,13 +570,7 @@ class TweetTableViewController: UITableViewController {
             updateLoadingState(isLoadingMore: isLoadingMore, hasMoreTweets: hasMoreTweets)
         }
 
-        // Ensure video visibility is evaluated after initial layout completes.
-        // registerDelegate kicks playback but onScreenMediaCells may be empty if
-        // updateVisibleTweetsForVideoPlayback hasn't been called yet (no scroll event
-        // on first appearance). Delay lets cells finish rendering.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.updateVisibleTweetsForVideoPlayback()
-        }
+        scheduleVideoVisibilityRefresh(reason: "viewDidAppear")
     }
     
     override func viewWillDisappear(_ animated: Bool) {
@@ -617,6 +611,10 @@ class TweetTableViewController: UITableViewController {
         if !hasCompletedInitialLayout {
             lastScrollOffset = tableView.contentOffset.y
             hasCompletedInitialLayout = true
+            if !didScheduleInitialVisibilityRefresh {
+                didScheduleInitialVisibilityRefresh = true
+                scheduleVideoVisibilityRefresh(reason: "initialLayout")
+            }
 
             // Ensure table view is scrolled to proper top position (respecting safe area)
             // This prevents header from being covered by navigation bar
@@ -630,6 +628,12 @@ class TweetTableViewController: UITableViewController {
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
                 lastScrollOffset = -topInset
             }
+        }
+
+        if headerViewBuilder != nil,
+           tableView.window != nil,
+           abs(tableView.bounds.width - lastHeaderLayoutWidth) > 1 {
+            updateHeader()
         }
     }
     
@@ -757,9 +761,7 @@ class TweetTableViewController: UITableViewController {
                 // SwiftUI will automatically re-render action buttons via @Published properties
 
                 // Still update visibility for video coordinator
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    self?.updateVisibleTweetsForVideoPlayback()
-                }
+                scheduleVideoVisibilityRefresh(reason: "pinnedTweetsSameOrder")
                 return
             }
         }
@@ -777,10 +779,7 @@ class TweetTableViewController: UITableViewController {
         isTableViewUpdating = false
 
         // CRITICAL: Update visibility after reload so coordinator knows pinned videos are visible
-        // Use longer delay (300ms) to ensure cells are fully rendered
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.updateVisibleTweetsForVideoPlayback()
-        }
+        scheduleVideoVisibilityRefresh(reason: "pinnedTweetsReload")
     }
     
     func updateTweets(_ newTweets: [Tweet]) {
@@ -811,12 +810,10 @@ class TweetTableViewController: UITableViewController {
             isTableViewUpdating = false
             videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
             
-            // Trigger video detection after initial load
-            // CRITICAL: Use longer delay (300ms) to ensure all cells are fully rendered
-            // 100ms was too short, causing only first video to be detected on app launch
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.updateVisibleTweetsForVideoPlayback()
-            }
+            // Trigger video detection after initial load. Multiple passes are intentional:
+            // cached startup rows can self-size/layout over several run-loop turns, and a
+            // single early pass may only see the first visible media cell.
+            scheduleVideoVisibilityRefresh(reason: "initialTweets")
             return
         }
         
@@ -835,6 +832,7 @@ class TweetTableViewController: UITableViewController {
                 // Tweet.getInstance() already updated the @Published count properties
                 // SwiftUI will automatically re-render action buttons, no need to reload cells
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                scheduleVideoVisibilityRefresh(reason: "tweetsSameOrder")
                 return
             }
         }
@@ -868,6 +866,7 @@ class TweetTableViewController: UITableViewController {
                 tableView.insertRows(at: indexPaths, with: .automatic)
                 isTableViewUpdating = false
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                scheduleVideoVisibilityRefresh(reason: "tweetsPrepended")
                 return
             }
         }
@@ -882,6 +881,7 @@ class TweetTableViewController: UITableViewController {
                 tableView.insertRows(at: indexPaths, with: .none)
                 isTableViewUpdating = false
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                scheduleVideoVisibilityRefresh(reason: "tweetsAppended")
                 return
             }
         }
@@ -895,6 +895,7 @@ class TweetTableViewController: UITableViewController {
                 tableView.deleteRows(at: [IndexPath(row: removedIndex, section: 0)], with: .automatic)
                 isTableViewUpdating = false
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                scheduleVideoVisibilityRefresh(reason: "tweetDeleted")
                 return
             }
         }
@@ -907,6 +908,7 @@ class TweetTableViewController: UITableViewController {
         if diff.isEmpty {
             // No structural changes - content-only updates handled by ObservableObject
             videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+            scheduleVideoVisibilityRefresh(reason: "emptyDiff")
             return
         }
 
@@ -923,6 +925,7 @@ class TweetTableViewController: UITableViewController {
         }
         isTableViewUpdating = false
         videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+        scheduleVideoVisibilityRefresh(reason: "diffUpdate")
     }
     
     private var needsHeaderUpdate = false
@@ -940,6 +943,7 @@ class TweetTableViewController: UITableViewController {
             if tableView.tableHeaderView != nil {
                 tableView.tableHeaderView = nil
             }
+            lastHeaderLayoutWidth = 0
             return
         }
         
@@ -962,6 +966,7 @@ class TweetTableViewController: UITableViewController {
             // Use frame-based layout (no constraints) to avoid width=0 conflicts
             // Calculate content width accounting for padding
             let tableWidth = max(tableView.bounds.width, 100) // Ensure minimum width
+            lastHeaderLayoutWidth = tableWidth
             let contentWidth = tableWidth - (leadingPadding + trailingPadding)
             
             // Size the SwiftUI view properly
@@ -1004,6 +1009,7 @@ class TweetTableViewController: UITableViewController {
             // Recalculate size with frame-based layout
             if let headerView = headerHostingController?.view, let containerView = tableView.tableHeaderView {
                 let tableWidth = max(tableView.bounds.width, 100)
+                lastHeaderLayoutWidth = tableWidth
                 let contentWidth = tableWidth - (leadingPadding + trailingPadding)
                 
                 // Set fixed width before calculating height
@@ -1057,6 +1063,8 @@ class TweetTableViewController: UITableViewController {
         
         self.isLoadingMore = isLoadingMore
         self.hasMoreTweets = hasMoreTweets
+
+        guard stateChanged || needsFooterUpdate else { return }
         
         // ✅ FIX: Only log state changes, and avoid logging Date() or complex objects
         // Excessive logging can cause Xcode console to stop showing logs (FontServicesDaemonManager error)
@@ -1692,9 +1700,8 @@ class TweetTableViewController: UITableViewController {
             updateVisibleTweetsForVideoPlayback()
         }
 
-        if isUserDragging || isDecelerating {
-            triggerDirectionalImagePreloadIfNeeded(now: now)
-        }
+        // Directional image warmup is done at scroll stop. Starting network work
+        // during active dragging/deceleration competes with visible media and video.
 
         // Auto-load next page when scrolling near the bottom
         let contentHeight = scrollView.contentSize.height
@@ -1859,25 +1866,6 @@ class TweetTableViewController: UITableViewController {
         preloadImagesForRows(preloadRows + oppositeRows)
 
         videoCoordinator.performPreloadOnScrollStop()
-    }
-
-    private func triggerDirectionalImagePreloadIfNeeded(now: CFTimeInterval = CACurrentMediaTime()) {
-        guard now - lastDirectionalImagePreloadTime >= directionalImagePreloadThrottleInterval else {
-            return
-        }
-        lastDirectionalImagePreloadTime = now
-
-        guard let visibleIndexPaths = tableView.indexPathsForVisibleRows,
-              let firstVisible = visibleIndexPaths.first,
-              let lastVisible = visibleIndexPaths.last else { return }
-
-        let preloadRows = directionalPreloadRows(
-            firstVisibleRow: firstVisible.row,
-            lastVisibleRow: lastVisible.row
-        )
-        guard !preloadRows.isEmpty else { return }
-
-        preloadImagesForRows(preloadRows)
     }
 
     private func directionalPreloadRows(firstVisibleRow: Int, lastVisibleRow: Int) -> [Int] {
@@ -2089,6 +2077,27 @@ class TweetTableViewController: UITableViewController {
     /// Preflight height estimates for new tweets to reduce initial layout jumps
     
     // MARK: - Video Playback Coordination
+
+    private func scheduleVideoVisibilityRefresh(reason _: String) {
+        let delays: [TimeInterval] = [0, 0.1, 0.35, 0.8]
+        for delay in delays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.tableView.window != nil else { return }
+                self.forceLayoutVisibleCellsForVisibilityPass()
+                self.updateVisibleTweetsForVideoPlayback()
+            }
+        }
+    }
+
+    private func forceLayoutVisibleCellsForVisibilityPass() {
+        tableView.layoutIfNeeded()
+        for cell in tableView.visibleCells {
+            cell.setNeedsLayout()
+            cell.layoutIfNeeded()
+            cell.contentView.setNeedsLayout()
+            cell.contentView.layoutIfNeeded()
+        }
+    }
     
     private func updateVisibleTweetsForVideoPlayback() {
         guard tableView.window != nil else { return }

@@ -126,6 +126,9 @@ extension Notification.Name {
     /// Posted when a cached video thumbnail/first frame becomes available.
     /// userInfo: ["mediaID": String]
     static let videoThumbnailCached = Notification.Name("VideoThumbnailCached")
+    /// Posted when a directional preload has created a reusable AVPlayer.
+    /// userInfo: ["mediaID": String]
+    static let videoPlayerPreloaded = Notification.Name("VideoPlayerPreloaded")
     
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast
@@ -153,6 +156,14 @@ final class OverlayVisibilityCoordinator: ObservableObject {
             updateIfNeeded(source: source)
         } else {
             print("WARNING: [OverlayVisibilityCoordinator] Overlay '\(id)' was already registered. Active overlays: \(activeOverlayIds)")
+        }
+    }
+
+    func beginOverlayIfNeeded(id: String, source: String? = nil) {
+        let inserted = activeOverlayIds.insert(id).inserted
+        if inserted {
+            print("DEBUG: [OverlayVisibilityCoordinator] Began overlay '\(id)' from source: \(source ?? "unknown"). Active count: \(activeOverlayIds.count)")
+            updateIfNeeded(source: source)
         }
     }
 

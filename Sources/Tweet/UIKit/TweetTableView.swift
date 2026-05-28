@@ -34,6 +34,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     class Coordinator {
         var lastTweetIds: [String] = []
         var lastPinnedTweetIds: [String] = []
+        var lastHeaderWasPresent: Bool?
         weak var controller: TweetTableViewController?
 
         func triggerLoadMore() {
@@ -67,6 +68,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.allowDeleteAll = allowDeleteAll
 
         controller.updateHeader()
+        context.coordinator.lastHeaderWasPresent = header != nil
 
         return controller
     }
@@ -110,11 +112,13 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.onShowToast = onShowToast
         uiViewController.allowDeleteAll = allowDeleteAll
 
-        // Only update header if it exists — avoids unnecessary SwiftUI layout work
-        // on every updateUIViewController call (which fires on any SwiftUI state change)
+        // Only rebuild the hosted header when its presence changes. The hosted
+        // SwiftUI view continues to observe its own model changes; reassigning it
+        // on every wrapper update causes expensive sizeThatFits/layout work while scrolling.
         let headerChanged = (header != nil) != (uiViewController.headerViewBuilder != nil)
         uiViewController.headerViewBuilder = header
-        if header != nil || headerChanged {
+        if headerChanged || coordinator.lastHeaderWasPresent != (header != nil) {
+            coordinator.lastHeaderWasPresent = header != nil
             uiViewController.updateHeader()
         }
     }

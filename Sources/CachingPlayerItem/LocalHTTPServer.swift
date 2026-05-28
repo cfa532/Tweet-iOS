@@ -2260,17 +2260,34 @@ public class LocalHTTPServer: @unchecked Sendable {
         streamingSessionsLock.lock()
         if let oldSession = streamingSessions[sessionKey] {
             if isPrimary {
-                // Primary takes over: cancel the stalled preload session and start a fresh
-                // download that streams directly to the primary's NWConnection. The old
-                // session's IPFS download may have stalled (node unresponsive for this variant);
-                // waiting for it causes a permanent spinner because AVPlayer treats server
-                // errors (503) as stream-wide failures and stops requesting ALL segments.
-                streamingSessions[sessionKey] = session
+                // A fullscreen/primary request can reconnect while the same segment is still
+                // being filled in the disk cache after AVPlayer closed the previous NWConnection.
+                // Do not cancel that producer immediately; repeated takeovers restart the same
+                // large segment and keep the fullscreen player stuck waiting for data.
                 streamingSessionsLock.unlock()
-                oldSession.invalidateAndCancel()
+                session.invalidateAndCancel()
                 let shortId = shortMID(mediaID)
-                print("🎯 [HLS SEGMENT \(shortId)] Primary taking over stalled download for \(relativePath)")
-                // Fall through to start fresh download below
+                print("♻️ [HLS SEGMENT \(shortId)] Primary duplicate for \(relativePath), waiting for disk cache")
+                completion()
+                Task { [weak self] in
+                    for _ in 0..<20 { // max 10s
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        switch connection.state {
+                        case .cancelled, .failed: return
+                        default: break
+                        }
+                        if FileManager.default.fileExists(atPath: cachePath) {
+                            autoreleasepool { self?.serveFile(path: cachePath, connection: connection, method: "GET") }
+                            return
+                        }
+                    }
+
+                    // The original producer really did stall. Let AVPlayer reconnect; the next
+                    // request can claim a fresh download after the stale session times out/cleans up.
+                    oldSession.invalidateAndCancel()
+                    connection.cancel()
+                }
+                return
             } else {
                 // Non-primary: poll for the cache file to appear (background IPFS download
                 // may still be writing). Avoids cancel-retry storm.
