@@ -1,81 +1,62 @@
-# 🚀 Quick Start - Video Resume Fix
+# Tweet-iOS Quick Start
 
-## ✅ What's Been Done
+Use this guide when setting up the project for local development.
 
-All code changes are complete! Just need to add one file to your project.
+## 1) Prerequisites
 
-## 📋 3-Step Integration
+- Xcode 15+
+- CocoaPods installed (`pod --version`)
+- iOS 17 simulator/device (root app entry is iOS 17 annotated)
 
-### Step 1: Add File to Xcode (1 minute)
-1. Locate `SimpleVideoPlayer+PersistentState.swift` in your project folder
-2. Drag it into Xcode project navigator
-3. Ensure it's checked for your app target
-4. Done! ✅
+## 2) Project Setup
 
-### Step 2: Build & Run (30 seconds)
-```
-Press ⌘ + B (build)
-Press ⌘ + R (run)
-```
+From repository root:
 
-### Step 3: Test (2 minutes)
-1. Open a video in detail view
-2. Play for 10 seconds
-3. Lock screen (power button)
-4. Wait 2-3 seconds
-5. Unlock screen
-6. **Expected**: Video resumes at ~10 seconds ✅
-
-## 🎯 That's It!
-
-If the test passes, you're done! All videos will now:
-- ✅ Resume after screen lock
-- ✅ Remember position when navigating away/back
-- ✅ Work correctly even after player recreation
-
-## 🔍 Verify It's Working
-
-Check console for these logs:
-
-**On screen lock:**
-```
-💾 [StateHelper] Saved state: time=10.2s, wasPlaying=true
+```bash
+pod install
+open Tweet.xcworkspace
 ```
 
-**On unlock:**
+In Xcode:
+
+1. Select scheme: `Tweet`
+2. Choose a simulator/device
+3. Build and run (`Cmd + R`)
+
+## 3) First-Run Verification
+
+After launch, verify these basics:
+
+1. App opens without crash
+2. Home timeline renders
+3. Chat tab loads
+4. Compose sheet opens
+5. Search screen opens
+6. A tweet with media can start playback
+
+## 4) Recommended Reading Order
+
+1. `ARCHITECTURE.md` (system-level design)
+2. `VIDEO_PLAYBACK_PIPELINE.md` (video behavior and IPFS path)
+3. `UPLOAD_SYSTEM.md` (media publish flow)
+4. `NETWORK_RESILIENCE.md` (network fallback and reliability)
+
+## 5) Useful Commands
+
+```bash
+# Install dependencies
+pod install
+
+# Open workspace
+open Tweet.xcworkspace
 ```
-🔄 [StateHelper] Restoring position for {mid}: 10.2s
-✅ [StateHelper] Restored position to 10.2s
-▶️ [StateHelper] Resumed playback
-```
 
-## ❓ Troubleshooting
+## 6) Troubleshooting
 
-**If video restarts instead of resuming:**
-
-1. Check file was added to target:
-   - Select file in Xcode
-   - Check "Target Membership" in File Inspector
-
-2. Clean build folder:
-   - ⌘ + Shift + K (clean)
-   - ⌘ + B (rebuild)
-
-3. Check console logs:
-   ```bash
-   # Should see this on app launch:
-   grep "SimpleVideoPlayerStateHelper initialized" console.log
-   ```
-
-4. Still not working? See `COMPLETE_VIDEO_RESUME_SOLUTION.md` → Troubleshooting section
-
-## 📚 Full Documentation
-
-For detailed information, see:
-- **`COMPLETE_VIDEO_RESUME_SOLUTION.md`** - Complete guide
-- **`DETAILVIEW_HANDLER_COMPLETE.md`** - Implementation details
-- **`VIDEO_RESUME_IMPLEMENTATION_GUIDE.md`** - Testing scenarios
-
-## 🎉 Success!
-
-Videos now resume perfectly after screen lock! 🎊
+- If pods are out of sync:
+  - run `pod install` again
+  - clean build folder in Xcode (`Shift + Cmd + K`)
+- If media playback fails on first launch:
+  - relaunch once to ensure local proxy startup completes
+- If build errors mention missing workspace dependencies:
+  - make sure you opened `Tweet.xcworkspace`, not `Tweet.xcodeproj`

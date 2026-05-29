@@ -44,17 +44,17 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full details.
 
 ### Quick Links
 
-- [Architecture](ARCHITECTURE.md) | [Features](FEATURES.md)
-- [Video System](VIDEO_SYSTEM.md) | [Video Playback Algorithm](VideoPlaybackAlgorithm.md)
+- [Architecture](ARCHITECTURE.md) | [Quick Start](QUICKSTART.md)
+- [Video Playback Pipeline](VIDEO_PLAYBACK_PIPELINE.md) | [Upload System](UPLOAD_SYSTEM.md)
 - [Memory Management](MEMORY_MANAGEMENT.md) | [Network Resilience](NETWORK_RESILIENCE.md)
-- [Chat & Search](CHAT_AND_SEARCH_FEATURES.md) | [Upload System](UPLOAD_SYSTEM.md)
+- [Chat & Search](CHAT_AND_SEARCH_FEATURES.md) | [Sharing System](SHARING_SYSTEM.md)
 - [Debug Build](DEBUG_BUILD_INSTRUCTIONS.md) | [Universal Links](UNIVERSAL_LINKS.md)
 
 ## Development
 
 ### Requirements
 
-- iOS 16.0+
+- iOS 17.0+
 - Xcode 15.0+
 - Swift 5.9+
 

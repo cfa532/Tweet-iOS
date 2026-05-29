@@ -988,8 +988,8 @@ print("DEBUG: [ImageCacheManager] ...")
 
 ## Related Documentation
 
-- [VIDEO_SYSTEM.md](VIDEO_SYSTEM.md) - Video caching and playback
-- [TWEET_MEMORY_CACHE_ALGORITHM.md](TWEET_MEMORY_CACHE_ALGORITHM.md) - Tweet-specific caching
+- [VIDEO_PLAYBACK_PIPELINE.md](VIDEO_PLAYBACK_PIPELINE.md) - Video caching and playback interactions
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System-level design decisions
 - [NETWORK_RESILIENCE.md](NETWORK_RESILIENCE.md) - Network error handling
 - [UPLOAD_SYSTEM.md](UPLOAD_SYSTEM.md) - Upload memory management
 

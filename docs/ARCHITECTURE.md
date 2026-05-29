@@ -1,173 +1,257 @@
 # Tweet-iOS Architecture Overview
 
-**Last Updated:** February 2026
-**Version:** 3.0
+**Last Updated:** May 2026  
+**Version:** 3.2
 
-## Architecture Pattern
+## What This Architecture Optimizes For
 
-Tweet-iOS uses a **UIKit/SwiftUI hybrid** architecture. The main feed uses UITableView with pure UIKit cells for maximum scroll performance, while detail/profile/compose screens use SwiftUI with NavigationStack.
+Tweet-iOS is designed around a practical goal: keep the app fast and stable when users are scrolling media-heavy feeds on unreliable networks.
 
-## High-Level Architecture
+The core strategy is:
+- Render the feed with UIKit where scroll performance matters most.
+- Keep product surfaces in SwiftUI for developer speed and clearer composition.
+- Centralize hard problems (networking, media, caching, lifecycle recovery) in a small set of Core managers.
+- Prefer graceful degradation (cache-first rendering, cancellation, retries, fallbacks) over rigid "all-or-nothing" flows.
+
+## Design Principles
+
+1. **Fast first paint**
+   - Show cached content early, then reconcile with server state.
+2. **Single source of truth per concern**
+   - API calls through `HproseInstance`, video player lifecycle through `SharedAssetCache`, upload lifecycle through `UploadProgressManager`.
+3. **Resource-aware media handling**
+   - Only load what is likely to be watched next; cancel expensive work once it is no longer relevant.
+4. **Lifecycle resilience**
+   - Treat foreground/background transitions as first-class events, not edge cases.
+5. **Feature modules on top of shared infrastructure**
+   - Home/Chat/Compose/Search/Profile focus on product behavior and reuse Core systems.
+
+## Glossary (Quick Read)
+
+- **Primary video**: The single video currently prioritized for playback and network bandwidth in a feed.
+- **Preload**: Background preparation of likely-next media (asset/player/network) before it becomes primary.
+- **Directional preload**: Preloading biased toward current scroll direction (usually the next items users are most likely to watch).
+- **Protected set**: Media IDs temporarily shielded from cancellation/eviction because they are visible or about to be visible.
+- **Deduplication**: Reusing in-flight segment/range work so duplicate network requests are avoided.
+- **Slot**: A per-node concurrency budget unit used by `NodeConnectionPool` to prevent background downloads from starving foreground playback.
+
+## Top-Level Module Map
+
+| Module | Main Paths | Why it exists |
+| --- | --- | --- |
+| App Shell | `Sources/App` | Own app startup, lifecycle bridging, root tab/navigation orchestration |
+| Core Infrastructure | `Sources/Core` | Hold shared mechanics: API, media orchestration, cache, memory, notifications |
+| Feed + Tweet UI | `Sources/Tweet` | Provide high-performance tweet list/detail/comment rendering |
+| Product Features | `Sources/Features` | Implement user-facing flows (Home/Compose/Chat/Search/Profile/Legal) |
+| Video Proxy/Cache | `Sources/CachingPlayerItem` | Isolate media proxy, IPFS-aware transport, segment/range caching |
+| Data Models | `Sources/DataModels` | Define shared entities and IDs used across all modules |
+| Account/Settings | `Sources/Screens` | Keep auth and settings surfaces separated from feature modules |
+| Utilities | `Sources/Utils` | Contain cross-cutting UI/helpers (theme, deep links, prefs, etc.) |
+
+## How The App Is Organized
+
+### 1) Startup and Lifecycle
+
+**Key files:** `Sources/App/TweetApp.swift`, `Sources/App/AppDelegate.swift`
+
+Design idea:
+- Separate "show something now" from "finish full initialization".
+
+Mechanism:
+- `AppState.initialize()` sets up local basics and `initializeAppUser()` first.
+- Cached content is allowed to render immediately (`canShowCachedContent`).
+- Full network bootstrap (`initAppEntry`) continues in background.
+- `AppDelegate` starts `LocalHTTPServer` early and owns lifecycle-sensitive recovery paths.
+
+Why this matters:
+- Users avoid staring at an empty loading screen while network/IP resolution completes.
+- Video infrastructure is initialized predictably and repaired on lifecycle transitions.
+
+### 2) Home Feed and Timeline Rendering
+
+**Key files:** `Sources/Features/Home/FollowingsTweetView.swift`, `Sources/Tweet/TweetListView.swift`, `Sources/Tweet/UIKit/TweetTableViewController.swift`
+
+Design idea:
+- The feed is the hottest path, so it gets the most performance-oriented rendering stack.
+
+Mechanism:
+- Cache-first fetch path for initial list display.
+- UIKit table/cell rendering for timeline media-heavy scrolling.
+- SwiftUI remains the composition layer above UIKit bridge components.
+
+Why this matters:
+- Scroll smoothness remains stable even with mixed text/media content and frequent list updates.
+
+### 3) Video Playback Architecture
+
+**Key files:** `Sources/Core/VideoPlaybackCoordinator.swift`, `Sources/Core/SharedAssetCache.swift`, `Sources/Core/VideoLoadingManager.swift`, `Sources/CachingPlayerItem/LocalHTTPServer.swift`, `Sources/CachingPlayerItem/NodeConnectionPool.swift`
+
+Design idea:
+- Treat playback as a scheduling problem, not just a player problem.
+
+At a high level:
+- `VideoPlaybackCoordinator` decides *what should play now*.
+- `VideoLoadingManager` decides *what should load now*.
+- `SharedAssetCache` decides *what should stay alive now*.
+- `LocalHTTPServer` and `NodeConnectionPool` decide *how network bandwidth is allocated now*.
+
+#### Video strategy: from user intent to network behavior
+
+**Visibility-driven autoplay**
+- Start threshold is about when media becomes meaningfully visible.
+- Continue threshold is stricter, which reduces rapid start/stop flapping while scrolling.
+
+**Directional preload strategy**
+- Preload the next likely-to-watch videos (small window, currently 2 in scroll direction).
+- Keep preload scope intentionally tight to avoid over-downloading content users may never see.
+
+**Off-screen cancellation strategy**
+- Once media is behind the active window, cancel unnecessary work in batches.
+- Cancellation includes async loading, in-flight player creation, and proxy downloads.
+- Protected sets prevent accidental cancellation of media that is about to be visible.
+
+**Primary video prioritization**
+- As soon as coordinator selects a primary video, proxy/network paths prioritize it.
+- Primary is promoted explicitly (`setPrimaryMediaID`) instead of relying on passive queue timing.
+
+**IPFS optimization strategy**
+- Deduplicate segment/range work whenever possible.
+- Use longer tolerance for non-primary/preload paths, shorter response for primary paths.
+- Manage slot budgets per node (`host:port`) so one noisy node does not starve all playback.
+- Keep non-primary soft cap low (`maxPreloadSlots = 3`) while allowing primary-specific bypass/caps.
+
+#### Human-friendly interaction flow (primary vs preload)
 
 ```
-Presentation Layer
-  UIKit Feed (UITableView + pure UIKit cells)
-  SwiftUI Screens (detail, profile, compose, chat, media browser)
-  NavigationStack with NavigationPath
-      |
-  ViewModels (@Published State)
-  (HomeViewModel, CommentsViewModel, etc.)
-      |
-Business Logic Layer
-  Managers (TweetCacheManager, ImageCacheManager, VideoManagers)
-  VideoPlaybackCoordinator (per-feed instances)
-  Repositories (ChatRepository, etc.)
-      |
-Data Layer
-  Network (HproseInstance - Hprose RPC)
-  Local Storage (Core Data + caches)
-  NodePool (self-healing IP cache)
+User scrolls feed
+  -> Coordinator updates on-screen media set
+    -> Next directional videos selected for preload (small window)
+      -> SharedAssetCache starts preload players/assets
+        -> LocalHTTPServer performs range/segment fetch with dedup
+
+Primary video is selected
+  -> Coordinator marks primary in proxy (setPrimaryMediaID)
+    -> Node pool favors primary traffic over preloads
+      -> Visible playback stabilizes first
+        -> stale/off-screen preload work is cancelled or deprioritized
 ```
 
-## Feed Architecture (UIKit)
+#### Why this design works
 
-The feed was migrated from SwiftUI to pure UIKit in Phases 1-5 (Feb 2026) for scroll performance:
+- It prevents "good network assumptions" from breaking UX on weak links.
+- It protects foreground intent (what user is watching now) from background greed (what might be watched next).
+- It keeps memory and bandwidth bounded by policy, not by chance.
 
-### UIKit Cell Hierarchy
+### 4) Upload and Media Processing
+
+**Key files:** `Sources/Core/TweetUploadManager.swift`, `Sources/Core/UploadProgressManager.swift`, `Sources/Core/VideoConversionService.swift`
+
+Design idea:
+- Uploads should be reliable and understandable, even when app state changes.
+
+Mechanism:
+- Serialize upload execution through a shared queue.
+- Track stage-level progress centrally.
+- Persist pending tweet uploads for recovery/retry flows.
+
+Why this matters:
+- Prevents race conditions between concurrent media uploads.
+- Gives users consistent progress feedback and resumable behavior.
+
+### 5) Chat
+
+**Key files:** `Sources/Features/Chat/ChatSessionManager.swift`, `Sources/Features/Chat/ChatRepository.swift`, `Sources/Core/ChatCacheManager.swift`
+
+Design idea:
+- Chat should feel responsive even before backend sync completes.
+
+Mechanism:
+- Cache sessions/messages locally, merge with backend checks.
+- Surface unread count in root tab shell.
+- Use local notification manager for message alerts and interaction routing.
+
+### 6) Search and Profile
+
+**Key files:** `Sources/Features/Search/SearchScreen.swift`, `Sources/Features/Profile/ProfileView.swift`
+
+Design idea:
+- Reuse shared feed/model/media infrastructure instead of building special paths.
+
+Mechanism:
+- Search blends network queries and local cache support.
+- Profile timelines reuse timeline rendering and media subsystems.
+
+### 7) Network and Backend Integration
+
+**Key files:** `Sources/Core/HproseInstance.swift`, `Sources/Core/HproseClientPool.swift`, `Sources/Core/NodePool.swift`, `Sources/Core/BlackList.swift`
+
+Design idea:
+- Make backend access predictable by routing all remote calls through one gateway layer.
+
+Mechanism:
+- `HproseInstance` is the RPC boundary for feature modules.
+- Client pooling + IP discovery/health checks + node tracking improve resilience.
+- Blacklist logic avoids repeatedly expensive failing media/network attempts.
+
+## Cross-Module Interaction Model
+
 ```
-TweetTableViewCell (UITableViewCell)
-  └── TweetCellContentView (UIView)
-        ├── AvatarUIView (42x42, round image)
-        ├── TweetHeaderUIView (name, username, time)
-        ├── TweetBodyUIView (text + media)
-        │     └── MediaGridUIView (frame-based grid layout)
-        │           └── MediaCellUIView (image/video/audio)
-        │                 └── LightweightVideoPlayerView (AVPlayerLayer)
-        ├── TweetActionBarView (like, retweet, bookmark, comment, share)
-        └── EmbeddedTweetUIView (quoted tweets)
+TweetApp / AppDelegate
+  -> ContentView (root tabs + navigation)
+    -> Feature modules (Home / Chat / Compose / Search / Profile)
+      -> Core managers (cache, video, upload, notifications)
+        -> HproseInstance (network gateway)
+          -> Leither/Hprose backend
+
+Feed and media views
+  -> VideoPlaybackCoordinator
+    -> SharedAssetCache
+      -> LocalHTTPServer + NodeConnectionPool
+        -> IPFS/provider network endpoints
 ```
 
-### Key UIKit Patterns
-- **Combine observation**: UIKit views use `.sink()` on `@Published` properties, stored in `cancellables`, cleared in `prepareForReuse()`
-- **Frame-based media layout**: `MediaGridUIView.calculateCellFrames()` computes frame-based grid matching golden ratio proportional sizing
-- **Video player**: `LightweightVideoPlayerView` wraps AVPlayerLayer directly (no UIHostingController)
-- **Closure-based navigation**: UIKit cells use closure callbacks flowing through `TweetTableView` bridge to SwiftUI NavigationStack
+## Data and State Strategy
 
-### Per-Feed Video Coordination
-Each feed has its own `VideoPlaybackCoordinator` instance to prevent state clobbering:
-- Main feed uses `VideoPlaybackCoordinator.shared`
-- Profile/list feeds create their own coordinator via `@StateObject`
-- `VideoPlaybackCoordinator.active` (weak) tracks the currently visible feed
-- Coordinator chain: `TweetTableViewController` -> `TweetTableViewCell` -> `TweetCellContentView` -> `TweetBodyUIView` -> `MediaGridUIView` -> `MediaCellUIView`
+- **Stable model identity:** `Tweet` and `User` instance registries reduce duplicate object drift across views.
+- **Layered persistence:** memory state + Core Data cache + network refresh.
+- **State propagation:** `@StateObject`, `@Published`, and notification events for cross-boundary coordination.
+- **Concurrency model:** async/await and `@MainActor` for UI-facing flows; internal lock/actor patterns for shared resources.
 
-### Remaining SwiftUI in Feed
-- `TweetMenu` (popover)
-- `DocumentAttachmentsView`
-- `SimpleAudioPlayer`
+## Cross-Cutting Systems
 
-## SwiftUI Screens
+### Caching
+- Tweets/users and chat use dedicated persistent cache managers.
+- Media uses player/asset caches plus proxy-backed disk caching for HLS/progressive paths.
 
-Detail, profile, compose, chat, and media browser screens remain SwiftUI:
+### Memory Control
+- Managers coordinate cleanup under memory pressure without blindly destroying foreground playback.
+- Lifecycle transitions trigger scoped cleanup and recovery to avoid stale/invalid media state.
 
-- `TweetDetailView`: Tweet with comments thread
-- `ProfileView` / `ProfileTweetsSection`: User profile with tweet list
-- `ComposeTweetView`: Tweet composition with media attachments
-- `ChatScreen`: Direct messaging
-- `MediaBrowserView`: Fullscreen media viewer
-- `SimpleVideoPlayer`: Used for detail/browser/embedded video modes
+### Resilience
+- Startup and foreground recovery paths handle stale IP/network conditions.
+- Message checks, retries, and pending upload recovery reduce user-visible failure impact.
 
-## Data Models
+## Platform Constraints
 
-### Singleton Pattern
-`Tweet` and `User` are `ObservableObject` singletons accessed via `getInstance(mid:)`:
-```swift
-class Tweet: Identifiable, Codable, ObservableObject {
-    private static var instances: [MimeiId: Tweet] = [:]
-    static func getInstance(mid: MimeiId, ...) -> Tweet {
-        // Returns existing instance (updated) or creates new one
-    }
-}
-```
+- Root app entry (`TweetApp`, `ContentView`) is iOS 17 annotated.
+- Some isolated feature components still compile with iOS 16 annotations, but runtime app behavior follows root targets.
+- Feed rendering intentionally prioritizes UIKit performance, while feature composition remains SwiftUI-first.
 
-### Caching Strategy
-```
-Memory (Tweet/User singletons) - fast, volatile
-    | Miss
-Disk (Core Data via TweetCacheManager) - persistent
-    | Miss
-Network (HproseInstance RPC) - authoritative
-    | Success
-Update Disk -> Update Memory
-```
+## Backend / Server Relationship
 
-Cache keys use `appUser.mid` prefix, persisted across logouts.
+Tweet-iOS communicates with a separate backend repository:
 
-## Key Managers
+- Local path: `/Users/cfa532/Documents/GitHub/TweetBackendApp`
+- GitHub repo: `TweetBackendApp` under account `cfa532`
 
-| Manager | Purpose |
-|---------|---------|
-| `TweetCacheManager` | In-memory + Core Data tweet caching |
-| `ImageCacheManager` | Memory -> disk -> network image pipeline with priority queue |
-| `SharedAssetCache` | AVPlayer/AVAsset caching (25 players) |
-| `VideoPlaybackCoordinator` | Per-feed autoplay, visibility detection, sequential playback |
-| `VideoLoadingManager` | Concurrent video load limits (4) |
-| `GlobalImageLoadManager` | Image download priority and concurrency (8 images, 4 avatars) |
-| `DetailVideoManager` | Singleton video player for detail views |
-| `MemoryWarningManager` | Memory pressure monitoring (1GB threshold) |
-| `NotificationManager` | Local push notifications for chat |
-| `AudioSessionManager` | Audio session lifecycle |
-| `ScrollPositionManager` | In-memory scroll position (no disk persistence) |
+Server entry points are JavaScript functions invoked via `lapi.RunMApp("filename", params, [])`.
+When API behavior changes, iOS and backend changes should be reviewed together.
 
-## Media Download Priority
+## Related Docs
 
-| Priority | Use Case |
-|----------|----------|
-| `critical` | Single visible media |
-| `high` | Grid visible media |
-| `normal` | Default |
-| `low` | Prefetch |
-
-- Priority boosting via `GlobalImageLoadManager.boostPriority()` when media becomes visible
-- Cancellation via `cancelLoad()` when scrolled out of view
-- `NSURLErrorCancelled` (-999) not counted as network failure
-
-## Concurrency
-
-- **Swift async/await**: Primary pattern for network calls and async operations
-- **Combine**: UIKit view observation of `@Published` properties
-- **MainActor**: UI updates
-- **Task.detached**: Background work (video player creation, image loading)
-- **NSLock**: Thread-safe singleton access
-
-## Navigation
-
-SwiftUI `NavigationStack` with `NavigationPath` at the root. UIKit cells trigger navigation via closure callbacks that flow through `TweetTableView` bridge to the SwiftUI navigation system.
-
-## Technology Stack
-
-- **Language:** Swift 5.9+
-- **UI:** UIKit (feed) + SwiftUI (screens) hybrid
-- **Minimum iOS:** 16.0+
-- **Backend:** Hprose RPC
-- **Media:** AVFoundation + AVPlayerLayer
-- **Storage:** Core Data
-- **Networking:** URLSession
-- **Build:** `Tweet.xcworkspace`, Scheme: `Tweet`
-- **Dependencies (CocoaPods):** SDWebImage, ffmpeg-kit-ios, hprose
-
-## Backend / Server Code
-
-The app talks to a Leither/Hprose backend. Server code is in a **separate repository**:
-
-- **Local path:** `/Users/cfa532/Documents/GitHub/TweetBackendApp`
-- **GitHub:** same repo name under account `cfa532` (TweetBackendApp)
-
-When changing APIs, auth, or agent-token behavior, check and update the server implementation there. Key server entry points are `.js` files invoked via `lapi.RunMApp(filename, params, [])` (e.g. `add_tweet.js`, `login.js`, `verify_agent_token.js`).
-
-## Related Documentation
-
-- [Video System](./VIDEO_SYSTEM.md) - Complete video architecture
-- [Video Playback Algorithm](./VideoPlaybackAlgorithm.md) - Autoplay and visibility detection
-- [Memory Management](./MEMORY_MANAGEMENT.md) - Memory monitoring and cleanup
-- [Network Resilience](./NETWORK_RESILIENCE.md) - NodePool, retry logic, BlackList
-- [HLS Video](./HLS_VIDEO_IMPLEMENTATION.md) - HLS streaming and local caching
+- [Documentation Index](./INDEX.md)
+- [Video Playback Pipeline](./VIDEO_PLAYBACK_PIPELINE.md)
+- [Upload System](./UPLOAD_SYSTEM.md)
+- [Memory Management](./MEMORY_MANAGEMENT.md)
+- [Network Resilience](./NETWORK_RESILIENCE.md)
+- [Chat and Search Features](./CHAT_AND_SEARCH_FEATURES.md)

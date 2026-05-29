@@ -352,8 +352,7 @@ If the web app switches from HashHistory to HTML5 History mode:
 
 ## Related Documentation
 
-- **[BASEURL_RESOLUTION_AND_CACHE_RENDERING.md](./BASEURL_RESOLUTION_AND_CACHE_RENDERING.md)** - BaseURL resolution system (deprecated)
-- **[INSTANT_TWEET_RENDERING.md](./INSTANT_TWEET_RENDERING.md)** - Current tweet rendering system
-- **[VIDEO_SYSTEM.md](./VIDEO_SYSTEM.md)** - Video player architecture
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Overall app architecture
+- **[VIDEO_PLAYBACK_PIPELINE.md](./VIDEO_PLAYBACK_PIPELINE.md)** - Video playback and network behavior
+- **[UNIVERSAL_LINKS.md](./UNIVERSAL_LINKS.md)** - Link routing behavior
 

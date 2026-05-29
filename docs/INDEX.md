@@ -1,79 +1,53 @@
 # Tweet-iOS Documentation Index
 
-**Last Updated:** February 2026
+**Last Updated:** May 2026
 
 ---
 
-## Getting Started
+## Core Docs (Read First)
 
 | Document | Description |
 | -------- | ----------- |
-| [QUICKSTART.md](./QUICKSTART.md) | Getting started guide for new developers |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | App architecture: UIKit/SwiftUI hybrid, data flow, key managers |
-| [FEATURES.md](./FEATURES.md) | Complete feature list and capabilities |
-| [DEBUG_BUILD_INSTRUCTIONS.md](./DEBUG_BUILD_INSTRUCTIONS.md) | Build instructions, debugging, log capture |
+| [QUICKSTART.md](./QUICKSTART.md) | Local setup and first-run verification |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Human-friendly system design, module responsibilities, interaction model |
+| [VIDEO_PLAYBACK_PIPELINE.md](./VIDEO_PLAYBACK_PIPELINE.md) | Video playback flow from feed visibility to IPFS delivery |
+| [DEBUG_BUILD_INSTRUCTIONS.md](./DEBUG_BUILD_INSTRUCTIONS.md) | Build, debug, and log-capture workflows |
 
 ---
 
-## Core Systems
-
-### Video
+## Feature and Platform Docs
 
 | Document | Description |
 | -------- | ----------- |
-| [VIDEO_SYSTEM.md](./VIDEO_SYSTEM.md) | Complete video architecture and orchestration |
-| [VideoPlaybackAlgorithm.md](./VideoPlaybackAlgorithm.md) | Autoplay, visibility detection, sequential playback |
-| [VIDEO_PRIORITY_ALGORITHM.md](./VIDEO_PRIORITY_ALGORITHM.md) | Video download priority and concurrency |
-| [HLS_VIDEO_IMPLEMENTATION.md](./HLS_VIDEO_IMPLEMENTATION.md) | HLS streaming with local caching proxy |
-| [HLS_CONVERSION_ALGORITHM.md](./HLS_CONVERSION_ALGORITHM.md) | Server-side HLS conversion pipeline |
-| [architecture/VIDEO_COORDINATOR_ANALYSIS.md](./architecture/VIDEO_COORDINATOR_ANALYSIS.md) | Per-feed VideoPlaybackCoordinator analysis |
-| [features/RETWEET_VIDEO_ISSUE.md](./features/RETWEET_VIDEO_ISSUE.md) | Retweet video race condition analysis |
-
-### Caching & Memory
-
-| Document | Description |
-| -------- | ----------- |
-| [MEMORY_MANAGEMENT.md](./MEMORY_MANAGEMENT.md) | Memory monitoring, thresholds, cleanup strategies |
-| [TWEET_CACHE_STRATEGY.md](./TWEET_CACHE_STRATEGY.md) | Dual-strategy caching (main feed vs profile) |
-| [PERMANENT_CACHE_SYSTEM.md](./PERMANENT_CACHE_SYSTEM.md) | Permanent caching for private/bookmarked tweets |
-| [IMAGE_ZOOM_ALGORITHM.md](./IMAGE_ZOOM_ALGORITHM.md) | Dynamic image zoom in MediaBrowserView |
-
-### Networking
-
-| Document | Description |
-| -------- | ----------- |
-| [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md) | Multi-layer caching, BlackList, retry logic |
-| [NODEPOOL.md](./NODEPOOL.md) | Self-healing IP cache with trust vs verify strategies |
-| [GETPROVIDERIP_FLOW.md](./GETPROVIDERIP_FLOW.md) | Provider IP resolution with health checking |
-| [BLACKLIST_MEDIA_INTEGRATION.md](./BLACKLIST_MEDIA_INTEGRATION.md) | BlackList system for failed media URLs |
-
-### Scroll & Layout
-
-| Document | Description |
-| -------- | ----------- |
-| [architecture/SCROLL_POSITION_FLOW.md](./architecture/SCROLL_POSITION_FLOW.md) | Scroll position preservation flow |
-| [architecture/SCROLL_POSITION_PRESERVATION.md](./architecture/SCROLL_POSITION_PRESERVATION.md) | In-memory scroll position (no disk persistence) |
-| [STARTUP_PERFORMANCE_OPTIMIZATION.md](./STARTUP_PERFORMANCE_OPTIMIZATION.md) | Phased startup with lazy initialization |
-| [TWEETLIST_PERFORMANCE_OPTIMIZATION.md](./TWEETLIST_PERFORMANCE_OPTIMIZATION.md) | Summary of feed scroll and cell performance optimizations |
+| [CHAT_AND_SEARCH_FEATURES.md](./CHAT_AND_SEARCH_FEATURES.md) | Chat and search behavior and data flow |
+| [UPLOAD_SYSTEM.md](./UPLOAD_SYSTEM.md) | Tweet/comment/chat media upload pipeline |
+| [SHARING_SYSTEM.md](./SHARING_SYSTEM.md) | Sharing URL generation and behavior |
+| [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md) | Notification behavior and current implementation scope |
+| [UNIVERSAL_LINKS.md](./UNIVERSAL_LINKS.md) | Universal link setup and test paths |
+| [PERMISSION_LOCALIZATION_GUIDE.md](./PERMISSION_LOCALIZATION_GUIDE.md) | Permission-related localization strings and checks |
 
 ---
 
-## Features
+## Reliability and Performance Docs
 
 | Document | Description |
 | -------- | ----------- |
-| [CHAT_AND_SEARCH_FEATURES.md](./CHAT_AND_SEARCH_FEATURES.md) | Chat system and search functionality |
-| [CommentSystemREADME.md](./CommentSystemREADME.md) | Comment/reply system implementation |
-| [UPLOAD_SYSTEM.md](./UPLOAD_SYSTEM.md) | Upload system with progress tracking |
-| [SHARING_SYSTEM.md](./SHARING_SYSTEM.md) | IP-based sharing URLs with Vue HashHistory |
-| [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md) | Local notifications (current) + APNs push (planned) |
+| [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md) | IP resolution, retries, and network fallback behavior |
+| [MEMORY_MANAGEMENT.md](./MEMORY_MANAGEMENT.md) | Memory pressure handling and cleanup strategies |
 
 ---
 
-## Guides
+## Additional
 
 | Document | Description |
 | -------- | ----------- |
-| [UNIVERSAL_LINKS.md](./UNIVERSAL_LINKS.md) | Universal links setup and testing |
-| [PERMISSION_LOCALIZATION_GUIDE.md](./PERMISSION_LOCALIZATION_GUIDE.md) | Permission string localization |
+| [README.md](./README.md) | Docs landing page and development summary |
 | [Server_API.md](./Server_API.md) | Server API reference (symlink to backend repo) |
+
+---
+
+## Engineering Notes
+
+| Document | Description |
+| -------- | ----------- |
+| [notes/ENGINEERING_NOTES.md](./notes/ENGINEERING_NOTES.md) | Consolidated engineering context: performance strategy, memory fixes, and migration notes |
