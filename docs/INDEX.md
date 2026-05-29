@@ -50,4 +50,4 @@
 
 | Document | Description |
 | -------- | ----------- |
-| [notes/ENGINEERING_NOTES.md](./notes/ENGINEERING_NOTES.md) | Consolidated engineering context: performance strategy, memory fixes, and migration notes |
+| [ENGINEERING_NOTES.md](./ENGINEERING_NOTES.md) | Consolidated engineering context: performance strategy, memory fixes, and migration notes |
