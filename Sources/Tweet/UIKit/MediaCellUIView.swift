@@ -285,24 +285,24 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         fullscreenSpinner.center = CGPoint(x: b.midX, y: b.midY)
 
         // Mute button: 44pt touch area centered on 26pt visual circle, bottom-right
-        let visualSize: CGFloat = 26
+        let visualSize: CGFloat = 24
         let touchSize: CGFloat = 44
         let inset = (touchSize - visualSize) / 2  // 9pt
         muteButton.frame = CGRect(
-            x: b.maxX - visualSize - 12 - inset,
-            y: b.maxY - visualSize - 12 - inset,
+            x: b.maxX - visualSize - 6 - inset,
+            y: b.maxY - visualSize - 6 - inset,
             width: touchSize, height: touchSize
         )
         muteCircleLayer.frame = CGRect(x: inset, y: inset, width: visualSize, height: visualSize)
 
-        // Timer label: bottom-left, 12pt padding
+        // Timer label: bottom-left, 6pt padding
         if !timerLabel.isHidden {
             let timerSize = timerLabel.sizeThatFits(CGSize(width: 100, height: 24))
             let timerW = timerSize.width + 16
             let timerH: CGFloat = 24
             timerLabel.frame = CGRect(
-                x: 12,
-                y: b.maxY - timerH - 12,
+                x: 6,
+                y: b.maxY - timerH - 6,
                 width: timerW, height: timerH
             )
         }
@@ -677,10 +677,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         schedulePlayerAcquireIfNeeded()
 
-        // Mute button for single video (timer shown when playback starts)
-        if isSingleMedia {
-            setupMuteButton()
-        }
+        // Mute button on all feed videos; timer shown only for single-attachment videos
+        setupMuteButton()
     }
 
     private func observeCachedVideoThumbnail(for mediaID: String) {
