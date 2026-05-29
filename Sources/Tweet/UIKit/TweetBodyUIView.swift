@@ -63,9 +63,6 @@ class TweetBodyUIView: UIView {
     private var documentHostingController: UIHostingController<AnyView>?
     private let documentContainerView = UIView()
 
-    // Height constraint for media (used for dynamic sizing)
-    private var mediaHeightConstraint: NSLayoutConstraint?
-
     var onTweetBodyTap: (() -> Void)?
     var onContentExpanded: (() -> Void)?
     /// Per-feed video coordinator (set by TweetCellContentView)
@@ -143,11 +140,6 @@ class TweetBodyUIView: UIView {
             contentStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-
-        // Media height constraint (will be set dynamically)
-        mediaHeightConstraint = mediaContainerView.heightAnchor.constraint(equalToConstant: 0)
-        mediaHeightConstraint?.priority = UILayoutPriority(999)
-        mediaHeightConstraint?.isActive = true
 
         // Tap gesture on content label
         let tap = UITapGestureRecognizer(target: self, action: #selector(bodyTapped))
@@ -349,19 +341,6 @@ class TweetBodyUIView: UIView {
 
         // --- Media grid ---
         if hasMedia {
-            // Calculate actual available width based on context
-            let screenWidth = UIScreen.main.bounds.width
-            let gridWidth: CGFloat
-            if isEmbedded {
-                // Embedded: cell padding (32+32) + embedded container (8+4) + avatar (40) + spacing (8) = 124
-                gridWidth = max(10, screenWidth - 124)
-            } else {
-                // Regular: cell padding (32+32) + media trailing inset (2) = 66
-                gridWidth = max(10, screenWidth - 66)
-            }
-
-            let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, gridWidth: gridWidth)
-            mediaHeightConstraint?.constant = mediaHeight
             mediaContainerView.isHidden = false
 
             // Configure pure UIKit media grid
@@ -399,7 +378,6 @@ class TweetBodyUIView: UIView {
             }
         } else {
             mediaContainerView.isHidden = true
-            mediaHeightConstraint?.constant = 0
             captionLabel.isHidden = true
             isCaptionVisible = false
 

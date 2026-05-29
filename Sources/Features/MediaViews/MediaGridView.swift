@@ -782,7 +782,7 @@ struct MediaGridViewModel {
 
         let screenWidth = UIScreen.main.bounds.width
         let gridWidth = isEmbedded
-            ? max(10, screenWidth - 124)  // Match TweetBodyUIView embedded: cell(16) + leading(3) + avatar(42) + spacing(4) + embedded(8+4) + embAvatar(40) + embSpacing(8) - wrapper(-4)
+            ? max(10, screenWidth - 79)   // bodyView spans full contentStack (no avatar beside it): cell(16)+mainLeading(3)+avatar(42)+spacing(4)+embInsets(8+8)+mediaTrailing(2) = 79
             : max(10, screenWidth - 32 - 34)  // Regular width (32+32 cell padding + 2 trailing inset)
 
         return calculateHeight(for: attachments, gridWidth: gridWidth)

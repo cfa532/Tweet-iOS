@@ -35,6 +35,8 @@ class MediaGridUIView: UIView {
     // Track whether layout needs recalculation
     private var needsFrameRecalculation: Bool = false
     private var lastLayoutWidth: CGFloat = 0
+    /// Height last computed from actual bounds.width — drives intrinsicContentSize
+    private var computedGridHeight: CGFloat = 0
     private let playbackContinueVisibilityThreshold: CGFloat = 0.70
 
     var isGridVisible: Bool = false {
@@ -151,6 +153,13 @@ class MediaGridUIView: UIView {
         let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
         let gridHeight = max(10, gridWidth / gridAspectRatio)
 
+        // Notify Auto Layout of the new height so the parent container self-sizes correctly.
+        // This is the UIKit equivalent of Compose's fillMaxWidth() — no hardcoded offsets needed.
+        if gridHeight != computedGridHeight {
+            computedGridHeight = gridHeight
+            invalidateIntrinsicContentSize()
+        }
+
         let frames = calculateCellFrames(
             attachments: attachments,
             gridWidth: gridWidth,
@@ -182,6 +191,17 @@ class MediaGridUIView: UIView {
             moreLabelOverlay?.frame = frames[3]
             moreLabel?.frame = moreLabelOverlay?.bounds ?? .zero
         }
+    }
+
+    // MARK: - Intrinsic Size
+
+    /// Reports the grid height computed from the actual bounds.width in layoutSubviews.
+    /// The parent container (mediaContainerView in TweetBodyUIView) has no explicit height
+    /// constraint — it sizes itself from this intrinsic height, just like Android Compose's
+    /// fillMaxWidth() / BoxWithConstraints pattern.
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric,
+               height: computedGridHeight > 0 ? computedGridHeight : UIView.noIntrinsicMetric)
     }
 
     // MARK: - Frame Calculations
@@ -489,5 +509,12 @@ class MediaGridUIView: UIView {
         isGridVisible = false
         hasInitialized = false
         shouldLoadVideo = true
+        // Reset height so a recycled cell doesn't report a stale intrinsic size
+        if computedGridHeight != 0 {
+            computedGridHeight = 0
+            lastLayoutWidth = 0
+            needsFrameRecalculation = false
+            invalidateIntrinsicContentSize()
+        }
     }
 }
