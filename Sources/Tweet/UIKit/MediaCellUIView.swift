@@ -389,8 +389,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // With streaming, the first frame can render before playback can continue.
             // Keep primary feedback on, and keep visible non-primary feedback on until
             // a cover frame exists. Off-screen preloads should not show spinner chrome.
-            if coordinatorWantsToPlay && !shouldDelayPrimarySpinner(for: player) {
-                loadingSpinner.startAnimating()
+            if coordinatorWantsToPlay {
+                if let player, shouldDelayPrimarySpinner(for: player) {
+                    showPrimarySpinnerWithOptionalDelay(for: player)
+                } else {
+                    loadingSpinner.startAnimating()
+                }
             } else if shouldShowVisibleVideoCoverSpinner(hasCover: hasDisplayableCover) {
                 loadingSpinner.startAnimating()
             } else {
@@ -1091,9 +1095,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             && !isVideoAtEnd(player)
             && !isVisibleVideoFrameReady(player)
         if shouldShowSpinner {
-            if delayedPrimarySpinnerTask != nil {
-                return
-            }
+            cancelDelayedPrimarySpinner()
             loadingSpinner.startAnimating()
         } else {
             cancelDelayedPrimarySpinner()
@@ -1589,6 +1591,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
            recoveryTime.seconds.isFinite,
            recoveryTime.seconds > 0.25 {
             pendingRecoverySeekTime = nil
+            updateLoadingSpinnerForPlayback(player)
             player.seek(to: recoveryTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 guard let self else { return }
                 DispatchQueue.main.async {
@@ -1608,6 +1611,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
             let targetSeconds = info.time.seconds
             if targetSeconds.isFinite, targetSeconds > 0.25 {
+                updateLoadingSpinnerForPlayback(player)
                 player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                     guard let self, let _ = self.attachment?.mid else { return }
                     self.startPlaybackWithFade(player)
