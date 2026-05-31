@@ -170,6 +170,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// stuck at the first buffer gap after play() was requested.
     private var playbackStartupRecoveryTask: Task<Void, Never>?
     private var playbackStartupRecoveryRequestDate: Date?
+    private var playbackStartupProgressExtensionCount = 0
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -1216,7 +1217,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let hasActuallyPlayed = lastActualPlaybackDate != .distantPast
         let requestSeconds = seconds(from: requestPosition)
         let isStartupRecovery = !hasActuallyPlayed && requestSeconds < 8.0
-        let recoveryDelay: UInt64 = isStartupRecovery ? 4_000_000_000 : 12_000_000_000
+        let recoveryDelay: UInt64 = 12_000_000_000
         if playbackStartupRecoveryTask != nil,
            playbackStartupRecoveryRequestDate == requestDate {
             return
@@ -1262,6 +1263,23 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                       self.coordinatorWantsToPlay,
                       player.timeControlStatus != .playing,
                       !self.isVideoAtEnd(player) else { return }
+            }
+
+            if isStartupRecovery, bufferedAhead > 0 {
+                player.automaticallyWaitsToMinimizeStalling = false
+                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                player.play()
+                self.updateLoadingSpinnerForPlayback(player)
+
+                if self.playbackStartupProgressExtensionCount < 3 {
+                    self.playbackStartupProgressExtensionCount += 1
+                    self.lastPlaybackRequestDate = Date()
+                    self.playbackStartupRecoveryTask = nil
+                    self.playbackStartupRecoveryRequestDate = nil
+                    print("\(self.logPrefix) ⏳ startup recovery (\(reason)): still buffering, preserving player (buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp), extension=\(self.playbackStartupProgressExtensionCount))")
+                    self.scheduleStartupRecovery(for: player, reason: "\(reason)-buffering")
+                    return
+                }
             }
 
             let recoveryTime = player.currentTime()
@@ -1721,6 +1739,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.isMuted = MuteState.shared.isMuted
         lastPlaybackRequestDate = Date()
+        playbackStartupProgressExtensionCount = 0
         player.play()
         scheduleStartupRecovery(for: player, reason: "actuallyStartPlayback")
 
@@ -2060,6 +2079,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
                 if player.timeControlStatus == .playing {
                     self.lastActualPlaybackDate = Date()
+                    self.playbackStartupProgressExtensionCount = 0
                     self.playbackStartupRecoveryTask?.cancel()
                     self.playbackStartupRecoveryTask = nil
                     self.playbackStartupRecoveryRequestDate = nil
@@ -2916,6 +2936,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         hasRenderedFrameForCurrentPlayer = false
         lastPlaybackRequestDate = .distantPast
         lastPlaybackNudgeDate = .distantPast
+        playbackStartupProgressExtensionCount = 0
         lastLoggedTimeControlStatus = nil
         lastLoggedTimeControlBucket = -1
         lastLoggedTimeControlDate = .distantPast
