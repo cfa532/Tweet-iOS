@@ -958,8 +958,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
-        // User scrolled — clear finished exclusion so the video can be re-selected if scrolled back
-        if visibilityChanged {
+        // Keep the just-finished video excluded while it remains visible. Clear the
+        // exclusion only after that specific cell leaves the viewport.
+        if let finishedId = finishedPrimaryIdentifier,
+           !currentVisibleIdentifiers.contains(finishedId) {
             finishedPrimaryIdentifier = nil
         }
 
@@ -1573,6 +1575,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             guard mediaCellDelegates[video.identifier] != nil else { continue }
             if video.identifier == failedPrimaryIdentifier { continue }
             if video.identifier == finishedPrimaryIdentifier { continue }
+            if VideoStateCache.shared.isVideoFinished(video.identifier) { continue }
             if video.identifier == primaryBelowContinueIdentifier { continue }
             return video
         }
@@ -1668,7 +1671,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         while candidateIndex >= 0 && candidateIndex < visibleVideos.count {
             let candidate = visibleVideos[candidateIndex]
             let isVisible = isVideoOnScreen(candidate)
-            if isVisible {
+            if isVisible,
+               candidate.identifier != finishedPrimaryIdentifier,
+               !VideoStateCache.shared.isVideoFinished(candidate.identifier) {
                 nextVideo = candidate
                 break
             }
@@ -1718,6 +1723,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
             if isPrimaryFinished {
                 finishedPrimaryIdentifier = primaryId
+                VideoStateCache.shared.markVideoFinished(identifier: primaryId)
                 playNextVisibleVideo()
             }
         }

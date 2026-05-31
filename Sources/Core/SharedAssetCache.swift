@@ -706,7 +706,7 @@ class SharedAssetCache: ObservableObject {
             // This catches broken players that occur after backgrounding
             if !isPlayerHealthy(player, for: mediaID) {
                 print("🔄 [PLAYER HEALTH] Removing unhealthy player \(mediaID.prefix(8)) - will recreate on next request")
-                removeInvalidPlayer(for: mediaID)
+                removeInvalidPlayer(for: mediaID, force: true)
                 return nil
             }
 
@@ -929,10 +929,11 @@ class SharedAssetCache: ObservableObject {
             return
         }
         playerCache.removeValue(forKey: mediaID)
-        if force {
-        }
+        preloadedPlayerMids.remove(mediaID)
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
     }
-    
+
     /// Clear asset cache for a specific mediaID
     @MainActor func clearAssetCache(for mediaID: String) {
         assetCache.removeValue(forKey: mediaID)

@@ -170,7 +170,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// stuck at the first buffer gap after play() was requested.
     private var playbackStartupRecoveryTask: Task<Void, Never>?
     private var playbackStartupRecoveryRequestDate: Date?
-    private var playbackStartupProgressExtensionCount = 0
+    private var playbackRecoveryProgressExtensionCount = 0
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -1265,18 +1265,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                       !self.isVideoAtEnd(player) else { return }
             }
 
-            if isStartupRecovery, bufferedAhead > 0 {
+            let label = isStartupRecovery ? "startup recovery" : "playback recovery"
+            if bufferedAhead > 0 {
                 player.automaticallyWaitsToMinimizeStalling = false
                 player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                 player.play()
                 self.updateLoadingSpinnerForPlayback(player)
 
-                if self.playbackStartupProgressExtensionCount < 3 {
-                    self.playbackStartupProgressExtensionCount += 1
+                if self.playbackRecoveryProgressExtensionCount < 3 {
+                    self.playbackRecoveryProgressExtensionCount += 1
                     self.lastPlaybackRequestDate = Date()
                     self.playbackStartupRecoveryTask = nil
                     self.playbackStartupRecoveryRequestDate = nil
-                    print("\(self.logPrefix) ⏳ startup recovery (\(reason)): still buffering, preserving player (buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp), extension=\(self.playbackStartupProgressExtensionCount))")
+                    print("\(self.logPrefix) ⏳ \(label) (\(reason)): still buffering, preserving player (buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp), extension=\(self.playbackRecoveryProgressExtensionCount))")
                     self.scheduleStartupRecovery(for: player, reason: "\(reason)-buffering")
                     return
                 }
@@ -1292,7 +1293,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 self.preserveFrameToCache()
             }
 
-            let label = isStartupRecovery ? "startup recovery" : "playback recovery"
             print("\(self.logPrefix) 🔄 \(label) (\(reason)): rebuilding stuck player, pos=\(String(format: "%.1f", recoverySeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp)")
             SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
             self.cleanupVideoPlayer(reason: "startupRecovery.stuckWaiting")
@@ -1739,7 +1739,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.isMuted = MuteState.shared.isMuted
         lastPlaybackRequestDate = Date()
-        playbackStartupProgressExtensionCount = 0
+        playbackRecoveryProgressExtensionCount = 0
         player.play()
         scheduleStartupRecovery(for: player, reason: "actuallyStartPlayback")
 
@@ -2079,7 +2079,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
                 if player.timeControlStatus == .playing {
                     self.lastActualPlaybackDate = Date()
-                    self.playbackStartupProgressExtensionCount = 0
+                    self.playbackRecoveryProgressExtensionCount = 0
                     self.playbackStartupRecoveryTask?.cancel()
                     self.playbackStartupRecoveryTask = nil
                     self.playbackStartupRecoveryRequestDate = nil
@@ -2936,7 +2936,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         hasRenderedFrameForCurrentPlayer = false
         lastPlaybackRequestDate = .distantPast
         lastPlaybackNudgeDate = .distantPast
-        playbackStartupProgressExtensionCount = 0
+        playbackRecoveryProgressExtensionCount = 0
         lastLoggedTimeControlStatus = nil
         lastLoggedTimeControlBucket = -1
         lastLoggedTimeControlDate = .distantPast
