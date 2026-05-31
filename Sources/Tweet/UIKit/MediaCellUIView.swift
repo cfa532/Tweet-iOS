@@ -183,6 +183,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Last time AVPlayer confirmed playing (timeControlStatus == .playing).
     /// Used by stall-check to distinguish HLS buffer gaps from genuine stalls.
     private var lastActualPlaybackDate: Date = .distantPast
+    /// Last time the playback clock actually advanced. AVPlayer can briefly
+    /// report .playing while the visible frame is still frozen.
+    private var lastPlaybackProgressDate: Date = .distantPast
+    private var lastObservedPlaybackSeconds: Double = 0
+    private var lastPlaybackRequestPositionSeconds: Double = 0
     /// True after the current AVPlayerLayer has rendered a frame for this player.
     /// This lets visible non-primary videos stop their spinner once they have
     /// something real to show, even if frame capture did not produce a poster.
@@ -407,8 +412,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // play() and the first .waitingToPlayAtSpecifiedRate / .playing KVO callback.
             if state == .playing,
                let player = self.player,
-               player.timeControlStatus != .playing,
-               !isVideoAtEnd(player) {
+               !isVideoAtEnd(player),
+               !isVisibleVideoFrameReady(player) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -953,6 +958,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         }
         hasRenderedFrameForCurrentPlayer = false
+        resetPlaybackProgressTracking(to: newPlayer.currentTime())
         removePlayerObservers()
         self.player = newPlayer
         // Notify other feed cells that may hold the same player (tweet + retweet case)
@@ -1086,7 +1092,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// A video is visually ready only once playback has started and the layer can display frames.
     private func isVisibleVideoFrameReady(_ player: AVPlayer) -> Bool {
-        player.timeControlStatus == .playing && videoPlayerView.isLayerReadyForDisplay
+        guard player.timeControlStatus == .playing,
+              videoPlayerView.isLayerReadyForDisplay else { return false }
+
+        let currentSeconds = seconds(from: player.currentTime())
+        let advancedSinceRequest = currentSeconds >= lastPlaybackRequestPositionSeconds + 0.15
+        let hasRecentProgress = Date().timeIntervalSince(lastPlaybackProgressDate) < 1.25
+        return advancedSinceRequest && hasRecentProgress
     }
 
     /// Keep the spinner up until the user can actually see moving video content.
@@ -1203,6 +1215,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         if lastPlaybackRequestDate == .distantPast {
             lastPlaybackRequestDate = Date()
+            lastPlaybackRequestPositionSeconds = seconds(from: player.currentTime())
         }
         player.play()
         updateLoadingSpinnerForPlayback(player)
@@ -1698,8 +1711,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             player.volume = 1.0
             if isSingleMedia, let mid = attachment?.mid {
                 setupVideoTimer(videoMid: mid)
-                startPlayerTimeObserver()
             }
+            startPlayerTimeObserver()
             if player.timeControlStatus != .playing {
                 nudgePlaybackIfWaiting(player, reason: "\(reason)-rateAlreadyPositive")
             }
@@ -1743,14 +1756,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.isMuted = MuteState.shared.isMuted
         lastPlaybackRequestDate = Date()
+        resetPlaybackProgressTracking(to: player.currentTime())
         playbackRecoveryProgressExtensionCount = 0
+        startPlayerTimeObserver()
         player.play()
         scheduleStartupRecovery(for: player, reason: "actuallyStartPlayback")
 
         // Show timer when playback starts
         if isSingleMedia {
             setupVideoTimer(videoMid: mid)
-            startPlayerTimeObserver()
         }
     }
 
@@ -1962,21 +1976,21 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // If playback already started before status reached readyToPlay,
                     // reveal player layer now (safe point) instead of relying on an
                     // earlier .playing callback that may have fired while still unknown.
-                    // Also stop the spinner: requestPlaybackStartIfNeeded may have started
-                    // it while waiting for statusKVO, but since rate > 0 the rate==0 guard
-                    // at firstReadyTransition skips requestPlaybackStartIfNeeded, leaving
-                    // the spinner running forever.
+                    // Keep the spinner until the playback clock advances; AVPlayer can
+                    // report .playing while the visible frame is still frozen.
                     if let player = self.player,
                        player.timeControlStatus == .playing,
                        (self.videoCellState == .playing || self.videoCellState == .playerReady) {
                         self.updateLoadingSpinnerForPlayback(player)
-                        if self.videoPlayerView.isLayerReadyForDisplay {
+                        if self.isVisibleVideoFrameReady(player) {
                             self.imageView.isHidden = true
                         } else {
                             self.addReadyForDisplayAction { [weak self] in
                                 guard let self, let player = self.player else { return }
                                 self.updateLoadingSpinnerForPlayback(player)
-                                self.imageView.isHidden = true
+                                if self.isVisibleVideoFrameReady(player) {
+                                    self.imageView.isHidden = true
+                                }
                             }
                         }
                     }
@@ -2091,15 +2105,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         player.automaticallyWaitsToMinimizeStalling = true
                     }
                     self.updateLoadingSpinnerForPlayback(player)
-                    // Smooth playback confirmed — hide thumbnail cover to reveal actual video
+                    // Hide thumbnail cover only once playback is visibly advancing.
                     if self.isActuallyPlayerReady(player) && (self.videoCellState == .playing || self.videoCellState == .playerReady) {
-                        if self.videoPlayerView.isLayerReadyForDisplay {
+                        if self.isVisibleVideoFrameReady(player) {
                             self.imageView.isHidden = true
                         } else {
                             self.addReadyForDisplayAction { [weak self] in
                                 guard let self, let player = self.player else { return }
                                 self.updateLoadingSpinnerForPlayback(player)
-                                self.imageView.isHidden = true
+                                if self.isVisibleVideoFrameReady(player) {
+                                    self.imageView.isHidden = true
+                                }
                             }
                         }
                     }
@@ -2258,17 +2274,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         timerLabel.text = "0:00"
     }
 
-    /// Attach a periodic time observer to the player to drive the timer label.
-    /// Called from configurePlayer() once we have a valid AVPlayer.
+    /// Attach a periodic time observer to track visible playback progress and
+    /// drive the timer label for single-media videos.
     private func startPlayerTimeObserver() {
-        guard isSingleMedia else { return }
         removePlayerTimeObserver()
 
         guard let player = player else { return }
-        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         timeObserverPlayer = player
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            self?.updateTimerLabel(currentTime: time)
+            guard let self else { return }
+            self.recordPlaybackProgress(currentTime: time)
+            if self.isSingleMedia {
+                self.updateTimerLabel(currentTime: time)
+            }
         }
     }
 
@@ -2278,6 +2297,30 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         timeObserverToken = nil
         timeObserverPlayer = nil
+    }
+
+    private func resetPlaybackProgressTracking(to time: CMTime = .zero) {
+        let currentSeconds = seconds(from: time)
+        lastPlaybackProgressDate = .distantPast
+        lastObservedPlaybackSeconds = currentSeconds.isFinite ? currentSeconds : 0
+        lastPlaybackRequestPositionSeconds = lastObservedPlaybackSeconds
+    }
+
+    private func recordPlaybackProgress(currentTime: CMTime) {
+        let currentSeconds = seconds(from: currentTime)
+        guard currentSeconds.isFinite else { return }
+
+        if currentSeconds > lastObservedPlaybackSeconds + 0.05 {
+            lastObservedPlaybackSeconds = currentSeconds
+            lastPlaybackProgressDate = Date()
+            if let player, coordinatorWantsToPlay {
+                updateLoadingSpinnerForPlayback(player)
+                if isVisibleVideoFrameReady(player),
+                   videoCellState == .playing || videoCellState == .playerReady {
+                    imageView.isHidden = true
+                }
+            }
+        }
     }
 
     private func updateTimerLabel(currentTime: CMTime) {
@@ -2940,6 +2983,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         hasRenderedFrameForCurrentPlayer = false
         lastPlaybackRequestDate = .distantPast
         lastPlaybackNudgeDate = .distantPast
+        resetPlaybackProgressTracking()
         playbackRecoveryProgressExtensionCount = 0
         lastLoggedTimeControlStatus = nil
         lastLoggedTimeControlBucket = -1
