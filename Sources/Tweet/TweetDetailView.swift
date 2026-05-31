@@ -573,8 +573,8 @@ struct DetailMediaCell: View {
         print("DEBUG: [TweetDetailView] Starting network load for \(loadId)")
         loading = true
         
-        // Use high priority for visible images in detail view
-        GlobalImageLoadManager.shared.loadImageHighPriority(
+        // Detail-visible images should outrank preload/background image work.
+        GlobalImageLoadManager.shared.loadImageCriticalPriority(
             id: loadId,
             url: url,
             attachment: attachment,

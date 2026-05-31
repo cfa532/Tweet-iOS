@@ -28,6 +28,19 @@ enum ImageLoadingPriority: Int, CaseIterable {
             return .userInteractive
         }
     }
+
+    var taskPriority: TaskPriority {
+        switch self {
+        case .low:
+            return .utility
+        case .normal:
+            return .medium
+        case .high:
+            return .userInitiated
+        case .critical:
+            return .userInteractive
+        }
+    }
 }
 
 // MARK: - Image Load Request
@@ -58,6 +71,7 @@ class GlobalImageLoadManager: ObservableObject {
     
     // MARK: - Configuration
     private let maxConcurrentLoads = 4   // Keep image fanout small so visible media gets bandwidth faster
+    private let maxConcurrentCriticalLoads = 8 // Visible images may burst past the normal preload cap
     private let reservedHighPrioritySlots = 2  // Slots reserved for critical/high priority requests
     private let maxQueueSize = 50
     private let memoryWarningThreshold = 0.75 // Foreground cache can use more memory; background clears it
@@ -477,7 +491,7 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func startLoading(_ request: ImageLoadRequest) {
-        let task = Task {
+        let task = Task(priority: request.priority.taskPriority) {
             // Check if image is already cached
             if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                 await MainActor.run {
@@ -631,7 +645,7 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func startLoadingOptimized(_ request: ImageLoadRequest, maxSize: CGSize) {
-        let task = Task {
+        let task = Task(priority: request.priority.taskPriority) {
             do {
                 // Check cancellation early
                 try Task.checkCancellation()
@@ -852,6 +866,9 @@ class GlobalImageLoadManager: ObservableObject {
     /// Last `reservedHighPrioritySlots` slots are reserved for critical/high priority requests.
     private func canStartLoad(priority: ImageLoadingPriority) -> Bool {
         let active = activeLoads.count
+        if priority == .critical {
+            return active < maxConcurrentCriticalLoads
+        }
         if active < maxConcurrentLoads - reservedHighPrioritySlots {
             return true // Unreserved slots available for any priority
         }

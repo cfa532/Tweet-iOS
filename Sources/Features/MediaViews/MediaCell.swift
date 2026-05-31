@@ -475,9 +475,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                     self.isLoading = false
                 } else {
                     print("DEBUG: [MediaCell] No cached image found, starting network load for \(attachmentCopy.mid)")
-                    // If no cached image at all, start loading with global manager
-                    // Use normal priority for grid images (they're visible but not as critical as detail view)
-                    GlobalImageLoadManager.shared.loadImageNormalPriority(
+                    // If no cached image at all, visible cells outrank preload/background image work.
+                    GlobalImageLoadManager.shared.loadImageCriticalPriority(
                         id: attachmentCopy.mid,
                         url: url,
                         attachment: attachmentCopy,

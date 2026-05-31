@@ -654,8 +654,8 @@ struct MediaBrowserView: View {
             return 
         }
         
-        // Use normal priority to load and cache compressed image
-        GlobalImageLoadManager.shared.loadImageNormalPriority(
+        // Fullscreen-visible media should outrank preload/background image work.
+        GlobalImageLoadManager.shared.loadImageCriticalPriority(
             id: loadId,
             url: url,
             attachment: attachment,
