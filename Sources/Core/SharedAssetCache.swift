@@ -26,8 +26,12 @@ private struct CacheMetadata: Codable {
 class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
     
-    // CRITICAL: Track visible videos to prevent their players from being removed
-    private var visibleVideoMids: Set<String> = []
+    // CRITICAL: Track visible videos to prevent their players from being removed.
+    // Count by media ID because the same video can be visible in more than one cell.
+    private var visibleVideoMidCounts: [String: Int] = [:]
+    private var visibleVideoMids: Set<String> {
+        Set(visibleVideoMidCounts.keys)
+    }
 
     // Track preloaded players (next videos in scroll direction) — protected from LRU eviction
     private var preloadedPlayerMids: Set<String> = []
@@ -722,12 +726,17 @@ class SharedAssetCache: ObservableObject {
     /// Remove invalid cached player
     /// Mark a video as visible (prevents player removal)
     func markAsVisible(_ mediaID: String) {
-        visibleVideoMids.insert(mediaID)
+        visibleVideoMidCounts[mediaID, default: 0] += 1
     }
     
     /// Mark a video as not visible (allows player removal)
     func markAsNotVisible(_ mediaID: String) {
-        visibleVideoMids.remove(mediaID)
+        let nextCount = max((visibleVideoMidCounts[mediaID] ?? 0) - 1, 0)
+        if nextCount == 0 {
+            visibleVideoMidCounts.removeValue(forKey: mediaID)
+        } else {
+            visibleVideoMidCounts[mediaID] = nextCount
+        }
     }
 
     /// Media IDs that must not be evicted while app is in foreground.
@@ -832,7 +841,7 @@ class SharedAssetCache: ObservableObject {
 
         guard !mediaIDsToCancel.isEmpty else { return }
 
-        visibleVideoMids = visibleVideoMids.intersection(protected)
+        visibleVideoMidCounts = visibleVideoMidCounts.filter { protected.contains($0.key) }
         preloadedPlayerMids.removeAll()
         protectedPreloadMids.removeAll()
         preloadedPlayerGraceExpirations.removeAll()
@@ -2362,7 +2371,7 @@ class SharedAssetCache: ObservableObject {
         // Clear feed visibility state — feed is no longer on screen
         let previousVisible = visibleVideoMids.count
         let previousPreloaded = max(preloadedPlayerMids.count, protectedPreloadMids.count)
-        visibleVideoMids.removeAll()
+        visibleVideoMidCounts.removeAll()
         preloadedPlayerMids.removeAll()
         protectedPreloadMids.removeAll()
 
@@ -2755,7 +2764,7 @@ class SharedAssetCache: ObservableObject {
         tweetUrlMapping.removeAll()
         diskCacheStatus.removeAll()
 
-        visibleVideoMids.removeAll()
+        visibleVideoMidCounts.removeAll()
         preloadedPlayerMids.removeAll()
         protectedPreloadMids.removeAll()
 
