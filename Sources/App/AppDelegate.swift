@@ -609,23 +609,21 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         let hproseInstance = HproseInstance.shared
         
-        // Refresh appUser from server in background (non-blocking)
-        // getProviderIP() inside refreshAppUserFromServer() will handle all IP resolution
-        Task.detached {
-            do {
-                print("[AppDelegate] Refreshing appUser from server (getProviderIP handles IP resolution)...")
-                try await hproseInstance.refreshAppUserFromServer()
-                print("[AppDelegate] ✅ Successfully refreshed appUser from server")
-                
-                // Save updated user to cache
-                await MainActor.run {
-                    TweetCacheManager.shared.saveUser(hproseInstance.appUser)
-                    print("[AppDelegate] ✅ Saved refreshed appUser to cache")
-                }
-            } catch {
-                print("[AppDelegate] ⚠️ Failed to refresh appUser: \(error)")
-                // Non-fatal - we'll continue with cached data and retry on next API call
+        // Refresh appUser inline so callers can truly await completion.
+        // getProviderIP() inside refreshAppUserFromServer() will handle all IP resolution.
+        do {
+            print("[AppDelegate] Refreshing appUser from server (getProviderIP handles IP resolution)...")
+            try await hproseInstance.refreshAppUserFromServer()
+            print("[AppDelegate] ✅ Successfully refreshed appUser from server")
+            
+            // Save updated user to cache
+            await MainActor.run {
+                TweetCacheManager.shared.saveUser(hproseInstance.appUser)
+                print("[AppDelegate] ✅ Saved refreshed appUser to cache")
             }
+        } catch {
+            print("[AppDelegate] ⚠️ Failed to refresh appUser: \(error)")
+            // Non-fatal - we'll continue with cached data and retry on next API call
         }
     }
     

@@ -28,6 +28,11 @@ enum VideoCellState {
 // MARK: - MediaCellUIView
 
 class MediaCellUIView: UIView, MediaCellDelegate {
+#if DEBUG && VERBOSE_VIDEO_LOGS
+    private static let verboseLogsEnabled = true
+#else
+    private static let verboseLogsEnabled = false
+#endif
 
     // MARK: - Subviews
 
@@ -241,6 +246,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return "[VIDEO-\(shortMid)]"
     }
 
+    private func logVerbose(_ message: String) {
+        guard Self.verboseLogsEnabled else { return }
+        print("\(logPrefix) \(message)")
+    }
+
     // MARK: - Init
 
     override init(frame: CGRect) {
@@ -320,7 +330,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Log state transitions
         if oldState != state {
-            print("\(logPrefix) State: \(oldState) → \(state)")
+            logVerbose("State: \(oldState) → \(state)")
         }
 
         // Hide retry button when leaving .failed state
@@ -991,12 +1001,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // If coordinator already told us to play, attempt now — covers the case
             // where KVO fired before onReadyForDisplay (or didn't fire for preloaded players).
             if self.coordinatorWantsToPlay, let player = self.player {
-                print("\(self.logPrefix) 🖼️ onReadyForDisplay: coordinatorWants=true, calling requestPlayback")
+                self.logVerbose("🖼️ onReadyForDisplay: coordinatorWants=true, calling requestPlayback")
                 self.requestPlaybackStartIfNeeded(player, reason: "onReadyForDisplay-coordinatorWaiting")
             } else {
                 // Notify coordinator — video is ready. If idle, start; if primary is
                 // stuck (not actually playing), reset and pick a new primary.
-                print("\(self.logPrefix) 🖼️ onReadyForDisplay: coordinatorWants=false, checking stall")
+                self.logVerbose("🖼️ onReadyForDisplay: coordinatorWants=false, checking stall")
                 (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
             }
         }
@@ -1195,7 +1205,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         updateLoadingSpinnerForPlayback(player)
 
         lastPlaybackNudgeDate = now
-        print("\(logPrefix) 🔄 playback nudge (\(reason)): timeControl=\(player.timeControlStatus.rawValue), buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp), bypassWait=\(shouldBypassStartupWait)")
+        logVerbose("🔄 playback nudge (\(reason)): timeControl=\(player.timeControlStatus.rawValue), buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp), bypassWait=\(shouldBypassStartupWait)")
 
         scheduleStartupRecovery(for: player, reason: reason)
     }
@@ -1297,7 +1307,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let hasPlayer = player != nil
         let itemStatus = player?.currentItem?.status.rawValue ?? -1
         let rate = player?.rate ?? -1
-        print("\(logPrefix) 🎬 shouldPlayVideo: state=\(videoCellState), hasPlayer=\(hasPlayer), itemStatus=\(itemStatus), rate=\(rate)")
+        logVerbose("🎬 shouldPlayVideo: state=\(videoCellState), hasPlayer=\(hasPlayer), itemStatus=\(itemStatus), rate=\(rate)")
 
         isHandlingFinishEvent = false
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
@@ -1565,7 +1575,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 guard let self else { return }
                 DispatchQueue.main.async {
                     guard self.attachment?.mid == mid else { return }
-                    print("\(self.logPrefix) 🔄 recovery seek restored \(String(format: "%.1f", recoveryTime.seconds))s")
+                    self.logVerbose("🔄 recovery seek restored \(String(format: "%.1f", recoveryTime.seconds))s")
                     self.startPlaybackWithFade(player)
                 }
             }
@@ -1594,11 +1604,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Start playback if coordinator wants to play and player isn't already playing.
     private func requestPlaybackStartIfNeeded(_ player: AVPlayer, reason: String) {
         guard coordinatorWantsToPlay else {
-            print("\(logPrefix) ⏸️ requestPlayback(\(reason)): skipped, coordinatorWantsToPlay=false")
+            logVerbose("⏸️ requestPlayback(\(reason)): skipped, coordinatorWantsToPlay=false")
             return
         }
         guard isVisible else {
-            print("\(logPrefix) 👻 requestPlayback(\(reason)): skipped, cell not visible")
+            logVerbose("👻 requestPlayback(\(reason)): skipped, cell not visible")
             return
         }
         // Guard against premature play() when onReadyForDisplay fires from a stale GPU frame
@@ -1609,7 +1619,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // by enabling network + calling actuallyStartPlayback() directly.
         guard isActuallyPlayerReady(player) else {
             let itemStatus = player.currentItem?.status
-            print("\(logPrefix) ⏸️ requestPlayback(\(reason)): item not ready (status=\(itemStatus?.rawValue ?? -1)), deferring to statusKVO")
+            logVerbose("⏸️ requestPlayback(\(reason)): item not ready (status=\(itemStatus?.rawValue ?? -1)), deferring to statusKVO")
             // If item is in a terminal failure state or has no currentItem, statusKVO will
             // never fire .readyToPlay. Clean up and re-acquire instead of spinning forever.
             if itemStatus == .failed || player.currentItem == nil {
@@ -1646,13 +1656,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return
         }
 
-        print("\(logPrefix) ▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
+        logVerbose("▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
 
         if player.rate > 0 {
             // Already told to play — sync UI state.
             videoPlayerView.isHidden = false
             if videoCellState != .playing {
-                print("\(logPrefix) State: \(videoCellState) → playing")
+                logVerbose("State: \(videoCellState) → playing")
                 videoCellState = .playing
             }
             // Only stop spinner if actually rendering frames. rate > 0 just means
@@ -1694,7 +1704,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // imageView stays as-is: visible (thumbnail cover) or hidden (layer showing).
         // timeControlStatus KVO will hide the thumbnail when smooth playback starts.
         if videoCellState != .playing {
-            print("\(logPrefix) State: \(videoCellState) → playing")
+            logVerbose("State: \(videoCellState) → playing")
         }
         videoCellState = .playing
         retryButton.isHidden = true
@@ -1924,7 +1934,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     self.statusUnknownFallbackTask = nil
 
                     let firstReadyTransition = change.oldValue != .readyToPlay
-                    print("\(self.logPrefix) 📺 statusKVO: readyToPlay (first=\(firstReadyTransition), coordWants=\(self.coordinatorWantsToPlay), state=\(self.videoCellState))")
+                    self.logVerbose("📺 statusKVO: readyToPlay (first=\(firstReadyTransition), coordWants=\(self.coordinatorWantsToPlay), state=\(self.videoCellState))")
 
                     // If playback already started before status reached readyToPlay,
                     // reveal player layer now (safe point) instead of relying on an
@@ -2044,7 +2054,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
                     logMsg += ", reason=\(reason), ranges=[\(ranges)], bufEmpty=\(bufferEmpty), keepUp=\(keepUp)"
                 }
-                print(logMsg)
+                if Self.verboseLogsEnabled {
+                    print(logMsg)
+                }
 
                 if player.timeControlStatus == .playing {
                     self.lastActualPlaybackDate = Date()

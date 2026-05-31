@@ -278,6 +278,27 @@ struct TweetListView: View {
                 await refreshTweets()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in
+            // Cold start guard: if initial page loaded before initialization finished
+            // (or before any cache existed), force a retry once appUser/baseUrl is ready.
+            Task {
+                print("🚀 [INIT RETRY] .appUserReady received for feed=\(feedIdentifier), tweets=\(tweets.count), isLoading=\(isLoading), isLoadingMore=\(isLoadingMore)")
+                var waitCount = 0
+                while waitCount < 20 && (isLoading || isLoadingMore) {
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                    waitCount += 1
+                }
+                if waitCount > 0 {
+                    print("⏳ [INIT RETRY] Waited \(waitCount * 100)ms for loading to settle, feed=\(feedIdentifier)")
+                }
+                guard tweets.isEmpty else {
+                    print("✅ [INIT RETRY] Skipped retry because feed already has \(tweets.count) tweet(s), feed=\(feedIdentifier)")
+                    return
+                }
+                print("🔄 [INIT RETRY] Triggering refreshTweets() after init completion, feed=\(feedIdentifier)")
+                await refreshTweets()
+            }
+        }
         .onChange(of: externalRefreshToken) { _, _ in
             Task {
                 await reloadFromServerAfterRouteChange()

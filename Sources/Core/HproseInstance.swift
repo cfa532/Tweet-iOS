@@ -443,8 +443,21 @@ final class HproseInstance: ObservableObject {
     
     /// Manually mark initialization as complete (for cases where initialize() is not called)
     func markInitializationComplete() {
+        let wasAlreadyComplete = isInitializationComplete
         isAppInitializing = false
         isInitializationComplete = true
+        
+        // Keep startup hooks consistent with initAppEntry() paths.
+        // Post only on the transition to "complete" to avoid duplicate work.
+        if !wasAlreadyComplete {
+            print("DEBUG: [HproseInstance] Posting .appUserReady from markInitializationComplete()")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .appUserReady, object: nil)
+            }
+        } else {
+            print("DEBUG: [HproseInstance] markInitializationComplete() called but already complete; skipping .appUserReady")
+        }
+        
         print("DEBUG: [HproseInstance] Manually marked initialization as complete")
     }
     

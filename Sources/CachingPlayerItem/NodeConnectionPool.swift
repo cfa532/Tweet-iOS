@@ -21,6 +21,11 @@ import Foundation
 
 actor NodeConnectionPool {
     let nodeHost: String
+#if DEBUG && VERBOSE_VIDEO_LOGS
+    private static let verboseLogsEnabled = true
+#else
+    private static let verboseLogsEnabled = false
+#endif
     /// Cap on concurrent preload downloads. Primary slots are separate and don't count here.
     private let maxPreloadSlots = 3
 
@@ -54,7 +59,9 @@ actor NodeConnectionPool {
             let current = activeSlots[mediaID] ?? 0
             if current < primarySlotCap {
                 occupy(mediaID: mediaID)
-                print("🎰 [POOL \(nodeHost)] PRIMARY \(short) slot \(current + 1)/\(primarySlotCap) (preload=\(nonPrimaryActive)/\(maxPreloadSlots))")
+                if Self.verboseLogsEnabled {
+                    print("🎰 [POOL \(nodeHost)] PRIMARY \(short) slot \(current + 1)/\(primarySlotCap) (preload=\(nonPrimaryActive)/\(maxPreloadSlots))")
+                }
                 return true
             } else {
                 return false
@@ -87,7 +94,9 @@ actor NodeConnectionPool {
         }
         if released > 0 {
             let short = primaryMediaID.map { String($0.prefix(8)) } ?? "nil"
-            print("🎰 [POOL \(nodeHost)] force-released \(released) non-primary slots (primary=\(short), preload=\(nonPrimaryActive)/\(maxPreloadSlots))")
+            if Self.verboseLogsEnabled {
+                print("🎰 [POOL \(nodeHost)] force-released \(released) non-primary slots (primary=\(short), preload=\(nonPrimaryActive)/\(maxPreloadSlots))")
+            }
         }
     }
 

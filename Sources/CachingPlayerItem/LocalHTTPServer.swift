@@ -202,13 +202,17 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                               nsError.code == NSURLErrorNetworkConnectionLost ||
                               nsError.code == NSURLErrorNotConnectedToInternet
             if isTransient {
-                print("⚠️ [DOWNLOAD \(shortId)\(startLabel)] Transient error (\(nsError.domain) \(nsError.code)), \(sentBytesCount / 1024)KB sent")
+                if LocalHTTPServer.verboseLogsEnabled {
+                    print("⚠️ [DOWNLOAD \(shortId)\(startLabel)] Transient error (\(nsError.domain) \(nsError.code)), \(sentBytesCount / 1024)KB sent")
+                }
             } else {
                 print("❌ [DOWNLOAD \(shortId)\(startLabel)] Failed: \(nsError.domain) \(nsError.code)")
                 BlackList.shared.recordFailure(mediaID)
             }
         } else {
-            print("✅ [DOWNLOAD \(shortId)\(startLabel)] Complete: \(sentBytesCount / 1024)KB")
+            if LocalHTTPServer.verboseLogsEnabled {
+                print("✅ [DOWNLOAD \(shortId)\(startLabel)] Complete: \(sentBytesCount / 1024)KB")
+            }
         }
 
         // Send TCP FIN so AVPlayer detects end-of-body (Connection: close).
@@ -304,6 +308,11 @@ private final class URLSessionTrackingBox {
 
 public class LocalHTTPServer: @unchecked Sendable {
     public static let shared = LocalHTTPServer()
+#if DEBUG && VERBOSE_VIDEO_LOGS
+    fileprivate static let verboseLogsEnabled = true
+#else
+    fileprivate static let verboseLogsEnabled = false
+#endif
 
     private var listener: NWListener?
     public private(set) var port: UInt16 = 8080  // Public read, private write
@@ -1736,7 +1745,9 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         session.dataTask(with: streamRequest).resume()
-        print("📡 [DOWNLOAD \(shortId)] range=\(rangeHeader ?? "full")\(shouldCache ? "" : " (no-cache)")")
+        if Self.verboseLogsEnabled {
+            print("📡 [DOWNLOAD \(shortId)] range=\(rangeHeader ?? "full")\(shouldCache ? "" : " (no-cache)")")
+        }
     }
 
     // MARK: - Progressive Video Cache Helpers
