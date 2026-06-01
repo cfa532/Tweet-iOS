@@ -72,6 +72,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return btn
     }()
 
+    /// Replay button shown only after this video has naturally played to the end.
+    private lazy var replayButton: UIButton = {
+        let btn = UIButton(type: .system)
+        let config = UIImage.SymbolConfiguration(pointSize: 34, weight: .light)
+        btn.setImage(UIImage(systemName: "arrow.counterclockwise.circle", withConfiguration: config), for: .normal)
+        btn.tintColor = .white.withAlphaComponent(0.8)
+        btn.backgroundColor = .clear
+        btn.addTarget(self, action: #selector(replayTapped), for: .touchUpInside)
+        btn.accessibilityLabel = "Replay video"
+        btn.isHidden = true
+        return btn
+    }()
+
     /// Mute button background circle (26pt visual, inside 44pt touch area)
     private let muteCircleLayer: CALayer = {
         let layer = CALayer()
@@ -157,7 +170,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var setupPlayerTask: Task<Void, Never>?
 
     /// Debounce task that delays player acquisition during fast scroll.
-    /// Cancelled if the cell scrolls off-screen within 0.3s of configure().
+    /// Cancelled if the cell scrolls off-screen within 0.5s of configure().
     private var playerAcquireDebounceTask: Task<Void, Never>?
 
     /// Fallback task: if item.status stays .unknown after deferring to statusKVO,
@@ -275,6 +288,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         addSubview(imageView)
         addSubview(loadingSpinner)
         addSubview(retryButton)
+        addSubview(replayButton)
         addSubview(fullscreenOverlay)
         fullscreenOverlay.addSubview(fullscreenSpinner)
         addSubview(muteButton)
@@ -297,6 +311,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         retryButton.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
         retryButton.center = CGPoint(x: b.midX, y: b.midY)
+        replayButton.frame = CGRect(x: 0, y: 0, width: 56, height: 56)
+        replayButton.center = CGPoint(x: b.midX, y: b.minY + b.height * 0.618)
         fullscreenOverlay.frame = b
         fullscreenSpinner.center = CGPoint(x: b.midX, y: b.midY)
 
@@ -343,12 +359,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if state != .failed {
             retryButton.isHidden = true
         }
+        updateReplayButtonVisibility()
 
         switch state {
         case .noContent:
             imageView.isHidden = true
             videoPlayerView.isHidden = false  // black backdrop for spinner
-            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner(hasCover: false) {
+            if coordinatorWantsToPlay {
+                showPrimarySpinnerAfterDebounce()
+            } else if shouldShowVisibleVideoCoverSpinner(hasCover: false) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -359,7 +378,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // If this is the selected video, a newly captured cover frame should not
             // briefly dismiss loading feedback before AVPlayer is actually playing.
             if coordinatorWantsToPlay {
-                loadingSpinner.startAnimating()
+                showPrimarySpinnerAfterDebounce()
             } else {
                 loadingSpinner.stopAnimating()
             }
@@ -373,7 +392,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             videoPlayerView.isHidden = hasThumbnail
             // Primary videos always show loading chrome. Visible non-primary videos
             // also show it until their cover frame arrives; off-screen preloads stay quiet.
-            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner() {
+            if coordinatorWantsToPlay {
+                showPrimarySpinnerAfterDebounce(for: player)
+            } else if shouldShowVisibleVideoCoverSpinner() {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -395,11 +416,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Keep primary feedback on, and keep visible non-primary feedback on until
             // a cover frame exists. Off-screen preloads should not show spinner chrome.
             if coordinatorWantsToPlay {
-                if let player, shouldDelayPrimarySpinner(for: player) {
-                    showPrimarySpinnerWithOptionalDelay(for: player)
-                } else {
-                    loadingSpinner.startAnimating()
-                }
+                showPrimarySpinnerAfterDebounce(for: player)
             } else if shouldShowVisibleVideoCoverSpinner(hasCover: hasDisplayableCover) {
                 loadingSpinner.startAnimating()
             } else {
@@ -414,7 +431,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                let player = self.player,
                !isVideoAtEnd(player),
                !isVisibleVideoFrameReady(player) {
-                loadingSpinner.startAnimating()
+                showPrimarySpinnerAfterDebounce(for: player)
             } else {
                 loadingSpinner.stopAnimating()
             }
@@ -426,6 +443,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // from prematurely revealing wrong frames during seek/resume.
             imageView.isHidden = (imageView.image == nil)
         case .failed:
+            replayButton.isHidden = true
             // Prefer thumbnail (captured from last rendered frame) over black backdrop.
             // cleanupFailedPlayerState nils the player before we get here, so rely on
             // imageView which was set by preserveFrameToCache() earlier in the failure path.
@@ -448,6 +466,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func shouldShowVisibleVideoCoverSpinner(hasCover: Bool? = nil) -> Bool {
         isVisible && isVideoAttachment && shouldLoadVideo && !(hasCover ?? hasVideoCoverForSpinner)
+    }
+
+    private var shouldShowReplayButton: Bool {
+        guard isVisible, isVideoAttachment, let id = videoIdentifier else { return false }
+        return VideoStateCache.shared.isVideoFinished(id)
+    }
+
+    private func updateReplayButtonVisibility() {
+        replayButton.isHidden = !shouldShowReplayButton
     }
 
     // MARK: - Configure
@@ -500,6 +527,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         muteButton.isHidden = true
         timerLabel.isHidden = true
         retryButton.isHidden = true
+        replayButton.isHidden = true
         loadingSpinner.stopAnimating()
 
         guard let url = att.getUrl(effectiveBaseUrl) else { return }
@@ -777,7 +805,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
               playerAcquireDebounceTask == nil else { return }
 
         if let att = attachment,
-           SharedAssetCache.shared.getCachedPlayer(for: att.mid) != nil,
+           (VideoStateCache.shared.getCachedState(for: att.mid) != nil
+            || SharedAssetCache.shared.getCachedPlayer(for: att.mid) != nil),
            let url = att.getUrl(effectiveBaseUrl),
            let parentTweet = parentTweet {
             acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
@@ -785,7 +814,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         playerAcquireDebounceTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
             guard !Task.isCancelled,
                   let self else { return }
             defer { self.playerAcquireDebounceTask = nil }
@@ -797,7 +826,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                   let parentTweet = self.parentTweet else { return }
 
             // Skip if a player is already configured (coordinator may have acquired one
-            // during the 0.3s window). Without this guard, the debounce reconfigures
+            // during the 0.5s window). Without this guard, the debounce reconfigures
             // an already-playing player — causing a playing→playerLoading state reset.
             guard self.player == nil, self.setupPlayerTask == nil else { return }
             self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
@@ -1103,46 +1132,58 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Keep the spinner up until the user can actually see moving video content.
     private func updateLoadingSpinnerForPlayback(_ player: AVPlayer) {
-        let shouldShowSpinner = coordinatorWantsToPlay
-            && !isVideoAtEnd(player)
-            && !isVisibleVideoFrameReady(player)
-        if shouldShowSpinner {
-            cancelDelayedPrimarySpinner()
-            loadingSpinner.startAnimating()
+        if shouldShowPrimarySpinner(for: player) {
+            showPrimarySpinnerAfterDebounce(for: player)
         } else {
             cancelDelayedPrimarySpinner()
             loadingSpinner.stopAnimating()
         }
     }
 
-    private func shouldDelayPrimarySpinner(for player: AVPlayer?) -> Bool {
-        guard coordinatorWantsToPlay,
-              let player,
-              isActuallyPlayerReady(player),
-              !isVideoAtEnd(player) else { return false }
-        return hasVideoCoverForSpinner || videoPlayerView.isLayerReadyForDisplay
+    private func shouldShowPrimarySpinner(for player: AVPlayer? = nil) -> Bool {
+        guard coordinatorWantsToPlay else { return false }
+        guard let player else { return true }
+        return !isVideoAtEnd(player) && !isVisibleVideoFrameReady(player)
     }
 
-    private func showPrimarySpinnerWithOptionalDelay(for player: AVPlayer) {
-        cancelDelayedPrimarySpinner()
-
-        guard shouldDelayPrimarySpinner(for: player) else {
-            loadingSpinner.startAnimating()
+    private func showPrimarySpinnerAfterDebounce(for player: AVPlayer? = nil) {
+        guard shouldShowPrimarySpinner(for: player) else {
+            cancelDelayedPrimarySpinner()
+            loadingSpinner.stopAnimating()
             return
         }
 
+        if delayedPrimarySpinnerTask != nil {
+            loadingSpinner.stopAnimating()
+            return
+        }
+
+        cancelDelayedPrimarySpinner()
         loadingSpinner.stopAnimating()
-        delayedPrimarySpinnerTask = Task { @MainActor [weak self, weak player] in
+        delayedPrimarySpinnerTask = Task { @MainActor [weak self, player] in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard let self,
-                  let player,
-                  self.player === player,
-                  self.coordinatorWantsToPlay,
-                  self.videoCellState == .playing,
-                  !self.isVideoAtEnd(player),
-                  !self.isVisibleVideoFrameReady(player) else {
+                  self.coordinatorWantsToPlay else {
                 self?.delayedPrimarySpinnerTask = nil
                 return
+            }
+            let currentPlayer = player ?? self.player
+            if let currentPlayer {
+                if let player {
+                    guard self.player === player else {
+                        self.delayedPrimarySpinnerTask = nil
+                        return
+                    }
+                }
+                guard self.shouldShowPrimarySpinner(for: currentPlayer) else {
+                    self.delayedPrimarySpinnerTask = nil
+                    return
+                }
+            } else {
+                guard self.shouldShowPrimarySpinner() else {
+                    self.delayedPrimarySpinnerTask = nil
+                    return
+                }
             }
             self.delayedPrimarySpinnerTask = nil
             self.loadingSpinner.startAnimating()
@@ -1345,11 +1386,27 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         isHandlingFinishEvent = false
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
+        replayButton.isHidden = true
 
         // Don't auto-replay a video that already played to completion this session.
         // The user can still tap to watch it fullscreen; this only suppresses coordinator autoplay.
         if let id = videoIdentifier, VideoStateCache.shared.isVideoFinished(id) {
             coordinatorWantsToPlay = false
+            updateReplayButtonVisibility()
+            return
+        }
+
+        // A video that finished, left the viewport, and came back should autoplay
+        // from the already-cached player instead of being treated as a stall at end.
+        if let player = player,
+           isActuallyPlayerReady(player),
+           isVideoAtEnd(player, tolerance: 5.0) {
+            cancelDelayedPrimarySpinner()
+            loadingSpinner.stopAnimating()
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
+                self.requestPlaybackStartIfNeeded(player, reason: "coordinatorPlay-replayAfterReturn")
+            }
             return
         }
 
@@ -1668,8 +1725,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
                 return
             }
-            // Show spinner so the user sees loading feedback while waiting for statusKVO.
-            loadingSpinner.startAnimating()
+            // Primary loading feedback is debounced so cached/quick starts don't flash.
+            showPrimarySpinnerAfterDebounce(for: player)
 
             // FALLBACK: A paused HLS player with canUseNetworkResourcesForLiveStreamingWhilePaused=false
             // may never transition item.status from .unknown → .readyToPlay, causing a permanent spinner.
@@ -1747,7 +1804,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Show loading feedback only if playback does not start quickly. Cached
         // videos already have a poster/frame, so a 0.5s grace period avoids a
         // distracting spinner flash on instant starts.
-        showPrimarySpinnerWithOptionalDelay(for: player)
+        showPrimarySpinnerAfterDebounce(for: player)
 
         // Primary playback must own network recovery. Preloaded players may be
         // paused with background-friendly settings, so restore AVPlayer's normal
@@ -2192,10 +2249,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Pause immediately
         player.pause()
         player.isMuted = MuteState.shared.isMuted
-        VideoStateCache.shared.clearCachedState(for: mid)
         // Sync capture with skipImageView: imageView may hold a stale first-frame thumbnail,
         // so we go directly to video output to capture the actual last rendered frame.
         preserveFrameToCache(skipImageView: true)
+        VideoStateCache.shared.cacheVideoState(
+            for: mid,
+            player: player,
+            time: .zero,
+            wasPlaying: false,
+            originalMuteState: player.isMuted
+        )
 
         // Notify coordinator to advance to next video (include full identifier: tweet id + video id + index)
         var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweet?.mid ?? ""]
@@ -2205,13 +2268,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             object: nil,
             userInfo: userInfo
         )
-
-        VideoStateCache.shared.clearCache(for: mid, force: true)
-
         // Prevent coordinator from auto-replaying this video when it scrolls back into view.
         if let id = videoIdentifier {
             VideoStateCache.shared.markVideoFinished(identifier: id)
         }
+        coordinatorWantsToPlay = false
+        cancelDelayedPrimarySpinner()
+        loadingSpinner.stopAnimating()
+        updateReplayButtonVisibility()
     }
 
     // MARK: - Utilities
@@ -2371,6 +2435,54 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
     }
 
+    @objc private func replayTapped() {
+        replayFinishedVideo()
+    }
+
+    private func replayFinishedVideo() {
+        guard isVideoAttachment,
+              let att = attachment,
+              let url = att.getUrl(effectiveBaseUrl),
+              let parentTweet = parentTweet else { return }
+
+        let mid = att.mid
+        print("\(logPrefix) 🔁 Manual video replay")
+        if let id = videoIdentifier {
+            VideoStateCache.shared.clearVideoFinished(id)
+        }
+        VideoStateCache.shared.clearStoppedByCoordinator(mid)
+        VideoStateCache.shared.clearCache(for: mid, force: true)
+
+        replayButton.isHidden = true
+        retryButton.isHidden = true
+        isHandlingFinishEvent = false
+
+        if let id = videoIdentifier,
+           (videoCoordinator ?? .shared).replayFinishedVideo(identifier: id) {
+            return
+        }
+
+        // Fallback for rare cases where the coordinator has not rebuilt its video list yet.
+        if let player, isActuallyPlayerReady(player) {
+            (videoCoordinator ?? .shared).stopAllVideos()
+            LocalHTTPServer.shared.setPrimaryMediaID(mid)
+            coordinatorWantsToPlay = true
+            transitionTo(.playerReady)
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.coordinatorWantsToPlay, self.player === player else { return }
+                    self.requestPlaybackStartIfNeeded(player, reason: "replayButton")
+                }
+            }
+        } else {
+            (videoCoordinator ?? .shared).stopAllVideos()
+            LocalHTTPServer.shared.setPrimaryMediaID(mid)
+            coordinatorWantsToPlay = true
+            transitionTo(imageView.image != nil ? .thumbnail : .noContent)
+            acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+        }
+    }
+
     private func retryVideoLoad() {
         guard isVideoAttachment,
               let att = attachment,
@@ -2379,6 +2491,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         print("\(logPrefix) 🔄 Manual video retry")
         retryButton.isHidden = true
+        replayButton.isHidden = true
         coordinatorWantsToPlay = false
         if let player = player, isActuallyPlayerReady(player) {
             // Reload button restores the preview only. If this cell later becomes
@@ -2619,6 +2732,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if let id = videoIdentifier {
                 (videoCoordinator ?? .shared).registerDelegate(self, forIdentifier: id)
             }
+            updateReplayButtonVisibility()
 
             // If video was in failed state, trigger a fresh retry on becoming visible again.
             // Don't call clearPlayerForMediaID — disk cache is preserved for faster recovery.
@@ -2647,6 +2761,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 // Revert the isVisible flag — the cell is logically still visible
                 isVisible = true
                 return
+            }
+            replayButton.isHidden = true
+            if let id = videoIdentifier {
+                VideoStateCache.shared.clearVideoFinished(id)
+            }
+            if isHandlingFinishEvent, let player, isActuallyPlayerReady(player) {
+                player.pause()
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                isHandlingFinishEvent = false
+                cancelDelayedPrimarySpinner()
+                loadingSpinner.stopAnimating()
             }
 
             // Cancel image loads
@@ -2978,6 +3103,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerWasLoaned = false
         videoCellState = .noContent
         cancelDelayedPrimarySpinner()
+        replayButton.isHidden = true
         lastFrameCaptureAt = .distantPast
         lastActualPlaybackDate = .distantPast
         hasRenderedFrameForCurrentPlayer = false
@@ -3044,6 +3170,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         imageView.gestureRecognizers?.forEach { imageView.removeGestureRecognizer($0) }
         loadingSpinner.stopAnimating()
         retryButton.isHidden = true
+        replayButton.isHidden = true
         muteButton.isHidden = true
         timerLabel.isHidden = true
         fullscreenOverlay.isHidden = true

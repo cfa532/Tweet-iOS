@@ -962,6 +962,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // exclusion only after that specific cell leaves the viewport.
         if let finishedId = finishedPrimaryIdentifier,
            !currentVisibleIdentifiers.contains(finishedId) {
+            VideoStateCache.shared.clearVideoFinished(finishedId)
             finishedPrimaryIdentifier = nil
         }
 
@@ -1105,6 +1106,32 @@ class VideoPlaybackCoordinator: ObservableObject {
     func requestStartPlaybackIfIdle() {
         guard phase == .idle else { return }
         startPrimaryVideoPlayback()
+    }
+
+    /// User-initiated replay for a video that previously reached the end.
+    /// This clears the finished gate and makes the replayed video the active primary.
+    @discardableResult
+    func replayFinishedVideo(identifier: String) -> Bool {
+        guard let video = allVideos.first(where: { $0.identifier == identifier }),
+              let delegate = mediaCellDelegates[identifier] else {
+            return false
+        }
+
+        stopAllVideos()
+        VideoStateCache.shared.clearVideoFinished(identifier)
+        failedPrimaryIdentifier = nil
+        finishedPrimaryIdentifier = nil
+
+        phase = .primaryPlaying
+        primaryVideoId = identifier
+        currentlyPlayingVideoIds = [identifier]
+        cachedVisibilityRatios[identifier] = 0.7
+        lastPrimarySwitchTime = Date()
+        LocalHTTPServer.shared.setPrimaryMediaID(video.videoMid)
+
+        delegate.shouldPlayVideo(withMid: video.videoMid)
+        refreshDirectionalPreloads(reason: "manual replay", throttle: false)
+        return true
     }
 
     /// Called by media cells when ready. If coordinator is idle, starts playback.
