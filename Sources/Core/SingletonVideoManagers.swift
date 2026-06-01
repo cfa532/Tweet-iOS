@@ -1908,6 +1908,10 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
+        isBuffering = false
+        isPlaybackRendering = false
+        isItemReady = false
+        loadFailedVideoMid = nil
     }
     
     @Published var currentPlayer: AVPlayer?
@@ -1941,6 +1945,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
     private var loadGeneration: Int = 0
     @Published private(set) var isItemReady = false
+    @Published private(set) var loadFailedVideoMid: String?
     private var itemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
     private var pendingFeedResumeTime: CMTime?
@@ -1984,6 +1989,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     func loadVideo(url: URL, mid: String, mediaType: MediaType) {
         // Fast path: same video already loaded and healthy
         if currentVideoMid == mid, currentPlayer?.currentItem != nil, !isPlayerBroken() {
+            loadFailedVideoMid = nil
             applyStartupAudioMuteIfNeeded()
             if isItemReady {
                 isPlaying = true
@@ -2031,8 +2037,9 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         loadGeneration += 1
         let generation = loadGeneration
         isItemReady = false
-        isBuffering = false
+        isBuffering = true
         isPlaybackRendering = false
+        loadFailedVideoMid = nil
 
         // Clean up old observers
         itemStatusObserver?.invalidate()
@@ -2075,10 +2082,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
             setupDetailCompletionObserver(cachedItem)
             setupDetailTimeControlObserver()
-            if cachedItem.status == .readyToPlay {
+            if cachedItem.status == .failed {
+                print("❌ [DetailVideoManager] Cached player item failed: \(cachedItem.error?.localizedDescription ?? "unknown")")
+                loadFailedVideoMid = mid
+                isBuffering = false
+                isPlaying = false
+            } else if cachedItem.status == .readyToPlay {
                 isItemReady = true
+                isBuffering = false
                 seekAndPlay(playerItem: cachedItem, mid: mid)
             } else {
+                isBuffering = true
                 startDetailPlayback(playerItem: cachedItem, mid: mid)
                 cachedItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                 cachedPlayer.play()
@@ -2108,6 +2122,10 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 await MainActor.run {
                     guard self.loadGeneration == generation else { return }
                     print("❌ [DetailVideoManager] Failed to load video: \(error)")
+                    self.loadFailedVideoMid = mid
+                    self.isBuffering = false
+                    self.isPlaying = false
+                    self.isPlaybackRendering = false
                 }
             }
         }
@@ -2146,17 +2164,26 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
     private func startDetailPlayback(playerItem: AVPlayerItem, mid: String) {
         isPlaying = true
+        isBuffering = true
         itemStatusObserver = playerItem.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             guard let self = self else { return }
             DispatchQueue.main.async {
                 guard !self.isItemReady else { return }
                 if item.status == .readyToPlay {
                     self.isItemReady = true
+                    self.isBuffering = false
+                    self.loadFailedVideoMid = nil
                     self.itemStatusObserver?.invalidate()
                     self.itemStatusObserver = nil
                     self.seekAndPlay(playerItem: item, mid: mid)
                 } else if item.status == .failed {
                     print("❌ [DetailVideoManager] PlayerItem failed: \(item.error?.localizedDescription ?? "unknown")")
+                    self.loadFailedVideoMid = mid
+                    self.isBuffering = false
+                    self.isPlaying = false
+                    self.isPlaybackRendering = false
+                    self.itemStatusObserver?.invalidate()
+                    self.itemStatusObserver = nil
                 }
             }
         }
@@ -2463,6 +2490,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isItemReady = false
         isBuffering = false
         isPlaybackRendering = false
+        loadFailedVideoMid = nil
         pendingFeedResumeTime = nil
 
         // Remove legacy KVO observer before clearing (only if it was added)
@@ -2504,6 +2532,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isPlaying = false
         isPlayerLoaned = false
         isPlaybackRendering = false
+        loadFailedVideoMid = nil
     }
     
     /// Setup video completion observer

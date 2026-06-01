@@ -631,9 +631,22 @@ private struct DetailSingletonVideoPlayerView: View {
         manager.currentVideoMid == mid && manager.isPlaybackRendering
     }
 
-    /// True when loadVideo has been called for this mid but the item isn't ready yet
-    private var isThisVideoLoading: Bool {
-        manager.currentVideoMid == mid && manager.currentPlayer?.currentItem == nil
+    private var didThisVideoFailToLoad: Bool {
+        manager.loadFailedVideoMid == mid
+    }
+
+    /// True after loadVideo has been called for this mid and before readyToPlay/failure.
+    /// AVPlayer can already have a currentItem while that item is still .unknown; that
+    /// state still needs visible loading feedback instead of a blank black frame.
+    private var isThisVideoPreparing: Bool {
+        manager.currentVideoMid == mid
+            && !manager.isItemReady
+            && !didThisVideoFailToLoad
+    }
+
+    private var shouldShowLoadingSpinner: Bool {
+        isThisVideoPreparing
+            || (manager.currentVideoMid == mid && manager.isBuffering && !didThisVideoFailToLoad)
     }
 
     var body: some View {
@@ -651,7 +664,7 @@ private struct DetailSingletonVideoPlayerView: View {
                 thumbnailOrBlack
             }
 
-            if isThisVideoLoading || (manager.isBuffering && manager.currentVideoMid == mid) {
+            if shouldShowLoadingSpinner {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     .scaleEffect(1.5)
