@@ -97,7 +97,22 @@ class ProfileTweetsViewModel: ObservableObject {
             }
         }
     }
-    
+
+    func mergeResyncedTweets(_ resyncedTweets: [Tweet]) {
+        let visibleTweets = resyncedTweets.filter { tweet in
+            tweet.authorId == user.mid &&
+            (!(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid) &&
+            !pinnedTweetIds.contains(tweet.mid)
+        }
+
+        guard !visibleTweets.isEmpty else { return }
+        tweets.mergeTweets(visibleTweets)
+
+        for tweet in visibleTweets {
+            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+        }
+    }
+
     func handleDeletedTweet(_ tweetId: String) {
         tweets.removeAll { $0.mid == tweetId }
         TweetCacheManager.shared.deleteTweet(mid: tweetId)
@@ -145,6 +160,8 @@ struct ProfileTweetsSection<Header: View>: View {
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
     let routeRefreshToken: Int
+    let resyncedTweets: [Tweet]
+    let resyncedTweetsToken: Int
     @StateObject private var viewModel: ProfileTweetsViewModel
     let header: () -> Header
 
@@ -161,6 +178,8 @@ struct ProfileTweetsSection<Header: View>: View {
         onShowLogin: (() -> Void)? = nil,
         onShowToast: ((String, Bool) -> Void)? = nil,
         routeRefreshToken: Int = 0,
+        resyncedTweets: [Tweet] = [],
+        resyncedTweetsToken: Int = 0,
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
     ) {
         self.pinnedTweets = pinnedTweets
@@ -175,6 +194,8 @@ struct ProfileTweetsSection<Header: View>: View {
         self.onShowLogin = onShowLogin
         self.onShowToast = onShowToast
         self.routeRefreshToken = routeRefreshToken
+        self.resyncedTweets = resyncedTweets
+        self.resyncedTweetsToken = resyncedTweetsToken
         self.header = header
         self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
             hproseInstance: hproseInstance,
@@ -263,6 +284,9 @@ struct ProfileTweetsSection<Header: View>: View {
         }
         .onChange(of: pinnedTweetIds) { _, newPinnedTweetIds in
             viewModel.updatePinnedTweetIds(newPinnedTweetIds)
+        }
+        .onChange(of: resyncedTweetsToken) { _, _ in
+            viewModel.mergeResyncedTweets(resyncedTweets)
         }
         .onDisappear {
         }

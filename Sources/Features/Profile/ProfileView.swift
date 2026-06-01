@@ -11,10 +11,6 @@ struct ProfileView: View {
     @ObservedObject private var hproseInstance = HproseInstance.shared
     @Environment(\.dismiss) private var dismiss
     
-    /// Track users that have been resynced this app session to avoid redundant long-running operations
-    private static var resyncedUsersThisSession: Set<String> = []
-    private static let resyncLock = NSLock()
-    
     /// Navigation state
     @State private var selectedUserForNavigation: User? = nil
     @State private var userListDestination: UserListDestination? = nil
@@ -32,6 +28,8 @@ struct ProfileView: View {
     @State private var didLoad = false
     /// Bumped when stale-IP recovery changes this profile's read route so tweets reload without clearing cached content.
     @State private var profileTweetsRefreshToken = 0
+    @State private var resyncedTweets: [Tweet] = []
+    @State private var resyncedTweetsToken = 0
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
@@ -267,6 +265,8 @@ struct ProfileView: View {
                     onShowLogin: onShowLogin,
                     onShowToast: onShowToast,
                     routeRefreshToken: profileTweetsRefreshToken,
+                    resyncedTweets: resyncedTweets,
+                    resyncedTweetsToken: resyncedTweetsToken,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
@@ -728,31 +728,23 @@ struct ProfileView: View {
         
         await refreshPinnedTweets()
         
-        // Resync user data on server in background (long-running operation)
-        // Only run once per app session per user to avoid redundant expensive operations
+        // Resync user data on server in background each time the profile opens.
         let userId = user.mid
-        let shouldResync = Self.resyncLock.withLock {
-            if Self.resyncedUsersThisSession.contains(userId) {
-                return false
-            }
-            Self.resyncedUsersThisSession.insert(userId)
-            return true
-        }
-        
-        if shouldResync {
-        Task.detached {
+        Task {
             do {
-                let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
-                print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
+                let resyncResult = try await hproseInstance.resyncUser(userId: userId)
+                print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server with \(resyncResult.tweets.count) tweets")
                 
-                TweetCacheManager.shared.saveUser(resyncedUser)
+                TweetCacheManager.shared.saveUser(resyncResult.user)
                 print("DEBUG: [ProfileView] Saved resynced user to cache")
+
+                await MainActor.run {
+                    resyncedTweets = resyncResult.tweets
+                    resyncedTweetsToken += 1
+                }
             } catch {
                 print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
             }
-            }
-        } else {
-            print("DEBUG: [ProfileView] Skipping resync for user \(userId) - already resynced this session")
         }
     }
     

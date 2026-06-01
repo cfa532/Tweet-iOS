@@ -2260,68 +2260,96 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    /// Resyncs a user from the backend and returns the updated user object
-    func resyncUser(userId: String) async throws -> User {
-        return try await withRetry {
-            // Get the user instance first to access their baseUrl
-            let user = User.getInstance(mid: userId)
-            
-            // If user doesn't have a baseUrl, fetch it first
-            if user.baseUrl == nil {
-                print("DEBUG: [resyncUser] User \(userId) has no baseUrl, fetching user first to resolve IP")
-                _ = try await fetchUser(userId, baseUrl: "")
-            }
-            
-            let entry = "resync_user"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "userid": userId
-            ]
-            
-            // Use the target user's hproseClient (with their baseUrl). If it
-            // cannot be resolved, fail instead of sending the request to a
-            // different user's baseUrl.
-            guard let client = user.hproseClient else {
-                throw NSError(
-                    domain: "HproseClient",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Client not initialized for user \(userId); refusing to fall back to appUser baseUrl"]
-                )
-            }
-            
-            print("DEBUG: [resyncUser] Using user's own hproseClient with baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(userId)")
-            
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            guard let userData = unwrappedResponse as? [String: Any] else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
-            
-            // Update user properties from the response
-            await MainActor.run {
-                user.name = userData["name"] as? String
-                user.username = userData["username"] as? String
-                user.email = userData["email"] as? String
-                user.profile = userData["profile"] as? String
-                user.avatar = userData["avatar"] as? String
-                user.tweetCount = userData["tweetCount"] as? Int
-                user.followingCount = userData["followingCount"] as? Int
-                user.followersCount = userData["followersCount"] as? Int
-                user.bookmarksCount = userData["bookmarksCount"] as? Int
-                user.favoritesCount = userData["favoritesCount"] as? Int
-                user.commentsCount = userData["commentsCount"] as? Int
-                
-                // Update cloudDrivePort if provided
-                if let cloudDrivePort = userData["cloudDrivePort"] as? Int {
-                    user.cloudDrivePort = cloudDrivePort
-                }
-            }
-            TweetCacheManager.shared.saveUser(user)
+    struct ResyncUserResult {
+        let user: User
+        let tweets: [Tweet]
+    }
 
-            return user
+    /// Resyncs a user from the backend and returns the updated user plus newly synced tweets.
+    func resyncUser(userId: String) async throws -> ResyncUserResult {
+        let user = User.getInstance(mid: userId)
+
+        let route = user.baseUrl?.absoluteString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
+        guard !route.isEmpty else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Route unavailable for resync user \(userId)"]
+            )
         }
+
+        let entry = "resync_user"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v3",
+            "userid": userId,
+            "appuserid": appUser.mid
+        ]
+
+        let client = HproseHttpClient()
+        client.uri = "\(route)/webapi/"
+        client.timeout = 300
+
+        print("DEBUG: [resyncUser] Calling resync_user for userId: \(userId) with baseUrl: \(route)")
+
+        guard let rawResponse = client.invoke("runMApp", withArgs: [entry, params]) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from resync_user for user \(userId)"])
+        }
+
+        guard let responseData = Self.asStringKeyedDictionary(rawResponse) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+        }
+
+        guard let userData = Self.asStringKeyedDictionary(responseData["user"])
+                ?? (responseData["username"] != nil ? responseData : nil) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid resync_user response for user \(userId): missing user data"])
+        }
+
+        let syncedUser = try await MainActor.run {
+            try User.from(dict: userData)
+        }
+        guard syncedUser.mid == userId, !(syncedUser.username?.isEmpty ?? true) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid resync_user data for user \(userId)"])
+        }
+
+        let tweetDataList = Self.tweetDataDictionaries(from: responseData["tweets"])
+        let syncedTweets = tweetDataList.compactMap { tweetData -> Tweet? in
+            do {
+                let tweet = try Tweet.from(dict: tweetData)
+                tweet.author = tweet.authorId == syncedUser.mid
+                    ? syncedUser
+                    : User.getInstance(mid: tweet.authorId)
+                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                return tweet
+            } catch {
+                print("WARN: [resyncUser] Ignoring invalid synced tweet for user \(userId): \(error)")
+                return nil
+            }
+        }
+
+        TweetCacheManager.shared.saveUser(syncedUser)
+        print("DEBUG: [resyncUser] Successfully resynced user \(userId) with \(syncedTweets.count) tweets")
+
+        return ResyncUserResult(user: syncedUser, tweets: syncedTweets)
+    }
+
+    private static func tweetDataDictionaries(from value: Any?) -> [[String: Any]] {
+        if let dict = asStringKeyedDictionary(value) {
+            return [dict]
+        }
+
+        if let array = value as? [Any] {
+            return array.flatMap { tweetDataDictionaries(from: $0) }
+        }
+
+        if let array = value as? NSArray {
+            return array.flatMap { tweetDataDictionaries(from: $0) }
+        }
+
+        return []
     }
     
     func login(_ loginUser: User) async throws -> [String: Any] {
