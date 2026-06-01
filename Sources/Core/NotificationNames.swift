@@ -115,6 +115,9 @@ extension Notification.Name {
     /// Posted when a feed cell's AVPlayer is loaned to the detail view.
     /// userInfo: ["videoMid": String]. The owning MediaCellUIView should release its reference.
     static let videoPlayerLoaned = Notification.Name("VideoPlayerLoaned")
+    /// Posted when DetailVideoManager is done with a loaned feed AVPlayer.
+    /// userInfo: ["videoMid": String]. A visible MediaCellUIView can reclaim the player without reloading.
+    static let videoPlayerReturned = Notification.Name("VideoPlayerReturned")
     /// Posted when a feed cell claims exclusive ownership of an AVPlayer.
     /// userInfo: ["videoMid": String, "claimerIdentity": Int].
     /// Other MediaCellUIView instances holding the same player must release it.

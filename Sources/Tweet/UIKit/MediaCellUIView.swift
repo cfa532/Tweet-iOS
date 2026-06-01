@@ -159,6 +159,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var videoCompletionObserver: NSObjectProtocol?
     private var stopAllObserver: NSObjectProtocol?
     private var playerLoanedObserver: NSObjectProtocol?
+    private var playerReturnedObserver: NSObjectProtocol?
     private var playerClaimedObserver: NSObjectProtocol?
     private var videoThumbnailObserver: NSObjectProtocol?
     private var videoPlayerPreloadedObserver: NSObjectProtocol?
@@ -179,6 +180,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Defers the primary spinner for cached/covered videos so instant starts do
     /// not flash loading chrome over an already-present frame.
     private var delayedPrimarySpinnerTask: Task<Void, Never>?
+    /// Short grace window after DetailView gives a player back to the feed.
+    /// The player and frame are already present, so this avoids treating the
+    /// resume as a cold load while AVPlayer's clock starts moving again.
+    private var suppressPrimarySpinnerUntil: Date = .distantPast
     /// Recovery for ready players that were promoted from preload but remain
     /// stuck at the first buffer gap after play() was requested.
     private var playbackStartupRecoveryTask: Task<Void, Never>?
@@ -689,6 +694,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             self.player = nil
         }
 
+        playerReturnedObserver = NotificationCenter.default.addObserver(
+            forName: .videoPlayerReturned, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  self.isVisible,
+                  let returnedMid = notification.userInfo?["videoMid"] as? String,
+                  returnedMid == self.attachment?.mid else { return }
+            self.reclaimReturnedLoanedPlayer(shouldPlay: self.coordinatorWantsToPlay)
+        }
+
         // Listen for another feed cell claiming exclusive ownership of the same player.
         // When tweet A and its retweet B both show the same videoMid, both call acquirePlayer()
         // and get the same cached AVPlayer. Whichever cell calls configurePlayer() last posts
@@ -1124,10 +1139,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard player.timeControlStatus == .playing,
               videoPlayerView.isLayerReadyForDisplay else { return false }
 
-        let currentSeconds = seconds(from: player.currentTime())
-        let advancedSinceRequest = currentSeconds >= lastPlaybackRequestPositionSeconds + 0.15
-        let hasRecentProgress = Date().timeIntervalSince(lastPlaybackProgressDate) < 1.25
-        return advancedSinceRequest && hasRecentProgress
+        // Once AVPlayer says it is playing and the layer has a drawable frame, do not
+        // keep the feed covered by a spinner waiting for our periodic time observer.
+        // Fullscreen can play the same cached player immediately; this keeps feed UI
+        // from getting stuck behind a stricter, stale progress gate.
+        return true
     }
 
     /// Keep the spinner up until the user can actually see moving video content.
@@ -1142,6 +1158,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func shouldShowPrimarySpinner(for player: AVPlayer? = nil) -> Bool {
         guard coordinatorWantsToPlay else { return false }
+        if Date() < suppressPrimarySpinnerUntil,
+           imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
+            return false
+        }
         guard let player else { return true }
         return !isVideoAtEnd(player) && !isVisibleVideoFrameReady(player)
     }
@@ -1273,7 +1293,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let hasActuallyPlayed = lastActualPlaybackDate != .distantPast
         let requestSeconds = seconds(from: requestPosition)
         let isStartupRecovery = !hasActuallyPlayed && requestSeconds < 8.0
-        let recoveryDelay: UInt64 = 12_000_000_000
+        let recoveryDelay: UInt64 = isStartupRecovery ? 4_000_000_000 : 8_000_000_000
         if playbackStartupRecoveryTask != nil,
            playbackStartupRecoveryRequestDate == requestDate {
             return
@@ -1375,6 +1395,59 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     // MARK: - Coordinator Command Handlers
 
+    @discardableResult
+    private func reclaimReturnedLoanedPlayer(shouldPlay: Bool) -> Bool {
+        guard let mid = attachment?.mid else { return false }
+
+        let returnedPlayer: AVPlayer?
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            returnedPlayer = cachedState.player
+        } else {
+            returnedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid)
+        }
+
+        guard let returnedPlayer,
+              returnedPlayer.currentItem != nil else {
+            return false
+        }
+
+        playerWasLoaned = false
+        returnedPlayer.isMuted = MuteState.shared.isMuted
+        player = returnedPlayer
+        suppressPrimarySpinnerUntil = Date().addingTimeInterval(1.0)
+
+        // The loaned player already belongs to the feed cache again; prevent detail
+        // teardown from pausing or clearing it after this cell has reclaimed it.
+        DetailVideoManager.shared.disownLoanedPlayer()
+
+        let currentTime = returnedPlayer.currentTime()
+        VideoStateCache.shared.cacheVideoState(
+            for: mid,
+            player: returnedPlayer,
+            time: currentTime,
+            wasPlaying: false,
+            originalMuteState: MuteState.shared.isMuted
+        )
+
+        if videoPlayerView.isLayerReadyForDisplay {
+            hasRenderedFrameForCurrentPlayer = true
+        }
+        videoPlayerView.setPlayer(returnedPlayer)
+        videoPlayerView.isHidden = false
+        cancelDelayedPrimarySpinner()
+        loadingSpinner.stopAnimating()
+
+        if shouldPlay {
+            print("\(logPrefix) ♻️ Reclaimed returned loaned player at \(currentTime.seconds)s")
+            actuallyStartPlayback(returnedPlayer)
+        } else {
+            print("\(logPrefix) ♻️ Reclaimed paused loaned player at \(currentTime.seconds)s")
+            transitionTo(.paused)
+        }
+
+        return true
+    }
+
     private func handleCoordinatorPlayCommand() {
         guard let mid = attachment?.mid else { return }
 
@@ -1457,27 +1530,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // playback via onReadyForDisplay — but the layer already has the player attached
         // (never detached during loan), so onReadyForDisplay would never fire.
         if playerWasLoaned, self.player == nil {
-            playerWasLoaned = false
-            if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-                let player = cachedState.player
-                player.isMuted = MuteState.shared.isMuted
-                self.player = player
-
-                // Disown from DetailVideoManager BEFORE playing — prevents the pending
-                // deactivate()/endDetailViewSession() from pausing our reclaimed player.
-                DetailVideoManager.shared.disownLoanedPlayer()
-
-                // Update VideoStateCache with current position (detail view's exit position)
-                let currentTime = player.currentTime()
-                VideoStateCache.shared.cacheVideoState(
-                    for: mid, player: player,
-                    time: currentTime,
-                    wasPlaying: false,
-                    originalMuteState: MuteState.shared.isMuted
-                )
-
-                print("\(logPrefix) ♻️ Reclaimed loaned player at \(currentTime.seconds)s")
-                actuallyStartPlayback(player)
+            if reclaimReturnedLoanedPlayer(shouldPlay: true) {
                 return
             }
             // Cache miss — fall through to normal flow
@@ -2734,6 +2787,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             updateReplayButtonVisibility()
 
+            if isVideoAttachment, playerWasLoaned, player == nil {
+                _ = reclaimReturnedLoanedPlayer(shouldPlay: coordinatorWantsToPlay)
+            }
+
             // If video was in failed state, trigger a fresh retry on becoming visible again.
             // Don't call clearPlayerForMediaID — disk cache is preserved for faster recovery.
             if isVideoAttachment && videoCellState == .failed {
@@ -3064,6 +3121,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         stopAllObserver = nil
         if let o = playerLoanedObserver { NotificationCenter.default.removeObserver(o) }
         playerLoanedObserver = nil
+        if let o = playerReturnedObserver { NotificationCenter.default.removeObserver(o) }
+        playerReturnedObserver = nil
         if let o = playerClaimedObserver { NotificationCenter.default.removeObserver(o) }
         playerClaimedObserver = nil
         if let o = videoThumbnailObserver { NotificationCenter.default.removeObserver(o) }

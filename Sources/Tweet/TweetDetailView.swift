@@ -622,13 +622,15 @@ private struct DetailSingletonVideoPlayerView: View {
     let shouldLoad: Bool
 
     @ObservedObject private var manager = DetailVideoManager.shared
+    @StateObject private var controls = DetailVideoControlsModel()
 
     private var isThisVideoLoaded: Bool {
         manager.currentVideoMid == mid && manager.currentPlayer?.currentItem != nil
     }
 
-    private var isThisVideoRendering: Bool {
-        manager.currentVideoMid == mid && manager.isPlaybackRendering
+    private var isThisVideoReady: Bool {
+        manager.currentVideoMid == mid
+            && manager.currentPlayer?.currentItem?.status == .readyToPlay
     }
 
     private var didThisVideoFailToLoad: Bool {
@@ -641,27 +643,60 @@ private struct DetailSingletonVideoPlayerView: View {
     private var isThisVideoPreparing: Bool {
         manager.currentVideoMid == mid
             && !manager.isItemReady
+            && !isThisVideoReady
+            && !manager.isPlaybackRendering
             && !didThisVideoFailToLoad
     }
 
     private var shouldShowLoadingSpinner: Bool {
         isThisVideoPreparing
-            || (manager.currentVideoMid == mid && manager.isBuffering && !didThisVideoFailToLoad)
+            || (manager.currentVideoMid == mid
+                && manager.isBuffering
+                && !isThisVideoReady
+                && !manager.isPlaybackRendering
+                && !didThisVideoFailToLoad)
+    }
+
+    private var shouldShowPlaceholder: Bool {
+        !isThisVideoLoaded || isThisVideoPreparing
     }
 
     var body: some View {
         ZStack {
             Color.black
 
-            if isThisVideoLoaded {
+            if isThisVideoLoaded, let player = manager.currentPlayer {
                 DetailAVPlayerView(
-                    player: manager.currentPlayer!
+                    player: player
                 )
+                    .id(ObjectIdentifier(player))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onAppear {
+                        controls.attach(to: player)
+                    }
             }
 
-            if !isThisVideoRendering {
+            if shouldShowPlaceholder {
                 thumbnailOrBlack
+            }
+
+            if isThisVideoLoaded {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        controls.surfaceTapped()
+                    }
+
+                DetailVideoControlsOverlay(
+                    isVisible: controls.showsControls,
+                    isPlaying: controls.isPlaying,
+                    currentTime: controls.currentTime,
+                    duration: controls.duration,
+                    isMuted: controls.isMuted,
+                    playAction: controls.playButtonTapped,
+                    seekAction: controls.seek(to:),
+                    muteAction: controls.toggleMute
+                )
             }
 
             if shouldShowLoadingSpinner {
@@ -692,7 +727,7 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.player = player
-        vc.showsPlaybackControls = true
+        vc.showsPlaybackControls = false
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
         return vc
@@ -702,9 +737,287 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         if vc.player !== player {
             vc.player = player
         }
-        if !vc.showsPlaybackControls {
-            vc.showsPlaybackControls = true
+        if vc.showsPlaybackControls {
+            vc.showsPlaybackControls = false
         }
+    }
+}
+
+@MainActor
+private final class DetailVideoControlsModel: ObservableObject {
+    @Published var showsControls = false
+    @Published var isPlaying = false
+    @Published var currentTime: Double = 0
+    @Published var duration: Double = 0
+    @Published var isMuted = false
+
+    private weak var player: AVPlayer?
+    private var timeControlObserver: NSKeyValueObservation?
+    private var itemStatusObserver: NSKeyValueObservation?
+    private var timeObserverToken: Any?
+    private weak var timeObserverPlayer: AVPlayer?
+    private var hideControlsTask: Task<Void, Never>?
+
+    func attach(to player: AVPlayer) {
+        guard self.player !== player else {
+            updateFromPlayer()
+            return
+        }
+
+        self.player = player
+        player.isMuted = false
+        isMuted = false
+        timeControlObserver?.invalidate()
+        itemStatusObserver?.invalidate()
+        removeTimeObserver()
+        hideControlsTask?.cancel()
+
+        timeControlObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] _, _ in
+            Task { @MainActor in
+                self?.updateFromPlayer()
+            }
+        }
+
+        itemStatusObserver = player.observe(\.currentItem?.status, options: [.new, .initial]) { [weak self] _, _ in
+            Task { @MainActor in
+                self?.updateFromPlayer()
+            }
+        }
+
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        timeObserverPlayer = player
+        timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
+            Task { @MainActor in
+                guard let self else { return }
+                self.currentTime = Self.validSeconds(time)
+                self.duration = Self.validSeconds(player?.currentItem?.duration ?? .zero)
+            }
+        }
+    }
+
+    func surfaceTapped() {
+        guard let player,
+              player.timeControlStatus == .playing else { return }
+
+        hideControlsTask?.cancel()
+        hideControlsTask = nil
+        player.pause()
+        isPlaying = false
+        showsControls = true
+    }
+
+    func toggleMute() {
+        guard let player else { return }
+        player.isMuted.toggle()
+        isMuted = player.isMuted
+    }
+
+    func playButtonTapped() {
+        guard let player else { return }
+
+        hideControlsTask?.cancel()
+        hideControlsTask = nil
+
+        if isAtEnd(player) {
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak player] _ in
+                Task { @MainActor in
+                    player?.play()
+                }
+            }
+        } else {
+            player.play()
+        }
+
+        showsControls = true
+        isPlaying = true
+        scheduleControlsHide()
+    }
+
+    func seek(to seconds: Double) {
+        guard let player else { return }
+        let target = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        currentTime = seconds
+        showsControls = true
+    }
+
+    private func updateFromPlayer() {
+        guard let player,
+              player.currentItem?.status == .readyToPlay else {
+            hideControlsTask?.cancel()
+            hideControlsTask = nil
+            showsControls = false
+            return
+        }
+
+        switch player.timeControlStatus {
+        case .paused:
+            hideControlsTask?.cancel()
+            hideControlsTask = nil
+            isPlaying = false
+            showsControls = true
+        case .playing:
+            isPlaying = true
+            scheduleControlsHide()
+        case .waitingToPlayAtSpecifiedRate:
+            isPlaying = false
+            showsControls = false
+        @unknown default:
+            isPlaying = false
+            showsControls = false
+        }
+
+        currentTime = Self.validSeconds(player.currentTime())
+        duration = Self.validSeconds(player.currentItem?.duration ?? .zero)
+        isMuted = player.isMuted
+    }
+
+    private func scheduleControlsHide() {
+        hideControlsTask?.cancel()
+        hideControlsTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self,
+                  let player = self.player,
+                  player.timeControlStatus == .playing else { return }
+            self.showsControls = false
+            self.hideControlsTask = nil
+        }
+    }
+
+    private func isAtEnd(_ player: AVPlayer) -> Bool {
+        guard let item = player.currentItem else { return false }
+        let duration = item.duration.seconds
+        let current = player.currentTime().seconds
+        guard duration.isFinite, duration > 0, current.isFinite else { return false }
+        return current >= duration - 0.25
+    }
+
+    private func removeTimeObserver() {
+        if let timeObserverToken, let timeObserverPlayer {
+            timeObserverPlayer.removeTimeObserver(timeObserverToken)
+        }
+        timeObserverToken = nil
+        timeObserverPlayer = nil
+    }
+
+    private static func validSeconds(_ time: CMTime) -> Double {
+        let seconds = time.seconds
+        return seconds.isFinite && seconds > 0 ? seconds : 0
+    }
+
+    deinit {
+        timeControlObserver?.invalidate()
+        itemStatusObserver?.invalidate()
+        if let timeObserverToken, let timeObserverPlayer {
+            timeObserverPlayer.removeTimeObserver(timeObserverToken)
+        }
+        hideControlsTask?.cancel()
+    }
+}
+
+private struct DetailVideoControlsOverlay: View {
+    let isVisible: Bool
+    let isPlaying: Bool
+    let currentTime: Double
+    let duration: Double
+    let isMuted: Bool
+    let playAction: () -> Void
+    let seekAction: (Double) -> Void
+    let muteAction: () -> Void
+
+    @State private var scrubValue: Double = 0
+    @State private var isScrubbing = false
+
+    var body: some View {
+        ZStack {
+            if isVisible {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: muteAction) {
+                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(.black.opacity(0.48))
+                                .clipShape(Circle())
+                                .overlay(
+                                    Circle()
+                                        .stroke(.white.opacity(0.24), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 12)
+                    .padding(.trailing, 12)
+                    Spacer()
+                }
+
+                if !isPlaying {
+                    Button(action: playAction) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 34, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 74, height: 74)
+                            .background(.black.opacity(0.48))
+                            .clipShape(Circle())
+                            .overlay(
+                                Circle()
+                                    .stroke(.white.opacity(0.28), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+                }
+
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Text(formatTime(isScrubbing ? scrubValue : currentTime))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, alignment: .leading)
+
+                        Slider(
+                            value: Binding(
+                                get: { isScrubbing ? scrubValue : min(currentTime, max(duration, 0)) },
+                                set: { scrubValue = $0 }
+                            ),
+                            in: 0...max(duration, 0.1),
+                            onEditingChanged: { editing in
+                                isScrubbing = editing
+                                if !editing {
+                                    seekAction(scrubValue)
+                                }
+                            }
+                        )
+                        .tint(.white)
+
+                        Text(formatTime(duration))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.86))
+                            .frame(width: 44, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.42))
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: isVisible)
+        .onChange(of: currentTime) { _, newValue in
+            guard !isScrubbing else { return }
+            scrubValue = newValue
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "0:00" }
+        let total = Int(seconds.rounded(.down))
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
     }
 }
 

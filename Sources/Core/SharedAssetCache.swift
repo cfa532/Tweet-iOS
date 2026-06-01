@@ -651,7 +651,7 @@ class SharedAssetCache: ObservableObject {
     /// Cache a player instance for immediate reuse
     func cachePlayer(_ player: AVPlayer, for mediaID: String) {
         // Remove old player if exists - do this asynchronously to avoid blocking
-        if let oldPlayer = playerCache[mediaID] {
+        if let oldPlayer = playerCache[mediaID], oldPlayer !== player {
             Task.detached {
                 oldPlayer.pause()
             }

@@ -1948,6 +1948,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     @Published private(set) var loadFailedVideoMid: String?
     private var itemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
+    private var detailStartupRecoveryTask: Task<Void, Never>?
     private var pendingFeedResumeTime: CMTime?
     private var startupAudioMuteUntil: Date = .distantPast
     private var startupAudioUnmuteTask: Task<Void, Never>?
@@ -1991,6 +1992,10 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         if currentVideoMid == mid, currentPlayer?.currentItem != nil, !isPlayerBroken() {
             loadFailedVideoMid = nil
             applyStartupAudioMuteIfNeeded()
+            if currentPlayer?.currentItem?.status == .readyToPlay {
+                isItemReady = true
+                isBuffering = false
+            }
             if isItemReady {
                 isPlaying = true
                 // Rewind if at end, then play
@@ -2046,6 +2051,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         itemStatusObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+        detailStartupRecoveryTask?.cancel()
+        detailStartupRecoveryTask = nil
         if let obs = videoCompletionObserver {
             NotificationCenter.default.removeObserver(obs)
             videoCompletionObserver = nil
@@ -2187,6 +2194,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 }
             }
         }
+        scheduleDetailStartupRecovery(for: playerItem, mid: mid)
     }
 
     private func preferredFeedResumeTime(for mid: String) -> CMTime? {
@@ -2318,8 +2326,15 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                let isPlayingNow = player.timeControlStatus == .playing
                 self.isBuffering = isWaiting && !self.isVideoAtEnd(player)
-                self.isPlaybackRendering = player.timeControlStatus == .playing
+                self.isPlaybackRendering = isPlayingNow
+                if isPlayingNow {
+                    self.isItemReady = true
+                    self.isBuffering = false
+                    self.detailStartupRecoveryTask?.cancel()
+                    self.detailStartupRecoveryTask = nil
+                }
                 if player.timeControlStatus == .playing && !player.automaticallyWaitsToMinimizeStalling {
                     player.automaticallyWaitsToMinimizeStalling = true
                 }
@@ -2340,6 +2355,62 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         player.play()
         isPlaying = true
         isBuffering = player.timeControlStatus != .playing && !isVideoAtEnd(player)
+        if item.status == .readyToPlay {
+            isItemReady = true
+        }
+        scheduleDetailStartupRecovery(for: item, mid: currentVideoMid)
+    }
+
+    private func scheduleDetailStartupRecovery(for item: AVPlayerItem, mid: String?) {
+        detailStartupRecoveryTask?.cancel()
+        detailStartupRecoveryTask = Task { @MainActor [weak self, weak item] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self,
+                  let item,
+                  let player = self.currentPlayer,
+                  self.currentPlayer?.currentItem === item,
+                  self.currentVideoMid == mid,
+                  self.isPlaying,
+                  !self.isVideoAtEnd(player) else {
+                self?.detailStartupRecoveryTask = nil
+                return
+            }
+
+            if item.status == .readyToPlay {
+                self.isItemReady = true
+                self.isBuffering = self.currentPlayer?.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            }
+
+            guard self.currentPlayer?.timeControlStatus != .playing else {
+                self.isItemReady = true
+                self.isBuffering = false
+                self.detailStartupRecoveryTask = nil
+                return
+            }
+
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            self.currentPlayer?.automaticallyWaitsToMinimizeStalling = false
+            self.currentPlayer?.play()
+
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled,
+                  self.currentPlayer?.currentItem === item,
+                  self.currentVideoMid == mid else {
+                self.detailStartupRecoveryTask = nil
+                return
+            }
+
+            if self.currentPlayer?.timeControlStatus == .playing {
+                self.isItemReady = true
+                self.isBuffering = false
+            } else if item.status == .readyToPlay {
+                // A ready item with an attached player should not keep the whole DetailView
+                // under a permanent loading mask; AVPlayerViewController can show the frame.
+                self.isItemReady = true
+                self.isBuffering = false
+            }
+            self.detailStartupRecoveryTask = nil
+        }
     }
 
     private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
@@ -2487,6 +2558,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         itemStatusObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+        detailStartupRecoveryTask?.cancel()
+        detailStartupRecoveryTask = nil
         isItemReady = false
         isBuffering = false
         isPlaybackRendering = false
@@ -2510,6 +2583,22 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             // The feed cell still references this AVPlayer and will resume on return.
             currentPlayer?.pause()
             currentPlayer?.isMuted = MuteState.shared.isMuted
+            if let player = currentPlayer,
+               let videoMid = currentVideoMid {
+                VideoStateCache.shared.cacheVideoState(
+                    for: videoMid,
+                    player: player,
+                    time: player.currentTime(),
+                    wasPlaying: false,
+                    originalMuteState: MuteState.shared.isMuted
+                )
+                SharedAssetCache.shared.cachePlayer(player, for: videoMid)
+                NotificationCenter.default.post(
+                    name: .videoPlayerReturned,
+                    object: nil,
+                    userInfo: ["videoMid": videoMid]
+                )
+            }
             print("DEBUG: [DetailVideoManager] Returned loaned player (paused, mute restored)")
         } else if let ownedPlayer = currentPlayer {
             // Owned player: destroy completely so AVPlayerViewController cannot restart it.

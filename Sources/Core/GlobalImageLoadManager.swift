@@ -38,7 +38,7 @@ enum ImageLoadingPriority: Int, CaseIterable {
         case .high:
             return .userInitiated
         case .critical:
-            return .userInteractive
+            return .userInitiated
         }
     }
 }
