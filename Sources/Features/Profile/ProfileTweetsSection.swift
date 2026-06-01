@@ -223,6 +223,7 @@ struct ProfileTweetsSection<Header: View>: View {
             pinnedTweets: pinnedTweets,
             feedIdentifier: "profile_\(user.mid)",
             externalRefreshToken: routeRefreshToken,
+            emptyStateText: LocalizedStringKey("No tweets yet"),
             header: {
                 AnyView(
                     VStack(spacing: 0) {

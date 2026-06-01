@@ -38,6 +38,7 @@ struct TweetListView: View {
     let allowDeleteAll: Bool  // If true, appUser can delete any tweet (main feed); otherwise only own tweets
     /// External signal used by profile route recovery to reload page 0 while preserving currently visible tweets.
     let externalRefreshToken: Int
+    let emptyStateText: LocalizedStringKey?
     private let pageSize: UInt = 10  // Manual load-more only
 
     // Navigation callbacks (passed through to UIKit cells)
@@ -71,6 +72,7 @@ struct TweetListView: View {
     @State private var videoManagerUpdateTask: Task<Void, Never>? = nil
     @State private var hasAppearedOnce: Bool = false  // Track if view has appeared before (to detect navigation return)
     @State private var lastCleanupTime: Date = Date()
+    @State private var didConfirmEmptyFromServer: Bool = false
     private let cleanupInterval: TimeInterval = 10.0  // Cleanup every 10 seconds max
 
     /// Per-feed video coordinator — main feed uses .shared, other feeds get independent instances
@@ -167,6 +169,7 @@ struct TweetListView: View {
         preserveOrder: Bool = false,
         allowDeleteAll: Bool = false,
         externalRefreshToken: Int = 0,
+        emptyStateText: LocalizedStringKey? = nil,
         header: (() -> AnyView)? = nil,
         onRefreshExtra: (() async -> Void)? = nil,
         onAvatarTap: ((User) -> Void)? = nil,
@@ -186,6 +189,7 @@ struct TweetListView: View {
         self.preserveOrder = preserveOrder
         self.allowDeleteAll = allowDeleteAll
         self.externalRefreshToken = externalRefreshToken
+        self.emptyStateText = emptyStateText
         self.header = header
         self.onRefreshExtra = onRefreshExtra
         self.onAvatarTap = onAvatarTap
@@ -252,6 +256,23 @@ struct TweetListView: View {
                     .background(header == nil ? Color(UIColor.systemBackground) : Color.clear)
             }
 
+            if let emptyStateText,
+               didConfirmEmptyFromServer,
+               tweets.isEmpty,
+               pinnedTweets.isEmpty,
+               !isLoading,
+               !isLoadingMore {
+                VStack {
+                    Spacer()
+                    Text(emptyStateText)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+            }
+
             if showToast {
                 VStack {
                     Spacer()
@@ -270,6 +291,7 @@ struct TweetListView: View {
                     // If we already have tweets, mark as loaded
                     initialLoadComplete = true
                     isLoading = false
+                    didConfirmEmptyFromServer = false
                 }
             }
         }  // Close GeometryReader
@@ -518,53 +540,46 @@ struct TweetListView: View {
     
     func performInitialLoad() async {
         currentPage = 0
+        didConfirmEmptyFromServer = false
+        if tweets.isEmpty {
+            isLoading = true
+        }
         let page: UInt = 0
 
         do {
-            // Step 1: Load ALL cached pages for instant UX (not just page 0)
-            // When server is unreachable, this ensures the full cached feed is available
-            var allCachedTweets: [Tweet] = []
-            var cachePage: UInt = 0
-            while true {
-                let tweetsFromCache = try await tweetFetcher(cachePage, pageSize, true)
-                let validPage = tweetsFromCache.compactMap { $0 }
-                if validPage.isEmpty { break }
-                allCachedTweets.append(contentsOf: validPage)
-                if tweetsFromCache.count < pageSize { break }
-                cachePage += 1
-            }
+            // Step 1: Load the first cached page for the first paint. This mirrors
+            // Android: if the requested cached page has anything renderable, show it
+            // immediately and let server refresh / scroll pagination handle the rest.
+            let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
+            let validPage = tweetsFromCache.compactMap { $0 }
+            let hasCachedContent = !validPage.isEmpty
 
-            let hasCachedContent = !allCachedTweets.isEmpty
+            if hasCachedContent {
+                await MainActor.run {
+                    // Use direct assignment for page 0 so cached order is not disturbed.
+                    tweets = validPage
+                    currentPage = page
 
-            await MainActor.run {
-                if hasCachedContent {
-                    // If we have cached content, show it immediately without loading spinner
-                    // Use direct assignment (not merge) to avoid re-sorting cached content
-                    tweets = allCachedTweets
-                    currentPage = cachePage
-
-                    // All cache pages loaded — no more cached tweets to paginate
                     hasMoreTweets = true  // Server may have more
 
-                    // Update VideoLoadingManager with delay for startup
-                    updateVideoLoadingManager(delay: 1.0)
+                    // Update VideoLoadingManager quickly for the first visible cache page.
+                    updateVideoLoadingManager(delay: 0.2)
 
                     // Don't mark as loaded yet - wait for server fetch to complete
                     // This prevents "No tweet yet" from showing prematurely if cached tweets
                     // are filtered out (e.g., pinned tweets) before server fetch completes
                     isLoading = false
                     initialLoadComplete = false  // Keep false until server fetch completes
-                } else {
-                    // No cached content - show loading spinner and wait for server
+                    didConfirmEmptyFromServer = false
+                }
+
+                await Task.yield()
+            } else {
+                // No cached content - keep showing loading spinner and wait for server
+                await MainActor.run {
                     isLoading = true
                     initialLoadComplete = false
                 }
-            }
-
-            // Yield so SwiftUI/UIKit can render cached tweets before we start the server fetch.
-            // Without this, the server Task can run immediately and the list may not show cache first.
-            if hasCachedContent {
-                await Task.yield()
             }
 
             // Prewarm singleton players based on the first available cached video (best-effort).
@@ -601,8 +616,11 @@ struct TweetListView: View {
             }
         } catch {
             await MainActor.run {
-                isLoading = false
-                initialLoadComplete = true
+                if tweets.isEmpty {
+                    isLoading = true
+                    initialLoadComplete = false
+                }
+                didConfirmEmptyFromServer = false
             }
         }
         
@@ -630,6 +648,7 @@ struct TweetListView: View {
 
         isLoading = true
         initialLoadComplete = false
+        didConfirmEmptyFromServer = false
         currentPage = 0
 
         // DON'T clear existing tweets - keep them while refreshing for better UX
@@ -668,12 +687,15 @@ struct TweetListView: View {
                     hasMoreTweets = freshTweets.count >= pageSize
 
                     if freshTweets.count < pageSize {
-                        // Keep existing content visible on refresh. Empty responses can
-                        // happen during route recovery; a successful non-empty page will
-                        // merge below on the next refresh/load.
-                        if tweets.isEmpty {
+                        // Profile lists opt into a real empty state: cached rows
+                        // render first, then disappear if the server confirms empty.
+                        // Other lists keep existing content visible on empty refreshes.
+                        if tweets.isEmpty || emptyStateText != nil {
                             tweets = []
                             updateVideoLoadingManager()
+                            didConfirmEmptyFromServer = true
+                        } else {
+                            didConfirmEmptyFromServer = false
                         }
                     }
                     // Full page of nils: server still has entries, keep cached content and let
@@ -688,6 +710,7 @@ struct TweetListView: View {
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
+                didConfirmEmptyFromServer = false
                 // Keep existing tweets on refresh failure
             }
         }
@@ -826,6 +849,7 @@ struct TweetListView: View {
                 if page == 0 {
                     isLoading = false
                     initialLoadComplete = true
+                    didConfirmEmptyFromServer = false
                 }
                 // Don't modify tweets array - keep cached data intact
             }
@@ -838,6 +862,7 @@ struct TweetListView: View {
             if tweets.isEmpty {
                 isLoading = true
                 initialLoadComplete = false
+                didConfirmEmptyFromServer = false
             }
         }
         await loadFromServer(page: 0, pageSize: pageSize) { _ in }
@@ -889,6 +914,7 @@ struct TweetListView: View {
 
         // BRANCH 1: Got valid tweets - check response size
         if hasValidTweet {
+            didConfirmEmptyFromServer = false
             // For preserveOrder lists (bookmarks/favorites), page 0 should always REPLACE
             // to ensure correct server order (sorted by bookmark/favorite time)
             if page == 0 && preserveOrder {
@@ -936,19 +962,20 @@ struct TweetListView: View {
             // Partial page means server ran out of bookmark/favorite entries
             hasMoreTweets = false
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), PARTIAL PAGE - no more tweets")
-            if page == 0 && tweets.isEmpty {
-                // Server confirmed empty feed — only clear when we have no cached content.
-                // If tweets is non-empty (cached), keep them: fetchers should throw on network
-                // error, but guard here in case any path swallows the error and returns [].
+            if page == 0 && (tweets.isEmpty || emptyStateText != nil) {
+                // Server confirmed an empty first page. Profile lists opt into
+                // clearing stale cached rows so the empty state can be shown.
                 tweets = []
                 updateVideoLoadingManager()
                 isLoading = false
                 initialLoadComplete = true
+                didConfirmEmptyFromServer = true
             } else if page == 0 {
                 // Have cached tweets but server returned empty — keep cached content visible.
                 // Either network failed (fetcher should have thrown) or server is temporarily empty.
                 isLoading = false
                 initialLoadComplete = true
+                didConfirmEmptyFromServer = false
             }
 
         // BRANCH 3: No valid tweets BUT full page - keep trying next page
