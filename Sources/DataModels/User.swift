@@ -1,6 +1,14 @@
 import Foundation
 import hprose
 
+enum UserCacheStatus: String {
+    case unknown
+    case fresh
+    case stale
+    case refreshing
+    case refreshFailed
+}
+
 class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Singleton Dictionary
     private static var userInstances: [MimeiId: User] = [:]
@@ -276,6 +284,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var commentsList: [MimeiId]? // List of MimeiId
     @Published var topTweets: [MimeiId]? // List of MimeiId
     @Published var userBlackList: [MimeiId]? // List of MimeiId
+    @Published var cacheStatus: UserCacheStatus = .unknown
     
     var id: String { mid }  // Computed property that returns mid
     
@@ -316,6 +325,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.hostIds = hostIds
         self.publicKey = publicKey
         self.hasAcceptedTerms = hasAcceptedTerms
+        self.cacheStatus = .unknown
     }
     
     // MARK: - Factory Methods
@@ -342,6 +352,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         do {
             // Convert NSArray objects to proper JSON arrays and handle type conversions
             var sanitizedDict = dict
+            var explicitNullFields: Set<String> = []
             for (key, value) in dict {
                 if let nsArray = value as? NSArray {
                     // Convert NSArray to Swift Array
@@ -361,6 +372,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                         sanitizedDict[key] = 0
                     }
                 } else if !JSONSerialization.isValidJSONObject([key: value]) {
+                } else if value is NSNull {
+                    explicitNullFields.insert(key)
                 }
             }
             
@@ -376,7 +389,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             decodedUser.baseUrl = instance.baseUrl  // Preserve provider IP, ignore backend baseUrl
             decodedUser.writableUrl = instance.writableUrl
             
-            updateUserInstance(with: decodedUser)
+            updateUserInstance(with: decodedUser, nilFieldsToClear: explicitNullFields)
             return userInstancesQueue.sync {
                 User.userInstances[decodedUser.mid]!
             }
@@ -412,98 +425,102 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     static func updateUserInstance(
         with user: User,
-        _ shouldUpdateBaseUrl: Bool = false
+        _ shouldUpdateBaseUrl: Bool = false,
+        nilFieldsToClear: Set<String> = []
     ) {
         let instance = getInstance(mid: user.mid)
         
         // Update synchronously if already on MainActor, otherwise dispatch to MainActor
         if Thread.isMainThread {
-            instance.name = user.name
-            instance.username = user.username
-            instance.password = user.password
-            instance.avatar = user.avatar
-            instance.email = user.email
-            instance.profile = user.profile
-            instance.timestamp = user.timestamp
-            instance.lastLogin = user.lastLogin
-            instance.cloudDrivePort = user.cloudDrivePort
-            instance.domainToShare = user.domainToShare
-            instance.hostIds = user.hostIds
-            instance.publicKey = user.publicKey
-            instance.agentPublicKey = user.agentPublicKey
-            
-            // when user argument is from cache, do not use its baseUrl.
-            if (shouldUpdateBaseUrl) {
-                instance.baseUrl = user.baseUrl
-            }
-            
-            if instance.tweetCount != user.tweetCount {
-                print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(user.tweetCount ?? 0) for user \(instance.mid)")
-            }
-            instance.tweetCount = user.tweetCount
-            instance.followingCount = user.followingCount
-            instance.followersCount = user.followersCount
-            instance.bookmarksCount = user.bookmarksCount
-            instance.favoritesCount = user.favoritesCount
-            instance.commentsCount = user.commentsCount
-            
-            // Update array properties — only when the source actually provided them.
-            // Server responses (e.g. get_user_core_data) sometimes omit list fields entirely,
-            // which decodes to `nil`. Overwriting locally-mutated lists with `nil` would wipe
-            // optimistic updates such as a freshly-appended followingList entry.
-            // An empty `[]` from the server IS treated as authoritative.
-            if let v = user.fansList { instance.fansList = v }
-            if let v = user.followingList { instance.followingList = v }
-            if let v = user.bookmarkedTweets { instance.bookmarkedTweets = v }
-            if let v = user.favoriteTweets { instance.favoriteTweets = v }
-            if let v = user.repliedTweets { instance.repliedTweets = v }
-            if let v = user.commentsList { instance.commentsList = v }
-            if let v = user.topTweets { instance.topTweets = v }
-            if let v = user.userBlackList { instance.userBlackList = v }
+            mergeUserData(
+                into: instance,
+                from: user,
+                shouldUpdateBaseUrl: shouldUpdateBaseUrl,
+                nilFieldsToClear: nilFieldsToClear
+            )
         } else {
             DispatchQueue.main.async {
-                instance.name = user.name
-                instance.username = user.username
-                instance.password = user.password
-                instance.avatar = user.avatar
-                instance.email = user.email
-                instance.profile = user.profile
-                instance.timestamp = user.timestamp
-                instance.lastLogin = user.lastLogin
-                instance.cloudDrivePort = user.cloudDrivePort
-                instance.domainToShare = user.domainToShare
-                instance.hostIds = user.hostIds
-                instance.publicKey = user.publicKey
-                instance.agentPublicKey = user.agentPublicKey
-                
-                // CRITICAL: Never overwrite baseUrl from user parameter - it might be from hostId[0]
-                // baseUrl should only be set via getProviderIP(user.mid) in HproseInstance
-                // Preserve the existing baseUrl that was correctly resolved from provider IP
-                // writableUrl: Not persisted, resolved fresh from hostIds
-                // Note: baseUrl is preserved above in User.from(dict:), so we don't overwrite it here
-                if let newWritableUrl = user.writableUrl {
-                    instance.writableUrl = newWritableUrl
-                }
-                
-                if instance.tweetCount != user.tweetCount {
-                    print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(user.tweetCount ?? 0) for user \(instance.mid)")
-                }
-                instance.tweetCount = user.tweetCount
-                instance.followingCount = user.followingCount
-                instance.followersCount = user.followersCount
-                instance.bookmarksCount = user.bookmarksCount
-                instance.favoritesCount = user.favoritesCount
-                instance.commentsCount = user.commentsCount
-                
-                // Update array properties
-                instance.fansList = user.fansList
-                instance.followingList = user.followingList
-                instance.bookmarkedTweets = user.bookmarkedTweets
-                instance.favoriteTweets = user.favoriteTweets
-                instance.repliedTweets = user.repliedTweets
-                instance.commentsList = user.commentsList
-                instance.topTweets = user.topTweets
-                instance.userBlackList = user.userBlackList
+                mergeUserData(
+                    into: instance,
+                    from: user,
+                    shouldUpdateBaseUrl: shouldUpdateBaseUrl,
+                    nilFieldsToClear: nilFieldsToClear
+                )
+            }
+        }
+    }
+
+    private static func mergeUserData(
+        into instance: User,
+        from user: User,
+        shouldUpdateBaseUrl: Bool,
+        nilFieldsToClear: Set<String>
+    ) {
+        instance.name = user.name ?? instance.name
+        instance.username = user.username ?? instance.username
+        instance.password = user.password ?? instance.password
+        instance.avatar = user.avatar ?? instance.avatar
+        instance.email = user.email ?? instance.email
+        instance.profile = user.profile ?? instance.profile
+        instance.timestamp = user.timestamp
+        instance.lastLogin = user.lastLogin ?? instance.lastLogin
+        instance.cloudDrivePort = user.cloudDrivePort
+        instance.domainToShare = user.domainToShare ?? instance.domainToShare
+        instance.hostIds = user.hostIds ?? instance.hostIds
+        instance.publicKey = user.publicKey ?? instance.publicKey
+        instance.agentPublicKey = user.agentPublicKey ?? instance.agentPublicKey
+
+        // Base URLs are only committed from validated routes or cache load.
+        if shouldUpdateBaseUrl, let newBaseUrl = user.baseUrl {
+            instance.baseUrl = newBaseUrl
+        }
+        if let newWritableUrl = user.writableUrl {
+            instance.writableUrl = newWritableUrl
+        }
+
+        if let v = user.tweetCount {
+            if instance.tweetCount != v {
+                print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(v) for user \(instance.mid)")
+            }
+            instance.tweetCount = v
+        }
+        if let v = user.followingCount { instance.followingCount = v }
+        if let v = user.followersCount { instance.followersCount = v }
+        if let v = user.bookmarksCount { instance.bookmarksCount = v }
+        if let v = user.favoritesCount { instance.favoritesCount = v }
+        if let v = user.commentsCount { instance.commentsCount = v }
+
+        // Update collection properties only when the source provided them.
+        // Empty arrays are still authoritative; nil means "not included".
+        if let v = user.fansList { instance.fansList = v }
+        if let v = user.followingList { instance.followingList = v }
+        if let v = user.bookmarkedTweets { instance.bookmarkedTweets = v }
+        if let v = user.favoriteTweets { instance.favoriteTweets = v }
+        if let v = user.repliedTweets { instance.repliedTweets = v }
+        if let v = user.commentsList { instance.commentsList = v }
+        if let v = user.topTweets { instance.topTweets = v }
+        if let v = user.userBlackList { instance.userBlackList = v }
+
+        for field in nilFieldsToClear {
+            switch field {
+            case CodingKeys.name.rawValue:
+                instance.name = nil
+            case CodingKeys.password.rawValue:
+                instance.password = nil
+            case CodingKeys.avatar.rawValue:
+                instance.avatar = nil
+            case CodingKeys.email.rawValue:
+                instance.email = nil
+            case CodingKeys.profile.rawValue:
+                instance.profile = nil
+            case CodingKeys.domainToShare.rawValue:
+                instance.domainToShare = nil
+            case CodingKeys.publicKey.rawValue:
+                instance.publicKey = nil
+            case CodingKeys.agentPublicKey.rawValue:
+                instance.agentPublicKey = nil
+            default:
+                break
             }
         }
     }
@@ -552,6 +569,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         commentsList = try container.decodeIfPresent([String].self, forKey: .commentsList)
         topTweets = try container.decodeIfPresent([String].self, forKey: .topTweets)
         userBlackList = try container.decodeIfPresent([String].self, forKey: .userBlackList)
+        cacheStatus = .unknown
     }
     
     // Encode method for Codable

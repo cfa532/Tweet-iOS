@@ -454,7 +454,7 @@ struct ProfileEditView: View {
                         
                         // Clear old avatar image cache
                         if let old = oldAvatar {
-                            ImageCacheManager.shared.clearCache(for: old)
+                            ImageCacheManager.shared.clearCache(for: "avatar_\(old)")
                             print("🗑️ [Avatar Upload] Cleared cache for old avatar: \(old)")
                         }
                         
@@ -464,7 +464,7 @@ struct ProfileEditView: View {
                     }
                     
                     // Pre-cache the uploaded image locally so Avatar doesn't show spinner
-                    let avatarAttachment = MimeiFileType(mid: confirmedAvatar, mediaType: .image)
+                    let avatarAttachment = MimeiFileType(mid: "avatar_\(confirmedAvatar)", mediaType: .image)
                     _ = ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment)
                     print("✅ [Avatar Upload] Pre-cached new avatar image locally")
                     
@@ -562,8 +562,8 @@ struct ProfileEditView: View {
                 try await onSubmit(
                     username,
                     password.isEmpty ? nil : password,
-                    alias.isEmpty ? nil : alias,
-                    profile.isEmpty ? nil : profile,
+                    alias,
+                    profile,
                     hostIdValue,
                     finalPortValue,
                     shareDomainValue

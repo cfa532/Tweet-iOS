@@ -14,6 +14,7 @@ struct Avatar: View {
     @State private var isLoading = false
     @State private var loadFailed = false // Track if load failed/timed out
     @State private var loadTask: Task<Void, Never>?
+    @State private var displayedAvatarId: String?
     
     init(user: User, size: CGFloat = 40) {
         self.user = user
@@ -61,6 +62,7 @@ struct Avatar: View {
                         if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
                             // Found in cache - use it and reset failed state
                             cachedImage = cached
+                            displayedAvatarId = user.avatar
                             loadFailed = false
                         } else {
                             // Not in memory cache - always try loading (checks disk cache + network)
@@ -78,6 +80,7 @@ struct Avatar: View {
                     
                     // Clear cached state and reload (loadAvatar will manage isLoading flag)
                     cachedImage = nil
+                    displayedAvatarId = nil
                     loadFailed = false
                     
                     if let avatarUrl = user.avatarUrl {
@@ -94,7 +97,8 @@ struct Avatar: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
-            // When user is updated (e.g., baseUrl resolved), reload avatar with new URL
+            // Route changes are only relevant for a network retry. Cached/displayed
+            // avatars are keyed by avatar id and should survive baseUrl changes.
             guard let userId = notification.userInfo?["userId"] as? String,
                   userId == user.mid,
                   let avatarUrl = user.avatarUrl,
@@ -107,13 +111,13 @@ struct Avatar: View {
             loadFailed = false
             loadAvatar(from: avatarUrl)
         }
-        .onChange(of: user.avatarUrl) { _, avatarUrl in
-            guard let avatarUrl else { return }
-            // Profile headers may first render with a placeholder/no route. Once
-            // fetchUser fills avatar/baseUrl, restart the avatar load for that URL.
+        .onChange(of: user.avatar) { _, avatarId in
+            guard avatarId != displayedAvatarId,
+                  let avatarUrl = user.avatarUrl else { return }
             loadTask?.cancel()
             loadTask = nil
             cachedImage = nil
+            displayedAvatarId = nil
             isLoading = false
             loadFailed = false
             loadAvatar(from: avatarUrl)
@@ -145,6 +149,7 @@ struct Avatar: View {
 
             if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
                 cachedImage = cached
+                displayedAvatarId = avatar
                 loadFailed = false
             }
         }
@@ -166,6 +171,7 @@ struct Avatar: View {
             mid: "avatar_\(rawKey)",
             mediaType: .image
         )
+        let expectedAvatarId = user.avatar
         
         // ✅ PERFORMANCE FIX: Check disk cache asynchronously to avoid blocking main thread
         // Set isLoading synchronously to prevent race conditions, but clear it immediately if cache is found
@@ -176,8 +182,10 @@ struct Avatar: View {
             // Check disk cache first (async, non-blocking)
             if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
                 await MainActor.run {
+                    guard user.avatar == expectedAvatarId else { return }
                     // Found in disk cache - set immediately and clear loading state
                     cachedImage = cached
+                    displayedAvatarId = expectedAvatarId
                     loadFailed = false
                     isLoading = false  // Clear loading state immediately
                 }
@@ -197,11 +205,15 @@ struct Avatar: View {
 
             let result = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment)
 
-            guard !Task.isCancelled else { return }
-
             await MainActor.run {
+                guard user.avatar == expectedAvatarId else { return }
+                if Task.isCancelled {
+                    isLoading = false
+                    return
+                }
                 if let image = result {
                     cachedImage = image
+                    displayedAvatarId = expectedAvatarId
                     loadFailed = false
                 } else {
                     // Load failure - mark as failed to show default avatar

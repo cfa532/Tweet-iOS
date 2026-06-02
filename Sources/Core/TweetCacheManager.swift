@@ -848,20 +848,9 @@ extension TweetCacheManager {
     
 
     func deleteExpiredUsers() {
-        context.performAndWait {
-            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-            let oneMonthAgo = Calendar.current.date(byAdding: .month, value: -1, to: Date())!
-            request.predicate = NSPredicate(format: "timeCached < %@", oneMonthAgo as NSDate)
-            
-            // Create a separate array to store the objects to delete
-            if let expiredUsers = try? context.fetch(request) {
-                let usersToDelete = Array(expiredUsers)
-                for user in usersToDelete {
-                    context.delete(user)
-                }
-                try? context.save()
-            }
-        }
+        // User metadata is treated as stale-but-useful rather than disposable.
+        // fetchUser marks/refreshes stale users; it should not lose names,
+        // avatars, or route hints just because the Core Data timestamp aged out.
     }
 
     func deleteUser(mid: String) {
@@ -1269,5 +1258,4 @@ extension TweetCacheManager {
         return Array(sortedResults)
     }
 } 
-
 

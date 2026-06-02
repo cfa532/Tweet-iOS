@@ -1548,8 +1548,14 @@ final class HproseInstance: ObservableObject {
                 // Return cached user if it's still valid and the caller did
                 // not explicitly ask us to re-resolve the provider route.
                 if !hasExpired && !forceFreshIPResolution {
+                    await MainActor.run {
+                        cachedUser.cacheStatus = .fresh
+                    }
                     return cachedUser
                 } else if hasExpired {
+                    await MainActor.run {
+                        cachedUser.cacheStatus = .stale
+                    }
                     // User data has expired
                     // If baseUrl is empty (forcing fresh IP resolution), don't return stale data
                     // This is critical during login to ensure we get a healthy IP
@@ -1571,6 +1577,9 @@ final class HproseInstance: ObservableObject {
 
                             // Kick off background refresh if we're the first to notice expiration
                             if shouldStartBackgroundRefresh {
+                                await MainActor.run {
+                                    cachedUser.cacheStatus = .refreshing
+                                }
                                 Task {
                                     await startBackgroundRefresh(
                                         userId,
@@ -1622,6 +1631,9 @@ final class HproseInstance: ObservableObject {
         do {
             // Get or create a User instance for this userId
             let user = User.getInstance(mid: userId)
+            await MainActor.run {
+                user.cacheStatus = .refreshing
+            }
             
             // Validate an explicitly supplied route, but do not write it to the
             // shared User yet. Candidate routes are committed only after get_user
@@ -1646,12 +1658,18 @@ final class HproseInstance: ObservableObject {
             userUpdateQueue.sync {
                 _ = userUpdateErrors.removeValue(forKey: userId)
             }
+            await MainActor.run {
+                updatedUser.cacheStatus = .fresh
+            }
             return updatedUser
         } catch {
             // Catch and log any exceptions during the fetch process
             print("DEBUG: [fetchUser] Exception in fetchUser: userId: \(userId), error: \(error)")
             userUpdateQueue.sync {
                 userUpdateErrors[userId] = error as NSError
+            }
+            await MainActor.run {
+                User.getInstance(mid: userId).cacheStatus = .refreshFailed
             }
             throw error
         }
@@ -1702,6 +1720,9 @@ final class HproseInstance: ObservableObject {
         v4Only: Bool = false,
         forceFreshIP: Bool = false
     ) async {
+        await MainActor.run {
+            cachedUser.cacheStatus = .refreshing
+        }
         defer {
             userUpdateQueue.sync {
                 _ = ongoingUserUpdates.remove(userId)
@@ -1720,9 +1741,15 @@ final class HproseInstance: ObservableObject {
             userUpdateQueue.sync {
                 _ = userUpdateErrors.removeValue(forKey: userId)
             }
+            await MainActor.run {
+                cachedUser.cacheStatus = .fresh
+            }
         } catch {
             userUpdateQueue.sync {
                 userUpdateErrors[userId] = error as NSError
+            }
+            await MainActor.run {
+                cachedUser.cacheStatus = .refreshFailed
             }
             print("DEBUG: [startBackgroundRefresh] Background refresh failed for userId: \(userId): \(error)")
         }
@@ -2314,6 +2341,7 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [updateUserFromDict] Updated user: \(updatedUser.username ?? "nil") (\(updatedUser.mid))")
             
             User.updateUserInstance(with: updatedUser, confirmedBaseUrl != nil)
+            User.getInstance(mid: updatedUser.mid).cacheStatus = .fresh
             TweetCacheManager.shared.saveUser(updatedUser)
             NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": updatedUser.mid])
         }
@@ -7269,9 +7297,8 @@ final class HproseInstance: ObservableObject {
                     print("DEBUG: updateUserCore - updated in-memory appUser, cloudDrivePort: \(cloudDrivePort), domainToShare: \(self.appUser.domainToShare ?? "nil")")
                 }
                 
-                // Clear user cache to ensure fresh data is loaded
-                TweetCacheManager.shared.deleteUser(mid: appUser.mid)
-                print("DEBUG: updateUserCore - cleared user cache for: \(appUser.mid)")
+                TweetCacheManager.shared.saveUser(appUser)
+                print("DEBUG: updateUserCore - saved updated user cache for: \(appUser.mid)")
                 
                 return true
             } else {
