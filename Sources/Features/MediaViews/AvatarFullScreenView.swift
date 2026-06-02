@@ -133,6 +133,11 @@ struct AvatarFullScreenView: View {
                       let image = UIImage(data: data) else {
                     throw URLError(.badServerResponse)
                 }
+
+                if let avatar = user.avatar {
+                    let avatarAttachment = MimeiFileType(mid: "avatar_\(avatar)", mediaType: .image)
+                    ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment)
+                }
                 
                 await MainActor.run {
                     imageState = .loaded(image)

@@ -137,8 +137,7 @@ struct Avatar: View {
             // When an image is cached, check if it's this avatar and reload from memory cache
             guard let avatarId = notification.userInfo?["avatarId"] as? String,
                   let avatar = user.avatar,
-                  avatarId == "avatar_\(avatar)" || avatarId == avatar,
-                  cachedImage == nil else { return }
+                  avatarId == "avatar_\(avatar)" || avatarId == avatar else { return }
 
             loadTask?.cancel()
             loadTask = nil

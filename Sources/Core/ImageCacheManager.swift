@@ -864,6 +864,14 @@ class ImageCacheManager: @unchecked Sendable {
         let compressedKey = "\(key)_compressed"
         // Replace in memory cache
         cacheImageInMemory(image, forKey: compressedKey)
+
+        Task { @MainActor in
+            NotificationCenter.default.post(
+                name: .imageCached,
+                object: nil,
+                userInfo: ["avatarId": key]
+            )
+        }
         
         // Replace on disk (save original as compressed cache file)
         let compressedFileURL = getCompressedCacheFileURL(for: key)

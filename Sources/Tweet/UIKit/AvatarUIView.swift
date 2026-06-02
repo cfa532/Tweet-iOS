@@ -116,6 +116,22 @@ class AvatarUIView: UIView {
             self.loadAvatarImage(user: user)
         }
         notificationObservers.append(userUpdateObserver)
+
+        let imageCachedObserver = NotificationCenter.default.addObserver(
+            forName: .imageCached, object: nil, queue: .main
+        ) { [weak self, weak user] notification in
+            guard let self, let user,
+                  let avatar = user.avatar,
+                  let avatarId = notification.userInfo?["avatarId"] as? String,
+                  avatarId == avatar || avatarId == "avatar_\(avatar)" else { return }
+
+            let avatarAttachment = MimeiFileType(mid: "avatar_\(avatar)", mediaType: .image)
+            if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
+                self.imageView.image = cached
+                self.placeholderImageView.isHidden = true
+            }
+        }
+        notificationObservers.append(imageCachedObserver)
     }
 
     private func updateSizeIfNeeded(_ size: CGFloat) {
