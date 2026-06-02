@@ -25,11 +25,15 @@ final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
+    private static let updateFollowingTweetsEntry = "update_following_tweets"
+    private static let heavyCallInterval: TimeInterval = 5 * 60
     private var _domainToShare: String = AppConfig.baseUrl
     
     // IP Cache: Stores short-lived HEAD health results with 30-second expiry
     private var ipCache: [String: IPCacheEntry] = [:]
     private let ipCacheLock = NSLock()
+    private var heavyCallLastAttemptAt: [String: Date] = [:]
+    private let heavyCallLock = NSLock()
     
     /// The domain to use for sharing links
     var domainToShare: String {
@@ -228,6 +232,22 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [updateUserFromServer] Updated baseUrl (\(reason)) to \(newValue) for userId: \(user.mid)")
             NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": user.mid])
         }
+    }
+
+    private func shouldAttemptHeavyCall(_ key: String, interval: TimeInterval = HproseInstance.heavyCallInterval) -> Bool {
+        heavyCallLock.lock()
+        defer { heavyCallLock.unlock() }
+
+        let now = Date()
+        if let lastAttempt = heavyCallLastAttemptAt[key],
+           now.timeIntervalSince(lastAttempt) < interval {
+            let remaining = Int(interval - now.timeIntervalSince(lastAttempt))
+            print("DEBUG: [\(key)] Skipping heavy call, cooldown remaining \(remaining)s")
+            return false
+        }
+
+        heavyCallLastAttemptAt[key] = now
+        return true
     }
     
     /// If the transport layer returned a JSON object as a string, parse it so v2 unwrapping works.
@@ -938,16 +958,31 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet?] {
+        let isFollowingTweetUpdate = entry == HproseInstance.updateFollowingTweetsEntry
+
         // If app is not initialized, only return cached tweets
         if !isInitializationComplete {
             let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
             return cachedTweets
         }
+
+        if isFollowingTweetUpdate,
+           !shouldAttemptHeavyCall(HproseInstance.updateFollowingTweetsEntry) {
+            return []
+        }
         
-        guard let client = appUser.hproseClient else {
+        let client: HproseClient?
+        if isFollowingTweetUpdate {
+            client = await followingTweetsHomeClient()
+        } else {
+            client = appUser.hproseClient
+        }
+
+        guard let client = client else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        var params = [
+
+        var params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
@@ -957,7 +992,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ]
         
-        if entry == "update_following_tweets" {
+        if isFollowingTweetUpdate {
             params["hostid"] = appUser.hostIds?.first
         }
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
@@ -973,8 +1008,9 @@ final class HproseInstance: ObservableObject {
         let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
         
         
-        if entry == "update_following_tweets" {
+        if isFollowingTweetUpdate {
             print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
+            await syncFollowingTweetsToAccessHostIfNeeded(homeResponse: response, requestParams: params)
         }
         
         // Cache original tweets first - cache under their authorId, not appUser.mid
@@ -1065,6 +1101,57 @@ final class HproseInstance: ObservableObject {
         print("[fetchTweetFeed] Returning \(tweets.count) tweets")
         NodePool.shared.updateFromUser(user)
         return tweets
+    }
+
+    private func followingTweetsHomeClient() async -> HproseClient? {
+        if let _ = try? await appUser.resolveWritableUrl(),
+           let client = appUser.writableClient {
+            client.timeout = 15
+            return client
+        }
+
+        guard let homeHostId = appUser.hostIds?.first,
+              let homeIP = await getHostIP(homeHostId, v4Only: true) else {
+            print("ERROR: [update_following_tweets] Unable to resolve home host for appUser \(appUser.mid)")
+            return appUser.hproseClient
+        }
+
+        let client = clientPool.getClientByIP(for: homeIP)
+        client.timeout = 15
+        return client
+    }
+
+    private func syncFollowingTweetsToAccessHostIfNeeded(homeResponse: [String: Any], requestParams: [String: Any]) async {
+        let newTweetCount = (homeResponse["tweets"] as? [Any])?.filter { !($0 is NSNull) }.count ?? 0
+        guard newTweetCount > 0 else { return }
+
+        guard let hostIds = appUser.hostIds,
+              let homeHostId = hostIds.first,
+              hostIds.count > 1 else {
+            return
+        }
+
+        let accessHostId = hostIds[1]
+        guard accessHostId != homeHostId else { return }
+
+        guard let accessIP = await getHostIP(accessHostId, v4Only: true) else {
+            print("ERROR: [update_following_tweets] Unable to resolve access host \(accessHostId)")
+            return
+        }
+
+        var accessParams = requestParams
+        accessParams["homeupdated"] = true
+
+        let accessClient = clientPool.getClientByIP(for: accessIP)
+        accessClient.timeout = 15
+
+        do {
+            let rawResponse = accessClient.invoke("runMApp", withArgs: [HproseInstance.updateFollowingTweetsEntry, accessParams])
+            _ = try Self.unwrapV2Response(rawResponse)
+            print("DEBUG: [update_following_tweets] Synced \(newTweetCount) tweets from home host \(homeHostId) to access host \(accessHostId)")
+        } catch {
+            print("ERROR: [update_following_tweets] Failed to sync access host \(accessHostId): \(error)")
+        }
     }
     
     /// Fetches a page of tweets for a specific user.
