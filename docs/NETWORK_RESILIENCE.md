@@ -957,42 +957,43 @@ ProfileView has been optimized to eliminate redundant backend calls when users o
 }
 ```
 
-#### 2. Session-Based Resync Optimization
+#### 2. Direct Resync Refresh
 
-`resyncUser()` is a long-running backend operation that updates server-side state. Now it only runs once per app session per user.
+`resyncUser()` runs when a profile opens and the profile already has a usable route. Since `resync_user` returns updated user data, ProfileView no longer performs a forced `get_user` immediately before it.
 
 **Implementation:**
 ```swift
-private static var resyncedUsersThisSession: Set<String> = []
-private static let resyncLock = NSLock()
+private static var resyncingUserIds: Set<String> = []
+private static let resyncStateQueue = DispatchQueue(label: "profile.resync.state")
 
-// Check before running expensive resync
-let shouldResync = Self.resyncLock.withLock {
-    if Self.resyncedUsersThisSession.contains(userId) {
+// Coalesce simultaneous opens of the same profile while resync is in flight.
+let shouldStartResync = Self.resyncStateQueue.sync {
+    guard !Self.resyncingUserIds.contains(userId) else {
         return false
     }
-    Self.resyncedUsersThisSession.insert(userId)
+    Self.resyncingUserIds.insert(userId)
     return true
 }
 ```
 
 **Behavior:**
-- **First view (per session)**: `get_user` + `resync_user` (2 calls)
-- **Subsequent views**: `get_user` only (1 call)
+- **Routed profile open**: `resync_user` only (the response updates the cached user)
+- **Missing route or resync fallback**: `get_user` only
+- **Simultaneous opens for the same user**: one `resync_user`; later opens skip an extra user fetch while it is in flight
 
 ### Results
 
 | Scenario | Before | After | Improvement |
 |----------|--------|-------|-------------|
-| First profile view | 2+ calls | 2 calls | Lifecycle fixed |
-| Subsequent views | 2+ calls | 1 call | 50% reduction |
-| Server load | High | Low | 50% average reduction |
+| Routed profile open | `get_user` + `resync_user` | `resync_user` | Removes redundant user fetch |
+| Missing route | `get_user` + `resync_user` | `get_user` | Avoids back-to-back user refreshes |
+| Simultaneous same-user opens | Multiple user refreshes | One in-flight resync | Prevents duplicate user fetches |
 
 ### Benefits
 
-1. **Reduced Network Traffic**: ~50% fewer backend calls
-2. **Faster Loading**: Quick `get_user` instead of slow `resync_user` on repeat views
-3. **Better Server Health**: Less load on backend infrastructure
+1. **Reduced Network Traffic**: eliminates the pre-resync `get_user` call
+2. **Fresh Profile State**: keeps `resync_user` on profile open so server-side state is updated
+3. **Better Server Health**: coalesces simultaneous same-user profile opens
 4. **Improved UX**: More responsive profile navigation
 5. **Battery Efficiency**: Fewer network operations
 
@@ -1011,9 +1012,9 @@ The profile optimization complements existing network resilience features:
 To verify the optimization:
 
 1. **Enable debug logging**
-2. **Open a user profile** → Check logs for 2 backend calls (get_user + resync_user)
-3. **Navigate away and back** → Check logs for 1 backend call (get_user only)
-4. **Look for**: `"Skipping resync for user X - already resynced this session"`
+2. **Open a routed user profile** → Check logs for `resync_user` without a preceding profile `get_user`
+3. **Open a profile with no cached route** → Check logs for `get_user` without an immediate `resync_user`
+4. **Open the same profile simultaneously** → Look for `"Skipping user fetch for X - resync already in progress"`
 
 ### Documentation
 
