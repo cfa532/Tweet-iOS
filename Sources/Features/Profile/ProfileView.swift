@@ -96,11 +96,11 @@ struct ProfileView: View {
         mainContentView
             .onAppear {
                 // Calculate isFollowing by checking if the user's mid is in the app user's followingList
-                isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
+                setFollowingState((hproseInstance.appUser.followingList)?.contains(user.mid) ?? false)
             }
             .onReceive(hproseInstance.appUser.$followingList) { newList in
                 // followingList may load asynchronously after onAppear; keep button state in sync
-                isFollowing = newList?.contains(user.mid) ?? false
+                setFollowingState(newList?.contains(user.mid) ?? false)
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -301,9 +301,10 @@ struct ProfileView: View {
                                     }
                                 },
                                 onFollowToggle: {
-                                    isFollowing.toggle()
+                                    let optimisticFollowing = !isFollowing
+                                    setFollowingState(optimisticFollowing)
                                     Task {
-                                        await handleToggleFollowing(for: user, isFollowing: $isFollowing)
+                                        await handleToggleFollowing(for: user, optimisticFollowing: optimisticFollowing)
                                     }
                                 },
                                 onAvatarTap: { showAvatarFullScreen = true }
@@ -610,12 +611,17 @@ struct ProfileView: View {
             showToast = false
         }
     }
+
+    private func setFollowingState(_ newValue: Bool) {
+        guard isFollowing != newValue else { return }
+        isFollowing = newValue
+        profileHeaderRefreshToken += 1
+    }
     
-    private func handleToggleFollowing(for user: User, isFollowing: Binding<Bool>? = nil) async {
+    private func handleToggleFollowing(for user: User, optimisticFollowing: Bool) async {
         if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
-            // Update the isFollowing binding if provided
-            if let isFollowing = isFollowing {
-                isFollowing.wrappedValue = ret
+            await MainActor.run {
+                setFollowingState(ret)
             }
             
             // Update app user's followingList based on the result
@@ -680,11 +686,10 @@ struct ProfileView: View {
                 print("DEBUG: [ProfileView] After update - user \(user.mid) followers count: \(user.followersCount ?? 0)")
             }
         } else {
-            // Revert the isFollowing binding if provided
-            if let isFollowing = isFollowing {
-                isFollowing.wrappedValue.toggle()
+            await MainActor.run {
+                setFollowingState(!optimisticFollowing)
+                showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"), type: .error)
             }
-            showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"), type: .error)
         }
     }
     
