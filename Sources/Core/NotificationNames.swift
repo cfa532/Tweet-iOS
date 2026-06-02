@@ -136,6 +136,9 @@ extension Notification.Name {
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast
     static let errorOccurred = Notification.Name("ErrorOccurred")
+    /// Posted when audio playback cannot start because the resource is unavailable.
+    /// userInfo: ["message": String]
+    static let audioPlaybackWarning = Notification.Name("AudioPlaybackWarning")
 }
 
 /// Centralized overlay coverage state for the app.

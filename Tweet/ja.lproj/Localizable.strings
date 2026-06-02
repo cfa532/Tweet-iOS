@@ -297,6 +297,7 @@
 "Photo" = "写真";
 "Video" = "動画";
 "Audio" = "音声";
+"This audio is not available." = "この音声は利用できません。";
 "File" = "ファイル";
 "Image" = "画像";
 "Camera" = "カメラ";

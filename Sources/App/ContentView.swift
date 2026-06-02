@@ -416,6 +416,25 @@ struct ContentView: View {
                 }
             }
         )
+
+        // 6b. Audio playback warning
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .audioPlaybackWarning,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let message = notification.userInfo?["message"] as? String {
+                    self.toastMessage = message
+                    self.toastType = .warning
+                    self.showToast = true
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+                        withAnimation { self.showToast = false }
+                    }
+                }
+            }
+        )
         
         // 7. Memory warning critical
         notificationObservers.append(

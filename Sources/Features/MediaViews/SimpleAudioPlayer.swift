@@ -2,6 +2,32 @@ import SwiftUI
 import AVFoundation
 import Combine
 
+private func isAudioResourceUnavailableError(_ error: Error?) -> Bool {
+    guard let error else { return true }
+
+    let nsError = error as NSError
+    if nsError.domain == NSURLErrorDomain {
+        switch nsError.code {
+        case NSURLErrorResourceUnavailable,
+             NSURLErrorBadServerResponse,
+             NSURLErrorFileDoesNotExist,
+             NSURLErrorCannotFindHost,
+             NSURLErrorCannotConnectToHost,
+             NSURLErrorNotConnectedToInternet,
+             NSURLErrorTimedOut:
+            return true
+        default:
+            break
+        }
+    }
+
+    if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+        return isAudioResourceUnavailableError(underlyingError)
+    }
+
+    return false
+}
+
 struct SimpleAudioPlayer: View {
     let url: URL
     var autoPlay: Bool = true
@@ -14,6 +40,9 @@ struct SimpleAudioPlayer: View {
     @StateObject private var muteState = MuteState.shared
     @State private var timeObserver: Any?
     @State private var cancellables = Set<AnyCancellable>()
+    @State private var wantsPlayback = false
+    @State private var playbackLoadFailed = false
+    @State private var lastPlaybackWarningDate = Date.distantPast
     
     var body: some View {
         VStack(spacing: 16) {
@@ -149,6 +178,7 @@ struct SimpleAudioPlayer: View {
         
         if autoPlay {
             print("DEBUG: [AUDIO PLAYER] Auto-playing audio")
+            wantsPlayback = true
             player?.play()
             isPlaying = true
         }
@@ -167,6 +197,7 @@ struct SimpleAudioPlayer: View {
             // Check if playback finished using helper function
             if self.isAudioAtEnd() {
                 self.isPlaying = false
+                self.wantsPlayback = false
                 self.currentTime = 0
                 self.player?.seek(to: .zero)
             }
@@ -181,6 +212,11 @@ struct SimpleAudioPlayer: View {
                     print("DEBUG: [AUDIO PLAYER] Player item ready to play")
                 case .failed:
                     print("DEBUG: [AUDIO PLAYER] Player item failed: \(playerItem.error?.localizedDescription ?? "Unknown error")")
+                    self.playbackLoadFailed = true
+                    self.isPlaying = false
+                    if self.wantsPlayback {
+                        self.showAudioUnavailableToast()
+                    }
                 case .unknown:
                     print("DEBUG: [AUDIO PLAYER] Player item status unknown")
                 @unknown default:
@@ -207,11 +243,21 @@ struct SimpleAudioPlayer: View {
         do {
             let duration = try await playerItem.asset.load(.duration)
             await MainActor.run {
+                guard self.playerItem === playerItem else { return }
                 self.duration = duration.seconds
                 print("DEBUG: [AUDIO PLAYER] Loaded duration: \(self.duration)")
             }
         } catch {
             print("DEBUG: [AUDIO PLAYER] Failed to load duration: \(error)")
+            guard isAudioResourceUnavailableError(error) else { return }
+            await MainActor.run {
+                guard self.playerItem === playerItem else { return }
+                self.playbackLoadFailed = true
+                self.isPlaying = false
+                if self.wantsPlayback {
+                    self.showAudioUnavailableToast()
+                }
+            }
         }
     }
     
@@ -221,11 +267,34 @@ struct SimpleAudioPlayer: View {
         if isPlaying {
             print("DEBUG: [AUDIO PLAYER] Pausing playback")
             player.pause()
+            wantsPlayback = false
+            isPlaying = false
         } else {
+            guard !playbackLoadFailed, player.currentItem?.status != .failed else {
+                showAudioUnavailableToast()
+                isPlaying = false
+                return
+            }
+
             print("DEBUG: [AUDIO PLAYER] Starting playback")
+            wantsPlayback = true
             player.play()
+            isPlaying = true
         }
-        isPlaying.toggle()
+    }
+
+    private func showAudioUnavailableToast() {
+        let now = Date()
+        guard now.timeIntervalSince(lastPlaybackWarningDate) > 1 else { return }
+        lastPlaybackWarningDate = now
+
+        NotificationCenter.default.post(
+            name: .audioPlaybackWarning,
+            object: nil,
+            userInfo: [
+                "message": NSLocalizedString("This audio is not available.", comment: "Audio playback unavailable warning")
+            ]
+        )
     }
     
     private func toggleMute() {
@@ -268,6 +337,8 @@ struct SimpleAudioPlayer: View {
         player?.pause()
         player = nil
         playerItem = nil
+        wantsPlayback = false
+        playbackLoadFailed = false
     }
 }
 
@@ -283,6 +354,9 @@ struct CompactAudioPlaylistPlayer: View {
     @State private var duration: Double = 0
     @State private var timeObserver: Any?
     @State private var cancellables = Set<AnyCancellable>()
+    @State private var wantsPlayback = false
+    @State private var playbackLoadFailed = false
+    @State private var lastPlaybackWarningDate = Date.distantPast
 
     private var baseUrl: URL {
         parentTweet.author?.baseUrl
@@ -447,6 +521,8 @@ struct CompactAudioPlaylistPlayer: View {
         cancellables.removeAll()
         currentTime = 0
         duration = 0
+        playbackLoadFailed = false
+        wantsPlayback = shouldPlay
 
         let item = AVPlayerItem(asset: AVURLAsset(url: url))
         player.replaceCurrentItem(with: item)
@@ -456,12 +532,22 @@ struct CompactAudioPlaylistPlayer: View {
             do {
                 let loadedDuration = try await item.asset.load(.duration)
                 await MainActor.run {
+                    guard let currentItem = player.currentItem, currentItem === item else { return }
                     if loadedDuration.isValid && !loadedDuration.isIndefinite {
                         duration = loadedDuration.seconds
                     }
                 }
             } catch {
                 print("DEBUG: [COMPACT AUDIO] Failed to load duration: \(error)")
+                guard isAudioResourceUnavailableError(error) else { return }
+                await MainActor.run {
+                    guard let currentItem = player.currentItem, currentItem === item else { return }
+                    playbackLoadFailed = true
+                    isPlaying = false
+                    if wantsPlayback {
+                        showAudioUnavailableToast()
+                    }
+                }
             }
         }
 
@@ -474,6 +560,20 @@ struct CompactAudioPlaylistPlayer: View {
     }
 
     private func observe(item: AVPlayerItem) {
+        item.publisher(for: \.status)
+            .receive(on: DispatchQueue.main)
+            .sink { status in
+                if status == .failed {
+                    print("DEBUG: [COMPACT AUDIO] Player item failed: \(item.error?.localizedDescription ?? "Unknown error")")
+                    playbackLoadFailed = true
+                    isPlaying = false
+                    if wantsPlayback {
+                        showAudioUnavailableToast()
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
         item.publisher(for: \.duration)
             .receive(on: DispatchQueue.main)
             .sink { newDuration in
@@ -490,6 +590,7 @@ struct CompactAudioPlaylistPlayer: View {
                     playNext()
                 } else {
                     isPlaying = false
+                    wantsPlayback = false
                     currentTime = 0
                     player?.seek(to: .zero)
                 }
@@ -512,7 +613,15 @@ struct CompactAudioPlaylistPlayer: View {
         if isPlaying {
             player.pause()
             isPlaying = false
+            wantsPlayback = false
         } else {
+            guard !playbackLoadFailed, player.currentItem?.status != .failed else {
+                showAudioUnavailableToast()
+                isPlaying = false
+                return
+            }
+
+            wantsPlayback = true
             player.play()
             isPlaying = true
         }
@@ -547,6 +656,22 @@ struct CompactAudioPlaylistPlayer: View {
         player = nil
         cancellables.removeAll()
         isPlaying = false
+        wantsPlayback = false
+        playbackLoadFailed = false
+    }
+
+    private func showAudioUnavailableToast() {
+        let now = Date()
+        guard now.timeIntervalSince(lastPlaybackWarningDate) > 1 else { return }
+        lastPlaybackWarningDate = now
+
+        NotificationCenter.default.post(
+            name: .audioPlaybackWarning,
+            object: nil,
+            userInfo: [
+                "message": NSLocalizedString("This audio is not available.", comment: "Audio playback unavailable warning")
+            ]
+        )
     }
 
     private func displayName(for attachment: MimeiFileType) -> String {

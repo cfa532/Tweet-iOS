@@ -5,7 +5,7 @@ struct ToastView: View {
     let message: String
     let type: ToastType
     
-    enum ToastType { case success, error, info }
+    enum ToastType { case success, error, warning, info }
     
     var body: some View {
         HStack(spacing: 10) {
@@ -32,6 +32,7 @@ struct ToastView: View {
         switch type {
         case .success: return Color(.systemGray6).opacity(0.95)
         case .error: return Color(.systemGray6).opacity(0.95)
+        case .warning: return Color(.systemGray6).opacity(0.95)
         case .info: return Color(.systemGray6).opacity(0.95)
         }
     }
@@ -40,6 +41,7 @@ struct ToastView: View {
         switch type {
         case .success: return Color(.systemGray4).opacity(0.8)
         case .error: return Color(.systemGray4).opacity(0.8)
+        case .warning: return Color(.systemGray4).opacity(0.8)
         case .info: return Color(.systemGray4).opacity(0.8)
         }
     }
@@ -48,6 +50,7 @@ struct ToastView: View {
         switch type {
         case .success: return Color(.label)
         case .error: return Color(.label)
+        case .warning: return Color(.label)
         case .info: return Color(.label)
         }
     }
@@ -56,6 +59,7 @@ struct ToastView: View {
         switch type {
         case .success: return "checkmark.circle.fill"
         case .error: return "exclamationmark.triangle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
         case .info: return "info.circle.fill"
         }
     }
