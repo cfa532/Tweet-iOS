@@ -160,6 +160,7 @@ struct ProfileTweetsSection<Header: View>: View {
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
     let routeRefreshToken: Int
+    let headerRefreshToken: Int
     let resyncedTweets: [Tweet]
     let resyncedTweetsToken: Int
     @StateObject private var viewModel: ProfileTweetsViewModel
@@ -178,6 +179,7 @@ struct ProfileTweetsSection<Header: View>: View {
         onShowLogin: (() -> Void)? = nil,
         onShowToast: ((String, Bool) -> Void)? = nil,
         routeRefreshToken: Int = 0,
+        headerRefreshToken: Int = 0,
         resyncedTweets: [Tweet] = [],
         resyncedTweetsToken: Int = 0,
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
@@ -194,6 +196,7 @@ struct ProfileTweetsSection<Header: View>: View {
         self.onShowLogin = onShowLogin
         self.onShowToast = onShowToast
         self.routeRefreshToken = routeRefreshToken
+        self.headerRefreshToken = headerRefreshToken
         self.resyncedTweets = resyncedTweets
         self.resyncedTweetsToken = resyncedTweetsToken
         self.header = header
@@ -264,6 +267,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     }
                 )
             },
+            headerRefreshToken: headerRefreshToken,
             onRefreshExtra: onPinnedTweetsRefresh,
             onAvatarTap: { user in
                 // If onAvatarTapInProfile is provided, use it (for scroll-to-top in profile)

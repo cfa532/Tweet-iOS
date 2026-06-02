@@ -28,6 +28,7 @@ struct TweetListView: View {
     let tweetFetcher: @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
     let showTitle: Bool
     let header: (() -> AnyView)?
+    let headerRefreshToken: Int
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     let leadingPadding: CGFloat  // Leading padding for cells
@@ -171,6 +172,7 @@ struct TweetListView: View {
         externalRefreshToken: Int = 0,
         emptyStateText: LocalizedStringKey? = nil,
         header: (() -> AnyView)? = nil,
+        headerRefreshToken: Int = 0,
         onRefreshExtra: (() async -> Void)? = nil,
         onAvatarTap: ((User) -> Void)? = nil,
         onTweetTap: ((Tweet) -> Void)? = nil,
@@ -191,6 +193,7 @@ struct TweetListView: View {
         self.externalRefreshToken = externalRefreshToken
         self.emptyStateText = emptyStateText
         self.header = header
+        self.headerRefreshToken = headerRefreshToken
         self.onRefreshExtra = onRefreshExtra
         self.onAvatarTap = onAvatarTap
         self.onTweetTap = onTweetTap
@@ -225,6 +228,7 @@ struct TweetListView: View {
                 TweetTableView(
                     tweets: $tweets,
                     header: header,
+                    headerRefreshToken: headerRefreshToken,
                     hproseInstance: hproseInstance,
                     hasMoreTweets: $hasMoreTweets,
                     isLoadingMore: isLoadingMore,

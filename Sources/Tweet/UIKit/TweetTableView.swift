@@ -10,6 +10,7 @@ import SwiftUI
 struct TweetTableView: UIViewControllerRepresentable {
     @Binding var tweets: [Tweet]
     let header: (() -> AnyView)?
+    let headerRefreshToken: Int
     let hproseInstance: HproseInstance
     @Binding var hasMoreTweets: Bool
     let isLoadingMore: Bool
@@ -35,6 +36,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         var lastTweetIds: [String] = []
         var lastPinnedTweetIds: [String] = []
         var lastHeaderWasPresent: Bool?
+        var lastHeaderRefreshToken: Int?
         weak var controller: TweetTableViewController?
 
         func triggerLoadMore() {
@@ -69,6 +71,7 @@ struct TweetTableView: UIViewControllerRepresentable {
 
         controller.updateHeader()
         context.coordinator.lastHeaderWasPresent = header != nil
+        context.coordinator.lastHeaderRefreshToken = headerRefreshToken
 
         return controller
     }
@@ -116,9 +119,11 @@ struct TweetTableView: UIViewControllerRepresentable {
         // SwiftUI view continues to observe its own model changes; reassigning it
         // on every wrapper update causes expensive sizeThatFits/layout work while scrolling.
         let headerChanged = (header != nil) != (uiViewController.headerViewBuilder != nil)
+        let headerRefreshChanged = coordinator.lastHeaderRefreshToken != headerRefreshToken
         uiViewController.headerViewBuilder = header
-        if headerChanged || coordinator.lastHeaderWasPresent != (header != nil) {
+        if headerChanged || headerRefreshChanged || coordinator.lastHeaderWasPresent != (header != nil) {
             coordinator.lastHeaderWasPresent = header != nil
+            coordinator.lastHeaderRefreshToken = headerRefreshToken
             uiViewController.updateHeader()
         }
     }

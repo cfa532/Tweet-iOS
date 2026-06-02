@@ -28,6 +28,7 @@ struct ProfileView: View {
     @State private var didLoad = false
     /// Bumped when stale-IP recovery changes this profile's read route so tweets reload without clearing cached content.
     @State private var profileTweetsRefreshToken = 0
+    @State private var profileHeaderRefreshToken = 0
     @State private var resyncedTweets: [Tweet] = []
     @State private var resyncedTweetsToken = 0
     
@@ -159,6 +160,24 @@ struct ProfileView: View {
                 isNavigationVisible = true
                 postNavigationVisibilityNotification(isVisible: true)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .imageCached)) { notification in
+                guard isProfileAvatarCacheNotification(notification) else { return }
+                profileHeaderRefreshToken += 1
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in
+                guard (notification.userInfo?["userId"] as? String) == user.mid else { return }
+                profileHeaderRefreshToken += 1
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
+                guard (notification.userInfo?["userId"] as? String) == user.mid else { return }
+                profileHeaderRefreshToken += 1
+            }
+    }
+
+    private func isProfileAvatarCacheNotification(_ notification: Notification) -> Bool {
+        guard let avatar = user.avatar,
+              let avatarId = notification.userInfo?["avatarId"] as? String else { return false }
+        return avatarId == avatar || avatarId == "avatar_\(avatar)"
     }
     
     @ViewBuilder
@@ -265,6 +284,7 @@ struct ProfileView: View {
                     onShowLogin: onShowLogin,
                     onShowToast: onShowToast,
                     routeRefreshToken: profileTweetsRefreshToken,
+                    headerRefreshToken: profileHeaderRefreshToken,
                     resyncedTweets: resyncedTweets,
                     resyncedTweetsToken: resyncedTweetsToken,
                     header: {
