@@ -839,7 +839,19 @@ extension TweetCacheManager {
             let cdUser = (try? self.context.fetch(request).first) ?? CDUser(context: self.context)
             cdUser.mid = user.mid
             cdUser.timeCached = Date()
-            if let userData = try? JSONEncoder().encode(user) {
+
+            var encodedUserData = try? JSONEncoder().encode(user)
+            if User.sanitizedAvatarId(user.avatar) == nil,
+               let existingData = cdUser.userData,
+               let existingUser = try? JSONDecoder().decode(User.self, from: existingData),
+               let existingAvatar = User.sanitizedAvatarId(existingUser.avatar),
+               let userData = encodedUserData,
+               var userDictionary = (try? JSONSerialization.jsonObject(with: userData)) as? [String: Any] {
+                userDictionary["avatar"] = existingAvatar
+                encodedUserData = try? JSONSerialization.data(withJSONObject: userDictionary)
+            }
+
+            if let userData = encodedUserData {
                 cdUser.userData = userData
             }
             try? self.context.save()
@@ -1258,4 +1270,3 @@ extension TweetCacheManager {
         return Array(sortedResults)
     }
 } 
-

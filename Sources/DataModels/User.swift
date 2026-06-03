@@ -309,7 +309,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.name = name
         self.username = username
         self.password = password
-        self.avatar = avatar
+        self.avatar = User.sanitizedAvatarId(avatar)
         self.email = email
         self.profile = profile
         self.timestamp = Date.now
@@ -354,7 +354,14 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             var sanitizedDict = dict
             var explicitNullFields: Set<String> = []
             for (key, value) in dict {
-                if let nsArray = value as? NSArray {
+                if key == CodingKeys.avatar.rawValue {
+                    if let avatar = value as? String,
+                       let sanitizedAvatar = sanitizedAvatarId(avatar) {
+                        sanitizedDict[key] = sanitizedAvatar
+                    } else {
+                        sanitizedDict.removeValue(forKey: key)
+                    }
+                } else if let nsArray = value as? NSArray {
                     // Convert NSArray to Swift Array
                     let swiftArray = nsArray.compactMap { $0 as? String }
                     sanitizedDict[key] = swiftArray
@@ -411,6 +418,26 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             throw NSError(domain: "User", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode dict to user: \(error.localizedDescription)"])
         }
     }
+
+    static func sanitizedAvatarId(_ value: String?) -> MimeiId? {
+        guard let value else { return nil }
+
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lowercased = trimmed.lowercased()
+        let nullSentinels: Set<String> = ["null", "nil", "none", "undefined", "<null>", "(null)"]
+        guard !nullSentinels.contains(lowercased) else { return nil }
+        guard trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else { return nil }
+        guard trimmed.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
+        guard !trimmed.contains("://"),
+              !trimmed.contains("/"),
+              !trimmed.contains("\\") else {
+            return nil
+        }
+
+        return trimmed
+    }
     
     static func from(cdUser: CDUser) -> User {
         // Try to decode the full user object from cache.
@@ -459,7 +486,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         instance.name = user.name ?? instance.name
         instance.username = user.username ?? instance.username
         instance.password = user.password ?? instance.password
-        instance.avatar = user.avatar ?? instance.avatar
+        if let avatar = sanitizedAvatarId(user.avatar) {
+            instance.avatar = avatar
+        }
         instance.email = user.email ?? instance.email
         instance.profile = user.profile ?? instance.profile
         instance.timestamp = user.timestamp
@@ -508,7 +537,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             case CodingKeys.password.rawValue:
                 instance.password = nil
             case CodingKeys.avatar.rawValue:
-                instance.avatar = nil
+                break
             case CodingKeys.email.rawValue:
                 instance.email = nil
             case CodingKeys.profile.rawValue:
@@ -542,7 +571,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         name = try container.decodeIfPresent(String.self, forKey: .name)
         username = try container.decodeIfPresent(String.self, forKey: .username)
         password = try container.decodeIfPresent(String.self, forKey: .password)
-        avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+        avatar = User.sanitizedAvatarId(try container.decodeIfPresent(String.self, forKey: .avatar))
         email = try container.decodeIfPresent(String.self, forKey: .email)
         profile = try container.decodeIfPresent(String.self, forKey: .profile)
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date.now
@@ -585,7 +614,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         try container.encodeIfPresent(name, forKey: .name)
         try container.encodeIfPresent(username, forKey: .username)
         try container.encodeIfPresent(password, forKey: .password)
-        try container.encodeIfPresent(avatar, forKey: .avatar)
+        try container.encodeIfPresent(User.sanitizedAvatarId(avatar), forKey: .avatar)
         try container.encodeIfPresent(email, forKey: .email)
         try container.encodeIfPresent(profile, forKey: .profile)
         try container.encode(timestamp, forKey: .timestamp)
