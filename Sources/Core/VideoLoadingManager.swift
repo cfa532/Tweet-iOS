@@ -53,11 +53,9 @@ class VideoLoadingManager: ObservableObject {
     // MARK: - Public Methods
 
     /// Tune the shared loader for the currently visible feed.
-    /// Profile feeds can be densely packed with large videos, so keep their loading window tight.
     func configureForFeed(identifier: String) {
-        let isProfileFeed = identifier.hasPrefix("profile_")
-        let nextPreloadCount = isProfileFeed ? 1 : defaultPreloadCount
-        let nextMaxConcurrentLoads = isProfileFeed ? 2 : defaultMaxConcurrentLoads
+        let nextPreloadCount = defaultPreloadCount
+        let nextMaxConcurrentLoads = defaultMaxConcurrentLoads
 
         guard preloadCount != nextPreloadCount || maxConcurrentLoads != nextMaxConcurrentLoads else { return }
 

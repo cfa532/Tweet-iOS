@@ -154,17 +154,17 @@ private let emergencyThreshold: Double = 0.95 // 95% = 1.9GB
 
 **Video Feed Fine Tuning (June 2026):**
 
-Profile feeds are treated as a denser, higher-risk media surface because one user profile can contain many adjacent 100MB videos. The app keeps the normal feed responsive while reducing profile memory and network pressure:
+All feed surfaces now use the same preload budget so profile navigation has the same next-video smoothness as the main feed:
 
 | Surface | Tweet preload window | Directional AVPlayer pre-creation | Max concurrent video loads |
 |---------|----------------------|------------------------------------|----------------------------|
 | Main/standard feeds | current + next 2 tweets | 2 nearby off-screen players | 4 |
-| Profile feeds | current + next 1 tweet | 1 nearby off-screen player | 2 |
+| Profile feeds | current + next 2 tweets | 2 nearby off-screen players | 4 |
 
 Additional guardrails:
 - Off-screen preloaded players may decode/cache a poster frame, but paused off-screen players do not keep network streaming enabled.
-- Visible media still gets priority: profile tuning only reduces future/off-screen work, not the currently visible video.
-- Directional preloads are cleared when the active profile window changes so stale adjacent players do not survive fast scrolling.
+- Visible media still gets priority over background preload work.
+- Directional preloads are cleared when the active window changes so stale adjacent players do not survive fast scrolling.
 
 **Caching Strategy:**
 ```swift
@@ -985,17 +985,16 @@ print("DEBUG: [ImageCacheManager] ...")
 - **Solution:** Synchronized both with 1GB threshold
 - **Impact:** No double cleanup on warnings
 
-### 7. Profile Video Preload Fine Tuning (June 3, 2026)
-- **Problem:** Media-heavy profiles with many large videos could overwhelm debug-attached runs by creating and buffering too many off-screen players at once.
+### 7. Video Preload Fine Tuning (June 2026)
+- **Problem:** Off-screen preloaded players could continue network streaming while paused after poster-frame work.
 - **Solution:**
-  - Profile tweet preload window reduced to current + 1 next tweet.
-  - Profile directional AVPlayer pre-creation reduced to 1 nearby off-screen player.
-  - Profile concurrent video load cap reduced to 2.
+  - Main, standard, and profile feeds use the same preload budget: current + next 2 tweets, 2 directional off-screen players, and 4 concurrent video loads.
   - Paused off-screen preloaded players no longer keep network streaming enabled after poster-frame work.
+  - Any positive media-cell intersection counts as visible for loading.
 - **Impact:**
-  - Lower peak memory/network pressure in profile views.
-  - Fewer simultaneous 100MB video pipelines competing with the visible video.
-  - Keeps one-step-ahead smoothness without returning to the heavier default feed budget.
+  - Profile feeds keep the same next-video smoothness as the main feed.
+  - Background players are less likely to continue downloading large media while paused.
+  - Visible or partially visible videos are prioritized for loading.
 
 ---
 

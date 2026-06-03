@@ -204,7 +204,7 @@ struct TweetListView: View {
         let coordinator = (feedIdentifier == "mainFeed")
             ? VideoPlaybackCoordinator.shared
             : VideoPlaybackCoordinator()
-        coordinator.directionalPlayerPreloadCount = feedIdentifier.hasPrefix("profile_") ? 1 : 2
+        coordinator.directionalPlayerPreloadCount = 2
         self.videoCoordinator = coordinator
         self.notifications = notifications ?? [
             TweetListNotification(
@@ -337,7 +337,7 @@ struct TweetListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             videoLoadingManager.configureForFeed(identifier: feedIdentifier)
-            videoCoordinator.directionalPlayerPreloadCount = feedIdentifier.hasPrefix("profile_") ? 1 : 2
+            videoCoordinator.directionalPlayerPreloadCount = 2
 
             // Set up foreground observer to fetch new tweets when app returns
             setupForegroundObserver()

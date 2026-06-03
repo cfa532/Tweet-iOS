@@ -449,7 +449,8 @@ class MediaGridUIView: UIView {
     }
 
     /// Updates per-media visibility.
-    /// `loadVisible` uses a low threshold so any on-screen media starts loading a cover frame.
+    /// `loadVisible` treats any positive on-screen intersection as visible so partially
+    /// visible media can start loading a cover frame/player.
     /// `continuePlayback` is stricter than `playable`: the current feed video stops once it drops below this threshold.
     /// `playable` keeps the 50% threshold used by the video coordinator for new autoplay candidates.
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
@@ -464,7 +465,7 @@ class MediaGridUIView: UIView {
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
             // Keep loading tied to actual media-cell geometry, not just table-row visibility.
-            let isLoadVisible = isGridVisible && ratio > 0.05
+            let isLoadVisible = isGridVisible && visibleArea > 0
             cellView.setVisible(isLoadVisible, shouldAcquirePlayer: isLoadVisible)
 
             guard cellView.isVideoAttachment,

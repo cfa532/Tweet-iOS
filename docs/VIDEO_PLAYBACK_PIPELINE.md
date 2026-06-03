@@ -34,7 +34,7 @@ When the coordinator picks a primary:
 
 If the primary video gets stuck (hasn't actually played for 15 seconds), the coordinator picks a different one.
 
-**Directional preload budget:** The coordinator pre-creates a small number of nearby off-screen players so the next likely video can appear quickly. Standard feeds use 2 directional player preloads. Profile feeds use 1 because profiles can contain dense runs of large videos, and the memory/network cost of preparing several 100MB videos at once is too high.
+**Directional preload budget:** The coordinator pre-creates a small number of nearby off-screen players so the next likely video can appear quickly. Main, standard, and profile feeds use 2 directional player preloads.
 
 ---
 
@@ -168,8 +168,8 @@ IPFS bandwidth is limited. Playing multiple videos simultaneously would cause al
 ### Why the 0.3s debounce?
 Creating an AVPlayer is expensive (memory, network, CPU). During fast scrolling, cells appear and disappear in under 100ms. The debounce prevents creating players for cells the user will never see.
 
-### Why profile feeds preload less?
-Profiles often show many videos from the same author in a row, including very large files. To avoid debug-session interruptions and peak memory spikes, profile feeds use a tighter budget: current + 1 next tweet for loading, 1 directional off-screen AVPlayer, and 2 concurrent video loads. Normal feeds keep the broader current + 2 / 2-player budget.
+### Why profile feeds use the same preload budget?
+Profiles now use the same preload budget as the main feed: current + 2 next tweets for loading, 2 directional off-screen AVPlayers, and 4 concurrent video loads. This keeps profile scrolling behavior consistent with the main feed while relying on the paused-preload guardrail below to avoid unnecessary background downloading.
 
 Paused off-screen preload players are also not allowed to keep network streaming enabled after poster-frame work. This preserves a fast next-video path without letting background players continue downloading large media.
 

@@ -103,8 +103,8 @@ At a high level:
 
 **Directional preload strategy**
 - Preload the next likely-to-watch videos with a small directional window.
-- Standard feeds pre-create up to 2 nearby off-screen players; profile feeds pre-create 1 because profile timelines can be packed with large videos.
-- Profile feeds also reduce tweet-level video preloading to current + 1 next tweet and cap concurrent video loads at 2.
+- Main, standard, and profile feeds pre-create up to 2 nearby off-screen players.
+- Feed-level video preloading uses current + next 2 tweets and caps concurrent video loads at 4.
 - Keep preload scope intentionally tight to avoid over-downloading content users may never see.
 
 **Off-screen cancellation strategy**
