@@ -2980,6 +2980,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     func showThumbnailForBackground() {
         guard isVideoAttachment, isVisible else { return }
         guard videoCellState == .playing || videoCellState == .paused || videoCellState == .playerReady else { return }
+        if let player {
+            saveCurrentPosition(player: player, wasPlaying: player.rate > 0 || coordinatorWantsToPlay)
+        }
         guard let mid = attachment?.mid,
               let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) else { return }
         imageView.image = thumbnail
@@ -2997,8 +3000,21 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     func refreshVideoLayerAfterForeground() {
         guard isVideoAttachment, let player = player, player.rate == 0 else { return }
         // Only refresh if videoPlayerView was previously rendering content
-        guard videoCellState == .playerReady || videoCellState == .paused else { return }
+        guard videoCellState == .playerLoading || videoCellState == .playerReady || videoCellState == .paused else { return }
 
+        let expectedMid = attachment?.mid
+        let currentTime = player.currentTime()
+        let cachedTime = expectedMid.flatMap { VideoStateCache.shared.getCachedPlaybackInfo(for: $0)?.time }
+        let resumeTime: CMTime = {
+            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
+                return currentTime
+            }
+            if let cachedTime, cachedTime.isValid, cachedTime.seconds.isFinite, cachedTime.seconds > 0.25 {
+                return cachedTime
+            }
+            return .zero
+        }()
+        pendingRecoverySeekTime = resumeTime.seconds > 0.25 ? resumeTime : nil
 
         // Temporarily show cached thumbnail while AVPlayerLayer re-initializes.
         // This prevents a black flash if the layer takes time to resume rendering.
@@ -3021,9 +3037,29 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoPlayerView.setPlayer(nil)
         hasRenderedFrameForCurrentPlayer = false
         videoPlayerView.setPlayer(player)
-        let t = player.currentTime()
-        let target = (t.isValid && !t.seconds.isNaN) ? t : .zero
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        player.seek(to: resumeTime, toleranceBefore: .zero, toleranceAfter: .zero)
+
+        Task { @MainActor [weak self, weak player] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard let self,
+                  let player,
+                  self.player === player,
+                  self.attachment?.mid == expectedMid,
+                  self.videoCellState == .playerLoading,
+                  self.isActuallyPlayerReady(player) else { return }
+
+            if self.videoPlayerView.isLayerReadyForDisplay {
+                self.hasRenderedFrameForCurrentPlayer = true
+            }
+
+            if self.coordinatorWantsToPlay {
+                self.requestPlaybackStartIfNeeded(player, reason: "foreground-layer-refresh-fallback")
+                self.updateLoadingSpinnerForPlayback(player)
+            } else {
+                self.transitionTo(.playerReady)
+                self.loadingSpinner.stopAnimating()
+            }
+        }
     }
 
     // MARK: - MediaCellDelegate

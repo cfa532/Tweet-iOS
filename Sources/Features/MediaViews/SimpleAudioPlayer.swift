@@ -2,6 +2,8 @@ import SwiftUI
 import AVFoundation
 import Combine
 
+private let audioPlaybackStartupTimeoutNanoseconds: UInt64 = 5_000_000_000
+
 private func isAudioResourceUnavailableError(_ error: Error?) -> Bool {
     guard let error else { return true }
 
@@ -42,7 +44,9 @@ struct SimpleAudioPlayer: View {
     @State private var cancellables = Set<AnyCancellable>()
     @State private var wantsPlayback = false
     @State private var playbackLoadFailed = false
+    @State private var isPlaybackLoading = false
     @State private var lastPlaybackWarningDate = Date.distantPast
+    @State private var startupTimeoutTask: Task<Void, Never>?
     
     var body: some View {
         VStack(spacing: 16) {
@@ -106,20 +110,24 @@ struct SimpleAudioPlayer: View {
             
             // Control buttons
             HStack(spacing: 20) {
-                // Mute/Unmute button
-                Button(action: toggleMute) {
-                    Image(systemName: muteState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(.themeSecondaryText)
-                }
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(.themeSecondaryText)
                 
                 Spacer()
                 
                 // Play/Pause button
                 Button(action: togglePlayback) {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 50))
-                        .foregroundColor(.themeAccent)
+                    if isPlaybackLoading {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.themeAccent)
+                            .frame(width: 50, height: 50)
+                    } else {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 50))
+                            .foregroundColor(.themeAccent)
+                    }
                 }
                 
                 Spacer()
@@ -141,8 +149,9 @@ struct SimpleAudioPlayer: View {
         .onDisappear {
             cleanup()
         }
-        .onChange(of: muteState.isMuted) { _, newMuteState in
-            player?.isMuted = newMuteState
+        .onChange(of: muteState.isMuted) { _, _ in
+            player?.isMuted = false
+            player?.volume = 1
         }
     }
     
@@ -165,8 +174,9 @@ struct SimpleAudioPlayer: View {
         playerItem = AVPlayerItem(asset: asset)
         player = AVPlayer(playerItem: playerItem)
         
-        // Configure player
-        player?.isMuted = muteState.isMuted
+        // Audio should always play through when the user explicitly starts it.
+        player?.isMuted = false
+        player?.volume = 1
         
         // Set up observers
         setupPlayerObservers()
@@ -179,6 +189,7 @@ struct SimpleAudioPlayer: View {
         if autoPlay {
             print("DEBUG: [AUDIO PLAYER] Auto-playing audio")
             wantsPlayback = true
+            scheduleStartupTimeout(for: playerItem)
             player?.play()
             isPlaying = true
         }
@@ -210,11 +221,17 @@ struct SimpleAudioPlayer: View {
                 switch status {
                 case .readyToPlay:
                     print("DEBUG: [AUDIO PLAYER] Player item ready to play")
+                    self.startupTimeoutTask?.cancel()
+                    self.isPlaybackLoading = false
                 case .failed:
                     print("DEBUG: [AUDIO PLAYER] Player item failed: \(playerItem.error?.localizedDescription ?? "Unknown error")")
+                    self.startupTimeoutTask?.cancel()
+                    let shouldWarn = self.wantsPlayback
                     self.playbackLoadFailed = true
+                    self.wantsPlayback = false
+                    self.isPlaybackLoading = false
                     self.isPlaying = false
-                    if self.wantsPlayback {
+                    if shouldWarn {
                         self.showAudioUnavailableToast()
                     }
                 case .unknown:
@@ -252,9 +269,13 @@ struct SimpleAudioPlayer: View {
             guard isAudioResourceUnavailableError(error) else { return }
             await MainActor.run {
                 guard self.playerItem === playerItem else { return }
+                self.startupTimeoutTask?.cancel()
+                let shouldWarn = self.wantsPlayback
                 self.playbackLoadFailed = true
+                self.wantsPlayback = false
+                self.isPlaybackLoading = false
                 self.isPlaying = false
-                if self.wantsPlayback {
+                if shouldWarn {
                     self.showAudioUnavailableToast()
                 }
             }
@@ -267,19 +288,74 @@ struct SimpleAudioPlayer: View {
         if isPlaying {
             print("DEBUG: [AUDIO PLAYER] Pausing playback")
             player.pause()
+            startupTimeoutTask?.cancel()
             wantsPlayback = false
+            isPlaybackLoading = false
             isPlaying = false
         } else {
-            guard !playbackLoadFailed, player.currentItem?.status != .failed else {
-                showAudioUnavailableToast()
-                isPlaying = false
+            if playbackLoadFailed || player.currentItem == nil || player.currentItem?.status == .failed {
+                reloadCurrentItemAndPlay()
                 return
             }
 
             print("DEBUG: [AUDIO PLAYER] Starting playback")
             wantsPlayback = true
+            isPlaybackLoading = true
+            player.isMuted = false
+            player.volume = 1
+            scheduleStartupTimeout(for: player.currentItem)
             player.play()
             isPlaying = true
+        }
+    }
+
+    private func reloadCurrentItemAndPlay() {
+        guard let player else { return }
+
+        startupTimeoutTask?.cancel()
+        cancellables.removeAll()
+        currentTime = 0
+        duration = 0
+        playbackLoadFailed = false
+        wantsPlayback = true
+        isPlaybackLoading = true
+
+        let item = AVPlayerItem(asset: AVURLAsset(url: url))
+        playerItem = item
+        player.replaceCurrentItem(with: item)
+        player.isMuted = false
+        player.volume = 1
+        setupPlayerObservers()
+
+        Task {
+            await loadDuration()
+        }
+
+        scheduleStartupTimeout(for: item)
+        player.play()
+        isPlaying = true
+    }
+
+    private func scheduleStartupTimeout(for item: AVPlayerItem?) {
+        startupTimeoutTask?.cancel()
+        guard let item else { return }
+
+        startupTimeoutTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: audioPlaybackStartupTimeoutNanoseconds)
+            guard !Task.isCancelled,
+                  self.wantsPlayback,
+                  self.playerItem === item,
+                  item.status != .readyToPlay,
+                  self.player?.timeControlStatus != .playing else { return }
+
+            print("DEBUG: [AUDIO PLAYER] Playback startup timed out")
+            self.playbackLoadFailed = true
+            self.wantsPlayback = false
+            self.isPlaybackLoading = false
+            self.isPlaying = false
+            self.player?.pause()
+            self.player?.replaceCurrentItem(with: nil)
+            self.showAudioUnavailableToast()
         }
     }
 
@@ -298,8 +374,8 @@ struct SimpleAudioPlayer: View {
     }
     
     private func toggleMute() {
-        muteState.toggleMute()
-        player?.isMuted = muteState.isMuted
+        player?.isMuted = false
+        player?.volume = 1
     }
     
     private func formatTime(_ time: Double) -> String {
@@ -332,12 +408,15 @@ struct SimpleAudioPlayer: View {
         
         // Cancel all Combine subscriptions
         cancellables.removeAll()
+        startupTimeoutTask?.cancel()
+        startupTimeoutTask = nil
         
         // Stop and cleanup player
         player?.pause()
         player = nil
         playerItem = nil
         wantsPlayback = false
+        isPlaybackLoading = false
         playbackLoadFailed = false
     }
 }
@@ -356,7 +435,9 @@ struct CompactAudioPlaylistPlayer: View {
     @State private var cancellables = Set<AnyCancellable>()
     @State private var wantsPlayback = false
     @State private var playbackLoadFailed = false
+    @State private var isPlaybackLoading = false
     @State private var lastPlaybackWarningDate = Date.distantPast
+    @State private var startupTimeoutTask: Task<Void, Never>?
 
     private var baseUrl: URL {
         parentTweet.author?.baseUrl
@@ -390,7 +471,7 @@ struct CompactAudioPlaylistPlayer: View {
                         .opacity(playableAttachments.count > 1 ? 1 : 0.35)
                         .disabled(playableAttachments.count <= 1)
 
-                    controlButton(systemName: isPlaying ? "pause.fill" : "play.fill", action: togglePlayback, isPrimary: true)
+                    primaryControlButton
 
                     controlButton(systemName: "forward.fill", action: playNext)
                         .opacity(playableAttachments.count > 1 ? 1 : 0.35)
@@ -440,7 +521,11 @@ struct CompactAudioPlaylistPlayer: View {
                 if currentIndex >= playableAttachments.count {
                     currentIndex = 0
                 }
-                loadCurrentItem(shouldPlay: isPlaying || autoPlay)
+                if isPlaying || autoPlay {
+                    loadCurrentItem(shouldPlay: true)
+                } else {
+                    resetCurrentItem()
+                }
             }
         }
     }
@@ -468,6 +553,13 @@ struct CompactAudioPlaylistPlayer: View {
 
                 Spacer(minLength: 8)
 
+                if playableAttachments.count > 1 {
+                    Text("\(currentIndex + 1)/\(playableAttachments.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                }
+
                 Image(systemName: "chevron.down")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.secondary)
@@ -493,6 +585,29 @@ struct CompactAudioPlaylistPlayer: View {
         .contentShape(Circle())
     }
 
+    private var primaryControlButton: some View {
+        Button(action: togglePlayback) {
+            ZStack {
+                Circle()
+                    .fill(Color.themeAccent)
+                    .frame(width: 48, height: 48)
+
+                if isPlaybackLoading {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                } else {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+            }
+            .frame(width: 48, height: 48)
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+    }
+
     private var progress: Double {
         guard duration.isFinite, duration > 0, currentTime.isFinite else { return 0 }
         return min(max(currentTime / duration, 0), 1)
@@ -509,8 +624,12 @@ struct CompactAudioPlaylistPlayer: View {
         }
 
         player = AVPlayer()
+        player?.isMuted = false
+        player?.volume = 1
         addTimeObserver()
-        loadCurrentItem(shouldPlay: autoPlay)
+        if autoPlay {
+            loadCurrentItem(shouldPlay: true)
+        }
     }
 
     private func loadCurrentItem(shouldPlay: Bool) {
@@ -519,10 +638,14 @@ struct CompactAudioPlaylistPlayer: View {
               let url = attachment.getUrl(baseUrl) else { return }
 
         cancellables.removeAll()
+        startupTimeoutTask?.cancel()
         currentTime = 0
         duration = 0
         playbackLoadFailed = false
         wantsPlayback = shouldPlay
+        isPlaybackLoading = shouldPlay
+        player.isMuted = false
+        player.volume = 1
 
         let item = AVPlayerItem(asset: AVURLAsset(url: url))
         player.replaceCurrentItem(with: item)
@@ -542,9 +665,13 @@ struct CompactAudioPlaylistPlayer: View {
                 guard isAudioResourceUnavailableError(error) else { return }
                 await MainActor.run {
                     guard let currentItem = player.currentItem, currentItem === item else { return }
+                    startupTimeoutTask?.cancel()
+                    let shouldWarn = wantsPlayback
                     playbackLoadFailed = true
+                    wantsPlayback = false
+                    isPlaybackLoading = false
                     isPlaying = false
-                    if wantsPlayback {
+                    if shouldWarn {
                         showAudioUnavailableToast()
                     }
                 }
@@ -552,8 +679,11 @@ struct CompactAudioPlaylistPlayer: View {
         }
 
         if shouldPlay {
+            player.isMuted = false
+            player.volume = 1
+            scheduleStartupTimeout(for: item)
             player.play()
-            isPlaying = true
+            isPlaying = false
         } else {
             isPlaying = false
         }
@@ -563,11 +693,21 @@ struct CompactAudioPlaylistPlayer: View {
         item.publisher(for: \.status)
             .receive(on: DispatchQueue.main)
             .sink { status in
-                if status == .failed {
-                    print("DEBUG: [COMPACT AUDIO] Player item failed: \(item.error?.localizedDescription ?? "Unknown error")")
-                    playbackLoadFailed = true
-                    isPlaying = false
+                if status == .readyToPlay {
+                    startupTimeoutTask?.cancel()
+                    isPlaybackLoading = false
                     if wantsPlayback {
+                        isPlaying = true
+                    }
+                } else if status == .failed {
+                    print("DEBUG: [COMPACT AUDIO] Player item failed: \(item.error?.localizedDescription ?? "Unknown error")")
+                    startupTimeoutTask?.cancel()
+                    let shouldWarn = wantsPlayback
+                    playbackLoadFailed = true
+                    wantsPlayback = false
+                    isPlaybackLoading = false
+                    isPlaying = false
+                    if shouldWarn {
                         showAudioUnavailableToast()
                     }
                 }
@@ -591,6 +731,7 @@ struct CompactAudioPlaylistPlayer: View {
                 } else {
                     isPlaying = false
                     wantsPlayback = false
+                    isPlaybackLoading = false
                     currentTime = 0
                     player?.seek(to: .zero)
                 }
@@ -612,38 +753,82 @@ struct CompactAudioPlaylistPlayer: View {
 
         if isPlaying {
             player.pause()
+            startupTimeoutTask?.cancel()
+            isPlaybackLoading = false
             isPlaying = false
             wantsPlayback = false
         } else {
-            guard !playbackLoadFailed, player.currentItem?.status != .failed else {
-                showAudioUnavailableToast()
-                isPlaying = false
+            if playbackLoadFailed || player.currentItem == nil || player.currentItem?.status == .failed {
+                loadCurrentItem(shouldPlay: true)
                 return
             }
 
             wantsPlayback = true
+            isPlaybackLoading = true
+            player.isMuted = false
+            player.volume = 1
+            scheduleStartupTimeout(for: player.currentItem)
             player.play()
-            isPlaying = true
+            isPlaying = false
         }
     }
 
-    private func selectItem(_ index: Int) {
+    private func scheduleStartupTimeout(for item: AVPlayerItem?) {
+        startupTimeoutTask?.cancel()
+        guard let item else { return }
+
+        startupTimeoutTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: audioPlaybackStartupTimeoutNanoseconds)
+            guard !Task.isCancelled,
+                  self.wantsPlayback,
+                  self.player?.currentItem === item,
+                  item.status != .readyToPlay,
+                  self.player?.timeControlStatus != .playing else { return }
+
+            print("DEBUG: [COMPACT AUDIO] Playback startup timed out")
+            self.playbackLoadFailed = true
+            self.wantsPlayback = false
+            self.isPlaybackLoading = false
+            self.isPlaying = false
+            self.player?.pause()
+            self.player?.replaceCurrentItem(with: nil)
+            self.showAudioUnavailableToast()
+        }
+    }
+
+    private func selectItem(_ index: Int, shouldPlay: Bool = false) {
         guard playableAttachments.indices.contains(index) else { return }
-        let shouldResume = isPlaying
         currentIndex = index
-        loadCurrentItem(shouldPlay: shouldResume)
+        if shouldPlay {
+            loadCurrentItem(shouldPlay: true)
+        } else {
+            resetCurrentItem()
+        }
+    }
+
+    private func resetCurrentItem() {
+        startupTimeoutTask?.cancel()
+        cancellables.removeAll()
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        currentTime = 0
+        duration = 0
+        isPlaying = false
+        wantsPlayback = false
+        isPlaybackLoading = false
+        playbackLoadFailed = false
     }
 
     private func playPrevious() {
         guard playableAttachments.count > 1 else { return }
         let nextIndex = (currentIndex - 1 + playableAttachments.count) % playableAttachments.count
-        selectItem(nextIndex)
+        selectItem(nextIndex, shouldPlay: true)
     }
 
     private func playNext() {
         guard playableAttachments.count > 1 else { return }
         let nextIndex = (currentIndex + 1) % playableAttachments.count
-        selectItem(nextIndex)
+        selectItem(nextIndex, shouldPlay: true)
     }
 
     private func cleanupCompactPlayer() {
@@ -651,12 +836,15 @@ struct CompactAudioPlaylistPlayer: View {
             player.removeTimeObserver(timeObserver)
         }
         timeObserver = nil
+        startupTimeoutTask?.cancel()
+        startupTimeoutTask = nil
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
         cancellables.removeAll()
         isPlaying = false
         wantsPlayback = false
+        isPlaybackLoading = false
         playbackLoadFailed = false
     }
 
