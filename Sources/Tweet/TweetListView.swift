@@ -201,9 +201,11 @@ struct TweetListView: View {
         self.onShowToast = onShowToast
         // Main feed uses shared coordinator; other feeds get independent instances
         // to prevent cross-feed interference (separate allVideos, visibleTweetIds, tableView, etc.)
-        self.videoCoordinator = (feedIdentifier == "mainFeed")
+        let coordinator = (feedIdentifier == "mainFeed")
             ? VideoPlaybackCoordinator.shared
             : VideoPlaybackCoordinator()
+        coordinator.directionalPlayerPreloadCount = feedIdentifier.hasPrefix("profile_") ? 1 : 2
+        self.videoCoordinator = coordinator
         self.notifications = notifications ?? [
             TweetListNotification(
                 name: .newTweetCreated,
@@ -288,6 +290,7 @@ struct TweetListView: View {
             }
             }  // Close ZStack
             .task {
+                videoLoadingManager.configureForFeed(identifier: feedIdentifier)
                 // Only load if tweets are empty and we haven't completed initial load
                 if tweets.isEmpty && !initialLoadComplete {
                     await performInitialLoad()
@@ -333,6 +336,9 @@ struct TweetListView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            videoLoadingManager.configureForFeed(identifier: feedIdentifier)
+            videoCoordinator.directionalPlayerPreloadCount = feedIdentifier.hasPrefix("profile_") ? 1 : 2
+
             // Set up foreground observer to fetch new tweets when app returns
             setupForegroundObserver()
             // Set up notification observers

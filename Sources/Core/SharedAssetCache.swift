@@ -1894,7 +1894,7 @@ class SharedAssetCache: ObservableObject {
                 userInfo: ["mediaID": mediaID]
             )
             if !visibleVideoMids.contains(mediaID), player.rate == 0 {
-                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             }
 
             // Still generate thumbnail if missing
@@ -1940,7 +1940,7 @@ class SharedAssetCache: ObservableObject {
                 await MainActor.run {
                     if !self.visibleVideoMids.contains(mediaID), player.rate == 0 {
                         player.pause()
-                        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                     }
                     self.preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
                     self.preloadedPlayerMids.insert(mediaID)
@@ -1992,6 +1992,12 @@ class SharedAssetCache: ObservableObject {
 
         player.isMuted = true
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        defer {
+            player.pause()
+            if !visibleVideoMids.contains(mediaID) {
+                item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            }
+        }
 
         if item.status != .readyToPlay {
             guard await waitForPreloadReadyAsset(player, mediaID: mediaID) != nil else { return false }

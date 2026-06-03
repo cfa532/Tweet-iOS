@@ -129,9 +129,6 @@ struct ProfileView: View {
                     }
                 }
             }
-            .navigationDestination(for: Tweet.self) { tweet in
-                tweetDestinationView(for: tweet)
-            }
             .navigationDestination(item: $selectedUserForNavigation) { user in
                 userDestinationView(for: user)
             }
@@ -178,18 +175,6 @@ struct ProfileView: View {
         guard let avatar = user.avatar,
               let avatarId = notification.userInfo?["avatarId"] as? String else { return false }
         return avatarId == avatar || avatarId == "avatar_\(avatar)"
-    }
-    
-    @ViewBuilder
-    private func tweetDestinationView(for tweet: Tweet) -> some View {
-        // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
-        if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
-            // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
-            CommentDetailViewWithParent(comment: tweet)
-        } else {
-            // This is a regular tweet or quote tweet, show TweetDetailView
-            TweetDetailView(tweet: tweet)
-        }
     }
     
     @ViewBuilder

@@ -181,6 +181,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var activePreloadMids: Set<String> = []
     private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
     private let directionalPreloadRefreshInterval: CFTimeInterval = 0.35
+    var directionalPlayerPreloadCount: Int = 2 {
+        didSet {
+            if directionalPlayerPreloadCount <= 0 {
+                clearPreloadedTracking()
+            }
+        }
+    }
 
     /// Timer: when scroll starts, gives in-flight preloads a brief grace period to finish.
     /// If scroll is still active after the delay, cancel off-screen directional preloads.
@@ -1420,7 +1427,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             lastDirectionalPreloadRefreshTime = now
         }
 
-        let nextVideos = getNextVideosInScrollDirection(count: 2)
+        let preloadCount = max(0, directionalPlayerPreloadCount)
+        guard preloadCount > 0 else {
+            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
+            activePreloadMids.removeAll()
+            SharedAssetCache.shared.updateProtectedPreloadMids([])
+            return
+        }
+
+        let nextVideos = getNextVideosInScrollDirection(count: preloadCount)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
 
         // Keep on-screen work alive, then cancel any older directional preloads.

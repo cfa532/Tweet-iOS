@@ -102,7 +102,9 @@ At a high level:
 - Continue threshold is stricter, which reduces rapid start/stop flapping while scrolling.
 
 **Directional preload strategy**
-- Preload the next likely-to-watch videos (small window, currently 2 in scroll direction).
+- Preload the next likely-to-watch videos with a small directional window.
+- Standard feeds pre-create up to 2 nearby off-screen players; profile feeds pre-create 1 because profile timelines can be packed with large videos.
+- Profile feeds also reduce tweet-level video preloading to current + 1 next tweet and cap concurrent video loads at 2.
 - Keep preload scope intentionally tight to avoid over-downloading content users may never see.
 
 **Off-screen cancellation strategy**
