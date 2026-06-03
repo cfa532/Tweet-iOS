@@ -1963,9 +1963,10 @@ final class HproseInstance: ObservableObject {
             // Validate response data BEFORE updating the singleton to avoid overwriting
             // a valid user object with invalid data from the server
             guard let mid = userDict["mid"] as? String, !mid.isEmpty,
-                  userDict["username"] != nil else {
-                print("ERROR: [processUserDataResponse] INVALID USER DATA in response: mid or username missing for userId: \(user.mid)")
-                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid user data received - missing mid or username")
+                  let username = userDict["username"] as? String,
+                  !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                print("ERROR: [processUserDataResponse] INVALID USER DATA in response: mid missing or username empty for userId: \(user.mid)")
+                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid user data received - missing mid or empty username")
             }
 
             if !skipRetryAndBlacklist {

@@ -832,6 +832,11 @@ extension TweetCacheManager {
     }
 
     func saveUser(_ user: User) {
+        guard user.hasValidUsername else {
+            print("DEBUG: [TweetCacheManager] Skipping invalid user cache write for \(user.mid): username is empty")
+            return
+        }
+
         // Use async perform to avoid blocking the main thread
         context.perform {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
@@ -1258,4 +1263,3 @@ extension TweetCacheManager {
         return Array(sortedResults)
     }
 } 
-
