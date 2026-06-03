@@ -660,64 +660,7 @@ struct TweetListView: View {
         //     tweets.removeAll()
         // }
 
-        do {
-            // Always load fresh data from server for refresh
-            let freshTweets = try await tweetFetcher(0, pageSize, false)
-            let validTweets = freshTweets.compactMap { $0 }
-            let hasValidTweet = !validTweets.isEmpty
-
-            if validTweets.isEmpty {
-            }
-
-            await MainActor.run {
-                // Update tweets with server data - MERGE on refresh to keep existing content
-                if hasValidTweet {
-                    // For preserveOrder lists (bookmarks/favorites), replace entirely on refresh to get fresh order
-                    // For other lists, merge with timestamp sorting
-                    if preserveOrder {
-                        tweets = validTweets
-                    } else {
-                        tweets.mergeTweets(validTweets)
-                    }
-                    currentPage = 0
-
-                    // Check response size to determine if more items exist
-                    hasMoreTweets = freshTweets.count >= pageSize
-
-                    // Update VideoLoadingManager with debouncing
-                    updateVideoLoadingManager(delay: 0.2)
-                } else {
-                    // No valid tweets - check response size
-                    hasMoreTweets = freshTweets.count >= pageSize
-
-                    if freshTweets.count < pageSize {
-                        // Profile lists opt into a real empty state: cached rows
-                        // render first, then disappear if the server confirms empty.
-                        // Other lists keep existing content visible on empty refreshes.
-                        if tweets.isEmpty || emptyStateText != nil {
-                            tweets = []
-                            updateVideoLoadingManager()
-                            didConfirmEmptyFromServer = true
-                        } else {
-                            didConfirmEmptyFromServer = false
-                        }
-                    }
-                    // Full page of nils: server still has entries, keep cached content and let
-                    // auto-load continue to the next page.
-                }
-
-                isLoading = false
-                initialLoadComplete = true
-            }
-            
-        } catch {
-            await MainActor.run {
-                isLoading = false
-                initialLoadComplete = true
-                didConfirmEmptyFromServer = false
-                // Keep existing tweets on refresh failure
-            }
-        }
+        await loadFromServer(page: 0, pageSize: pageSize) { _ in }
     }
 
     func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
@@ -833,29 +776,78 @@ struct TweetListView: View {
     
     // MARK: - Server Loading (No Retry)
     private func loadFromServer(page: UInt, pageSize: UInt, completion: @escaping (Bool) -> Void) async {
-        do {
-            let tweetsFromServer = try await tweetFetcher(page, pageSize, false)
-            let validServerTweets = tweetsFromServer.compactMap { $0 }
-            
-            await MainActor.run {
-                updateTweetsWithServerData(
-                    validServerTweets: validServerTweets,
-                    tweetsFromServer: tweetsFromServer,
-                    page: page,
-                    pageSize: pageSize
-                )
-            }
-            
-        } catch {
-            
-            await MainActor.run {
-                // Mark initial load as complete even on error for page 0
-                if page == 0 {
-                    isLoading = false
-                    initialLoadComplete = true
-                    didConfirmEmptyFromServer = false
+        var pageToLoad = page
+        var skippedEmptyFullPages = 0
+        let maxEmptyFullPagesToSkip = 200
+        var foundValidTweets = false
+        var lastResponseSize: Int?
+
+        while true {
+            do {
+                let tweetsFromServer = try await tweetFetcher(pageToLoad, pageSize, false)
+                let validServerTweets = tweetsFromServer.compactMap { $0 }
+                let shouldLoadNextPage = validServerTweets.isEmpty && tweetsFromServer.count >= pageSize
+                foundValidTweets = foundValidTweets || !validServerTweets.isEmpty
+                lastResponseSize = tweetsFromServer.count
+
+                await MainActor.run {
+                    updateTweetsWithServerData(
+                        validServerTweets: validServerTweets,
+                        tweetsFromServer: tweetsFromServer,
+                        page: pageToLoad,
+                        pageSize: pageSize
+                    )
                 }
-                // Don't modify tweets array - keep cached data intact
+
+                guard shouldLoadNextPage else {
+                    break
+                }
+
+                skippedEmptyFullPages += 1
+                if skippedEmptyFullPages >= maxEmptyFullPagesToSkip {
+                    print("⚠️ [PAGINATION] Stopped auto-skipping after \(skippedEmptyFullPages) full empty pages from page \(page)")
+                    await MainActor.run {
+                        if page == 0 {
+                            isLoading = false
+                            initialLoadComplete = true
+                            didConfirmEmptyFromServer = false
+                        }
+                    }
+                    break
+                }
+
+                pageToLoad += 1
+                print("📊 [PAGINATION] Auto-loading next page \(pageToLoad) after full empty page")
+            } catch {
+                await MainActor.run {
+                    // Mark initial load as complete even on error for page 0
+                    if page == 0 {
+                        isLoading = false
+                        initialLoadComplete = true
+                        didConfirmEmptyFromServer = false
+                    }
+                    // Don't modify tweets array - keep cached data intact
+                }
+                break
+            }
+        }
+
+        await MainActor.run {
+            if page == 0 {
+                isLoading = false
+                initialLoadComplete = true
+
+                if foundValidTweets {
+                    didConfirmEmptyFromServer = false
+                } else if let lastResponseSize, lastResponseSize < pageSize {
+                    if tweets.isEmpty || emptyStateText != nil {
+                        tweets = []
+                        updateVideoLoadingManager()
+                        didConfirmEmptyFromServer = true
+                    } else {
+                        didConfirmEmptyFromServer = false
+                    }
+                }
             }
         }
         completion(true)
