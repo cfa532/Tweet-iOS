@@ -58,6 +58,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private let loadingSpinner: UIActivityIndicatorView = {
         let spinner = UIActivityIndicatorView(style: .large)
         spinner.hidesWhenStopped = true
+        spinner.isUserInteractionEnabled = false
         return spinner
     }()
 
@@ -124,6 +125,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let spinner = UIActivityIndicatorView(style: .large)
         spinner.color = .white
         spinner.hidesWhenStopped = true
+        spinner.isUserInteractionEnabled = false
         return spinner
     }()
     private let fullscreenOverlay: UIView = {
