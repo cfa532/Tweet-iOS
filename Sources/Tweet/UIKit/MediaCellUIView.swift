@@ -75,10 +75,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Replay button shown only after this video has naturally played to the end.
     private lazy var replayButton: UIButton = {
         let btn = UIButton(type: .system)
-        let config = UIImage.SymbolConfiguration(pointSize: 34, weight: .light)
-        btn.setImage(UIImage(systemName: "arrow.counterclockwise.circle", withConfiguration: config), for: .normal)
-        btn.tintColor = .white.withAlphaComponent(0.8)
-        btn.backgroundColor = .clear
+        let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+        btn.setImage(UIImage(systemName: "play.fill", withConfiguration: config), for: .normal)
+        btn.tintColor = .white.withAlphaComponent(0.78)
+        btn.backgroundColor = .black.withAlphaComponent(0.34)
+        btn.layer.borderWidth = 1
+        btn.layer.borderColor = UIColor.white.withAlphaComponent(0.45).cgColor
         btn.addTarget(self, action: #selector(replayTapped), for: .touchUpInside)
         btn.accessibilityLabel = "Replay video"
         btn.isHidden = true
@@ -316,8 +318,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         retryButton.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
         retryButton.center = CGPoint(x: b.midX, y: b.midY)
-        replayButton.frame = CGRect(x: 0, y: 0, width: 56, height: 56)
-        replayButton.center = CGPoint(x: b.midX, y: b.minY + b.height * 0.618)
+        replayButton.frame = CGRect(x: 0, y: 0, width: 40, height: 40)
+        replayButton.layer.cornerRadius = 20
+        replayButton.center = CGPoint(x: b.midX, y: b.midY)
         fullscreenOverlay.frame = b
         fullscreenSpinner.center = CGPoint(x: b.midX, y: b.midY)
 
@@ -2312,6 +2315,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             wasPlaying: false,
             originalMuteState: player.isMuted
         )
+        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
+            DispatchQueue.main.async {
+                guard let self,
+                      let player,
+                      self.player === player,
+                      self.attachment?.mid == mid,
+                      self.isHandlingFinishEvent else { return }
+                self.videoCellState = .paused
+                self.videoPlayerView.isHidden = false
+                self.imageView.isHidden = true
+                self.loadingSpinner.stopAnimating()
+                self.updateReplayButtonVisibility()
+            }
+        }
 
         // Notify coordinator to advance to next video (include full identifier: tweet id + video id + index)
         var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweet?.mid ?? ""]
