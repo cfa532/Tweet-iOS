@@ -1728,6 +1728,25 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 transitionTo(.playerLoading)
             }
 
+            // Background memory release keeps the AVPlayer shell in visible cells but
+            // strips its currentItem. Treat that as missing, otherwise foreground
+            // coordinator play gets stuck on a black/loading layer forever.
+            if let existingPlayer = self.player,
+               existingPlayer.currentItem == nil || !existingPlayer.currentTime().seconds.isFinite {
+                print("\(logPrefix) 🔄 Coordinator play found released player shell - reacquiring")
+                cleanupVideoPlayer(reason: "coordinatorPlay.releasedPlayerShell")
+                coordinatorWantsToPlay = true
+                if shouldLoadVideo,
+                   isVisible,
+                   let att = attachment,
+                   let url = att.getUrl(effectiveBaseUrl),
+                   let parentTweet = parentTweet {
+                    transitionTo(imageView.image != nil ? .thumbnail : .playerLoading)
+                    acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+                }
+                return
+            }
+
             // Trigger player setup if needed.
             // Guard against re-triggering when setupPlayerTask is already in flight —
             // doing so would cancel the in-flight creation and start a duplicate one,
@@ -3219,11 +3238,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Re-attach player and seek to force AVPlayerLayer to render after foreground.
     /// Called from didBecomeActive when GPU is guaranteed ready.
-    /// Skips currently playing videos to avoid disrupting playback.
     func refreshVideoLayerAfterForeground() {
-        guard isVideoAttachment, let player = player, player.rate == 0 else { return }
-        // Only refresh if videoPlayerView was previously rendering content
-        guard videoCellState == .playerLoading || videoCellState == .playerReady || videoCellState == .paused else { return }
+        guard isVideoAttachment, let player = player else { return }
+        // Refresh any visible player layer after foreground, including the current
+        // primary video. AVPlayer can keep running while AVPlayerLayer resumes black.
+        guard videoCellState == .playerLoading ||
+              videoCellState == .playerReady ||
+              videoCellState == .paused ||
+              videoCellState == .playing else { return }
 
         let expectedMid = attachment?.mid
         let currentTime = player.currentTime()
@@ -3248,10 +3270,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         transitionTo(.playerLoading)
 
         // Transition to playerReady when the layer renders its first frame
-        videoPlayerView.onReadyForDisplay = { [weak self] in
-            guard let self else { return }
+        videoPlayerView.onReadyForDisplay = { [weak self, weak player] in
+            guard let self,
+                  let player,
+                  self.player === player,
+                  self.attachment?.mid == expectedMid else { return }
             self.hasRenderedFrameForCurrentPlayer = true
-            if self.videoCellState == .playerLoading {
+            if self.coordinatorWantsToPlay {
+                self.imageView.isHidden = true
+                self.requestPlaybackStartIfNeeded(player, reason: "foreground-layer-ready")
+                self.updateLoadingSpinnerForPlayback(player)
+            } else if self.videoCellState == .playerLoading {
                 self.transitionTo(.playerReady)
             }
         }
