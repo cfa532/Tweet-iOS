@@ -817,6 +817,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     // MARK: - Loading Overlay
     
     private func showLoadingOverlay() {
+        guard loadingWindow == nil else { return }
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             return
         }
@@ -825,13 +826,17 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         let loadingView = LoadingOverlayView()
         let hostingController = UIHostingController(rootView: loadingView)
         hostingController.view.backgroundColor = .clear
+        hostingController.view.isUserInteractionEnabled = false
         
-        // Create window
-        let window = UIWindow(windowScene: windowScene)
+        // Create a non-key, pass-through status window. Foreground video recovery
+        // can take a few seconds after a long background stay, but the feed should
+        // remain scrollable/tappable while that work completes.
+        let window = PassthroughLoadingWindow(windowScene: windowScene)
         window.rootViewController = hostingController
         window.windowLevel = .alert + 1
         window.backgroundColor = .clear
-        window.makeKeyAndVisible()
+        window.isUserInteractionEnabled = false
+        window.isHidden = false
         
         loadingWindow = window
     }
@@ -1027,17 +1032,26 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
 // MARK: - Loading Overlay View
 
+private final class PassthroughLoadingWindow: UIWindow {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        false
+    }
+}
+
 private struct LoadingOverlayView: View {
     var body: some View {
         ZStack {
-            // Semi-transparent background
-            Color.black.opacity(0.3)
+            Color.clear
                 .edgesIgnoringSafeArea(.all)
             
-            // Just a spinner
+            // Visual recovery status only. Touches pass through the overlay window.
             ProgressView()
                 .scaleEffect(1.5)
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .padding(18)
+                .background(Color.black.opacity(0.35))
+                .clipShape(Circle())
         }
+        .allowsHitTesting(false)
     }
 } 
