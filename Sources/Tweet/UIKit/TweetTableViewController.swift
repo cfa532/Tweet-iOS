@@ -332,6 +332,7 @@ class TweetTableViewController: UITableViewController {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
+            guard self.videoCoordinator.isFeedVisible else { return }
 
             // Request background time from iOS to complete cleanup
             self.backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
@@ -377,6 +378,7 @@ class TweetTableViewController: UITableViewController {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
+            guard self.videoCoordinator.isFeedVisible else { return }
 
             print("☀️ [FOREGROUND] App returning to foreground")
 
@@ -410,6 +412,7 @@ class TweetTableViewController: UITableViewController {
             queue: .main
         ) { [weak self] _ in
             guard let self = self, self.needsVideoLayerRefresh, !self.isTableViewUpdating else { return }
+            guard self.videoCoordinator.isFeedVisible else { return }
             self.needsVideoLayerRefresh = false
             for cell in self.tableView.visibleCells {
                 guard let tweetCell = cell as? TweetTableViewCell else { continue }
