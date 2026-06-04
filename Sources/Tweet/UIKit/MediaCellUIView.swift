@@ -193,6 +193,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var playbackStartupRecoveryTask: Task<Void, Never>?
     private var playbackStartupRecoveryRequestDate: Date?
     private var playbackRecoveryProgressExtensionCount = 0
+    private var playbackRecoveryLastBufferedAhead: Double = 0
+    private var playbackRecoveryStagnantCount = 0
+    private var stillFrameRecoveryTask: Task<Void, Never>?
+    private var stillFrameRecoveryAttemptCount = 0
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -218,6 +222,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// intentionally separate from lastActualPlaybackDate.
     private var lastPlaybackRequestDate: Date = .distantPast
     private var lastPlaybackNudgeDate: Date = .distantPast
+    /// Slow servers can recover with tiny buffers and then stall again. Track
+    /// repeated rebuffer events so each resume waits for a little more runway.
+    private var adaptiveRebufferCount = 0
+    private var lastAdaptiveRebufferDate: Date = .distantPast
+    private var lastAdaptiveRebufferPositionBucket: Int = -1
     private var pendingRecoverySeekTime: CMTime?
     private var lastLoggedTimeControlStatus: AVPlayer.TimeControlStatus?
     private var lastLoggedTimeControlBucket: Int = -1
@@ -1139,16 +1148,27 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return status == .readyToPlay
     }
 
-    /// A video is visually ready only once playback has started and the layer can display frames.
+    private func hasVisiblePlaybackProgress(for player: AVPlayer) -> Bool {
+        guard lastPlaybackRequestDate != .distantPast else { return true }
+
+        let currentSeconds = seconds(from: player.currentTime())
+        if currentSeconds > lastPlaybackRequestPositionSeconds + 0.08 {
+            return true
+        }
+
+        return lastPlaybackProgressDate != .distantPast
+            && lastPlaybackProgressDate >= lastPlaybackRequestDate
+    }
+
+    /// A video is visually ready only once playback has started, the layer can
+    /// display frames, and the playback clock has moved since the play request.
     private func isVisibleVideoFrameReady(_ player: AVPlayer) -> Bool {
         guard player.timeControlStatus == .playing,
               videoPlayerView.isLayerReadyForDisplay else { return false }
 
-        // Once AVPlayer says it is playing and the layer has a drawable frame, do not
-        // keep the feed covered by a spinner waiting for our periodic time observer.
-        // Fullscreen can play the same cached player immediately; this keeps feed UI
-        // from getting stuck behind a stricter, stale progress gate.
-        return true
+        // Cached players can report .playing while AVPlayerLayer is still showing
+        // the previous still frame. Keep loading feedback until time actually moves.
+        return hasVisiblePlaybackProgress(for: player)
     }
 
     /// Keep the spinner up until the user can actually see moving video content.
@@ -1164,7 +1184,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func shouldShowPrimarySpinner(for player: AVPlayer? = nil) -> Bool {
         guard coordinatorWantsToPlay else { return false }
         if Date() < suppressPrimarySpinnerUntil,
-           imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
+           imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay,
+           player.map({ hasVisiblePlaybackProgress(for: $0) }) ?? true {
             return false
         }
         guard let player else { return true }
@@ -1240,6 +1261,68 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return max(0, bestBufferAhead)
     }
 
+    private func adaptiveResumeBufferTarget(for player: AVPlayer) -> Double {
+        let hasActuallyPlayed = lastActualPlaybackDate != .distantPast
+        let currentSeconds = seconds(from: player.currentTime())
+        if !hasActuallyPlayed && currentSeconds < 2.0 {
+            return adaptiveRebufferCount == 0 ? 1.25 : 2.5
+        }
+
+        switch adaptiveRebufferCount {
+        case 0: return 2.0
+        case 1: return 3.5
+        case 2: return 5.0
+        default: return 7.0
+        }
+    }
+
+    private func adaptivePreferredForwardBufferDuration(for player: AVPlayer) -> TimeInterval {
+        min(12.0, max(4.0, adaptiveResumeBufferTarget(for: player) + 3.0))
+    }
+
+    private func applyAdaptiveBufferPolicy(to player: AVPlayer) {
+        player.automaticallyWaitsToMinimizeStalling = true
+        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        player.currentItem?.preferredForwardBufferDuration = adaptivePreferredForwardBufferDuration(for: player)
+    }
+
+    private func canForceResumeAfterBuffering(player: AVPlayer, bufferedAhead: Double, keepUp: Bool) -> Bool {
+        let target = adaptiveResumeBufferTarget(for: player)
+        if bufferedAhead >= target { return true }
+
+        // When the slow-server target has grown large, a 4s+ buffer is usually
+        // better spent resuming than rebuilding and discarding already cached data.
+        if adaptiveRebufferCount >= 3, bufferedAhead >= 4.0 {
+            return true
+        }
+
+        // On the first startup, AVPlayer's keep-up signal is often enough once
+        // there is a small cushion. After real stalls, require the adaptive target.
+        let isStartup = lastActualPlaybackDate == .distantPast && adaptiveRebufferCount == 0
+        return isStartup && keepUp && bufferedAhead >= min(2.0, target)
+    }
+
+    private func noteAdaptiveRebufferIfNeeded(for player: AVPlayer, reason: String) {
+        guard coordinatorWantsToPlay,
+              lastActualPlaybackDate != .distantPast,
+              !isVideoAtEnd(player) else { return }
+
+        let positionBucket = Int(seconds(from: player.currentTime()).rounded(.down))
+        let now = Date()
+        if positionBucket == lastAdaptiveRebufferPositionBucket,
+           now.timeIntervalSince(lastAdaptiveRebufferDate) < 2.0 {
+            return
+        }
+
+        adaptiveRebufferCount = min(adaptiveRebufferCount + 1, 4)
+        lastAdaptiveRebufferDate = now
+        lastAdaptiveRebufferPositionBucket = positionBucket
+        applyAdaptiveBufferPolicy(to: player)
+
+        let target = adaptiveResumeBufferTarget(for: player)
+        print("\(logPrefix) 🧭 adaptive buffering (\(reason)): stall=\(adaptiveRebufferCount), target=\(String(format: "%.1f", target))s")
+    }
+
     private func seconds(from time: CMTime) -> Double {
         let value = CMTimeGetSeconds(time)
         return value.isFinite ? value : 0
@@ -1254,9 +1337,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return Int(bucket)
     }
 
-    /// AVPlayer can report rate > 0 while still waiting on a tiny startup
-    /// buffer. Keep loading, keep the spinner visible, and briefly let it start
-    /// without AVPlayer's stall-minimizing wait so the first frames can render.
+    /// AVPlayer can report rate > 0 while still waiting on a tiny startup buffer.
+    /// On slow servers, repeatedly forcing playback on that tiny buffer causes
+    /// pause/resume loops, so only bypass AVPlayer's wait once the adaptive
+    /// resume target has enough buffered runway.
     private func nudgePlaybackIfWaiting(_ player: AVPlayer, reason: String) {
         guard coordinatorWantsToPlay,
               player.currentItem?.status == .readyToPlay,
@@ -1265,8 +1349,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         let bufferedAhead = bufferedTimeAhead(for: player)
         let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
-        let shouldBypassStartupWait = bufferedAhead > 0
-            && ((bufferedAhead < 1.5 && !keepUp) || (bufferedAhead >= 2.0 && keepUp))
+        let targetBuffer = adaptiveResumeBufferTarget(for: player)
+        let shouldBypassStartupWait = canForceResumeAfterBuffering(
+            player: player,
+            bufferedAhead: bufferedAhead,
+            keepUp: keepUp
+        )
         let now = Date()
         let nudgeCooldown: TimeInterval = shouldBypassStartupWait ? 0.8 : 2.0
 
@@ -1275,10 +1363,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return
         }
 
+        applyAdaptiveBufferPolicy(to: player)
+
         if shouldBypassStartupWait {
             player.automaticallyWaitsToMinimizeStalling = false
+        } else if bufferedAhead > 0 {
+            logVerbose("⏳ adaptive wait (\(reason)): buffered=\(String(format: "%.1f", bufferedAhead))s target=\(String(format: "%.1f", targetBuffer))s keepUp=\(keepUp)")
         }
-        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         if lastPlaybackRequestDate == .distantPast {
             lastPlaybackRequestDate = Date()
             lastPlaybackRequestPositionSeconds = seconds(from: player.currentTime())
@@ -1287,7 +1378,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         updateLoadingSpinnerForPlayback(player)
 
         lastPlaybackNudgeDate = now
-        logVerbose("🔄 playback nudge (\(reason)): timeControl=\(player.timeControlStatus.rawValue), buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp), bypassWait=\(shouldBypassStartupWait)")
+        logVerbose("🔄 playback nudge (\(reason)): timeControl=\(player.timeControlStatus.rawValue), buffered=\(String(format: "%.1f", bufferedAhead))s, target=\(String(format: "%.1f", targetBuffer))s, keepUp=\(keepUp), bypassWait=\(shouldBypassStartupWait)")
 
         scheduleStartupRecovery(for: player, reason: reason)
     }
@@ -1332,10 +1423,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             let bufferedAhead = self.bufferedTimeAhead(for: player)
             let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
-            if bufferedAhead >= 1.0 && keepUp {
-                if player.automaticallyWaitsToMinimizeStalling {
-                    player.automaticallyWaitsToMinimizeStalling = false
-                }
+            let targetBuffer = self.adaptiveResumeBufferTarget(for: player)
+            let canForceResume = self.canForceResumeAfterBuffering(
+                player: player,
+                bufferedAhead: bufferedAhead,
+                keepUp: keepUp
+            )
+            if canForceResume {
+                self.applyAdaptiveBufferPolicy(to: player)
+                player.automaticallyWaitsToMinimizeStalling = false
                 player.play()
                 self.updateLoadingSpinnerForPlayback(player)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -1348,17 +1444,33 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             let label = isStartupRecovery ? "startup recovery" : "playback recovery"
             if bufferedAhead > 0 {
-                player.automaticallyWaitsToMinimizeStalling = false
-                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                self.applyAdaptiveBufferPolicy(to: player)
+                if canForceResume {
+                    player.automaticallyWaitsToMinimizeStalling = false
+                }
                 player.play()
                 self.updateLoadingSpinnerForPlayback(player)
 
-                if self.playbackRecoveryProgressExtensionCount < 3 {
+                let bufferProgressed = bufferedAhead > self.playbackRecoveryLastBufferedAhead + 0.25
+                if bufferProgressed {
+                    self.playbackRecoveryStagnantCount = 0
+                } else {
+                    self.playbackRecoveryStagnantCount += 1
+                }
+                self.playbackRecoveryLastBufferedAhead = bufferedAhead
+
+                let hasUsefulBuffer = bufferedAhead >= 1.0
+                let maxExtensions = hasUsefulBuffer ? 12 : (targetBuffer >= 5.0 ? 5 : 3)
+                let shouldKeepWaiting = self.playbackRecoveryProgressExtensionCount < maxExtensions
+                    || bufferProgressed
+                    || (hasUsefulBuffer && self.playbackRecoveryStagnantCount < 4)
+
+                if shouldKeepWaiting {
                     self.playbackRecoveryProgressExtensionCount += 1
                     self.lastPlaybackRequestDate = Date()
                     self.playbackStartupRecoveryTask = nil
                     self.playbackStartupRecoveryRequestDate = nil
-                    print("\(self.logPrefix) ⏳ \(label) (\(reason)): still buffering, preserving player (buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp), extension=\(self.playbackRecoveryProgressExtensionCount))")
+                    print("\(self.logPrefix) ⏳ \(label) (\(reason)): preserving player (buffered=\(String(format: "%.1f", bufferedAhead))s, target=\(String(format: "%.1f", targetBuffer))s, keepUp=\(keepUp), extension=\(self.playbackRecoveryProgressExtensionCount)/\(maxExtensions), progress=\(bufferProgressed), stagnant=\(self.playbackRecoveryStagnantCount))")
                     self.scheduleStartupRecovery(for: player, reason: "\(reason)-buffering")
                     return
                 }
@@ -1383,6 +1495,71 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                let parentTweet = self.parentTweet {
                 self.transitionTo(self.imageView.image != nil ? .thumbnail : .playerLoading)
                 self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+            }
+        }
+    }
+
+    private func scheduleStillFrameRecovery(for player: AVPlayer, reason: String) {
+        stillFrameRecoveryTask?.cancel()
+        let requestDate = lastPlaybackRequestDate
+
+        stillFrameRecoveryTask = Task { @MainActor [weak self, weak player] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled,
+                  let self,
+                  let player else { return }
+            guard self.player === player,
+                  self.coordinatorWantsToPlay,
+                  self.videoCellState == .playing,
+                  self.lastPlaybackRequestDate == requestDate,
+                  player.timeControlStatus == .playing,
+                  !self.isVideoAtEnd(player),
+                  !self.hasVisiblePlaybackProgress(for: player) else {
+                self.stillFrameRecoveryTask = nil
+                return
+            }
+
+            self.stillFrameRecoveryTask = nil
+            self.updateLoadingSpinnerForPlayback(player)
+            self.noteAdaptiveRebufferIfNeeded(for: player, reason: "still-frame")
+
+            let bufferedAhead = self.bufferedTimeAhead(for: player)
+            let targetBuffer = self.adaptiveResumeBufferTarget(for: player)
+            print("\(self.logPrefix) 🖼️ still-frame recovery (\(reason)): buffered=\(String(format: "%.1f", bufferedAhead))s, target=\(String(format: "%.1f", targetBuffer))s, attempt=\(self.stillFrameRecoveryAttemptCount + 1)")
+
+            guard self.stillFrameRecoveryAttemptCount < 2 else {
+                self.stillFrameRecoveryAttemptCount = 0
+                if let mid = self.attachment?.mid {
+                    SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                }
+                self.cleanupVideoPlayer(reason: "stillFrameRecovery.rebuild")
+                self.coordinatorWantsToPlay = true
+                if let att = self.attachment,
+                   let url = att.getUrl(self.effectiveBaseUrl),
+                   let parentTweet = self.parentTweet {
+                    self.transitionTo(self.imageView.image != nil ? .thumbnail : .playerLoading)
+                    self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+                }
+                return
+            }
+
+            self.stillFrameRecoveryAttemptCount += 1
+            let recoveryTime = player.currentTime()
+            self.applyAdaptiveBufferPolicy(to: player)
+            player.pause()
+            player.seek(to: recoveryTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
+                DispatchQueue.main.async {
+                    guard let self,
+                          let player,
+                          self.player === player,
+                          self.coordinatorWantsToPlay else { return }
+                    self.lastPlaybackRequestDate = Date()
+                    self.resetPlaybackProgressTracking(to: recoveryTime)
+                    self.applyAdaptiveBufferPolicy(to: player)
+                    player.play()
+                    self.updateLoadingSpinnerForPlayback(player)
+                    self.scheduleStillFrameRecovery(for: player, reason: "\(reason)-retry")
+                }
             }
         }
     }
@@ -1809,6 +1986,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         logVerbose("▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
 
         if player.rate > 0 {
+            lastPlaybackRequestDate = Date()
+            resetPlaybackProgressTracking(to: player.currentTime())
+            playbackRecoveryLastBufferedAhead = 0
+            playbackRecoveryStagnantCount = 0
             // Already told to play — sync UI state.
             videoPlayerView.isHidden = false
             if videoCellState != .playing {
@@ -1820,8 +2001,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // == .waitingToPlayAtSpecifiedRate) with no frames to show.
             updateLoadingSpinnerForPlayback(player)
             retryButton.isHidden = true
-            player.automaticallyWaitsToMinimizeStalling = true
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            applyAdaptiveBufferPolicy(to: player)
             player.isMuted = MuteState.shared.isMuted
             player.volume = 1.0
             if isSingleMedia, let mid = attachment?.mid {
@@ -1830,6 +2010,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             startPlayerTimeObserver()
             if player.timeControlStatus != .playing {
                 nudgePlaybackIfWaiting(player, reason: "\(reason)-rateAlreadyPositive")
+            } else {
+                scheduleStillFrameRecovery(for: player, reason: "\(reason)-rateAlreadyPositive")
             }
             return
         }
@@ -1867,15 +2049,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Primary playback must own network recovery. Preloaded players may be
         // paused with background-friendly settings, so restore AVPlayer's normal
         // stall handling before issuing play().
-        player.automaticallyWaitsToMinimizeStalling = true
-        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        applyAdaptiveBufferPolicy(to: player)
         player.isMuted = MuteState.shared.isMuted
         lastPlaybackRequestDate = Date()
         resetPlaybackProgressTracking(to: player.currentTime())
         playbackRecoveryProgressExtensionCount = 0
+        playbackRecoveryLastBufferedAhead = 0
+        playbackRecoveryStagnantCount = 0
         startPlayerTimeObserver()
         player.play()
         scheduleStartupRecovery(for: player, reason: "actuallyStartPlayback")
+        scheduleStillFrameRecovery(for: player, reason: "actuallyStartPlayback")
 
         // Show timer when playback starts
         if isSingleMedia {
@@ -2223,8 +2407,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // Hide thumbnail cover only once playback is visibly advancing.
                     if self.isActuallyPlayerReady(player) && (self.videoCellState == .playing || self.videoCellState == .playerReady) {
                         if self.isVisibleVideoFrameReady(player) {
+                            self.stillFrameRecoveryTask?.cancel()
+                            self.stillFrameRecoveryTask = nil
+                            self.stillFrameRecoveryAttemptCount = 0
                             self.imageView.isHidden = true
                         } else {
+                            self.scheduleStillFrameRecovery(for: player, reason: "timeControl-playing")
                             self.addReadyForDisplayAction { [weak self] in
                                 guard let self, let player = self.player else { return }
                                 self.updateLoadingSpinnerForPlayback(player)
@@ -2237,12 +2425,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                           self.videoCellState == .playing || self.videoCellState == .playerReady {
                     guard !self.isVideoAtEnd(player) else { return }
+                    self.noteAdaptiveRebufferIfNeeded(for: player, reason: "waiting")
                     self.updateLoadingSpinnerForPlayback(player)
                     self.nudgePlaybackIfWaiting(player, reason: "timeControl-waiting")
                 } else if player.timeControlStatus == .paused
                             && self.coordinatorWantsToPlay
                             && self.videoCellState == .playing
                             && !self.isVideoAtEnd(player) {
+                    self.noteAdaptiveRebufferIfNeeded(for: player, reason: "paused")
                     self.updateLoadingSpinnerForPlayback(player)
                     self.nudgePlaybackIfWaiting(player, reason: "timeControl-paused")
                 }
@@ -2261,9 +2451,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                       self.videoCellState == .playing,
                       player.timeControlStatus != .playing,
                       !self.isVideoAtEnd(player) else { return }
+                let bufferedAhead = self.bufferedTimeAhead(for: player)
+                guard self.canForceResumeAfterBuffering(
+                    player: player,
+                    bufferedAhead: bufferedAhead,
+                    keepUp: true
+                ) else {
+                    self.applyAdaptiveBufferPolicy(to: player)
+                    print("\(self.logPrefix) ⏳ buffer keep-up waiting for adaptive target (buffered=\(String(format: "%.1f", bufferedAhead))s, target=\(String(format: "%.1f", self.adaptiveResumeBufferTarget(for: player)))s)")
+                    return
+                }
                 print("\(self.logPrefix) 🔄 buffer recovered — resuming at \(String(format: "%.1f", player.currentTime().seconds))s")
-                player.automaticallyWaitsToMinimizeStalling = true
-                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                self.applyAdaptiveBufferPolicy(to: player)
                 player.play()
                 self.lastPlaybackRequestDate = Date()
                 self.updateLoadingSpinnerForPlayback(player)
@@ -2449,6 +2648,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if currentSeconds > lastObservedPlaybackSeconds + 0.05 {
             lastObservedPlaybackSeconds = currentSeconds
             lastPlaybackProgressDate = Date()
+            stillFrameRecoveryTask?.cancel()
+            stillFrameRecoveryTask = nil
+            stillFrameRecoveryAttemptCount = 0
+            playbackRecoveryLastBufferedAhead = 0
+            playbackRecoveryStagnantCount = 0
             if let player, coordinatorWantsToPlay {
                 updateLoadingSpinnerForPlayback(player)
                 if isVisibleVideoFrameReady(player),
@@ -3131,6 +3335,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let hasWork =
             setupPlayerTask != nil ||
             playbackStartupRecoveryTask != nil ||
+            stillFrameRecoveryTask != nil ||
             videoOutput != nil ||
             videoOutputAttachedItem != nil ||
             timeObserverToken != nil ||
@@ -3167,6 +3372,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playbackStartupRecoveryTask?.cancel()
         playbackStartupRecoveryTask = nil
         playbackStartupRecoveryRequestDate = nil
+        stillFrameRecoveryTask?.cancel()
+        stillFrameRecoveryTask = nil
 
         videoPlayerView.onReadyForDisplay = nil
 
@@ -3223,6 +3430,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         hasRenderedFrameForCurrentPlayer = false
         lastPlaybackRequestDate = .distantPast
         lastPlaybackNudgeDate = .distantPast
+        adaptiveRebufferCount = 0
+        lastAdaptiveRebufferDate = .distantPast
+        lastAdaptiveRebufferPositionBucket = -1
+        stillFrameRecoveryAttemptCount = 0
+        playbackRecoveryLastBufferedAhead = 0
+        playbackRecoveryStagnantCount = 0
         resetPlaybackProgressTracking()
         playbackRecoveryProgressExtensionCount = 0
         lastLoggedTimeControlStatus = nil
@@ -3250,6 +3463,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playbackStartupRecoveryTask?.cancel()
         playbackStartupRecoveryTask = nil
         playbackStartupRecoveryRequestDate = nil
+        stillFrameRecoveryTask?.cancel()
+        stillFrameRecoveryTask = nil
         cancellables.removeAll()
 
         if let att = attachment {
