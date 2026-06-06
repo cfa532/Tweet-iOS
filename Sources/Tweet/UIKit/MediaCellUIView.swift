@@ -3415,6 +3415,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
     }
 
+    private func cachedThumbnailForCurrentVideo() -> UIImage? {
+        guard let mid = attachment?.mid else { return nil }
+        return SharedAssetCache.shared.cachedThumbnail(for: mid)
+    }
+
     /// Show cached thumbnail over the video player layer before background cleanup.
     /// Called by TweetTableViewController for all visible cells before video memory is released.
     func showThumbnailForBackground() {
@@ -3425,13 +3430,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         _ = preserveFrameToCache(skipImageView: videoCellState == .playing)
 
-        let cachedThumbnail: UIImage?
-        if let mid = attachment?.mid {
-            cachedThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
-        } else {
-            cachedThumbnail = nil
-        }
-        let thumbnail = imageView.image ?? cachedThumbnail
+        let thumbnail = imageView.image ?? cachedThumbnailForCurrentVideo()
         guard let thumbnail else { return }
         imageView.image = thumbnail
         imageView.isHidden = false
@@ -3471,8 +3470,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         // Keep a stable cover over the layer until playback is visibly advancing.
-        if let mid = attachment?.mid,
-           let cachedFrame = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+        if let cachedFrame = cachedThumbnailForCurrentVideo() {
             imageView.image = cachedFrame
             imageView.isHidden = false
         }
