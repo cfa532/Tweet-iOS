@@ -2692,7 +2692,8 @@ class SharedAssetCache: ObservableObject {
 
         // Pause all players and detach their items to release video buffers
         // This releases the heavy memory (decoded frames, buffered data) but keeps the AVPlayer objects
-        for (_, player) in playerCache {
+        for (mediaID, player) in playerCache {
+            savePlaybackPositionForBackground(mediaID: mediaID, player: player)
             player.pause()
             player.replaceCurrentItem(with: nil) // Releases video buffers and assets
         }
@@ -2757,7 +2758,8 @@ class SharedAssetCache: ObservableObject {
             LocalHTTPServer.shared.cancelDownloads(for: mediaID)
         }
 
-        for player in playerCache.values {
+        for (mediaID, player) in playerCache {
+            savePlaybackPositionForBackground(mediaID: mediaID, player: player)
             releasePlayer(player)
         }
 
@@ -2780,7 +2782,8 @@ class SharedAssetCache: ObservableObject {
     func clearVideoPlayersForBackgroundRecovery() {
         // Clear all cached players - they may have invalid video layers
         // Players will be recreated on demand with fresh video layers
-        for (_, player) in playerCache {
+        for (mediaID, player) in playerCache {
+            savePlaybackPositionForBackground(mediaID: mediaID, player: player)
             player.pause()
             player.replaceCurrentItem(with: nil) // CRITICAL: Detach the item to invalidate layer
         }
@@ -2802,6 +2805,38 @@ class SharedAssetCache: ObservableObject {
         // Keep resourceLoaderDelegates - they're needed for HLS playback
         // Keep cacheTimestamps - they track cache expiration
         // Keep HLS disk cache - playlists now use relative paths (port-independent!)
+    }
+
+    private func savePlaybackPositionForBackground(mediaID: String, player: AVPlayer) {
+        guard let item = player.currentItem else { return }
+        let currentTime = player.currentTime()
+        guard currentTime.isValid,
+              currentTime.seconds.isFinite,
+              currentTime.seconds > 0.25 else { return }
+
+        let duration = item.duration
+        if duration.isValid,
+           !duration.isIndefinite,
+           duration.seconds > 0,
+           duration.seconds - currentTime.seconds <= 5.0 {
+            return
+        }
+
+        let wasPlaying = player.rate > 0 || player.timeControlStatus == .playing
+        VideoStateCache.shared.cacheVideoState(
+            for: mediaID,
+            player: player,
+            time: currentTime,
+            wasPlaying: wasPlaying,
+            originalMuteState: player.isMuted
+        )
+        PersistentVideoStateManager.shared.saveState(
+            videoMid: mediaID,
+            currentTime: currentTime,
+            wasPlaying: wasPlaying,
+            context: .mediaCell,
+            duration: duration
+        )
     }
     
     /// Aggressively cleanup video players when navigating away from video-heavy screens

@@ -331,43 +331,8 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self else { return }
-            guard self.videoCoordinator.isFeedVisible else { return }
-
-            // Request background time from iOS to complete cleanup
-            self.backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
-                // Cleanup callback - iOS is about to force-terminate background task
-                print("⚠️ [BACKGROUND] Background task time expired - iOS forcing cleanup")
-                self?.endBackgroundTask()
-            }
-
-            // Log memory before cleanup
-            print("🌙 [BACKGROUND] App entering background - starting aggressive memory cleanup")
-
-            // Save the current scroll position before backgrounding
-            self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
-
-            // Directional image preloads are useful only while actively scrolling the feed.
-            // AppDelegate/MemoryCapManager clears global media caches on background; cancel
-            // these direct warmup tasks here so they do not keep network work alive.
-            self.cancelDirectionalImagePreloads()
-
-            // Show cached thumbnails on visible video cells before AppDelegate releases video memory.
-            // This prevents black AVPlayerLayer in the app switcher snapshot.
-            if !self.isTableViewUpdating {
-                for cell in self.tableView.visibleCells {
-                    guard let tweetCell = cell as? TweetTableViewCell else { continue }
-                    tweetCell.tweetContentView.showVideoThumbnailsForBackground()
-                }
-            }
-
-            // End background task after a short delay to allow cleanup to complete
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self = self else { return }
-                print("✅ [BACKGROUND] Cleanup complete")
-
-                // End background task when done
-                self.endBackgroundTask()
+            Task { @MainActor [weak self] in
+                self?.handleAppDidEnterBackground()
             }
         }
 
@@ -377,29 +342,8 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self else { return }
-            guard self.videoCoordinator.isFeedVisible else { return }
-
-            print("☀️ [FOREGROUND] App returning to foreground")
-
-            // Cancel background task if still active
-            self.endBackgroundTask()
-            self.needsVideoLayerRefresh = true
-
-            guard let savedPosition = self.scrollPositionBeforeBackground else { return }
-
-            // Restore the scroll position after a brief delay to let layout settle
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                guard let self = self else { return }
-                // Set lastContentOffset before restoring so scrollViewDidScroll sees zero delta
-                // This prevents the restoration from triggering toolbar hiding
-                self.lastContentOffset = savedPosition
-                self.lastCallbackOffset = savedPosition
-                self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
-                self.scrollPositionBeforeBackground = nil
-
-                // Restore visible video players and preload 2 more in scroll direction
-                self.restoreVideoPlayersAfterForeground()
+            Task { @MainActor [weak self] in
+                self?.handleAppWillEnterForeground()
             }
         }
 
@@ -411,13 +355,90 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self, self.needsVideoLayerRefresh, !self.isTableViewUpdating else { return }
-            guard self.videoCoordinator.isFeedVisible else { return }
-            self.needsVideoLayerRefresh = false
-            for cell in self.tableView.visibleCells {
-                guard let tweetCell = cell as? TweetTableViewCell else { continue }
-                tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
+            Task { @MainActor [weak self] in
+                self?.handleAppDidBecomeActive()
             }
+        }
+    }
+
+    @MainActor
+    private func handleAppDidEnterBackground() {
+        guard videoCoordinator.isFeedVisible else { return }
+
+        // Request background time from iOS to complete cleanup
+        backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
+            // Cleanup callback - iOS is about to force-terminate background task
+            print("⚠️ [BACKGROUND] Background task time expired - iOS forcing cleanup")
+            Task { @MainActor [weak self] in
+                self?.endBackgroundTask()
+            }
+        }
+
+        // Log memory before cleanup
+        print("🌙 [BACKGROUND] App entering background - starting aggressive memory cleanup")
+
+        // Save the current scroll position before backgrounding
+        scrollPositionBeforeBackground = tableView.contentOffset.y
+
+        // Directional image preloads are useful only while actively scrolling the feed.
+        // AppDelegate/MemoryCapManager clears global media caches on background; cancel
+        // these direct warmup tasks here so they do not keep network work alive.
+        cancelDirectionalImagePreloads()
+
+        // Show cached thumbnails on visible video cells before AppDelegate releases video memory.
+        // This prevents black AVPlayerLayer in the app switcher snapshot.
+        if !isTableViewUpdating {
+            for cell in tableView.visibleCells {
+                guard let tweetCell = cell as? TweetTableViewCell else { continue }
+                tweetCell.tweetContentView.showVideoThumbnailsForBackground()
+            }
+        }
+
+        // End background task after a short delay to allow cleanup to complete
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self else { return }
+            print("✅ [BACKGROUND] Cleanup complete")
+
+            // End background task when done
+            self.endBackgroundTask()
+        }
+    }
+
+    @MainActor
+    private func handleAppWillEnterForeground() {
+        guard videoCoordinator.isFeedVisible else { return }
+
+        print("☀️ [FOREGROUND] App returning to foreground")
+
+        // Cancel background task if still active
+        endBackgroundTask()
+        needsVideoLayerRefresh = true
+
+        guard let savedPosition = scrollPositionBeforeBackground else { return }
+
+        // Restore the scroll position after a brief delay to let layout settle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self = self else { return }
+            // Set lastContentOffset before restoring so scrollViewDidScroll sees zero delta
+            // This prevents the restoration from triggering toolbar hiding
+            self.lastContentOffset = savedPosition
+            self.lastCallbackOffset = savedPosition
+            self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
+            self.scrollPositionBeforeBackground = nil
+
+            // Restore visible video players and preload 2 more in scroll direction
+            self.restoreVideoPlayersAfterForeground()
+        }
+    }
+
+    @MainActor
+    private func handleAppDidBecomeActive() {
+        guard needsVideoLayerRefresh, !isTableViewUpdating else { return }
+        guard videoCoordinator.isFeedVisible else { return }
+        needsVideoLayerRefresh = false
+        for cell in tableView.visibleCells {
+            guard let tweetCell = cell as? TweetTableViewCell else { continue }
+            tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
         }
     }
 
@@ -745,10 +766,6 @@ class TweetTableViewController: UITableViewController {
         let newOriginalTweetIds = Set(tweets.compactMap(\.originalTweetId))
         prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds.subtracting(oldOriginalTweetIds))
 
-        // Rebuild video list when pinned tweets change
-        // This ensures pinned tweet videos are registered with the coordinator
-        videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: pinnedTweets)
-
         // Check if same tweets in same order - only counts may have changed
         if oldCount == tweets.count && oldCount > 0 {
             var sameOrder = true
@@ -764,6 +781,7 @@ class TweetTableViewController: UITableViewController {
                 // SwiftUI will automatically re-render action buttons via @Published properties
 
                 // Still update visibility for video coordinator
+                rebuildVideoListAndRefreshVisibility(reason: "pinnedTweetsSameOrder")
                 scheduleVideoVisibilityRefresh(reason: "pinnedTweetsSameOrder")
                 return
             }
@@ -782,6 +800,7 @@ class TweetTableViewController: UITableViewController {
         isTableViewUpdating = false
 
         // CRITICAL: Update visibility after reload so coordinator knows pinned videos are visible
+        rebuildVideoListAndRefreshVisibility(reason: "pinnedTweetsReload")
         scheduleVideoVisibilityRefresh(reason: "pinnedTweetsReload")
     }
     
@@ -811,7 +830,7 @@ class TweetTableViewController: UITableViewController {
             isTableViewUpdating = true
             tableView.reloadData()
             isTableViewUpdating = false
-            videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+            rebuildVideoListAndRefreshVisibility(reason: "initialTweetsVideoList")
             
             // Trigger video detection after initial load. Multiple passes are intentional:
             // cached startup rows can self-size/layout over several run-loop turns, and a
@@ -834,7 +853,7 @@ class TweetTableViewController: UITableViewController {
                 // OPTIMIZATION: Same tweets in same order - only hit counts changed
                 // Tweet.getInstance() already updated the @Published count properties
                 // SwiftUI will automatically re-render action buttons, no need to reload cells
-                videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                rebuildVideoListAndRefreshVisibility(reason: "tweetsSameOrderVideoList")
                 scheduleVideoVisibilityRefresh(reason: "tweetsSameOrder")
                 return
             }
@@ -868,7 +887,7 @@ class TweetTableViewController: UITableViewController {
                 let indexPaths = (0..<potentialPrependCount).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .automatic)
                 isTableViewUpdating = false
-                videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                rebuildVideoListAndRefreshVisibility(reason: "tweetsPrependedVideoList")
                 scheduleVideoVisibilityRefresh(reason: "tweetsPrepended")
                 return
             }
@@ -883,7 +902,7 @@ class TweetTableViewController: UITableViewController {
                 let indexPaths = (oldCount..<newTweets.count).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .none)
                 isTableViewUpdating = false
-                videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                rebuildVideoListAndRefreshVisibility(reason: "tweetsAppendedVideoList")
                 scheduleVideoVisibilityRefresh(reason: "tweetsAppended")
                 return
             }
@@ -897,7 +916,7 @@ class TweetTableViewController: UITableViewController {
                 isTableViewUpdating = true
                 tableView.deleteRows(at: [IndexPath(row: removedIndex, section: 0)], with: .automatic)
                 isTableViewUpdating = false
-                videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                rebuildVideoListAndRefreshVisibility(reason: "tweetDeletedVideoList")
                 scheduleVideoVisibilityRefresh(reason: "tweetDeleted")
                 return
             }
@@ -910,7 +929,7 @@ class TweetTableViewController: UITableViewController {
 
         if diff.isEmpty {
             // No structural changes - content-only updates handled by ObservableObject
-            videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+            rebuildVideoListAndRefreshVisibility(reason: "emptyDiffVideoList")
             scheduleVideoVisibilityRefresh(reason: "emptyDiff")
             return
         }
@@ -927,7 +946,7 @@ class TweetTableViewController: UITableViewController {
             }
         }
         isTableViewUpdating = false
-        videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+        rebuildVideoListAndRefreshVisibility(reason: "diffUpdateVideoList")
         scheduleVideoVisibilityRefresh(reason: "diffUpdate")
     }
     
@@ -2080,6 +2099,22 @@ class TweetTableViewController: UITableViewController {
     /// Preflight height estimates for new tweets to reduce initial layout jumps
     
     // MARK: - Video Playback Coordination
+
+    private func rebuildVideoListAndRefreshVisibility(reason _: String) {
+        let currentTweets = tweets
+        let currentPinnedTweets = pinnedTweets
+        videoCoordinator.buildVideoList(from: currentTweets, pinnedTweets: currentPinnedTweets) { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.tableView.window != nil else { return }
+                self.lastVisibleTweetIds = []
+                self.lastLoadVisibleVideoIds = []
+                self.lastContinuePlaybackVideoIds = []
+                self.lastOnScreenVideoIds = []
+                self.forceLayoutVisibleCellsForVisibilityPass()
+                self.updateVisibleTweetsForVideoPlayback()
+            }
+        }
+    }
 
     private func scheduleVideoVisibilityRefresh(reason _: String) {
         let delays: [TimeInterval] = [0, 0.1, 0.35, 0.8]
