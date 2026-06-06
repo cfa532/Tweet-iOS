@@ -2721,6 +2721,7 @@ class SharedAssetCache: ObservableObject {
     @MainActor func releaseForBackground() {
         let playerCount = playerCache.count
         let assetCount = assetCache.count
+        let protectedVisibleMids = visibleVideoMids
 
         var mediaIDsToCancel = Set<String>()
         mediaIDsToCancel.formUnion(playerCache.keys)
@@ -2736,6 +2737,7 @@ class SharedAssetCache: ObservableObject {
         for ids in tweetUrlMapping.values {
             mediaIDsToCancel.formUnion(ids)
         }
+        mediaIDsToCancel.subtract(protectedVisibleMids)
 
         cancelAllLoadingTasks()
 
@@ -2760,23 +2762,31 @@ class SharedAssetCache: ObservableObject {
 
         for (mediaID, player) in playerCache {
             savePlaybackPositionForBackground(mediaID: mediaID, player: player)
-            releasePlayer(player)
+            if protectedVisibleMids.contains(mediaID) {
+                player.pause()
+                player.isMuted = MuteState.shared.isMuted
+            } else {
+                releasePlayer(player)
+            }
         }
 
-        playerCache.removeAll()
-        assetCache.removeAll()
-        cacheTimestamps.removeAll()
-        cachingPlayerDelegates.removeAll()
-        cachingPlayerItems.removeAll()
-        resourceLoaderDelegates.removeAll()
-        tweetUrlMapping.removeAll()
-        diskCacheStatus.removeAll()
+        playerCache = playerCache.filter { protectedVisibleMids.contains($0.key) }
+        assetCache = assetCache.filter { protectedVisibleMids.contains($0.key) }
+        cacheTimestamps = cacheTimestamps.filter { protectedVisibleMids.contains($0.key) }
+        cachingPlayerDelegates = cachingPlayerDelegates.filter { protectedVisibleMids.contains($0.key) }
+        cachingPlayerItems = cachingPlayerItems.filter { protectedVisibleMids.contains($0.key) }
+        resourceLoaderDelegates = resourceLoaderDelegates.filter { protectedVisibleMids.contains($0.key) }
+        tweetUrlMapping = tweetUrlMapping
+            .mapValues { $0.intersection(protectedVisibleMids) }
+            .filter { !$0.value.isEmpty }
+        diskCacheStatus = diskCacheStatus.filter { protectedVisibleMids.contains($0.key) }
 
-        visibleVideoMidCounts.removeAll()
         preloadedPlayerMids.removeAll()
         protectedPreloadMids.removeAll()
+        preloadedPlayerGraceExpirations.removeAll()
 
-        print("🌙 [SharedAssetCache] Background release: \(playerCount) players, \(assetCount) assets, \(mediaIDsToCancel.count) media downloads")
+        let preservedCount = playerCache.count
+        print("🌙 [SharedAssetCache] Background release: \(playerCount) players (\(preservedCount) visible preserved), \(assetCount) assets, \(mediaIDsToCancel.count) media downloads")
     }
 
     func clearVideoPlayersForBackgroundRecovery() {
@@ -2808,35 +2818,8 @@ class SharedAssetCache: ObservableObject {
     }
 
     private func savePlaybackPositionForBackground(mediaID: String, player: AVPlayer) {
-        guard let item = player.currentItem else { return }
-        let currentTime = player.currentTime()
-        guard currentTime.isValid,
-              currentTime.seconds.isFinite,
-              currentTime.seconds > 0.25 else { return }
-
-        let duration = item.duration
-        if duration.isValid,
-           !duration.isIndefinite,
-           duration.seconds > 0,
-           duration.seconds - currentTime.seconds <= 5.0 {
-            return
-        }
-
         let wasPlaying = player.rate > 0 || player.timeControlStatus == .playing
-        VideoStateCache.shared.cacheVideoState(
-            for: mediaID,
-            player: player,
-            time: currentTime,
-            wasPlaying: wasPlaying,
-            originalMuteState: player.isMuted
-        )
-        PersistentVideoStateManager.shared.saveState(
-            videoMid: mediaID,
-            currentTime: currentTime,
-            wasPlaying: wasPlaying,
-            context: .mediaCell,
-            duration: duration
-        )
+        FeedVideoResumeStore.save(mid: mediaID, player: player, wasPlaying: wasPlaying)
     }
     
     /// Aggressively cleanup video players when navigating away from video-heavy screens

@@ -1218,8 +1218,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Release all players via SharedAssetCache
         SharedAssetCache.shared.releaseAllPlayers()
 
-        // Clear video state cache to free memory (playback positions are preserved in PersistentVideoStateManager)
-        VideoStateCache.shared.clearAllCache()
+        // Clear player/time references to free memory while preserving finished-video gates.
+        // Playback positions are preserved in PersistentVideoStateManager.
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
 
         print("✅ [VIDEO MEMORY] All video players released for background")
     }

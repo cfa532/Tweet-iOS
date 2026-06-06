@@ -258,7 +258,7 @@ class MemoryCapManager {
         ChatCacheManager.shared.clearMemoryCache()
         
         // Clear video state cache
-        VideoStateCache.shared.clearAllCache()
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
         
         // Notify user about critical memory situation
         let memoryMB = currentMemoryUsage / (1024 * 1024)
@@ -289,7 +289,7 @@ class MemoryCapManager {
         ImageCacheManager.shared.clearMemoryCache()
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
-        VideoStateCache.shared.clearAllCache()
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
         LocalHTTPServer.shared.resetAllConnectionsImmediately()
         LocalHTTPServer.shared.stopImmediatelyForBackground()
 

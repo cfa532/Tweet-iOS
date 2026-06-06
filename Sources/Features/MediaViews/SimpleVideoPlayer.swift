@@ -230,6 +230,15 @@ class VideoStateCache {
         cache.removeAll()
         finishedVideoIdentifiers.removeAll()
     }
+
+    /// Clear only cached player/time references for memory pressure.
+    /// Finished-video bookkeeping is intentionally preserved so foreground resume
+    /// does not auto-replay videos that already completed in the feed.
+    func clearPlaybackCacheForMemoryPressure() {
+        cache.removeAll()
+        visibleVideoMids.removeAll()
+        stoppedByCoordinatorMids.removeAll()
+    }
     
     /// Clear stale cached states (older than expiration interval)
     func clearStaleCache() {
