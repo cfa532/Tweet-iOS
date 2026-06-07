@@ -181,7 +181,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var activePreloadMids: Set<String> = []
     private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
     private let directionalPreloadRefreshInterval: CFTimeInterval = 0.35
-    var directionalPlayerPreloadCount: Int = 2 {
+    var directionalPlayerPreloadCount: Int = 3 {
         didSet {
             if directionalPlayerPreloadCount <= 0 {
                 clearPreloadedTracking()

@@ -782,6 +782,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         transitionTo(.noContent)
         observeCachedVideoThumbnail(for: attachment.mid)
         observePreloadedVideoPlayer(for: attachment.mid)
+        if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: attachment.mid) {
+            applyCachedVideoThumbnail(thumbnail)
+        }
 
         // Tap gesture for fullscreen — on both videoPlayerView and imageView so that
         // any visible video is tappable (thumbnail state or non-primary use imageView).
@@ -894,7 +897,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     private func applyCachedVideoThumbnail(_ image: UIImage) {
-        guard hasPlaybackCoverForCurrentVideo else { return }
+        guard canShowCachedCoverForCurrentVideo else { return }
         imageView.image = image
         switch videoCellState {
         case .noContent:
@@ -1146,9 +1149,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             )
         }
         // Pick up a real playback cover only after this visible cell has actually
-        // rendered playback. Saved resume time alone should not create a cover.
+        // rendered playback, or when the frame was decoded by off-screen preload.
+        // Saved resume time alone should not create a cover.
         if imageView.image == nil, let mid = attachment?.mid,
-           hasPlaybackCoverForCurrentVideo,
+           canShowCachedCoverForCurrentVideo,
            let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
             imageView.image = cached
         }
@@ -3498,8 +3502,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         lastActualPlaybackDate != .distantPast
     }
 
+    private var canShowCachedCoverForCurrentVideo: Bool {
+        if hasPlaybackCoverForCurrentVideo { return true }
+        guard let mid = attachment?.mid else { return false }
+        return SharedAssetCache.shared.hasPreloadedThumbnail(for: mid)
+    }
+
     private func cachedPlaybackCoverForCurrentVideo() -> UIImage? {
-        guard hasPlaybackCoverForCurrentVideo else { return nil }
+        guard canShowCachedCoverForCurrentVideo else { return nil }
         guard let mid = attachment?.mid else { return nil }
         return SharedAssetCache.shared.cachedThumbnail(for: mid)
     }

@@ -426,7 +426,7 @@ class TweetTableViewController: UITableViewController {
             self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
             self.scrollPositionBeforeBackground = nil
 
-            // Restore visible video players and preload 2 more in scroll direction
+            // Restore visible video players and refresh directional preloads.
             self.restoreVideoPlayersAfterForeground()
         }
     }
