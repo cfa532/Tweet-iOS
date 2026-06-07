@@ -41,8 +41,8 @@ class VideoLoadingManager: ObservableObject {
     private var isProcessingCancellations = false
     
     // MARK: - Configuration
-    private let defaultPreloadCount = 2
-    private var preloadCount = 2 // MEMORY FIX: Preload next 2 videos (4 visible + 2 ahead = max 6 videos for grid layout)
+    private let defaultPreloadCount = FeedPlaybackTuning.directionalVideoPreloadCount
+    private var preloadCount = FeedPlaybackTuning.directionalVideoPreloadCount
     private let bufferDistance = 1 // Keep 1 tweet behind as buffer
     private let cancellationBatchSize = 10 // Process cancellations in batches
     

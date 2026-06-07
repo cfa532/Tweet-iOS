@@ -37,7 +37,9 @@ class MediaGridUIView: UIView {
     private var lastLayoutWidth: CGFloat = 0
     /// Height last computed from actual bounds.width — drives intrinsicContentSize
     private var computedGridHeight: CGFloat = 0
-    private let playbackContinueVisibilityThreshold: CGFloat = 0.70
+    private let playbackContinueVisibilityThreshold = FeedPlaybackTuning.videoContinueVisibilityRatio
+    private let mediaLoadVisibleMinHeight = FeedPlaybackTuning.mediaLoadVisibleMinHeight
+    private let mediaLoadVisibleMinRatio = FeedPlaybackTuning.mediaLoadVisibleMinRatio
 
     var isGridVisible: Bool = false {
         didSet {
@@ -87,16 +89,14 @@ class MediaGridUIView: UIView {
         self.parentViewController = parentViewController
         hasInitialized = false
 
-        // Remove old cells
-        clearCells()
-
         guard !attachments.isEmpty else { return }
 
-        // Create cells (max 4 shown) - frames will be set in layoutSubviews()
+        // Reuse cells (max 4 shown) - frames will be set in layoutSubviews()
         let displayCount = min(attachments.count, 4)
+        prepareReusableCells(displayCount: displayCount)
 
         for i in 0..<displayCount {
-            let cellView = MediaCellUIView()
+            let cellView = cellViews[i]
             cellView.videoCoordinator = videoCoordinator
             // Frame will be set in layoutSubviews when actual width is known
             cellView.frame = .zero
@@ -113,8 +113,6 @@ class MediaGridUIView: UIView {
                 parentViewController: parentViewController
             )
 
-            addSubview(cellView)
-            cellViews.append(cellView)
         }
 
         if attachments.count > 4 {
@@ -167,7 +165,9 @@ class MediaGridUIView: UIView {
         )
 
         // Update cell frames and aspect ratios
-        for (i, cellView) in cellViews.enumerated() where i < frames.count {
+        let displayCount = min(cellViews.count, frames.count, attachments.count, 4)
+        for i in 0..<displayCount {
+            let cellView = cellViews[i]
             cellView.frame = frames[i]
 
             // Update aspect ratio based on actual frame
@@ -437,15 +437,24 @@ class MediaGridUIView: UIView {
 
     // MARK: - Cleanup
 
-    private func clearCells() {
-        for cell in cellViews {
-            cell.prepareForReuse()
-            cell.removeFromSuperview()
-        }
-        cellViews.removeAll()
+    private func prepareReusableCells(displayCount: Int) {
         moreLabelOverlay?.removeFromSuperview()
         moreLabelOverlay = nil
         moreLabel = nil
+
+        while cellViews.count < displayCount {
+            let cell = MediaCellUIView()
+            cell.frame = .zero
+            cell.isHidden = true
+            addSubview(cell)
+            cellViews.append(cell)
+        }
+
+        for (index, cell) in cellViews.enumerated() {
+            cell.prepareForReuse()
+            cell.frame = .zero
+            cell.isHidden = index >= displayCount
+        }
     }
 
     /// Updates per-media visibility.
@@ -457,7 +466,8 @@ class MediaGridUIView: UIView {
         var loadVisible: [String] = []
         var continuePlayback: [String] = []
         var playable: [String] = []
-        for cellView in cellViews {
+        let displayCount = min(cellViews.count, attachments.count, 4)
+        for cellView in cellViews.prefix(displayCount) {
             let cellFrame = cellView.convert(cellView.bounds, to: coordinateSpace)
             let intersection = cellFrame.intersection(visibleRect)
             let cellArea = cellFrame.width * cellFrame.height
@@ -465,7 +475,9 @@ class MediaGridUIView: UIView {
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
             // Keep loading tied to actual media-cell geometry, not just table-row visibility.
-            let isLoadVisible = isGridVisible && visibleArea > 0
+            let isLoadVisible = isGridVisible &&
+                visibleArea > 0 &&
+                (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
             cellView.setVisible(isLoadVisible, shouldAcquirePlayer: isLoadVisible)
 
             guard cellView.isVideoAttachment,
@@ -476,7 +488,7 @@ class MediaGridUIView: UIView {
             if ratio >= playbackContinueVisibilityThreshold {
                 continuePlayback.append(identifier)
             }
-            if ratio >= 0.5 {
+            if ratio >= FeedPlaybackTuning.videoStartVisibilityRatio {
                 playable.append(identifier)
             }
         }
@@ -501,7 +513,6 @@ class MediaGridUIView: UIView {
     }
 
     func prepareForReuse() {
-        clearCells()
         cancellables.removeAll()
         currentTweetId = nil
         parentTweet = nil
@@ -510,6 +521,14 @@ class MediaGridUIView: UIView {
         isGridVisible = false
         hasInitialized = false
         shouldLoadVideo = true
+        for cell in cellViews {
+            cell.prepareForReuse()
+            cell.frame = .zero
+            cell.isHidden = true
+        }
+        moreLabelOverlay?.removeFromSuperview()
+        moreLabelOverlay = nil
+        moreLabel = nil
         // Reset height so a recycled cell doesn't report a stale intrinsic size
         if computedGridHeight != 0 {
             computedGridHeight = 0

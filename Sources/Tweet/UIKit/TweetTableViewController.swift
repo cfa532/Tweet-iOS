@@ -93,7 +93,7 @@ class TweetTableViewController: UITableViewController {
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: CFTimeInterval = 0
-    private let videoVisibilityThrottleInterval: TimeInterval = 0.15 // 150ms during active drag
+    private let videoVisibilityThrottleInterval = FeedPlaybackTuning.videoVisibilityThrottleInterval
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     private var lastLoadVisibleVideoIds: Set<String> = [] // Cache media that is physically on screen and should load
     private var lastContinuePlaybackVideoIds: Set<String> = [] // Cache media visible enough to keep current playback
@@ -131,11 +131,13 @@ class TweetTableViewController: UITableViewController {
     
     // Track scroll direction for height caching strategy
     private var isScrollingBackward: Bool = false
-    private let directionalPreloadRowCount = 2
-    private let oppositeStopPreloadRowCount = 1
-    private let maxDirectionalImagePreloadsInFlight = 4
+    private let directionalPreloadRowCount = FeedPlaybackTuning.directionalImagePreloadRowCount
+    private let oppositeStopPreloadRowCount = FeedPlaybackTuning.oppositeStopImagePreloadRowCount
+    private let maxDirectionalImagePreloadsInFlight = FeedPlaybackTuning.maxDirectionalImagePreloadsInFlight
     private var activeDirectionalImagePreloadTasks: [String: Task<Void, Never>] = [:]
     private var didScheduleInitialVisibilityRefresh = false
+    private let mediaLoadVisibleMinHeight = FeedPlaybackTuning.mediaLoadVisibleMinHeight
+    private let mediaLoadVisibleMinRatio = FeedPlaybackTuning.mediaLoadVisibleMinRatio
 
     // Scroll state tracking to prevent direction detection jitter during deceleration
     private var isUserDragging: Bool = false
@@ -1251,6 +1253,11 @@ class TweetTableViewController: UITableViewController {
         let totalRows = pinnedTweets.count + tweets.count
         let isLastItem = indexPath.row == totalRows - 1
 
+        cell.shouldDeferHeightOverflowCheck = { [weak self] in
+            guard let self else { return false }
+            return self.isUserDragging || self.isDecelerating
+        }
+
         if let hprose = hproseInstance {
             cell.configure(
                 with: tweet,
@@ -1639,11 +1646,6 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
-        // Forward media visibility to the cell
-        if let tweetCell = cell as? TweetTableViewCell {
-            tweetCell.tweetContentView.setMediaVisible(true)
-        }
-
         // Cache the actual Auto Layout height from the cell frame.
         // heightForRowAt returns automaticDimension on first display, so cell.frame.height
         // reflects the true Auto Layout result. Cache it for future use so that
@@ -1803,6 +1805,7 @@ class TweetTableViewController: UITableViewController {
         // CRITICAL: Save scroll position immediately when user stops dragging
         // (if not decelerating, scroll has stopped - save now to survive app termination)
         if !decelerate {
+            runDeferredHeightOverflowChecksForVisibleCells()
             performPendingHeightRelayout()
             saveScrollPositionIfNeeded()
             triggerPreloadOnScrollStop()
@@ -1814,6 +1817,7 @@ class TweetTableViewController: UITableViewController {
 
         // Deceleration skipped video visibility updates — do one final update now
         updateVisibleTweetsForVideoPlayback()
+        runDeferredHeightOverflowChecksForVisibleCells()
         performPendingHeightRelayout()
 
         triggerPreloadOnScrollStop()
@@ -1848,6 +1852,13 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
+    private func runDeferredHeightOverflowChecksForVisibleCells() {
+        for cell in tableView.visibleCells {
+            guard let tweetCell = cell as? TweetTableViewCell else { continue }
+            tweetCell.runDeferredHeightOverflowCheckIfNeeded()
+        }
+    }
+
     /// Show bars immediately without animation.
     ///
     /// Posts `.showBarsAfterScrollEnd` so the parent view sets isNavigationVisible
@@ -1861,7 +1872,7 @@ class TweetTableViewController: UITableViewController {
         NotificationCenter.default.post(name: .showBarsAfterScrollEnd, object: nil)
 
         // Safety timeout — stop compensating even if layout never fires
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + FeedPlaybackTuning.barAppearanceCompensationTimeout) { [weak self] in
             self?.isCompensatingForBarAppearance = false
             self?.compensationBaseOriginY = nil
         }
@@ -2128,6 +2139,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func forceLayoutVisibleCellsForVisibilityPass() {
+        guard !isUserDragging && !isDecelerating else { return }
         tableView.layoutIfNeeded()
         for cell in tableView.visibleCells {
             cell.setNeedsLayout()
@@ -2164,11 +2176,13 @@ class TweetTableViewController: UITableViewController {
             let intersection = cellRect.intersection(visibleRect)
             let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
             let isRowOnScreen = intersection.height > 0
-            let isTweetVisible = ratio >= 0.5
+            let isRowLoadVisible = isRowOnScreen &&
+                (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
+            let isTweetVisible = ratio >= FeedPlaybackTuning.tweetVisibleRatio
 
-            // Any media that is physically on screen should load. Autoplay still
-            // uses the stricter 50% media-cell threshold returned as `playable`.
-            tweetCell.tweetContentView.setMediaVisible(isRowOnScreen)
+            // Avoid kicking off media work for a row that only has a sliver on screen.
+            // Autoplay still uses the stricter 50% media-cell threshold returned as `playable`.
+            tweetCell.tweetContentView.setMediaVisible(isRowLoadVisible)
             let mediaVisibility = tweetCell.tweetContentView.mediaVisibilityIdentifiers(
                 visibleRect: visibleRect,
                 coordinateSpace: tableView

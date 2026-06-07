@@ -180,8 +180,8 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Actively tracked directional video preloads — explicitly managed on scroll stop.
     private var activePreloadMids: Set<String> = []
     private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
-    private let directionalPreloadRefreshInterval: CFTimeInterval = 0.35
-    var directionalPlayerPreloadCount: Int = 1 {
+    private let directionalPreloadRefreshInterval = FeedPlaybackTuning.directionalVideoPreloadRefreshInterval
+    var directionalPlayerPreloadCount: Int = FeedPlaybackTuning.directionalVideoPreloadCount {
         didSet {
             if directionalPlayerPreloadCount <= 0 {
                 clearPreloadedTracking()
@@ -408,10 +408,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         
         // Overlay dismissed: wait for layout to settle before restarting.
-        // 0.35s lets view transitions and cell layout complete. While this timer
+        // The settling delay lets view transitions and cell layout complete. While this timer
         // is pending (overlayUncoverPlaybackTimer != nil), other resume paths
         // (viewWillAppear, updateOnScreenMediaCells) defer to avoid double-evaluation.
-        let timer = Timer(timeInterval: 0.35, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: FeedPlaybackTuning.overlayDismissSettleDelay, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.overlayUncoverPlaybackTimer = nil  // Settling period is over

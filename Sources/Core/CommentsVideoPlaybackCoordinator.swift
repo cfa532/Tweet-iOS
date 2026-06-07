@@ -46,12 +46,12 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
     /// Debounce timer for visibility updates
     private var visibilityDebounceTimer: Timer?
-    private let debounceInterval: TimeInterval = 0.15
+    private let debounceInterval = FeedPlaybackTuning.videoVisibilityThrottleInterval
 
     /// New videos can start once half of the media is visible.
-    private let startVisibilityRatio: CGFloat = 0.50
+    private let startVisibilityRatio = FeedPlaybackTuning.videoStartVisibilityRatio
     /// Stop the current video early as the user scrolls it away, matching feed behavior.
-    private let continueVisibilityRatio: CGFloat = 0.70
+    private let continueVisibilityRatio = FeedPlaybackTuning.videoContinueVisibilityRatio
 
     /// Track if coordinator is active
     private var isActive: Bool = false

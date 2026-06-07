@@ -2492,7 +2492,7 @@ class SharedAssetCache: ObservableObject {
 
         // REMOVED: Time-based inactive cleanup (was 15s threshold)
         // Reason: Too aggressive during scrolling - causes videos to reload when scrolling back
-        // Cache size is already managed by LRU eviction above (MAX_PLAYER_CACHE_SIZE = 6)
+        // Cache size is already managed by LRU eviction above (Constants.MAX_PLAYER_CACHE_SIZE)
     }
     
     /// Update access time for a player to prevent premature cleanup (called when video becomes visible)
