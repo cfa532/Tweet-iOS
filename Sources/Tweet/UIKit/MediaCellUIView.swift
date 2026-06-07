@@ -776,15 +776,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Set spinner color for video (white on dark background)
         loadingSpinner.color = .white.withAlphaComponent(0.7)
 
-        // Use a cover only after this video has previously played. First-load
-        // generated posters can differ from AVPlayer's first rendered frame and
-        // make playback start feel jumpy.
-        if let cachedFrame = cachedPlaybackCoverForCurrentVideo() {
-            imageView.image = cachedFrame
-            transitionTo(.thumbnail)
-        } else {
-            transitionTo(.noContent)
-        }
+        // Start without a poster cover. Generated/preloaded posters and saved-resume
+        // covers can differ from AVPlayer's first rendered frame and make playback
+        // start feel jumpy.
+        transitionTo(.noContent)
         observeCachedVideoThumbnail(for: attachment.mid)
         observePreloadedVideoPlayer(for: attachment.mid)
 
@@ -1150,7 +1145,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 userInfo: ["videoMid": mid, "claimerIdentity": ObjectIdentifier(self).hashValue]
             )
         }
-        // Pick up a real playback cover if the cell missed it during setupVideoCell.
+        // Pick up a real playback cover only after this visible cell has actually
+        // rendered playback. Saved resume time alone should not create a cover.
         if imageView.image == nil, let mid = attachment?.mid,
            hasPlaybackCoverForCurrentVideo,
            let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
@@ -3472,22 +3468,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     private var hasPlaybackCoverForCurrentVideo: Bool {
-        if lastActualPlaybackDate != .distantPast {
-            return true
-        }
-        if let currentTime = player?.currentTime(),
-           currentTime.isValid,
-           currentTime.seconds.isFinite,
-           currentTime.seconds > 0.25 {
-            return true
-        }
-        guard let mid = attachment?.mid,
-              let resumeTime = savedFeedResumeTime(for: mid, player: player) else {
-            return false
-        }
-        return resumeTime.isValid
-            && resumeTime.seconds.isFinite
-            && resumeTime.seconds > 0.25
+        lastActualPlaybackDate != .distantPast
     }
 
     private func cachedPlaybackCoverForCurrentVideo() -> UIImage? {
@@ -3545,8 +3526,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             pendingRecoverySeekTime = savedResumeTime
         }
 
-        // Keep a stable cover over the layer until playback is visibly advancing.
-        if let cachedFrame = cachedPlaybackCoverForCurrentVideo() {
+        // Background snapshots are useful in the app switcher, but when playback
+        // resumes the player should reveal its own frame instead of crossfading
+        // from a potentially different cover image.
+        if coordinatorWantsToPlay {
+            hideImageViewImmediately()
+        } else if let cachedFrame = cachedPlaybackCoverForCurrentVideo() {
             imageView.image = cachedFrame
             imageView.isHidden = false
         }
