@@ -1532,7 +1532,12 @@ final class HproseInstance: ObservableObject {
         // Check if this user has been blacklisted due to repeated failures
         // Skip this check if we're in internal retry logic to prevent double-checking
         if !skipRetryAndBlacklist && blackList.isBlacklisted(userId) {
-            print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning nil")
+            let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+            if cachedUser.username != nil {
+                print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning cached=true")
+                return cachedUser
+            }
+            print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning cached=false")
             return nil
         }
         
