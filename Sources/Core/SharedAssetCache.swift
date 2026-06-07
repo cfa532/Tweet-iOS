@@ -722,27 +722,6 @@ class SharedAssetCache: ObservableObject {
         }
     }
 
-    /// Move a prepared feed/preload player into fullscreen ownership without releasing it.
-    /// Mirrors Android's takePlayerForFullScreen(): preserve the prepared item/buffer,
-    /// remove feed/preload bookkeeping, and let fullscreen attach the same AVPlayer directly.
-    @MainActor func takePlayerForFullscreen(_ mediaID: String) -> AVPlayer? {
-        guard let player = playerCache.removeValue(forKey: mediaID),
-              player.currentItem != nil else {
-            return nil
-        }
-
-        cancelPreloadTaskEntry(for: mediaID)
-        visibleVideoMidCounts.removeValue(forKey: mediaID)
-        preloadedPlayerMids.remove(mediaID)
-        protectedPreloadMids.remove(mediaID)
-        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-        cacheTimestamps.removeValue(forKey: mediaID)
-
-        player.pause()
-        print("🎬 [SharedAssetCache] Handed off prepared player to fullscreen for \(shortMID(mediaID))")
-        return player
-    }
-    
     /// Check if a player is in a healthy, usable state
     /// Returns true only if player is fully functional and ready to play
     private func isPlayerHealthy(_ player: AVPlayer, for mediaID: String) -> Bool {

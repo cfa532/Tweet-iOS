@@ -318,18 +318,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             }
         }
 
-        if !returnLoanedPlayerToFeedIfNeeded(reason: "deactivate") {
-            // Clear the current item so the player truly stops: no decoding, no buffers, no resource use.
-            // Re-opening fullscreen will reattach an item (from cache when possible).
-            singletonPlayer?.replaceCurrentItem(with: nil)
-        }
+        // Clear the current item so the player truly stops: no decoding, no buffers, no resource use.
+        // Re-opening fullscreen will reattach an item (from cache when possible).
+        singletonPlayer?.replaceCurrentItem(with: nil)
         currentVideoMid = nil
         currentTweetId = nil
         currentCellTweetId = nil
         currentVideoIndex = 0
         LocalHTTPServer.shared.clearPrimaryRestriction()
 
-        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled")
+        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, player item cleared")
     }
 
     /// Set the feed's video list for fullscreen browsing (called before presenting MediaBrowserView)
@@ -500,7 +498,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var loadGeneration: Int = 0
     private var loadingMid: String?
     private var loadingStartedAt: Date?
-    private var isPlayerLoanedFromFeed = false
 
     // MARK: - Navigation Debounce
     /// Prevent multiple rapid swipe-ups (or duplicate gesture endings) from racing navigation.
@@ -604,11 +601,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     context: .mediaCell, duration: d)
             }
             player.pause()
-            if isPlayerLoanedFromFeed {
-                _ = returnLoanedPlayerToFeedIfNeeded(reason: "switchVideo")
-            } else {
-                player.replaceCurrentItem(with: nil)
-            }
+            player.replaceCurrentItem(with: nil)
         }
 
         // Bump generation so any prior async completions are ignored.
@@ -643,26 +636,23 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         self.currentTweetId = tweetId
         self.currentCellTweetId = cellTweetId
         self.currentVideoIndex = videoIndex
-        self.isPlayerLoanedFromFeed = false
         
-        // Android-style handoff: take the prepared feed/preload player into fullscreen
-        // ownership. This preserves its prepared item, buffer, and current position.
-        if let loanedPlayer = SharedAssetCache.shared.takePlayerForFullscreen(mid),
-           let playerItem = loanedPlayer.currentItem {
+        // Create a fresh fullscreen item from the cached feed asset when available.
+        // The fullscreen player stays independent from the feed AVPlayer.
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
+           let cachedPlayerItem = cachedPlayer.currentItem {
+            let playerItem = AVPlayerItem(asset: cachedPlayerItem.asset)
             self.loadingMid = nil
             self.loadingStartedAt = nil
 
             // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
             AudioSessionManager.shared.activateForVideoPlayback()
 
-            NotificationCenter.default.post(
-                name: .videoPlayerLoaned,
-                object: nil,
-                userInfo: ["videoMid": mid]
-            )
-
-            self.singletonPlayer = loanedPlayer
-            self.isPlayerLoanedFromFeed = true
+            if self.singletonPlayer == nil {
+                self.singletonPlayer = AVPlayer(playerItem: playerItem)
+            } else {
+                self.singletonPlayer?.replaceCurrentItem(with: playerItem)
+            }
 
             applyStartupAudioMuteIfNeeded()
 
@@ -691,8 +681,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     }
                     self.loadingMid = nil
                     self.loadingStartedAt = nil
-                    self.isPlayerLoanedFromFeed = false
-
                     // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
                     AudioSessionManager.shared.activateForVideoPlayback()
                     
@@ -1423,13 +1411,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             )
         }
 
-        // Keep feed-owned players intact. The singleton can point at the same AVPlayer
-        // instance that was returned to the feed; clearing its item would break feed playback.
-        if !returnLoanedPlayerToFeedIfNeeded(reason: "clearSingletonPlayer") {
-            // Keep the pre-created player alive — just remove the current item
-            singletonPlayer?.pause()
-            singletonPlayer?.replaceCurrentItem(with: nil)
-        }
+        // Keep the pre-created player alive — just remove the current item.
+        singletonPlayer?.pause()
+        singletonPlayer?.replaceCurrentItem(with: nil)
         LocalHTTPServer.shared.clearPrimaryRestriction()
 
         isItemReady = false
@@ -1462,30 +1446,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
     }
 
-    @discardableResult
-    private func returnLoanedPlayerToFeedIfNeeded(reason: String) -> Bool {
-        guard isPlayerLoanedFromFeed,
-              let player = singletonPlayer,
-              let videoMid = currentVideoMid,
-              player.currentItem != nil else {
-            return false
-        }
-
-        player.pause()
-        player.isMuted = MuteState.shared.isMuted
-        SharedAssetCache.shared.cachePlayer(player, for: videoMid)
-        NotificationCenter.default.post(
-            name: .videoPlayerReturned,
-            object: nil,
-            userInfo: ["videoMid": videoMid]
-        )
-        print("🎬 [FullScreenVideoManager] Returned loaned player for \(String(videoMid.prefix(8))) (\(reason))")
-
-        isPlayerLoanedFromFeed = false
-        singletonPlayer = nil
-        return true
-    }
-    
     /// Pause current playback
     func pause() {
         singletonPlayer?.pause()

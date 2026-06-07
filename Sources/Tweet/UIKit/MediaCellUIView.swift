@@ -1557,7 +1557,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 && FullScreenVideoManager.shared.currentVideoMid == mid
             guard !fullscreenOwnsMid else { return }
 
-            if self.isVisibleVideoFrameReady(player) || self.hasVisiblePlaybackProgress(for: player) {
+            if self.isVisibleVideoFrameReady(player) {
                 self.updateLoadingSpinnerForPlayback(player)
                 return
             }
@@ -1593,12 +1593,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
               player.timeControlStatus != .playing,
               !isVideoAtEnd(player) else { return false }
 
+        let now = Date()
         let currentSeconds = seconds(from: player.currentTime())
         let isStartup = lastActualPlaybackDate == .distantPast && currentSeconds < 1.0
+        let hasNoRecentProgress = lastPlaybackProgressDate == .distantPast
+            || now.timeIntervalSince(lastPlaybackProgressDate) >= 2.0
+        let isStalledResume = lastActualPlaybackDate != .distantPast && hasNoRecentProgress
         let hasUsableBuffer = bufferedAhead >= 2.0
-        guard isStartup, hasUsableBuffer else { return false }
+        guard (isStartup || isStalledResume), hasUsableBuffer else { return false }
 
-        let now = Date()
         guard now.timeIntervalSince(lastStartupBufferReleaseDate) >= 8.0 else { return true }
 
         lastStartupBufferReleaseDate = now
@@ -1610,7 +1613,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         updateLoadingSpinnerForPlayback(player)
 
         let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
-        print("\(logPrefix) ▶️ startup buffer ready (\(reason)): nudging playback, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp)")
+        let label = isStartup ? "startup buffer ready" : "resume buffer ready"
+        print("\(logPrefix) ▶️ \(label) (\(reason)): nudging playback, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp)")
         return true
     }
 
