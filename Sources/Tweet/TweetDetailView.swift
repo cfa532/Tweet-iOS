@@ -363,6 +363,12 @@ struct SelectableTextView: UIViewRepresentable {
 
 // Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
 @available(iOS 16.0, *)
+@MainActor
+private enum DetailImageLoadRegistry {
+    static var activeCompressedLoads: Set<String> = []
+}
+
+@available(iOS 16.0, *)
 struct DetailMediaCell: View {
     @ObservedObject var parentTweet: Tweet
     let attachmentIndex: Int
@@ -373,6 +379,7 @@ struct DetailMediaCell: View {
     let showMuteButton: Bool
     @State private var hasRestoredPosition = false // Track if we've restored position
     @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
+    @State private var imageCacheObserver: NSObjectProtocol? = nil
     @State private var originalImageTask: Task<Void, Never>? = nil
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
@@ -498,6 +505,7 @@ struct DetailMediaCell: View {
             
             // Setup foreground observer to reload resources if released during background
             setupForegroundObserver()
+            setupImageCacheObserver()
         }
         .onDisappear {
             // For videos in detail view, post notification to save state
@@ -517,6 +525,13 @@ struct DetailMediaCell: View {
             if let observer = foregroundObserver {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
+            }
+            if let observer = imageCacheObserver {
+                NotificationCenter.default.removeObserver(observer)
+                imageCacheObserver = nil
+            }
+            if attachment.type == .image {
+                DetailImageLoadRegistry.activeCompressedLoads.remove(Self.imageLoadId(for: attachment))
             }
 
             originalImageTask?.cancel()
@@ -545,6 +560,32 @@ struct DetailMediaCell: View {
             self.loadImage()
         }
     }
+
+    private func setupImageCacheObserver() {
+        guard attachment.type == .image else { return }
+        guard imageCacheObserver == nil else { return }
+
+        imageCacheObserver = NotificationCenter.default.addObserver(
+            forName: .imageCached,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard notification.userInfo?["avatarId"] as? String == self.attachment.mid else { return }
+            if self.image == nil || self.loading {
+                self.updateImageFromMemoryCache()
+            }
+        }
+    }
+
+    @discardableResult
+    private func updateImageFromMemoryCache() -> Bool {
+        guard let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) else {
+            return false
+        }
+        image = cachedImage
+        loading = false
+        return true
+    }
     
     private func loadImage() {
         guard let baseUrl = baseUrl,
@@ -554,6 +595,12 @@ struct DetailMediaCell: View {
         // cannot cancel the image load that is now visible in TweetDetailView.
         let loadId = Self.imageLoadId(for: attachment)
         print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
+
+        if updateImageFromMemoryCache() {
+            print("DEBUG: [TweetDetailView] Found memory cached image for \(loadId)")
+            startOriginalImageLoad(url: url, baseUrl: baseUrl)
+            return
+        }
         
         // First, try to get cached image immediately (disk check is OK in async context)
         if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
@@ -565,10 +612,17 @@ struct DetailMediaCell: View {
             startOriginalImageLoad(url: url, baseUrl: baseUrl)
             return
         }
+
+        if DetailImageLoadRegistry.activeCompressedLoads.contains(loadId) {
+            print("♻️ [TweetDetailView] Waiting for shared detail image load \(loadId)")
+            loading = true
+            return
+        }
         
         // If no cached image, start loading with global manager
         print("DEBUG: [TweetDetailView] Starting network load for \(loadId)")
         loading = true
+        DetailImageLoadRegistry.activeCompressedLoads.insert(loadId)
         
         // Detail-visible images should outrank preload/background image work.
         GlobalImageLoadManager.shared.loadImageCriticalPriority(
@@ -578,10 +632,19 @@ struct DetailMediaCell: View {
             baseUrl: baseUrl
         ) { loadedImage in
             print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
+            DetailImageLoadRegistry.activeCompressedLoads.remove(loadId)
             // Completion is already @MainActor, update state immediately without additional Task wrapper
             // The extra Task wrapper was causing a delay in UI updates, making spinners stick
             self.image = loadedImage
             self.loading = false
+
+            if loadedImage != nil {
+                NotificationCenter.default.post(
+                    name: .imageCached,
+                    object: nil,
+                    userInfo: ["avatarId": attachment.mid]
+                )
+            }
             
             // ✅ Load original image in background and replace compressed cache
             // This ensures detail view uses the highest quality image

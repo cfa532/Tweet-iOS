@@ -80,6 +80,8 @@ class GlobalImageLoadManager: ObservableObject {
     private var activeLoads: [String: Task<Void, Never>] = [:]
     private var activeLoadPriorities: [String: ImageLoadingPriority] = [:]
     private var activeLoadWaiters: [String: [ImageLoadRequest]] = [:]
+    private var activeLoadKeyById: [String: String] = [:]
+    private var activeLoadIdByKey: [String: String] = [:]
     private var pendingRequests: [ImageLoadRequest] = []
     private var completedRequests: Set<String> = []
     private var retryCounts: [String: Int] = [:] // Track retry attempts per request
@@ -117,6 +119,9 @@ class GlobalImageLoadManager: ObservableObject {
         }
         activeLoads.removeAll()
         activeLoadPriorities.removeAll()
+        activeLoadWaiters.removeAll()
+        activeLoadKeyById.removeAll()
+        activeLoadIdByKey.removeAll()
 
         pendingRequests.removeAll()
 
@@ -204,6 +209,27 @@ class GlobalImageLoadManager: ObservableObject {
             }
             return
         }
+
+        // Requests from feed/detail/fullscreen use different UI ids, but the
+        // underlying image is the same attachment. Join the active media load
+        // instead of creating a second GlobalImageLoadManager task.
+        if let key = imageCoalescingKey(for: request),
+           let activeId = activeLoadIdByKey[key],
+           activeId != request.id,
+           activeLoads[activeId] != nil {
+            let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: request.attachment)
+            if let cachedImage = cachedImage {
+                request.completion(cachedImage)
+            } else {
+                activeLoadWaiters[activeId, default: []].append(request)
+                if let activePriority = activeLoadPriorities[activeId],
+                   request.priority.rawValue > activePriority.rawValue {
+                    activeLoadPriorities[activeId] = request.priority
+                }
+                print("♻️ [IMAGE LOAD] Joining active load [\(request.priority)]: \(request.id) -> \(activeId)")
+            }
+            return
+        }
         
         // If image reappears and we haven't completed it successfully, reset retry count
         // This allows images to be retried when they come back into view
@@ -250,11 +276,21 @@ class GlobalImageLoadManager: ObservableObject {
     
     /// Cancel a specific image load request
     func cancelLoad(id: String) {
-        // Cancel active load
-        activeLoads[id]?.cancel()
-        activeLoads.removeValue(forKey: id)
-        activeLoadPriorities.removeValue(forKey: id)
-        activeLoadWaiters.removeValue(forKey: id)
+        let removedWaiters = removeWaitingRequests(id: id)
+        if removedWaiters > 0 {
+            print("DEBUG: [GlobalImageLoadManager] Removed \(removedWaiters) waiting image request(s) for: \(id)")
+        }
+
+        // Cancel active load only when no other UI request is attached to it.
+        if let activeTask = activeLoads[id] {
+            if let waiters = activeLoadWaiters[id], !waiters.isEmpty {
+                print("DEBUG: [GlobalImageLoadManager] Keeping active image load \(id) for \(waiters.count) joined request(s)")
+            } else {
+                activeTask.cancel()
+                activeLoadWaiters.removeValue(forKey: id)
+                clearActiveLoadState(for: id)
+            }
+        }
 
         // Cancel any scheduled retry
         if scheduledRetries[id] != nil {
@@ -374,6 +410,8 @@ class GlobalImageLoadManager: ObservableObject {
         activeLoads.removeAll()
         activeLoadPriorities.removeAll()
         activeLoadWaiters.removeAll()
+        activeLoadKeyById.removeAll()
+        activeLoadIdByKey.removeAll()
         print("DEBUG: [GlobalImageLoadManager] Cancelled \(activeLoads.count) active loads")
 
         // Clear all pending requests
@@ -434,11 +472,44 @@ class GlobalImageLoadManager: ObservableObject {
     
     // MARK: - Private Methods
 
+    private func imageCoalescingKey(for request: ImageLoadRequest) -> String? {
+        request.attachment.mid.isEmpty ? nil : request.attachment.mid
+    }
+
+    private func clearActiveLoadState(for id: String) {
+        activeLoads.removeValue(forKey: id)
+        activeLoadPriorities.removeValue(forKey: id)
+        if let key = activeLoadKeyById.removeValue(forKey: id),
+           activeLoadIdByKey[key] == id {
+            activeLoadIdByKey.removeValue(forKey: key)
+        }
+    }
+
+    @discardableResult
+    private func removeWaitingRequests(id: String) -> Int {
+        var removed = 0
+        for activeId in Array(activeLoadWaiters.keys) {
+            let original = activeLoadWaiters[activeId] ?? []
+            let filtered = original.filter { $0.id != id }
+            removed += original.count - filtered.count
+            if filtered.isEmpty {
+                activeLoadWaiters.removeValue(forKey: activeId)
+            } else {
+                activeLoadWaiters[activeId] = filtered
+            }
+        }
+        return removed
+    }
+
     private func completeRequest(_ request: ImageLoadRequest, with image: UIImage?) {
         let waiters = activeLoadWaiters.removeValue(forKey: request.id) ?? []
         request.completion(image)
         for waiter in waiters {
             waiter.completion(image)
+            if image != nil {
+                completedRequests.insert(waiter.id)
+                retryCounts.removeValue(forKey: waiter.id)
+            }
         }
     }
     
@@ -512,16 +583,14 @@ class GlobalImageLoadManager: ObservableObject {
                 await MainActor.run {
                     guard !Task.isCancelled else {
                         self.activeLoadWaiters.removeValue(forKey: request.id)
-                        self.activeLoads.removeValue(forKey: request.id)
-                        self.activeLoadPriorities.removeValue(forKey: request.id)
+                        self.clearActiveLoadState(for: request.id)
                         self.updateStatistics()
                         self.processNextPendingRequest()
                         return
                     }
                     self.completeRequest(request, with: cachedImage)
                     self.completedRequests.insert(request.id)
-                    self.activeLoads.removeValue(forKey: request.id)
-                    self.activeLoadPriorities.removeValue(forKey: request.id)
+                    self.clearActiveLoadState(for: request.id)
                     self.updateStatistics()
                     self.processNextPendingRequest()
                 }
@@ -537,8 +606,7 @@ class GlobalImageLoadManager: ObservableObject {
                 guard !Task.isCancelled else {
                     print("DEBUG: [GlobalImageLoadManager] Task cancelled for \(request.id) - skipping completion/retry")
                     self.activeLoadWaiters.removeValue(forKey: request.id)
-                    self.activeLoads.removeValue(forKey: request.id)
-                    self.activeLoadPriorities.removeValue(forKey: request.id)
+                    self.clearActiveLoadState(for: request.id)
                     self.updateStatistics()
                     self.processNextPendingRequest()
                     return
@@ -566,8 +634,7 @@ class GlobalImageLoadManager: ObservableObject {
                     // Always call completion on real failures so UI can update isLoading state.
                     self.completeRequest(request, with: nil)
                 }
-                self.activeLoads.removeValue(forKey: request.id)
-                self.activeLoadPriorities.removeValue(forKey: request.id)
+                self.clearActiveLoadState(for: request.id)
                 self.updateStatistics()
                 self.processNextPendingRequest()
             }
@@ -575,12 +642,16 @@ class GlobalImageLoadManager: ObservableObject {
         
         activeLoads[request.id] = task
         activeLoadPriorities[request.id] = request.priority
+        if let key = imageCoalescingKey(for: request) {
+            activeLoadKeyById[request.id] = key
+            activeLoadIdByKey[key] = request.id
+        }
         updateStatistics()
     }
     
     private func loadImageFromNetwork(_ request: ImageLoadRequest) async -> UIImage? {
         let startTime = Date()
-        print("📥 [IMAGE LOAD] Starting [\(request.priority)]: \(request.url.lastPathComponent)")
+        print("📥 [IMAGE LOAD] Starting [\(request.priority)] \(request.id): \(request.url.lastPathComponent)")
 
         let image = await ImageCacheManager.shared.loadAndCacheImage(
             from: request.url,
@@ -594,7 +665,7 @@ class GlobalImageLoadManager: ObservableObject {
             await MainActor.run {
                 request.onProgress(1.0)
             }
-            print("✅ [IMAGE LOAD] Completed [\(request.priority)] in \(String(format: "%.1f", elapsed))s: \(request.url.lastPathComponent)")
+            print("✅ [IMAGE LOAD] Completed [\(request.priority)] \(request.id) in \(String(format: "%.1f", elapsed))s: \(request.url.lastPathComponent)")
             return image
         }
 
@@ -975,6 +1046,9 @@ class GlobalImageLoadManager: ObservableObject {
         }
         activeLoads.removeAll()
         activeLoadPriorities.removeAll()
+        activeLoadWaiters.removeAll()
+        activeLoadKeyById.removeAll()
+        activeLoadIdByKey.removeAll()
 
         // Cancel all scheduled retries
         for workItem in scheduledRetries.values {
