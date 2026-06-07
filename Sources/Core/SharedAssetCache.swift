@@ -122,9 +122,19 @@ class SharedAssetCache: ObservableObject {
     private let maxCacheSize = Constants.MAX_ASSET_CACHE_SIZE
     private let maxPlayerCacheSize = Constants.MAX_PLAYER_CACHE_SIZE
     private let cacheExpirationInterval: TimeInterval = Constants.CACHE_EXPIRATION_SECONDS
+    private let feedMaxVideoDimension: CGFloat = 2560
 
     /// Truncate a mediaID to 8 chars for log readability.
     private func shortMID(_ id: String) -> String { id.count > 8 ? String(id.prefix(8)) : id }
+
+    private func applyFeedVideoDecodeLimit(to item: AVPlayerItem) {
+        // Feed/preload players should comfortably allow 1080p and QHD, but avoid
+        // inline 4K-class decode pressure. Fullscreen creates uncapped items.
+        item.preferredMaximumResolution = CGSize(
+            width: feedMaxVideoDimension,
+            height: feedMaxVideoDimension
+        )
+    }
     
     // MARK: - Player Creation Deduplication
     private var activeCreationTasks: [String: Task<AVPlayer, Error>] = [:] // mediaID -> creation task (for cancellation)
@@ -1261,6 +1271,7 @@ class SharedAssetCache: ObservableObject {
         // Let the player creation proceed and fail naturally if truly unplayable.
         
         let playerItem = AVPlayerItem(asset: asset)
+        applyFeedVideoDecodeLimit(to: playerItem)
         let player = AVPlayer(playerItem: playerItem)
 
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
@@ -1475,6 +1486,7 @@ class SharedAssetCache: ObservableObject {
         
         // Create CachingPlayerItem using HLS initializer (handles LocalHTTPServer internally)
         let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
+        applyFeedVideoDecodeLimit(to: cachingPlayerItem)
         
         
         // Create and store delegate for caching events
@@ -1554,6 +1566,7 @@ class SharedAssetCache: ObservableObject {
 
             LocalHTTPServer.shared.start()
             let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: extractedMediaID, avUrlAssetOptions: nil)
+            applyFeedVideoDecodeLimit(to: cachingPlayerItem)
             
             // Create delegate but DON'T cache it (singleton manages its own lifecycle)
             let delegate = CachingPlayerItemDelegateImpl()
@@ -1575,6 +1588,7 @@ class SharedAssetCache: ObservableObject {
             
             let asset = AVURLAsset(url: localURL)
             let playerItem = AVPlayerItem(asset: asset)
+            applyFeedVideoDecodeLimit(to: playerItem)
             
             return playerItem
         }
