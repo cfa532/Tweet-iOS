@@ -264,6 +264,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var timeObserverToken: Any?
     /// The player that owns timeObserverToken — must remove from the same instance.
     private weak var timeObserverPlayer: AVPlayer?
+    private var timerLabelVideoMid: String?
 
     /// Frame capture throttle
     private var lastFrameCaptureAt: Date = .distantPast
@@ -2813,8 +2814,17 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     // MARK: - Video Timer
 
     private func setupVideoTimer(videoMid: String) {
+        let isNewTimerVideo = timerLabelVideoMid != videoMid
+        timerLabelVideoMid = videoMid
         timerLabel.isHidden = false
-        timerLabel.text = "0:00"
+
+        if updateTimerLabelIfPossible(videoMid: videoMid) {
+            return
+        }
+
+        if isNewTimerVideo || timerLabel.text?.isEmpty != false {
+            timerLabel.text = "0:00"
+        }
     }
 
     /// Attach a periodic time observer to track visible playback progress and
@@ -2867,16 +2877,40 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func updateTimerLabel(currentTime: CMTime) {
-        guard let item = player?.currentItem else { return }
+        guard let videoMid = attachment?.mid else { return }
+        updateTimerLabelIfPossible(videoMid: videoMid, currentTime: currentTime)
+    }
+
+    @discardableResult
+    private func updateTimerLabelIfPossible(videoMid: String, currentTime: CMTime? = nil) -> Bool {
+        guard let item = player?.currentItem else { return false }
         let duration = item.duration
         let durationSeconds = seconds(from: duration)
-        guard duration.isValid, !duration.isIndefinite, durationSeconds > 0 else { return }
+        guard duration.isValid, !duration.isIndefinite, durationSeconds > 0 else { return false }
 
-        let remaining = max(0, durationSeconds - seconds(from: currentTime))
+        let displayTime: CMTime
+        if let currentTime,
+           currentTime.isValid,
+           currentTime.seconds.isFinite {
+            displayTime = currentTime
+        } else {
+            let playerTime = player?.currentTime() ?? .invalid
+            if playerTime.isValid,
+               playerTime.seconds.isFinite {
+                displayTime = playerTime
+            } else if let resumeTime = FeedVideoResumeStore.resumeTime(for: videoMid, player: player) {
+                displayTime = resumeTime
+            } else {
+                return false
+            }
+        }
+
+        let remaining = max(0, durationSeconds - seconds(from: displayTime))
         let minutes = Int(remaining) / 60
         let seconds = Int(remaining) % 60
         timerLabel.text = "\(minutes):\(String(format: "%02d", seconds))"
         setNeedsLayout()
+        return true
     }
 
     // scheduleTimerHide removed — timer label stays visible while video is loaded.
@@ -3803,6 +3837,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         replayButton.isHidden = true
         muteButton.isHidden = true
         timerLabel.isHidden = true
+        timerLabelVideoMid = nil
         fullscreenOverlay.isHidden = true
         fullscreenSpinner.stopAnimating()
 

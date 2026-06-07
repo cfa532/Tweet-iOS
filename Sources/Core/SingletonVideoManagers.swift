@@ -1162,6 +1162,24 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             return
         }
 
+        let bufferedAhead = bufferedTimeAhead(for: playerItem, player: player)
+        let keepUp = playerItem.isPlaybackLikelyToKeepUp
+        let requiredBuffer = keepUp ? 2.0 : 5.0
+        if playerItem.status == .readyToPlay,
+           !isSeekingToRestoredPosition,
+           player.timeControlStatus != .playing,
+           bufferedAhead >= requiredBuffer {
+            playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            player.automaticallyWaitsToMinimizeStalling = false
+            print("🎬 [FullScreenVideoManager] retry buffer nudge \(shortMID(currentVideoMid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(playerDiagnostic(player, item: playerItem))")
+            player.play()
+            isPlaying = true
+            isBuffering = false
+            wasPlayingBeforeWaiting = false
+            startRetryMonitoring()
+            return
+        }
+
         // If player is stuck (not playing and rate is 0), force a seek to trigger reload
         if player.rate == 0 && player.timeControlStatus != .playing {
             let currentTime = player.currentTime()
@@ -1340,16 +1358,21 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }()
 
         if let target = seekTarget {
+            isSeekingToRestoredPosition = true
             print("🎬 [FullScreenVideoManager] Seeking \(shortMID(mid)) to \(String(format: "%.2f", target.seconds))s before play")
             self.singletonPlayer?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 guard finished, let self = self else { return }
                 DispatchQueue.main.async {
+                    self.hasRestoredPosition = true
+                    self.isSeekingToRestoredPosition = false
                     print("🎬 [FullScreenVideoManager] Seek finished \(self.shortMID(mid)): \(self.playerDiagnostic(self.singletonPlayer, item: playerItem))")
                     self.startFullscreenPlayback(player: self.singletonPlayer, item: playerItem, log: "after seek to \(target.seconds)s")
                     print("▶️ [FullScreenVideoManager] Playing after seek to \(target.seconds)s")
                 }
             }
         } else {
+            hasRestoredPosition = true
+            isSeekingToRestoredPosition = false
             startFullscreenPlayback(player: singletonPlayer, item: playerItem, log: "immediate")
             print("▶️ [FullScreenVideoManager] Playing immediately (no seek needed)")
         }
@@ -2527,9 +2550,20 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 return
             }
 
+            let bufferedAhead = self.bufferedTimeAhead(for: item, player: player)
+            let keepUp = item.isPlaybackLikelyToKeepUp
+            let requiredBuffer = keepUp ? 2.0 : 5.0
+            guard bufferedAhead >= requiredBuffer else {
+                self.isBuffering = true
+                self.detailStartupRecoveryTask = nil
+                print("📱 [DetailVideoManager] recovery waiting for buffer \(self.shortMID(mid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(self.detailDiagnostic(player, item: item))")
+                self.scheduleDetailStartupRecovery(for: item, mid: mid)
+                return
+            }
+
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             self.currentPlayer?.automaticallyWaitsToMinimizeStalling = false
-            print("📱 [DetailVideoManager] recovery play nudge \(self.shortMID(mid)): \(self.detailDiagnostic(player, item: item))")
+            print("📱 [DetailVideoManager] recovery play nudge \(self.shortMID(mid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(self.detailDiagnostic(player, item: item))")
             self.currentPlayer?.play()
 
             try? await Task.sleep(nanoseconds: 1_500_000_000)

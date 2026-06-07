@@ -1132,15 +1132,50 @@ struct SingletonVideoPlayerView: View {
 
     private func shouldShowAttachedItemSpinner(for player: AVPlayer) -> Bool {
         guard manager.currentVideoMid == mid,
-              player.currentItem != nil else {
+              let item = player.currentItem else {
+            return false
+        }
+
+        guard player.timeControlStatus != .playing else {
             return false
         }
 
         if manager.isBuffering {
-            return player.timeControlStatus != .playing
+            return true
         }
 
-        return !manager.isItemReady && player.rate == 0 && player.timeControlStatus != .playing
+        if item.status != .readyToPlay || player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            return true
+        }
+
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        if manager.isPlaying && !item.isPlaybackLikelyToKeepUp && bufferedAhead < 0.5 {
+            return true
+        }
+
+        return !manager.isItemReady
+    }
+
+    private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+        let currentSeconds = CMTimeGetSeconds(player.currentTime())
+        guard currentSeconds.isFinite else { return 0 }
+
+        var bestBufferAhead: Double = 0
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = CMTimeGetSeconds(range.start)
+            let duration = CMTimeGetSeconds(range.duration)
+            guard start.isFinite, duration.isFinite else { continue }
+
+            let end = start + duration
+            if currentSeconds >= start && currentSeconds <= end {
+                return max(0, end - currentSeconds)
+            } else if end > currentSeconds {
+                bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
+            }
+        }
+
+        return max(0, bestBufferAhead)
     }
 
     private var loadingSpinnerOverlay: some View {
