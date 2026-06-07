@@ -286,8 +286,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
 
             print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
 
-            // Always allow playback when we receive a direct command for this instance
-            // The SharedVideoPlayerManager has already ensured only one video plays at a time
+            // Always allow playback when we receive a direct command for this instance.
+            // VideoPlaybackCoordinator owns the single-primary decision.
             shouldAutoPlay = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in
@@ -721,7 +721,8 @@ extension MediaCell {
 
         print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
 
-        // Always allow playback when we receive a direct command for this instance
+        // Always allow playback when we receive a direct command for this instance.
+        // VideoPlaybackCoordinator owns the single-primary decision.
         shouldAutoPlay = true
     }
 

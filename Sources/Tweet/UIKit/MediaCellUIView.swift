@@ -293,6 +293,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var adaptiveRebufferCount = 0
     private var lastAdaptiveRebufferDate: Date = .distantPast
     private var lastAdaptiveRebufferPositionBucket: Int = -1
+    private var lastAdaptiveRebufferLogKey: String?
+    private var lastAdaptiveRebufferLogDate: Date = .distantPast
+    private var lastBufferRecoveredLogDate: Date = .distantPast
+    private var lastBufferKeepUpWaitingLogDate: Date = .distantPast
     private var pendingRecoverySeekTime: CMTime?
     private var lastLoggedTimeControlStatus: AVPlayer.TimeControlStatus?
     private var lastLoggedTimeControlBucket: Int = -1
@@ -1484,7 +1488,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         applyAdaptiveBufferPolicy(to: player)
 
         let target = adaptiveResumeBufferTarget(for: player)
-        print("\(logPrefix) 🧭 adaptive buffering (\(reason)): stall=\(adaptiveRebufferCount), target=\(String(format: "%.1f", target))s")
+        let logKey = "\(reason)|\(adaptiveRebufferCount)|\(Int((target * 10).rounded()))"
+        if logKey != lastAdaptiveRebufferLogKey || now.timeIntervalSince(lastAdaptiveRebufferLogDate) >= 8.0 {
+            print("\(logPrefix) 🧭 adaptive buffering (\(reason)): stall=\(adaptiveRebufferCount), target=\(String(format: "%.1f", target))s")
+            lastAdaptiveRebufferLogKey = logKey
+            lastAdaptiveRebufferLogDate = now
+        }
     }
 
     private func seconds(from time: CMTime) -> Double {
@@ -2682,10 +2691,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     keepUp: true
                 ) else {
                     self.applyAdaptiveBufferPolicy(to: player)
-                    print("\(self.logPrefix) ⏳ buffer keep-up waiting for adaptive target (buffered=\(String(format: "%.1f", bufferedAhead))s, target=\(String(format: "%.1f", self.adaptiveResumeBufferTarget(for: player)))s)")
+                    let now = Date()
+                    if now.timeIntervalSince(self.lastBufferKeepUpWaitingLogDate) >= 5.0 {
+                        print("\(self.logPrefix) ⏳ buffer keep-up waiting for adaptive target (buffered=\(String(format: "%.1f", bufferedAhead))s, target=\(String(format: "%.1f", self.adaptiveResumeBufferTarget(for: player)))s)")
+                        self.lastBufferKeepUpWaitingLogDate = now
+                    }
                     return
                 }
-                print("\(self.logPrefix) 🔄 buffer recovered — resuming at \(String(format: "%.1f", player.currentTime().seconds))s")
+                let now = Date()
+                if now.timeIntervalSince(self.lastBufferRecoveredLogDate) >= 2.0 {
+                    print("\(self.logPrefix) 🔄 buffer recovered — resuming at \(String(format: "%.1f", player.currentTime().seconds))s")
+                    self.lastBufferRecoveredLogDate = now
+                }
                 self.applyAdaptiveBufferPolicy(to: player)
                 self.playPlayerWithResumeIfNeeded(player, reason: "bufferRecovered") { [weak self] player in
                     guard let self else { return }
@@ -3783,6 +3800,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         adaptiveRebufferCount = 0
         lastAdaptiveRebufferDate = .distantPast
         lastAdaptiveRebufferPositionBucket = -1
+        lastAdaptiveRebufferLogKey = nil
+        lastAdaptiveRebufferLogDate = .distantPast
+        lastBufferRecoveredLogDate = .distantPast
+        lastBufferKeepUpWaitingLogDate = .distantPast
         stillFrameRecoveryAttemptCount = 0
         playbackRecoveryLastBufferedAhead = 0
         playbackRecoveryStagnantCount = 0

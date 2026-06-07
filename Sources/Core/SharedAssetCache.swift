@@ -105,6 +105,18 @@ class SharedAssetCache: ObservableObject {
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var preloadedThumbnailMids: Set<String> = []
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
+
+    private enum VideoLoadKind: Hashable {
+        case asset
+        case player
+    }
+
+    private struct VideoLoadTicket: Hashable {
+        let mediaID: String
+        let kind: VideoLoadKind
+    }
+
+    private var activeVideoLoadTickets: Set<VideoLoadTicket> = []
     
     // MARK: - Retry Management (ID-based to avoid memory leaks)
     private var videoRetryCount: [String: Int] = [:] // mediaID -> retry count
@@ -134,6 +146,50 @@ class SharedAssetCache: ObservableObject {
             width: feedMaxVideoDimension,
             height: feedMaxVideoDimension
         )
+    }
+
+    private func beginVideoLoad(mediaID: String, kind: VideoLoadKind) {
+        let ticket = VideoLoadTicket(mediaID: mediaID, kind: kind)
+        guard activeVideoLoadTickets.insert(ticket).inserted else { return }
+        VideoLoadingManager.shared.videoLoadStarted()
+    }
+
+    private func finishVideoLoad(mediaID: String, kind: VideoLoadKind) {
+        let ticket = VideoLoadTicket(mediaID: mediaID, kind: kind)
+        guard activeVideoLoadTickets.remove(ticket) != nil else { return }
+        VideoLoadingManager.shared.videoLoadCompleted()
+    }
+
+    private func finishAllVideoLoads() {
+        let count = activeVideoLoadTickets.count
+        activeVideoLoadTickets.removeAll()
+        for _ in 0..<count {
+            VideoLoadingManager.shared.videoLoadCompleted()
+        }
+    }
+
+    private func cancelAssetLoadTask(for mediaID: String) {
+        if let task = loadingTasks.removeValue(forKey: mediaID) {
+            task.cancel()
+            finishVideoLoad(mediaID: mediaID, kind: .asset)
+        }
+    }
+
+    private func cancelPreloadTaskEntry(for mediaID: String) {
+        if let task = preloadTasks.removeValue(forKey: mediaID) {
+            task.cancel()
+        }
+    }
+
+    private func cancelPlayerCreationTasks(for mediaID: String) {
+        if let task = inFlightPlayerCreations.removeValue(forKey: mediaID) {
+            task.cancel()
+            finishVideoLoad(mediaID: mediaID, kind: .player)
+        }
+        if let task = activeCreationTasks.removeValue(forKey: mediaID) {
+            task.cancel()
+            finishVideoLoad(mediaID: mediaID, kind: .player)
+        }
     }
     
     // MARK: - Player Creation Deduplication
@@ -221,19 +277,17 @@ class SharedAssetCache: ObservableObject {
         let hasCachedPlayer = playerCache[mediaID] != nil
         
         // Cancel loading task if exists and no cache is available
-        if let loadingTask = loadingTasks[mediaID] {
+        if loadingTasks[mediaID] != nil {
             if !hasCachedAsset && !hasCachedPlayer {
-                loadingTask.cancel()
-                loadingTasks.removeValue(forKey: mediaID)
+                cancelAssetLoadTask(for: mediaID)
             } else {
             }
         }
         
         // Cancel preload task if exists and no cache is available
-        if let preloadTask = preloadTasks[mediaID] {
+        if preloadTasks[mediaID] != nil {
             if !hasCachedAsset && !hasCachedPlayer {
-                preloadTask.cancel()
-                preloadTasks.removeValue(forKey: mediaID)
+                cancelPreloadTaskEntry(for: mediaID)
             } else {
             }
         }
@@ -416,28 +470,13 @@ class SharedAssetCache: ObservableObject {
             }
 
             // Cancel loading tasks regardless of cache status
-            if let loadingTask = loadingTasks[mediaID] {
-                loadingTask.cancel()
-                loadingTasks.removeValue(forKey: mediaID)
-            }
+            cancelAssetLoadTask(for: mediaID)
 
             // Cancel preload tasks
-            if let preloadTask = preloadTasks[mediaID] {
-                preloadTask.cancel()
-                preloadTasks.removeValue(forKey: mediaID)
-            }
+            cancelPreloadTaskEntry(for: mediaID)
 
             // Cancel in-flight player creation dedup task
-            if let inFlightTask = inFlightPlayerCreations[mediaID] {
-                inFlightTask.cancel()
-                inFlightPlayerCreations.removeValue(forKey: mediaID)
-            }
-
-            // Cancel active creation task
-            if let creationTask = activeCreationTasks[mediaID] {
-                creationTask.cancel()
-                activeCreationTasks.removeValue(forKey: mediaID)
-            }
+            cancelPlayerCreationTasks(for: mediaID)
 
             // Stop network usage for CachingPlayerItem if it exists
             if let cachingPlayerItem = cachingPlayerItems[mediaID] {
@@ -521,11 +560,16 @@ class SharedAssetCache: ObservableObject {
             }
         }
         
-        // Notify VideoLoadingManager that a load is starting
-        VideoLoadingManager.shared.videoLoadStarted()
+        beginVideoLoad(mediaID: cacheKey, kind: .asset)
         
         // Create new loading task
         let task = Task<AVAsset, Error> {
+            defer {
+                Task { @MainActor in
+                    self.finishVideoLoad(mediaID: cacheKey, kind: .asset)
+                }
+            }
+
             // Check cancellation before starting
             try Task.checkCancellation()
             
@@ -621,8 +665,6 @@ class SharedAssetCache: ObservableObject {
                 // Save cache metadata to persist across app restarts
                 self.saveCacheMetadata()
 
-                // Notify VideoLoadingManager that the load completed
-                VideoLoadingManager.shared.videoLoadCompleted()
             }
             
             return asset
@@ -651,8 +693,6 @@ class SharedAssetCache: ObservableObject {
                     consecutiveNetworkFailures = 0 // Reset counter after cleanup
                 }
 
-                // Notify VideoLoadingManager that the load failed
-                VideoLoadingManager.shared.videoLoadCompleted()
             }
 
             throw error
@@ -803,22 +843,9 @@ class SharedAssetCache: ObservableObject {
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerMids.remove(mediaID)
 
-        if let preloadTask = preloadTasks[mediaID] {
-            preloadTask.cancel()
-            preloadTasks.removeValue(forKey: mediaID)
-        }
-        if let loadingTask = loadingTasks[mediaID] {
-            loadingTask.cancel()
-            loadingTasks.removeValue(forKey: mediaID)
-        }
-        if let inFlightTask = inFlightPlayerCreations[mediaID] {
-            inFlightTask.cancel()
-            inFlightPlayerCreations.removeValue(forKey: mediaID)
-        }
-        if let creationTask = activeCreationTasks[mediaID] {
-            creationTask.cancel()
-            activeCreationTasks.removeValue(forKey: mediaID)
-        }
+        cancelPreloadTaskEntry(for: mediaID)
+        cancelAssetLoadTask(for: mediaID)
+        cancelPlayerCreationTasks(for: mediaID)
         if let cachingPlayerItem = cachingPlayerItems[mediaID] {
             cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             cachingPlayerItem.asset.cancelLoading()
@@ -859,18 +886,9 @@ class SharedAssetCache: ObservableObject {
 
         var releasedPlayers = 0
         for mediaID in mediaIDsToCancel {
-            if let task = loadingTasks.removeValue(forKey: mediaID) {
-                task.cancel()
-            }
-            if let task = preloadTasks.removeValue(forKey: mediaID) {
-                task.cancel()
-            }
-            if let task = inFlightPlayerCreations.removeValue(forKey: mediaID) {
-                task.cancel()
-            }
-            if let task = activeCreationTasks.removeValue(forKey: mediaID) {
-                task.cancel()
-            }
+            cancelAssetLoadTask(for: mediaID)
+            cancelPreloadTaskEntry(for: mediaID)
+            cancelPlayerCreationTasks(for: mediaID)
             if let item = cachingPlayerItems.removeValue(forKey: mediaID) {
                 item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                 item.asset.cancelLoading()
@@ -903,17 +921,17 @@ class SharedAssetCache: ObservableObject {
 
         // 0. CRITICAL: Cancel any active loading/downloading tasks FIRST
         // This stops ongoing segment downloads that consume memory
-        if let loadingTask = loadingTasks[mediaID] {
-            loadingTask.cancel()
-            loadingTasks.removeValue(forKey: mediaID)
+        if loadingTasks[mediaID] != nil {
+            cancelAssetLoadTask(for: mediaID)
             print("🚫 [IMMEDIATE RELEASE] Canceled active loading task for \(mediaID)")
         }
 
-        if let preloadTask = preloadTasks[mediaID] {
-            preloadTask.cancel()
-            preloadTasks.removeValue(forKey: mediaID)
+        if preloadTasks[mediaID] != nil {
+            cancelPreloadTaskEntry(for: mediaID)
             print("🚫 [IMMEDIATE RELEASE] Canceled preload task for \(mediaID)")
         }
+
+        cancelPlayerCreationTasks(for: mediaID)
 
         // Stop network usage on CachingPlayerItem if it exists
         if let cachingPlayerItem = cachingPlayerItems[mediaID] {
@@ -1013,9 +1031,9 @@ class SharedAssetCache: ObservableObject {
         diskCacheStatus.removeValue(forKey: mediaID)
 
         // Cancel any pending loading tasks
-        if let task = loadingTasks.removeValue(forKey: mediaID) {
-            task.cancel()
-        }
+        cancelAssetLoadTask(for: mediaID)
+        cancelPreloadTaskEntry(for: mediaID)
+        cancelPlayerCreationTasks(for: mediaID)
 
         // Cancel active LocalHTTPServer downloads for this mediaID BEFORE deleting disk cache.
         // Without this, in-flight segment writes fail with "file not found" (directory deleted
@@ -1131,9 +1149,9 @@ class SharedAssetCache: ObservableObject {
             self.managePlayerCacheSize(reserveSlots: 1)
         }
 
-        // CRITICAL: Notify VideoLoadingManager that a load is starting
-        await MainActor.run {
-            VideoLoadingManager.shared.videoLoadStarted()
+        beginVideoLoad(mediaID: mediaID, kind: .player)
+        defer {
+            finishVideoLoad(mediaID: mediaID, kind: .player)
         }
         
         // Use MediaType to determine video type if available, otherwise fall back to URL-based detection
@@ -1151,9 +1169,7 @@ class SharedAssetCache: ObservableObject {
             try Task.checkCancellation()
             do {
                 let player = try await createCachingPlayerWithRetry(for: url, mediaID: mediaID, tweetId: tweetId)
-                // Notify success
                 await MainActor.run {
-                    VideoLoadingManager.shared.videoLoadCompleted()
                     // Clear retry count on success
                     videoRetryCount.removeValue(forKey: mediaID)
                     // ✅ RECORD SUCCESS TO BLACKLIST
@@ -1161,10 +1177,8 @@ class SharedAssetCache: ObservableObject {
                 }
                 return player
             } catch {
-                // Notify failure
                 let isCancellation = (error as NSError).code == NSURLErrorCancelled || error is CancellationError
                 await MainActor.run {
-                    VideoLoadingManager.shared.videoLoadCompleted()
                     if !isCancellation {
                         BlackList.shared.recordFailure(MimeiId(mediaID))
                     }
@@ -1176,19 +1190,15 @@ class SharedAssetCache: ObservableObject {
             try Task.checkCancellation()
             do {
                 let player = try await createProgressivePlayerWithRetry(for: url, mediaID: mediaID, tweetId: tweetId)
-                // Notify success
                 await MainActor.run {
-                    VideoLoadingManager.shared.videoLoadCompleted()
                     // Clear retry count on success
                     videoRetryCount.removeValue(forKey: mediaID)
                     BlackList.shared.recordSuccess(MimeiId(mediaID))
                 }
                 return player
             } catch {
-                // Notify failure
                 let isCancellation = (error as NSError).code == NSURLErrorCancelled || error is CancellationError
                 await MainActor.run {
-                    VideoLoadingManager.shared.videoLoadCompleted()
                     if !isCancellation {
                         BlackList.shared.recordFailure(MimeiId(mediaID))
                     }
@@ -1723,13 +1733,7 @@ class SharedAssetCache: ObservableObject {
         // Clear asset cache
         assetCache.removeAll()
         
-        // Clear loading tasks
-        loadingTasks.values.forEach { $0.cancel() }
-        loadingTasks.removeAll()
-        
-        // Clear preload tasks
-        preloadTasks.values.forEach { $0.cancel() }
-        preloadTasks.removeAll()
+        cancelAllLoadingTasks()
         
         // Clear retry tasks
         for task in scheduledVideoRetries.values {
@@ -1757,17 +1761,23 @@ class SharedAssetCache: ObservableObject {
     
     /// Cancel all active loading tasks to free memory immediately
     @MainActor func cancelAllLoadingTasks() {
-        // Cancel all asset loading tasks
-        for (_, task) in loadingTasks {
+        for task in loadingTasks.values {
             task.cancel()
         }
         loadingTasks.removeAll()
-        
-        // Cancel all preload tasks
-        for (_, task) in preloadTasks {
+        for task in preloadTasks.values {
             task.cancel()
         }
         preloadTasks.removeAll()
+        for task in inFlightPlayerCreations.values {
+            task.cancel()
+        }
+        inFlightPlayerCreations.removeAll()
+        for task in activeCreationTasks.values {
+            task.cancel()
+        }
+        activeCreationTasks.removeAll()
+        finishAllVideoLoads()
         
         // Cancel all retry tasks
         for (_, task) in scheduledVideoRetries {
@@ -1780,17 +1790,7 @@ class SharedAssetCache: ObservableObject {
     /// Emergency cleanup during network failures
     @MainActor func handleNetworkFailureCleanup() {
 
-        // Cancel all active loading tasks
-        for (_, task) in loadingTasks {
-            task.cancel()
-        }
-        loadingTasks.removeAll()
-
-        // Cancel all preload tasks
-        for (_, task) in preloadTasks {
-            task.cancel()
-        }
-        preloadTasks.removeAll()
+        cancelAllLoadingTasks()
 
         // Cancel all retry tasks
         for (_, task) in scheduledVideoRetries {
@@ -2691,17 +2691,23 @@ class SharedAssetCache: ObservableObject {
         memoryMonitorTimer?.invalidate()
         memoryMonitorTimer = nil
         
-        // Cancel all loading tasks
-        for (_, task) in loadingTasks {
+        for task in loadingTasks.values {
             task.cancel()
         }
         loadingTasks.removeAll()
-        
-        // Cancel all preload tasks
-        for (_, task) in preloadTasks {
+        for task in preloadTasks.values {
             task.cancel()
         }
         preloadTasks.removeAll()
+        for task in inFlightPlayerCreations.values {
+            task.cancel()
+        }
+        inFlightPlayerCreations.removeAll()
+        for task in activeCreationTasks.values {
+            task.cancel()
+        }
+        activeCreationTasks.removeAll()
+        activeVideoLoadTickets.removeAll()
         
         // Pause and clean up all cached players
         for (_, player) in playerCache {
@@ -2766,8 +2772,7 @@ class SharedAssetCache: ObservableObject {
         assetCache.removeAll()
 
         // Cancel loading tasks to prevent memory usage during background
-        loadingTasks.removeAll()
-        preloadTasks.removeAll()
+        cancelAllLoadingTasks()
 
         // Clear resource loader delegates — they can retain URLSession/loading state
         resourceLoaderDelegates.removeAll()
@@ -2800,16 +2805,6 @@ class SharedAssetCache: ObservableObject {
         mediaIDsToCancel.subtract(protectedVisibleMids)
 
         cancelAllLoadingTasks()
-
-        for task in inFlightPlayerCreations.values {
-            task.cancel()
-        }
-        inFlightPlayerCreations.removeAll()
-
-        for task in activeCreationTasks.values {
-            task.cancel()
-        }
-        activeCreationTasks.removeAll()
 
         for item in cachingPlayerItems.values {
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
@@ -2866,8 +2861,7 @@ class SharedAssetCache: ObservableObject {
         assetCache.removeAll()
 
         // Clear loading tasks to force fresh loads
-        loadingTasks.removeAll()
-        preloadTasks.removeAll()
+        cancelAllLoadingTasks()
 
         // CRITICAL: Clear disk cache status so videos will reload fresh from network
         diskCacheStatus.removeAll()
