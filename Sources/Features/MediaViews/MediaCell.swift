@@ -186,8 +186,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             updateEffectiveBaseUrl()
 
             // MEMORY FIX: Mark video as visible to prevent eviction
-            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
-                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
+            if isVideoAttachment, attachment.getUrl(effectiveBaseUrl) != nil {
+                let mediaID = attachment.mid
                 SharedAssetCache.shared.markAsVisible(mediaID)
                 VideoStateCache.shared.markAsVisible(attachment.mid)
                 print("👁️ [MediaCell] Marked video as visible: \(attachment.mid) (mediaID: \(mediaID))")
@@ -230,8 +230,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
 
             // MEMORY FIX: Mark video as not visible when cell disappears
             // Cleanup is handled by background timer (every 10s) to preserve preloading
-            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
-                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
+            if isVideoAttachment, attachment.getUrl(effectiveBaseUrl) != nil {
+                let mediaID = attachment.mid
 
                 // Mark as not visible (allows cleanup after grace period)
                 SharedAssetCache.shared.markAsNotVisible(mediaID)
@@ -684,9 +684,9 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         // Clear all caches and force reload by toggling shouldLoadVideo
         print("🔄 [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
-        if let url = attachment.getUrl(effectiveBaseUrl) {
+        if attachment.getUrl(effectiveBaseUrl) != nil {
             // Clear player cache
-            SharedAssetCache.shared.removeInvalidPlayer(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
+            SharedAssetCache.shared.removeInvalidPlayer(for: attachment.mid)
             
             // Clear video state cache
             VideoStateCache.shared.clearCache(for: attachment.mid)
@@ -694,7 +694,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             // Clear asset cache
             Task {
                 await MainActor.run {
-                    SharedAssetCache.shared.clearAssetCache(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
+                    SharedAssetCache.shared.clearAssetCache(for: attachment.mid)
                     print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
                 }
             }

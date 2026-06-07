@@ -533,7 +533,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         prewarmTask?.cancel()
         prewarmTask = Task { @MainActor in
-            SharedAssetCache.shared.preloadAsset(for: url, tweetId: nil, mediaType: mediaType)
+            SharedAssetCache.shared.preloadAsset(for: url, mediaID: mediaID, tweetId: nil, mediaType: mediaType)
         }
     }
     
@@ -669,7 +669,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // No cached player - load video asynchronously
         Task.detached(priority: .userInitiated) {
             do {
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweetId, mediaType: mediaType)
+                let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: tweetId, mediaType: mediaType)
                 let playerItem = await AVPlayerItem(asset: asset)
                 
                 await MainActor.run {
@@ -2110,7 +2110,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         // No cached player — load asynchronously
         Task.detached(priority: .userInitiated) {
             do {
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid, mediaType: mediaType)
+                let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: mid, mediaType: mediaType)
                 let playerItem = await AVPlayerItem(asset: asset)
                 await MainActor.run {
                     guard self.loadGeneration == generation, self.currentVideoMid == mid else { return }
@@ -2476,7 +2476,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 // Create independent player with disk caching support
                 // Get the asset from SharedAssetCache (which uses CachingPlayerItem for HLS)
                 // but create our own independent player instance
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid)
+                let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: mid)
                 let playerItem = await AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 
@@ -3018,7 +3018,7 @@ class ChatVideoManager: ObservableObject {
         }
 
         do {
-            let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaType: attachment.type)
+            let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: attachment.mid, mediaType: attachment.type)
             chatVideoPlayers[messageId] = player
             chatSessionMessages[receiptId, default: Set<String>()].insert(messageId)
             return player

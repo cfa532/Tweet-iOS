@@ -1072,7 +1072,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             do {
                 try Task.checkCancellation()
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
-                    for: uniqueURL, tweetId: tweetId, mediaType: mediaType
+                    for: uniqueURL, mediaID: expectedMid, tweetId: tweetId, mediaType: mediaType
                 )
                 try Task.checkCancellation()
 

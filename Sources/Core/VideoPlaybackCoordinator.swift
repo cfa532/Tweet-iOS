@@ -1290,8 +1290,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         return videosToPreload
     }
 
-    /// Resolve the video URL and tweet ID for a VideoPlaybackInfo entry.
-    private func resolveVideoURL(_ video: VideoPlaybackInfo) -> (url: URL, tweetId: String, mediaType: MediaType)? {
+    /// Resolve the video URL, media ID, and tweet ID for a VideoPlaybackInfo entry.
+    private func resolveVideoURL(_ video: VideoPlaybackInfo) -> (url: URL, mediaID: String, tweetId: String, mediaType: MediaType)? {
         guard let tweet = currentTweets.first(where: { $0.mid == video.mediaTweetId }) ?? Tweet.getInstance(for: video.mediaTweetId),
               let attachments = tweet.attachments,
               video.attachmentIndex < attachments.count else {
@@ -1309,20 +1309,20 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         guard let url = videoURL else { return nil }
-        return (url, tweet.mid, attachment.type)
+        return (url, attachment.mid, tweet.mid, attachment.type)
     }
 
     /// Preload video asset without starting playback
     private func preloadVideoAsset(_ video: VideoPlaybackInfo) {
         guard let resolved = resolveVideoURL(video) else { return }
-        SharedAssetCache.shared.preloadAsset(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+        SharedAssetCache.shared.preloadAsset(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
     /// Preload video player (asset + AVPlayer) for upcoming video in scroll direction.
     /// The pre-created player will be instantly available when the cell becomes visible.
     private func preloadVideoPlayer(_ video: VideoPlaybackInfo) {
         guard let resolved = resolveVideoURL(video) else { return }
-        SharedAssetCache.shared.preloadPlayer(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+        SharedAssetCache.shared.preloadPlayer(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
     /// Get up to `count` preloadable videos in the scroll direction that are not currently visible.

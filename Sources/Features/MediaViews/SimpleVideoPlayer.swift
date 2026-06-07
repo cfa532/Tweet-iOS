@@ -3288,6 +3288,7 @@ struct SimpleVideoPlayer: View {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
                         for: url,
+                        mediaID: mid,
                         tweetId: parentTweetId,
                         mediaType: mediaType
                     )
@@ -4027,7 +4028,7 @@ struct SimpleVideoPlayer: View {
                 try Task.checkCancellation()
                 
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: parentTweetId, mediaType: mediaType)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaID: mid, tweetId: parentTweetId, mediaType: mediaType)
 
                 // Check cancellation again after async operation
                 try Task.checkCancellation()
