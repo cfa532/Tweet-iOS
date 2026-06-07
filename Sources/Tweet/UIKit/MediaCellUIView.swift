@@ -1325,6 +1325,23 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return !isVideoAtEnd(player) && !isVisibleVideoFrameReady(player)
     }
 
+    private func shouldDebouncePrimarySpinner(for player: AVPlayer? = nil) -> Bool {
+        if imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
+            return true
+        }
+
+        if let player {
+            if isActuallyPlayerReady(player) || bufferedTimeAhead(for: player) > 0.25 {
+                return true
+            }
+            return false
+        }
+
+        guard let mid = attachment?.mid else { return false }
+        return VideoStateCache.shared.getCachedState(for: mid) != nil
+            || SharedAssetCache.shared.getCachedPlayer(for: mid) != nil
+    }
+
     private func showPrimarySpinnerAfterDebounce(for player: AVPlayer? = nil) {
         guard shouldShowPrimarySpinner(for: player) else {
             cancelDelayedPrimarySpinner()
@@ -1332,8 +1349,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return
         }
 
+        guard shouldDebouncePrimarySpinner(for: player) else {
+            cancelDelayedPrimarySpinner()
+            loadingSpinner.startAnimating()
+            return
+        }
+
         if delayedPrimarySpinnerTask != nil {
             loadingSpinner.stopAnimating()
+            return
+        }
+
+        if loadingSpinner.isAnimating {
             return
         }
 
