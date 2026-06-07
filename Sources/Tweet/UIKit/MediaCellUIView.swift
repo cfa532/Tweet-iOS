@@ -335,6 +335,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private var imageLoadTask: Task<Void, Never>?
     private var foregroundObserver: NSObjectProtocol?
+    private var imageCacheObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
     private var timerHideTask: DispatchWorkItem?
 
@@ -687,6 +688,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func setupImageCell(attachment: MimeiFileType, url: URL) {
         imageView.isHidden = false
+        setupImageCacheObserver()
 
         // Tap gesture (all media — including embedded tweets — opens fullscreen)
         let tap = UITapGestureRecognizer(target: self, action: #selector(imageTapped))
@@ -695,8 +697,38 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         if isVisible {
             loadImage(attachment: attachment, url: url)
-        } else if let cached = imageCache.getCompressedImageFromMemory(for: attachment) {
-            imageView.image = cached
+        } else {
+            applyCachedImageIfAvailable(for: attachment)
+        }
+    }
+
+    @discardableResult
+    private func applyCachedImageIfAvailable(for attachment: MimeiFileType) -> Bool {
+        guard let cached = imageCache.getCompressedImageFromMemory(for: attachment) else {
+            return false
+        }
+
+        imageView.image = cached
+        imageView.isHidden = false
+        loadingSpinner.stopAnimating()
+        retryButton.isHidden = true
+        imageLoadTask = nil
+        return true
+    }
+
+    private func setupImageCacheObserver() {
+        guard imageCacheObserver == nil else { return }
+        imageCacheObserver = NotificationCenter.default.addObserver(
+            forName: .imageCached,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let currentAttachment = self.attachment,
+                  currentAttachment.type == .image,
+                  notification.userInfo?["avatarId"] as? String == currentAttachment.mid else { return }
+
+            self.applyCachedImageIfAvailable(for: currentAttachment)
         }
     }
 
@@ -704,8 +736,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard isVisible else { return }
 
         // 1. Memory cache (synchronous)
-        if let cached = imageCache.getCompressedImageFromMemory(for: attachment) {
-            imageView.image = cached
+        if applyCachedImageIfAvailable(for: attachment) {
             return
         }
 
@@ -3138,7 +3169,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Boost priority for pending image loads or load if needed
             if attachment.type == .image {
-                if imageView.image == nil {
+                setupImageCacheObserver()
+                if applyCachedImageIfAvailable(for: attachment) {
+                    GlobalImageLoadManager.shared.boostPriority(id: attachment.mid, to: .critical)
+                } else if imageView.image == nil {
                     if let url = attachment.getUrl(effectiveBaseUrl) {
                         // Boost priority if already in queue - use critical for all visible images
                         GlobalImageLoadManager.shared.boostPriority(id: attachment.mid, to: .critical)
@@ -3221,6 +3255,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if let observer = foregroundObserver {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
+            }
+            if let observer = imageCacheObserver {
+                NotificationCenter.default.removeObserver(observer)
+                imageCacheObserver = nil
             }
 
             // Unregister delegate (by identifier — won't accidentally remove another cell's delegate)
@@ -3706,6 +3744,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             NotificationCenter.default.removeObserver(observer)
             foregroundObserver = nil
         }
+        if let observer = imageCacheObserver {
+            NotificationCenter.default.removeObserver(observer)
+            imageCacheObserver = nil
+        }
         if let observer = videoThumbnailObserver {
             NotificationCenter.default.removeObserver(observer)
             videoThumbnailObserver = nil
@@ -3753,6 +3795,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             NotificationCenter.default.removeObserver(o)
         }
         if let o = videoThumbnailObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        if let o = imageCacheObserver {
             NotificationCenter.default.removeObserver(o)
         }
         if let o = videoPlayerPreloadedObserver {
