@@ -1612,13 +1612,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             || now.timeIntervalSince(lastPlaybackProgressDate) >= 2.0
         let isStalledResume = lastActualPlaybackDate != .distantPast && hasNoRecentProgress
         let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
-        let requiredBuffer = keepUp ? 2.0 : (isStartup ? 4.0 : 5.0)
+        let requiredBuffer = 0.5
         let hasUsableBuffer = bufferedAhead >= requiredBuffer
-        guard (isStartup || isStalledResume), hasUsableBuffer else { return false }
+        guard hasUsableBuffer else { return false }
 
-        guard now.timeIntervalSince(lastStartupBufferReleaseDate) >= 8.0 else { return true }
-
-        lastStartupBufferReleaseDate = now
         startupBufferReleaseUntil = now.addingTimeInterval(6.0)
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.currentItem?.preferredForwardBufferDuration = 0
@@ -1626,8 +1623,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         player.play()
         updateLoadingSpinnerForPlayback(player)
 
-        let label = isStartup ? "startup buffer ready" : "resume buffer ready"
-        print("\(logPrefix) ▶️ \(label) (\(reason)): nudging playback, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, required=\(String(format: "%.1f", requiredBuffer))s, keepUp=\(keepUp)")
+        if now.timeIntervalSince(lastStartupBufferReleaseDate) >= 2.0 {
+            lastStartupBufferReleaseDate = now
+            let label: String
+            if isStartup {
+                label = "startup buffer ready"
+            } else if isStalledResume {
+                label = "resume buffer ready"
+            } else {
+                label = "primary buffer ready"
+            }
+            print("\(logPrefix) ▶️ \(label) (\(reason)): nudging playback, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, required=\(String(format: "%.1f", requiredBuffer))s, keepUp=\(keepUp)")
+        }
         return true
     }
 
