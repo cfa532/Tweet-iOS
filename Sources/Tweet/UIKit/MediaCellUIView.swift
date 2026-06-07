@@ -93,7 +93,7 @@ enum FeedVideoResumeStore {
 
 // MARK: - MediaCellUIView
 
-class MediaCellUIView: UIView, MediaCellDelegate {
+class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 #if DEBUG && VERBOSE_VIDEO_LOGS
     private static let verboseLogsEnabled = true
 #else
@@ -199,6 +199,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         v.backgroundColor = UIColor.black.withAlphaComponent(0.4)
         v.clipsToBounds = true
         v.isHidden = true
+        v.isUserInteractionEnabled = false
         return v
     }()
 
@@ -342,6 +343,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private let imageCache = ImageCacheManager.shared
 
+    private lazy var mediaTapGesture: UITapGestureRecognizer = {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(mediaTapped))
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        return tap
+    }()
+
     // Logging helper
     private var logPrefix: String {
         let mid = attachment?.mid ?? "nil"
@@ -377,6 +385,21 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         fullscreenOverlay.addSubview(fullscreenSpinner)
         addSubview(muteButton)
         addSubview(timerLabel)
+
+        isUserInteractionEnabled = true
+        addGestureRecognizer(mediaTapGesture)
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer === mediaTapGesture else { return true }
+        var view: UIView? = touch.view
+        while let current = view {
+            if current is UIControl {
+                return false
+            }
+            view = current.superview
+        }
+        return true
     }
 
     override func didMoveToWindow() {
@@ -691,11 +714,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         imageView.isHidden = false
         setupImageCacheObserver()
 
-        // Tap gesture (all media — including embedded tweets — opens fullscreen)
-        let tap = UITapGestureRecognizer(target: self, action: #selector(imageTapped))
-        imageView.addGestureRecognizer(tap)
-        imageView.isUserInteractionEnabled = true
-
         if isVisible {
             loadImage(attachment: attachment, url: url)
         } else {
@@ -818,13 +836,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Tap gesture for fullscreen — on both videoPlayerView and imageView so that
         // any visible video is tappable (thumbnail state or non-primary use imageView).
-        let tap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
-        videoPlayerView.addGestureRecognizer(tap)
-        videoPlayerView.isUserInteractionEnabled = true
-        let imageTap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
-        imageView.addGestureRecognizer(imageTap)
-        imageView.isUserInteractionEnabled = true
-
         // Listen for .stopAllVideos (posted by non-coordinator code like handleVideoTap)
         stopAllObserver = NotificationCenter.default.addObserver(
             forName: .stopAllVideos, object: nil, queue: .main
@@ -3042,6 +3053,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
     }
 
+    @objc private func mediaTapped() {
+        guard let attachment else { return }
+        switch attachment.type {
+        case .image:
+            imageTapped()
+        case .video, .hls_video:
+            handleVideoTap()
+        default:
+            break
+        }
+    }
+
     @objc private func imageTapped() {
         guard let parentTweet, let parentVC = parentViewController else { return }
         // Mark overlay BEFORE present to prevent setVisible(false) race (see handleVideoTap)
@@ -3054,10 +3077,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let hostingVC = UIHostingController(rootView: browserView)
         hostingVC.modalPresentationStyle = .fullScreen
         parentVC.present(hostingVC, animated: true)
-    }
-
-    @objc private func videoTapped() {
-        handleVideoTap()
     }
 
     private func handleVideoTap() {
