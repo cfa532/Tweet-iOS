@@ -85,7 +85,7 @@ class VideoStateCache {
     // This prevents black screen when SwiftUI recreates the view
     private var stoppedByCoordinatorMids: Set<String> = []
 
-    // Track videos that played to completion (by videoIdentifier = tweetId_videoMid_index).
+    // Track videos that played to completion (by videoIdentifier = outerTweetId_mediaTweetId_videoMid_index).
     // Prevents coordinator from auto-replaying finished videos when they scroll back into view.
     private var finishedVideoIdentifiers = Set<String>()
 
@@ -5122,8 +5122,10 @@ struct SimpleVideoPlayer: View {
         
         // Notify the coordinator that video finished (include full identifier: tweet id + video id + index when available)
         var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweetId ?? ""]
-        if let cellId = cellTweetId ?? parentTweetId, let idx = attachmentIndex {
-            userInfo["videoIdentifier"] = "\(cellId)_\(mid)_\(idx)"
+        if let mediaTweetId = parentTweetId,
+           let idx = attachmentIndex {
+            let outerTweetId = cellTweetId ?? mediaTweetId
+            userInfo["videoIdentifier"] = "\(outerTweetId)_\(mediaTweetId)_\(mid)_\(idx)"
         }
         NotificationCenter.default.post(
             name: .videoDidFinishPlaying,

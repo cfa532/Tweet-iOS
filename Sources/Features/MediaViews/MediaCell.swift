@@ -28,8 +28,8 @@ class VideoVisibilityManager: ObservableObject {
 // MARK: - Video List Provider Environment Key
 
 /// Closure type for providing a video list for fullscreen navigation.
-/// Parameters: (videoMid, cellTweetId, attachmentIndex) → (list, startIndex)?
-typealias VideoListProvider = (_ videoMid: String, _ cellTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
+/// Parameters: (videoMid, outerTweetId, mediaTweetId, attachmentIndex) → (list, startIndex)?
+typealias VideoListProvider = (_ videoMid: String, _ outerTweetId: String, _ mediaTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
 
 private struct VideoListProviderKey: EnvironmentKey {
     static let defaultValue: VideoListProvider? = nil
@@ -65,6 +65,16 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     @State private var isInViewport: Bool = false
     @ObservedObject private var muteState = MuteState.shared
     @Environment(\.videoListProvider) private var videoListProvider
+
+    private var videoIdentifier: String? {
+        guard let attachments = parentTweet.attachments,
+              attachmentIndex >= 0,
+              attachmentIndex < attachments.count else { return nil }
+        let attachment = attachments[attachmentIndex]
+        let mediaTweetId = parentTweet.mid
+        let outerTweetId = cellTweetId ?? mediaTweetId
+        return "\(outerTweetId)_\(mediaTweetId)_\(attachment.mid)_\(attachmentIndex)"
+    }
 
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
@@ -208,8 +218,9 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             setupForegroundObserver()
 
             // Phase 3: Register as delegate for direct video control communication
-            let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
-            VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: videoId)
+            if let videoIdentifier {
+                VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: videoIdentifier)
+            }
         }
         .onDisappear {
             // Set visibility to false immediately when cell disappears
@@ -225,8 +236,9 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             }
 
             // Phase 3: Unregister delegate
-            let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
-            VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: videoId)
+            if let videoIdentifier {
+                VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: videoIdentifier)
+            }
 
             // MEMORY FIX: Mark video as not visible when cell disappears
             // Cleanup is handled by background timer (every 10s) to preserve preloading
@@ -271,7 +283,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
 
             // If notification includes full videoId, validate it matches our instance
             if let videoId = notification.userInfo?["videoId"] as? String {
-                let ourVideoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
+                let ourVideoId = videoIdentifier ?? ""
                 guard videoId == ourVideoId else {
                     print("⚠️ [MediaCell] Ignoring play command for different instance - expected: \(ourVideoId), got: \(videoId)")
                     return
@@ -346,7 +358,12 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 // Set video list for fullscreen navigation if provider is available (e.g. comments)
                 if isVideoAttachment,
                    let provider = videoListProvider,
-                   let (list, startIndex) = provider(attachment.mid, cellTweetId ?? parentTweet.mid, attachmentIndex) {
+                   let (list, startIndex) = provider(
+                    attachment.mid,
+                    cellTweetId ?? parentTweet.mid,
+                    parentTweet.mid,
+                    attachmentIndex
+                   ) {
                     FullScreenVideoManager.shared.setVideoList(list, startIndex: startIndex)
                 }
             } else {

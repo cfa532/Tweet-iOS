@@ -1067,6 +1067,12 @@ struct SingletonVideoPlayerView: View {
                                 onUserInteraction()
                             }
                         )
+
+                    if shouldShowAttachedItemSpinner(for: player) {
+                        loadingSpinnerOverlay
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    }
                 } else {
                     // No player, no item, or different video — show lastframe as placeholder.
                     // This covers the load-failed case (currentVideoMid set to nil, currentItem nil)
@@ -1074,24 +1080,6 @@ struct SingletonVideoPlayerView: View {
                     loadingPoster
                 }
 
-                if manager.currentVideoMid == mid && !manager.isItemReady && manager.singletonPlayer?.currentItem != nil {
-                    loadingPoster
-                        .transition(.opacity)
-                        .allowsHitTesting(false)
-                }
-
-                // Show buffering spinner when waiting for data (non-interactive overlay)
-                if manager.isBuffering && manager.currentVideoMid == mid && manager.isItemReady {
-                    ZStack {
-                        Color.black.opacity(0.15)
-                        ProgressView()
-                            .scaleEffect(3.0)
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .opacity(0.8)
-                    }
-                    .transition(.opacity)
-                    .allowsHitTesting(false) // Don't block touches - allow user to interact with player controls
-                }
             }
             .onAppear {
                     // Only load video for the view the user actually tapped (shouldAutoPlay).
@@ -1139,6 +1127,28 @@ struct SingletonVideoPlayerView: View {
                         }
                     }
                 }
+        }
+    }
+
+    private func shouldShowAttachedItemSpinner(for player: AVPlayer) -> Bool {
+        guard manager.currentVideoMid == mid,
+              player.currentItem != nil else {
+            return false
+        }
+
+        if manager.isBuffering {
+            return player.timeControlStatus != .playing
+        }
+
+        return !manager.isItemReady && player.rate == 0 && player.timeControlStatus != .playing
+    }
+
+    private var loadingSpinnerOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.15)
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.5)
         }
     }
 

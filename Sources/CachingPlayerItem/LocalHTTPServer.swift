@@ -357,7 +357,6 @@ public class LocalHTTPServer: @unchecked Sendable {
     // Streaming download sessions
     private var streamingSessions: [String: URLSession] = [:]
     private var streamingSessionLastProgress: [String: Date] = [:]
-    private var recentSegmentDuplicateLogs: [String: Date] = [:]
     private let streamingSessionsLock = NSLock()
 
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
@@ -775,7 +774,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         streamingSessions.removeAll()
         streamingSessionLastProgress.removeAll()
-        recentSegmentDuplicateLogs.removeAll()
         streamingSessionsLock.unlock()
 
         // 3. Fire-and-forget: cancel tracked active downloads
@@ -805,7 +803,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             self.streamingSessions.removeAll()
             self.streamingSessionLastProgress.removeAll()
-            self.recentSegmentDuplicateLogs.removeAll()
             self.streamingSessionsLock.unlock()
 
             // Reset connection pool
@@ -833,8 +830,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             streamingSessions[key]?.invalidateAndCancel()
             streamingSessions.removeValue(forKey: key)
             streamingSessionLastProgress.removeValue(forKey: key)
-            recentSegmentDuplicateLogs.removeValue(forKey: "primary|\(key)")
-            recentSegmentDuplicateLogs.removeValue(forKey: "background|\(key)")
         }
         streamingSessionsLock.unlock()
 
@@ -1163,9 +1158,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                         await self.handleRequest(request, connection: connection) {
                             // With Connection: close, each NWConnection handles exactly one
                             // request-response cycle. Synchronous handlers (sendResponse /
-                            // serveFile) already send TCP FIN. Streaming handlers
-                            // (SegmentStreamDelegate) manage connection lifecycle themselves.
-                            // Do NOT cancel here — it kills streaming connections mid-flight.
+                            // serveFile) already send TCP FIN. Progressive range streams
+                            // manage connection lifecycle themselves.
+                            // Do NOT cancel here — it kills progressive streams mid-flight.
                         }
                         continuation.resume()
                     }
@@ -1287,7 +1282,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let filePathComponents = pathComponents[2...].joined(separator: "/")
         let potentialCachePath = mediaDir.appendingPathComponent(filePathComponents)
         
-        if FileManager.default.fileExists(atPath: potentialCachePath.path) {
+        if isUsableCachedFile(atPath: potentialCachePath.path) {
             // CACHE HIT - serve immediately without needing real URL
             
             if relativePath.hasSuffix(".m3u8") {
@@ -1362,7 +1357,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
-        let isCached = FileManager.default.fileExists(atPath: cachePath)
+        let isCached = isUsableCachedFile(atPath: cachePath)
 
         // Check cache first
         if isCached {
@@ -1399,7 +1394,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
 
         // Check cache first — always serve cached content regardless of concurrency
-        if FileManager.default.fileExists(atPath: cachePath) {
+        if isUsableCachedFile(atPath: cachePath) {
             autoreleasepool {
                 serveFile(path: cachePath, connection: connection, method: method)
             }
@@ -1442,7 +1437,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             for _ in 0..<maxPolls {
                 try? await Task.sleep(nanoseconds: pollInterval)
 
-                if FileManager.default.fileExists(atPath: cachePath) {
+                if isUsableCachedFile(atPath: cachePath) {
                     autoreleasepool { serveFile(path: cachePath, connection: connection, method: method) }
                     return
                 }
@@ -2211,276 +2206,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
         let isSegment = cachePath.hasSuffix(".ts")
 
-        // Stream .ts segments to AVPlayer as bytes arrive from IPFS.
-        // AVPlayer can render the first frame after the initial keyframe (~100–300 KB)
-        // instead of waiting for the full 4–5 MB segment to download.
-        // HEAD requests are routed through fetchWithRetry (we only need headers, not a stream).
-        if isSegment && method == "GET" {
-            streamSegmentAndServe(url: url, cachePath: cachePath, connection: connection, mediaID: mediaID, onConnectionDead: onConnectionDead, completion: completion ?? {})
-            return
-        }
-
         let maxAttempts = isSegment ? 3 : 1  // Retry segment downloads (like ExoPlayer)
         fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: 1, maxAttempts: maxAttempts, completion: completion)
-    }
-    
-    /// Stream a `.ts` segment from IPFS to `connection` byte-by-byte as the download progresses,
-    /// then write the completed segment to disk for caching.
-    ///
-    /// Unlike `fetchWithRetry` (which buffers the whole response before serving), this method
-    /// forwards `URLSessionDataDelegate.didReceive data` chunks directly to the `NWConnection`
-    /// so AVPlayer can start rendering the first video frame as soon as the initial keyframe
-    /// bytes arrive (~100–300 KB), rather than waiting for the full 4–5 MB segment.
-    ///
-    /// The session is registered in `streamingSessions` so `cancelDownloads(for:)` can cancel
-    /// it when the player is cleared.
-    private func streamSegmentAndServe(url: URL, cachePath: String, connection: NWConnection, mediaID: String, onConnectionDead: (() -> Void)? = nil, completion: @escaping () -> Void) {
-        // Use the relative path (e.g., "480p/segment000.ts") instead of just the filename
-        // to avoid session key collisions between quality variants of the same segment.
-        let cacheURL = URL(fileURLWithPath: cachePath)
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let mediaDir = cacheDir.appendingPathComponent(mediaID)
-        let relativePath: String
-        if cachePath.hasPrefix(mediaDir.path) {
-            // Strip the media directory prefix to get e.g. "480p/segment000.ts"
-            relativePath = String(cachePath.dropFirst(mediaDir.path.count + 1))
-        } else {
-            relativePath = cacheURL.lastPathComponent
-        }
-        let sessionKey = "\(mediaID)/stream/\(relativePath)"
-        let partialCachePath = "\(cachePath).part"
-        let resumeOffset: Int64
-        if FileManager.default.fileExists(atPath: cachePath) {
-            resumeOffset = 0
-        } else if let attrs = try? FileManager.default.attributesOfItem(atPath: partialCachePath),
-                  let size = attrs[.size] as? NSNumber,
-                  size.int64Value > 0 {
-            resumeOffset = size.int64Value
-        } else {
-            resumeOffset = 0
-        }
-
-        let trackedSession = URLSessionTrackingBox()
-        let delegate = SegmentStreamDelegate(
-            connection: connection,
-            cachePath: cachePath,
-            partialCachePath: partialCachePath,
-            mediaID: mediaID,
-            sessionKey: sessionKey,
-            resumeOffset: resumeOffset,
-            buildHeaders: { [weak self] statusCode, headers in
-                self?.buildHTTPHeaderData(statusCode: statusCode, headers: headers) ?? Data()
-            },
-            sendFallbackError: { [weak self] conn in
-                self?.sendResponse(connection: conn, statusCode: 500, headers: [:], body: nil)
-            },
-            removeSession: { [weak self] key in
-                self?.streamingSessionsLock.lock()
-                if let session = trackedSession.session,
-                   self?.streamingSessions[key] === session {
-                    self?.streamingSessions.removeValue(forKey: key)
-                    self?.streamingSessionLastProgress.removeValue(forKey: key)
-                    self?.recentSegmentDuplicateLogs.removeValue(forKey: "primary|\(key)")
-                    self?.recentSegmentDuplicateLogs.removeValue(forKey: "background|\(key)")
-                }
-                self?.streamingSessionsLock.unlock()
-            },
-            noteProgress: { [weak self] key in
-                self?.streamingSessionsLock.lock()
-                self?.streamingSessionLastProgress[key] = Date()
-                self?.streamingSessionsLock.unlock()
-            },
-            serveCompletedFile: { [weak self] path, conn in
-                self?.serveFile(path: path, connection: conn, method: "GET")
-            },
-            completion: completion
-        )
-        delegate.onConnectionDead = onConnectionDead
-
-        // HLS segments can arrive very slowly from weak IPFS sources. Keep primary
-        // requests patient so a slow 480p segment is not repeatedly discarded.
-        let isPrimary = isCurrentPrimary(mediaID)
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = isPrimary ? 45 : 30
-        config.timeoutIntervalForResource = 120
-        config.urlCache = nil
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-
-        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-        trackedSession.session = session
-
-        // Track session so cancelDownloads(for: mediaID) can invalidate it.
-        streamingSessionsLock.lock()
-        if let oldSession = streamingSessions[sessionKey] {
-            if isPrimary {
-                // A fullscreen/primary request can reconnect while the same segment is still
-                // being filled in the disk cache after AVPlayer closed the previous NWConnection.
-                // Let slow IPFS keep going if bytes are still arriving, but do not let
-                // fullscreen sit indefinitely behind a background fill that stopped progressing.
-                streamingSessionsLock.unlock()
-                let shortId = shortMID(mediaID)
-                logSegmentDuplicateIfNeeded(
-                    key: "primary|\(sessionKey)",
-                    message: "♻️ [HLS SEGMENT \(shortId)] Primary duplicate for \(relativePath), monitoring disk cache/progress"
-                )
-                Task { [weak self] in
-                    let startedWaiting = Date()
-                    var takeoverReason: String?
-                    for _ in 0..<180 { // max 90s while the existing fill keeps moving
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        switch connection.state {
-                        case .cancelled, .failed:
-                            session.invalidateAndCancel()
-                            completion()
-                            return
-                        default: break
-                        }
-                        if FileManager.default.fileExists(atPath: cachePath) {
-                            session.invalidateAndCancel()
-                            completion()
-                            autoreleasepool { self?.serveFile(path: cachePath, connection: connection, method: "GET") }
-                            return
-                        }
-
-                        guard let self else { continue }
-                        let (currentSession, lastProgress) = self.streamingSessionsLock.withLock {
-                            (
-                                self.streamingSessions[sessionKey],
-                                self.streamingSessionLastProgress[sessionKey] ?? startedWaiting
-                            )
-                        }
-
-                        guard let currentSession else {
-                            takeoverReason = "failed"
-                            break
-                        }
-
-                        guard currentSession === oldSession else {
-                            session.invalidateAndCancel()
-                            completion()
-                            connection.cancel()
-                            return
-                        }
-
-                        let waited = Date().timeIntervalSince(startedWaiting)
-                        let idleFor = Date().timeIntervalSince(lastProgress)
-                        if waited >= 6.0 && idleFor >= 12.0 {
-                            takeoverReason = "stalled"
-                            break
-                        }
-                    }
-
-                    guard let self else {
-                        session.invalidateAndCancel()
-                        completion()
-                        connection.cancel()
-                        return
-                    }
-
-                    guard let takeoverReason else {
-                        session.invalidateAndCancel()
-                        completion()
-                        connection.cancel()
-                        return
-                    }
-
-                    let shouldRestart = self.streamingSessionsLock.withLock {
-                        let currentSession = self.streamingSessions[sessionKey]
-                        if currentSession == nil || currentSession === oldSession {
-                            self.streamingSessions.removeValue(forKey: sessionKey)
-                            self.streamingSessionLastProgress.removeValue(forKey: sessionKey)
-                            return true
-                        }
-                        return false
-                    }
-
-                    if shouldRestart {
-                        session.invalidateAndCancel()
-                        if takeoverReason == "stalled" {
-                            oldSession.invalidateAndCancel()
-                        }
-                        print("🎯 [HLS SEGMENT \(shortId)] Primary restarting \(takeoverReason) download for \(relativePath)")
-                        self.streamSegmentAndServe(
-                            url: url,
-                            cachePath: cachePath,
-                            connection: connection,
-                            mediaID: mediaID,
-                            onConnectionDead: onConnectionDead,
-                            completion: completion
-                        )
-                    } else {
-                        session.invalidateAndCancel()
-                        completion()
-                        connection.cancel()
-                    }
-                }
-                return
-            } else {
-                // Non-primary: poll for the cache file to appear (background IPFS download
-                // may still be writing). Avoids cancel-retry storm.
-                streamingSessionsLock.unlock()
-                session.invalidateAndCancel()
-                let shortId = shortMID(mediaID)
-                logSegmentDuplicateIfNeeded(
-                    key: "background|\(sessionKey)",
-                    message: "♻️ [HLS SEGMENT \(shortId)] Duplicate download for \(sessionKey), waiting for disk cache"
-                )
-                completion()
-                Task { [weak self] in
-                    for _ in 0..<20 { // max 10s
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        switch connection.state {
-                        case .cancelled, .failed: return
-                        default: break
-                        }
-                        if FileManager.default.fileExists(atPath: cachePath) {
-                            autoreleasepool { self?.serveFile(path: cachePath, connection: connection, method: "GET") }
-                            return
-                        }
-                    }
-                    connection.cancel()
-                }
-                return
-            }
-        } else {
-            streamingSessions[sessionKey] = session
-            streamingSessionLastProgress[sessionKey] = Date()
-            streamingSessionsLock.unlock()
-        }
-
-        let shortId = shortMID(mediaID)
-        let segmentFile = cacheURL.lastPathComponent
-        let parentDir = cacheURL.deletingLastPathComponent().lastPathComponent
-        // Include resolution folder if present (e.g. "720p/segment000.ts")
-        let segmentLabel = (parentDir != mediaID && !parentDir.isEmpty) ? "\(parentDir)/\(segmentFile)" : segmentFile
-        if resumeOffset > 0 {
-            print("📡 [HLS SEGMENT \(shortId)] Resuming download: \(segmentLabel) @\(resumeOffset / 1024)KB")
-        } else {
-            print("📡 [HLS SEGMENT \(shortId)] Started download: \(segmentLabel)")
-        }
-
-        var request = URLRequest(url: url)
-        if resumeOffset > 0 {
-            request.setValue("bytes=\(resumeOffset)-", forHTTPHeaderField: "Range")
-        }
-        session.dataTask(with: request).resume()
-        // `session` and `delegate` are kept alive by the running task until completion.
-    }
-
-    private func logSegmentDuplicateIfNeeded(key: String, message: String) {
-        let now = Date()
-        let shouldLog = streamingSessionsLock.withLock {
-            if let lastLog = recentSegmentDuplicateLogs[key],
-               now.timeIntervalSince(lastLog) < 6.0 {
-                return false
-            }
-            recentSegmentDuplicateLogs[key] = now
-            return true
-        }
-
-        if shouldLog {
-            print(message)
-        }
     }
 
     /// Download and cache file without serving (for background downloads when connection is closing)
@@ -2583,15 +2310,18 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // CRITICAL: Write to cache (this is the only thing we do - no serving)
                 let cacheURL = URL(fileURLWithPath: cachePath)
                 // Skip silently if the parent directory was deleted (clearPlayerForMediaID)
-                guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
-                    completion?()
-                    return
-                }
-                do {
-                    try dataToCache.write(to: cacheURL)
-                } catch {
-                    print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
-                }
+                    guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
+                        completion?()
+                        return
+                    }
+                    do {
+                        try dataToCache.write(to: cacheURL, options: .atomic)
+                        if cachePath.hasSuffix(".ts") {
+                            try? FileManager.default.removeItem(atPath: "\(cachePath).part")
+                        }
+                    } catch {
+                        print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
+                    }
 
                 // Record successful fetch for this mediaID
                 if !mediaID.isEmpty {
@@ -2697,15 +2427,18 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let cacheURL = URL(fileURLWithPath: cachePath)
                 // Skip silently if the parent directory was deleted (clearPlayerForMediaID)
                 // while this download was in-flight — avoids spurious "file not found" warnings.
-                guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
-                    completion?()
-                    return
-                }
-                do {
-                    try dataToCache.write(to: cacheURL)
-                } catch {
-                    print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
-                }
+                    guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
+                        completion?()
+                        return
+                    }
+                    do {
+                        try dataToCache.write(to: cacheURL, options: .atomic)
+                        if cachePath.hasSuffix(".ts") {
+                            try? FileManager.default.removeItem(atPath: "\(cachePath).part")
+                        }
+                    } catch {
+                        print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
+                    }
 
                 // Record successful fetch for this mediaID
                 if !mediaID.isEmpty {
@@ -2734,6 +2467,22 @@ public class LocalHTTPServer: @unchecked Sendable {
         task.resume()
     }
     
+    private func isUsableCachedFile(atPath path: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: path),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attributes[.size] as? NSNumber else {
+            return false
+        }
+
+        guard size.int64Value > 0 else {
+            try? FileManager.default.removeItem(atPath: path)
+            print("⚠️ [LocalHTTPServer] Removed zero-byte cached file: \(URL(fileURLWithPath: path).lastPathComponent)")
+            return false
+        }
+
+        return true
+    }
+
     private func serveFile(path: String, connection: NWConnection, method: String) {
         // CRITICAL: Check if connection is still alive before trying to serve
         // After long waits (22+ seconds), AVPlayer may have closed the connection
@@ -2751,11 +2500,21 @@ public class LocalHTTPServer: @unchecked Sendable {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             return
         }
+
+        guard isUsableCachedFile(atPath: path) else {
+            sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+            return
+        }
         
         do {
             // MEMORY FIX: Use autoreleasepool for large files to release memory immediately
             try autoreleasepool {
                 let data = try Data(contentsOf: URL(fileURLWithPath: path))
+                guard !data.isEmpty else {
+                    try? FileManager.default.removeItem(atPath: path)
+                    sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+                    return
+                }
                 let mimeType = getMimeType(for: path)
                 
                 let headers: [String: String] = [
@@ -2988,315 +2747,5 @@ public class LocalHTTPServer: @unchecked Sendable {
             print("⚠️ [PROGRESSIVE CACHE] Failed to validate cache file: \(error.localizedDescription)")
             return false
         }
-    }
-}
-
-// MARK: - SegmentStreamDelegate
-
-/// `URLSessionDataDelegate` that pipes MPEG-TS segment bytes from IPFS to an AVPlayer
-/// `NWConnection` as they arrive, rather than buffering the whole download first.
-///
-/// **Why this matters for IPFS**: A typical HLS segment is 4–5 MB.  On a slow IPFS node
-/// the full download can take 20–30 s, keeping `AVPlayerItem.status` stuck at `.unknown`
-/// (black screen) the whole time.  By forwarding each `didReceive data` chunk immediately,
-/// AVPlayer sees real bytes and can transition to `.readyToPlay` once it has decoded the
-/// first keyframe — usually within the first 100–300 KB (~1–3 s on a slow connection).
-///
-/// Disk caching happens incrementally: bytes are written to a `.part` file as they arrive.
-/// If a slow source times out near completion, the next request resumes from that partial
-/// file instead of starting the segment from byte zero again.
-private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
-    private let connection: NWConnection
-    private let cachePath: String
-    private let partialCachePath: String
-    private let mediaID: String
-    private let sessionKey: String
-    private var resumeOffset: Int64
-    private let buildHeaders: (Int, [String: String]) -> Data
-    private let sendFallbackError: (NWConnection) -> Void
-    private let removeSession: (String) -> Void
-    private let noteProgress: (String) -> Void
-    private let serveCompletedFile: (String, NWConnection) -> Void
-    private let completion: () -> Void
-
-    private var partialFileHandle: FileHandle?
-    private var persistedBytes: Int64
-    private var headersSent = false
-    private var connectionDead = false
-    var onConnectionDead: (() -> Void)?
-
-    private lazy var segmentLabel: String = {
-        let url = URL(fileURLWithPath: cachePath)
-        let file = url.lastPathComponent
-        let parent = url.deletingLastPathComponent().lastPathComponent
-        return (parent != mediaID && !parent.isEmpty) ? "\(parent)/\(file)" : file
-    }()
-
-    init(connection: NWConnection,
-         cachePath: String,
-         partialCachePath: String,
-         mediaID: String,
-         sessionKey: String,
-         resumeOffset: Int64,
-         buildHeaders: @escaping (Int, [String: String]) -> Data,
-         sendFallbackError: @escaping (NWConnection) -> Void,
-         removeSession: @escaping (String) -> Void,
-         noteProgress: @escaping (String) -> Void,
-         serveCompletedFile: @escaping (String, NWConnection) -> Void,
-         completion: @escaping () -> Void) {
-        self.connection = connection
-        self.cachePath = cachePath
-        self.partialCachePath = partialCachePath
-        self.mediaID = mediaID
-        self.sessionKey = sessionKey
-        self.resumeOffset = resumeOffset
-        self.persistedBytes = resumeOffset
-        self.buildHeaders = buildHeaders
-        self.sendFallbackError = sendFallbackError
-        self.removeSession = removeSession
-        self.noteProgress = noteProgress
-        self.serveCompletedFile = serveCompletedFile
-        self.completion = completion
-    }
-
-    func urlSession(_ session: URLSession,
-                    dataTask: URLSessionDataTask,
-                    didReceive response: URLResponse,
-                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        if let http = response as? HTTPURLResponse,
-           http.statusCode == 416,
-           resumeOffset > 0 {
-            try? FileManager.default.removeItem(atPath: partialCachePath)
-            resumeOffset = 0
-            persistedBytes = 0
-        }
-
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            if !connectionDead {
-                sendFallbackError(connection)
-            }
-            completionHandler(.cancel)
-            return
-        }
-
-        let shouldStreamCachedPrefix = resumeOffset > 0 && http.statusCode == 206
-        if resumeOffset > 0 && http.statusCode != 206 {
-            try? FileManager.default.removeItem(atPath: partialCachePath)
-            resumeOffset = 0
-            persistedBytes = 0
-        }
-
-        guard openPartialFile(append: resumeOffset > 0) else {
-            if !connectionDead {
-                sendFallbackError(connection)
-            }
-            completionHandler(.cancel)
-            return
-        }
-
-        guard !connectionDead else {
-            completionHandler(.allow)
-            return
-        }
-
-        var headers: [String: String] = [
-            "Content-Type": "video/mp2t",
-            "Accept-Ranges": "bytes"
-        ]
-        if http.expectedContentLength > 0 {
-            let fullLength = shouldStreamCachedPrefix
-                ? Int64(resumeOffset) + http.expectedContentLength
-                : http.expectedContentLength
-            headers["Content-Length"] = "\(fullLength)"
-        }
-        let headerData = buildHeaders(200, headers)
-        switch connection.state {
-        case .cancelled, .failed:
-            connectionDead = true
-            completionHandler(.allow)
-            return
-        default: break
-        }
-        connection.send(content: headerData, isComplete: false, completion: .contentProcessed { _ in })
-        headersSent = true
-        if shouldStreamCachedPrefix {
-            sendCachedPrefixToPlayer()
-        }
-        completionHandler(.allow)
-    }
-
-    func urlSession(_ session: URLSession,
-                    dataTask: URLSessionDataTask,
-                    didReceive data: Data) {
-        writePartialChunk(data)
-        noteProgress(sessionKey)
-
-        guard !connectionDead else { return }
-        switch connection.state {
-        case .cancelled, .failed:
-            markConnectionDead()
-            return
-        default: break
-        }
-
-        connection.send(content: data, isComplete: false, completion: .contentProcessed { [weak self] error in
-            guard let self, error != nil, !self.connectionDead else { return }
-            self.markConnectionDead()
-        })
-    }
-
-    private func markConnectionDead() {
-        connectionDead = true
-        let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
-        print("🔌 [HLS SEGMENT \(shortId)] NWConnection closed mid-stream (\(segmentLabel)) — continuing IPFS download to disk cache")
-        let release = onConnectionDead
-        onConnectionDead = nil
-        release?()
-    }
-
-    private func sendCachedPrefixToPlayer() {
-        guard resumeOffset > 0, !connectionDead else { return }
-        let prefixURL = URL(fileURLWithPath: partialCachePath)
-        guard let prefixData = try? Data(contentsOf: prefixURL),
-              prefixData.count >= Int(resumeOffset) else {
-            if !connectionDead {
-                sendFallbackError(connection)
-                markConnectionDead()
-            }
-            return
-        }
-
-        let bytesToSend = prefixData.prefix(Int(resumeOffset))
-        guard !bytesToSend.isEmpty else { return }
-        connection.send(content: Data(bytesToSend), isComplete: false, completion: .contentProcessed { [weak self] error in
-            guard let self, error != nil, !self.connectionDead else { return }
-            self.markConnectionDead()
-        })
-    }
-
-    private func openPartialFile(append: Bool) -> Bool {
-        let partialURL = URL(fileURLWithPath: partialCachePath)
-        do {
-            try FileManager.default.createDirectory(
-                at: partialURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            if !append {
-                try? FileManager.default.removeItem(atPath: partialCachePath)
-            }
-            if !FileManager.default.fileExists(atPath: partialCachePath) {
-                FileManager.default.createFile(atPath: partialCachePath, contents: nil)
-            }
-            let handle = try FileHandle(forWritingTo: partialURL)
-            if append {
-                if #available(iOS 13.0, *) {
-                    try handle.seekToEnd()
-                } else {
-                    handle.seekToEndOfFile()
-                }
-            } else if #available(iOS 13.0, *) {
-                try handle.truncate(atOffset: 0)
-            } else {
-                handle.truncateFile(atOffset: 0)
-            }
-            partialFileHandle = handle
-            return true
-        } catch {
-            let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
-            print("⚠️ [HLS SEGMENT \(shortId)] Unable to open partial cache for \(segmentLabel): \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    private func writePartialChunk(_ data: Data) {
-        guard !data.isEmpty, let handle = partialFileHandle else { return }
-        do {
-            if #available(iOS 13.0, *) {
-                try handle.write(contentsOf: data)
-            } else {
-                handle.write(data)
-            }
-            persistedBytes += Int64(data.count)
-        } catch {
-            let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
-            print("⚠️ [HLS SEGMENT \(shortId)] Partial cache write failed for \(segmentLabel): \(error.localizedDescription)")
-        }
-    }
-
-    private func closePartialFile() {
-        if #available(iOS 13.0, *) {
-            try? partialFileHandle?.synchronize()
-        } else {
-            partialFileHandle?.synchronizeFile()
-        }
-        try? partialFileHandle?.close()
-        partialFileHandle = nil
-    }
-
-    func urlSession(_ session: URLSession,
-                    task: URLSessionTask,
-                    didCompleteWithError error: Error?) {
-        let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
-
-        defer {
-            closePartialFile()
-            removeSession(sessionKey)
-            completion()
-        }
-
-        if let error {
-            let nsError = error as NSError
-            if nsError.code == NSURLErrorCancelled {
-                if !connectionDead { connection.cancel() }
-                return
-            }
-            if !connectionDead && !headersSent {
-                sendFallbackError(connection)
-                BlackList.shared.recordFailure(mediaID)
-            } else if !connectionDead && headersSent {
-                connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
-                               completion: .contentProcessed { _ in })
-            }
-            print("⚠️ [HLS SEGMENT \(shortId)] \(segmentLabel) failed, \(persistedBytes / 1024)KB cached partial: \(nsError.domain) \(nsError.code)")
-            return
-        }
-
-        let cacheURL = URL(fileURLWithPath: cachePath)
-        guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
-            if !connectionDead {
-                connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
-                               completion: .contentProcessed { _ in })
-            }
-            return
-        }
-        guard persistedBytes > 0 else {
-            try? FileManager.default.removeItem(atPath: partialCachePath)
-            if !connectionDead {
-                sendFallbackError(connection)
-            }
-            return
-        }
-
-        closePartialFile()
-        try? FileManager.default.removeItem(atPath: cachePath)
-        do {
-            try FileManager.default.moveItem(atPath: partialCachePath, toPath: cachePath)
-        } catch {
-            print("⚠️ [HLS SEGMENT \(shortId)] Failed to promote partial cache for \(segmentLabel): \(error.localizedDescription)")
-            if !connectionDead {
-                sendFallbackError(connection)
-            }
-            return
-        }
-        BlackList.shared.recordSuccess(mediaID)
-
-        if connectionDead {
-            print("✅ [HLS SEGMENT \(shortId)] \(segmentLabel): \(persistedBytes / 1024)KB (background → disk cache)")
-            return
-        }
-
-        print("✅ [HLS SEGMENT \(shortId)] \(segmentLabel): \(persistedBytes / 1024)KB")
-        connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
-                       completion: .contentProcessed { _ in })
     }
 }

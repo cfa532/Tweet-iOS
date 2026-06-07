@@ -324,13 +324,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private weak var parentViewController: UIViewController?
     private var shouldAcquirePlayerWhenVisible: Bool = true
 
-    /// Matches VideoPlaybackInfo.identifier format: cellTweetId_videoMid_attachmentIndex.
+    /// Matches VideoPlaybackInfo.identifier format: outerTweetId_mediaTweetId_videoMid_attachmentIndex.
     /// Used to register/unregister delegate independently per feed cell, so the same video
     /// appearing in both a tweet and its retweet gets separate delegates.
     var videoIdentifier: String? {
         guard let attachment else { return nil }
-        let cell = cellTweetId ?? parentTweet?.mid ?? ""
-        return "\(cell)_\(attachment.mid)_\(attachmentIndex)"
+        let mediaTweetId = parentTweet?.mid ?? ""
+        let outerTweetId = cellTweetId ?? mediaTweetId
+        return "\(outerTweetId)_\(mediaTweetId)_\(attachment.mid)_\(attachmentIndex)"
     }
 
     private var imageLoadTask: Task<Void, Never>?
@@ -1585,34 +1586,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     @discardableResult
-    private func rebuildUnknownPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              videoCellState == .playing,
-              player.currentItem?.status == .unknown,
-              bufferedAhead >= 1.0,
-              !isVideoAtEnd(player),
-              let mid = attachment?.mid else { return false }
-
-        let resumeTime = player.currentTime()
-        if resumeTime.isValid, resumeTime.seconds.isFinite {
-            pendingRecoverySeekTime = resumeTime
-        }
-
-        print("\(logPrefix) 🔄 \(reason): item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player")
-        preserveFrameToCache(useVideoOutput: false)
-        LocalHTTPServer.shared.clearCancelledState(for: mid)
-        LocalHTTPServer.shared.setPrimaryMediaID(mid)
-        VideoStateCache.shared.clearCachedState(for: mid)
-        SharedAssetCache.shared.softResetPlayer(for: mid)
-        return reacquirePlayerForCurrentVideo(
-            reason: "unknownItemBufferedRecovery",
-            transitionState: imageView.image != nil ? .thumbnail : .playerLoading,
-            requireLoadableVisibleVideo: true,
-            wantsPlayback: true
-        )
-    }
-
-    @discardableResult
     private func releaseStartupBufferIfReady(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
         guard coordinatorWantsToPlay,
               videoCellState == .playing,
@@ -1639,6 +1612,34 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
         print("\(logPrefix) ▶️ startup buffer ready (\(reason)): nudging playback, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp)")
         return true
+    }
+
+    @discardableResult
+    private func rebuildUnknownPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
+        guard coordinatorWantsToPlay,
+              videoCellState == .playing,
+              player.currentItem?.status == .unknown,
+              bufferedAhead >= 1.0,
+              !isVideoAtEnd(player),
+              let mid = attachment?.mid else { return false }
+
+        let resumeTime = player.currentTime()
+        if resumeTime.isValid, resumeTime.seconds.isFinite {
+            pendingRecoverySeekTime = resumeTime
+        }
+
+        print("\(logPrefix) 🔄 \(reason): item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player")
+        preserveFrameToCache(useVideoOutput: false)
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid)
+        VideoStateCache.shared.clearCachedState(for: mid)
+        SharedAssetCache.shared.softResetPlayer(for: mid)
+        return reacquirePlayerForCurrentVideo(
+            reason: "unknownItemBufferedRecovery",
+            transitionState: imageView.image != nil ? .thumbnail : .playerLoading,
+            requireLoadableVisibleVideo: true,
+            wantsPlayback: true
+        )
     }
 
     private func scheduleStillFrameRecovery(for player: AVPlayer, reason: String) {
@@ -3066,11 +3067,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let coordinator = videoCoordinator ?? VideoPlaybackCoordinator.shared
         let fullscreenList = coordinator.getVideoListForFullscreen()
         let myMid = attachment?.mid
-        let myCellTweetId = cellTweetId
+        let myMediaTweetId = parentTweet.mid
+        let myOuterTweetId = cellTweetId ?? parentTweet.mid
         let startIndex = fullscreenList.firstIndex(where: {
-            $0.videoMid == myMid && $0.cellTweetId == myCellTweetId
+            $0.videoMid == myMid &&
+            $0.contextTweetId == myOuterTweetId &&
+            $0.mediaTweetId == myMediaTweetId &&
+            $0.attachmentIndex == attachmentIndex
         }) ?? fullscreenList.firstIndex(where: {
-            $0.videoMid == myMid
+            $0.videoMid == myMid &&
+            $0.cellTweetId == myOuterTweetId &&
+            $0.attachmentIndex == attachmentIndex
         }) ?? 0
         FullScreenVideoManager.shared.setVideoList(fullscreenList, startIndex: startIndex)
 

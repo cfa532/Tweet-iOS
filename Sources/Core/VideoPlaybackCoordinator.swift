@@ -67,24 +67,46 @@ private enum VideoPlaybackPhase {
 }
 
 /// Canonical video tracking info.
-/// A video is indexed by both the tweet (cell) id and its own id so the same video in different cells is distinct.
+/// A video is indexed by both the outermost visible tweet id and its own media id so
+/// the same video in different feed/detail contexts is distinct.
 ///
-/// - `cellTweetId`: The tweet ID of the *feed cell* (retweet ID for retweets, quoting tweet ID for embedded/quoted media).
+/// - `outerTweetId`: The outermost tweet ID that owns the visible context (feed row/detail tweet).
+/// - `cellTweetId`: The tweet ID of the visible media cell/comment (retweet ID for retweets, quoting tweet ID for embedded/quoted media).
 /// - `mediaTweetId`: The tweet ID that actually owns the attachments (original tweet for retweets, embedded tweet for quoted media).
 /// - `videoMid`: The attachment/media id (same video content can appear in multiple cells).
 /// - `attachmentIndex`: The index in `mediaTweetId.attachments` (can be > 3; fullscreen needs this).
 ///
-/// `identifier` = cellTweetId + "_" + videoMid + "_" + attachmentIndex is the unique key for playback (one delegate per cell instance).
+/// `identifier` = outerTweetId + "_" + mediaTweetId + "_" + videoMid + "_" + attachmentIndex
+/// is the unique key for playback (one delegate per rendered media instance).
 /// Feed playback coordination only considers `attachmentIndex < 4` because `MediaGridView` only renders the first 4 items.
 struct VideoPlaybackInfo: Equatable {
+    let outerTweetId: String?
     let cellTweetId: String
     let mediaTweetId: String
     let videoMid: String
     let attachmentIndex: Int
 
-    /// Unique key for this video instance: tweet id + video id + index (same video in different cells has different identifiers).
+    init(
+        outerTweetId: String? = nil,
+        cellTweetId: String,
+        mediaTweetId: String,
+        videoMid: String,
+        attachmentIndex: Int
+    ) {
+        self.outerTweetId = outerTweetId
+        self.cellTweetId = cellTweetId
+        self.mediaTweetId = mediaTweetId
+        self.videoMid = videoMid
+        self.attachmentIndex = attachmentIndex
+    }
+
+    var contextTweetId: String {
+        outerTweetId ?? cellTweetId
+    }
+
+    /// Unique key for this video instance: outer tweet + media owner + video id + index.
     var identifier: String {
-        "\(cellTweetId)_\(videoMid)_\(attachmentIndex)"
+        "\(contextTweetId)_\(mediaTweetId)_\(videoMid)_\(attachmentIndex)"
     }
     
     var isInVisibleMediaRange: Bool {
@@ -203,7 +225,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     // MARK: - Delegate-Based Communication (Phase 3)
 
     /// Registered MediaCell delegates for direct communication (keyed by video identifier:
-    /// cellTweetId_videoMid_attachmentIndex). This allows the same videoMid to have separate
+    /// outerTweetId_mediaTweetId_videoMid_attachmentIndex). This allows the same videoMid to have separate
     /// delegates when it appears in both a tweet and its retweet.
     private var mediaCellDelegates: [String: MediaCellDelegate] = [:]
 
@@ -809,7 +831,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         return videos
     }
     
-    /// Previously visible video identifiers (cellTweetId_videoMid_attachmentIndex).
+    /// Previously visible video identifiers (outerTweetId_mediaTweetId_videoMid_attachmentIndex).
     /// Using full identifiers (not bare videoMids) ensures the same video in a tweet
     /// and its retweet are tracked independently.
     private var previousVisibleIdentifiers: Set<String> = []
@@ -1748,7 +1770,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
     
     /// Handle video finished notification.
-    /// Match by full identifier (cellTweetId_videoMid_attachmentIndex) so the same video in different cells is distinct.
+    /// Match by full identifier (outerTweetId_mediaTweetId_videoMid_attachmentIndex) so the same video in different cells is distinct.
     @objc private func handleVideoFinished(_ notification: Notification) {
         guard let videoMid = notification.userInfo?["videoMid"] as? String else {
             return

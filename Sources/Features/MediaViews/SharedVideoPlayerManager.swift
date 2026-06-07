@@ -173,7 +173,7 @@ class SharedVideoPlayerManager: ObservableObject {
 
     /// Request to play a specific video instance (coordinates to ensure only one plays)
     /// - Parameters:
-    ///   - videoId: Full identifier (cellTweetId_videoMid_attachmentIndex)
+    ///   - videoId: Full identifier (outerTweetId_mediaTweetId_videoMid_attachmentIndex)
     ///   - videoMid: The attachment's mid (for notification routing)
     ///   - cellTweetId: The visible cell's tweet ID (retweet ID for retweets, quoting tweet ID for quotes)
     func playVideo(videoId: String, videoMid: String, cellTweetId: String) {

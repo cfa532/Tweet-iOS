@@ -721,6 +721,27 @@ class SharedAssetCache: ObservableObject {
             }
         }
     }
+
+    /// Move a prepared feed/preload player into fullscreen ownership without releasing it.
+    /// Mirrors Android's takePlayerForFullScreen(): preserve the prepared item/buffer,
+    /// remove feed/preload bookkeeping, and let fullscreen attach the same AVPlayer directly.
+    @MainActor func takePlayerForFullscreen(_ mediaID: String) -> AVPlayer? {
+        guard let player = playerCache.removeValue(forKey: mediaID),
+              player.currentItem != nil else {
+            return nil
+        }
+
+        cancelPreloadTaskEntry(for: mediaID)
+        visibleVideoMidCounts.removeValue(forKey: mediaID)
+        preloadedPlayerMids.remove(mediaID)
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+        cacheTimestamps.removeValue(forKey: mediaID)
+
+        player.pause()
+        print("🎬 [SharedAssetCache] Handed off prepared player to fullscreen for \(shortMID(mediaID))")
+        return player
+    }
     
     /// Check if a player is in a healthy, usable state
     /// Returns true only if player is fully functional and ready to play
@@ -857,54 +878,82 @@ class SharedAssetCache: ObservableObject {
         // Don't release cached player — LRU handles eviction
     }
 
-    /// Fullscreen owns the user's active video. Drop feed/preload players and in-flight
-    /// network work so the fullscreen primary segment is not stuck behind background fills.
+    /// Fullscreen owns the user's active video. Match Android's behavior: stop preload
+    /// work, release stale preloaded players, and pause other feed players without
+    /// tearing down the tapped/protected playback path.
     @MainActor func suspendFeedActivityForFullscreen(protecting protectedMediaID: String) {
         let protected = Set([protectedMediaID])
-        var mediaIDsToCancel = Set<String>()
-        mediaIDsToCancel.formUnion(playerCache.keys)
-        mediaIDsToCancel.formUnion(assetCache.keys)
-        mediaIDsToCancel.formUnion(cachingPlayerItems.keys)
-        mediaIDsToCancel.formUnion(loadingTasks.keys)
-        mediaIDsToCancel.formUnion(preloadTasks.keys)
-        mediaIDsToCancel.formUnion(inFlightPlayerCreations.keys)
-        mediaIDsToCancel.formUnion(activeCreationTasks.keys)
-        mediaIDsToCancel.formUnion(visibleVideoMids)
-        mediaIDsToCancel.formUnion(preloadedPlayerMids)
-        mediaIDsToCancel.formUnion(protectedPreloadMids)
-        for ids in tweetUrlMapping.values {
-            mediaIDsToCancel.formUnion(ids)
+        let stalePreloadedPlayers = Array(preloadedPlayerMids).filter { mediaID in
+            !protected.contains(mediaID) &&
+            (visibleVideoMidCounts[mediaID] ?? 0) == 0
         }
-        mediaIDsToCancel.subtract(protected)
 
-        guard !mediaIDsToCancel.isEmpty else { return }
-
-        visibleVideoMidCounts = visibleVideoMidCounts.filter { protected.contains($0.key) }
-        preloadedPlayerMids.removeAll()
-        protectedPreloadMids.removeAll()
-        preloadedPlayerGraceExpirations.removeAll()
-
-        var releasedPlayers = 0
-        for mediaID in mediaIDsToCancel {
-            cancelAssetLoadTask(for: mediaID)
+        let preloadIDs = Set(preloadTasks.keys)
+            .union(preloadedPlayerMids)
+            .union(protectedPreloadMids)
+            .subtracting(protected)
+        for mediaID in preloadIDs {
             cancelPreloadTaskEntry(for: mediaID)
-            cancelPlayerCreationTasks(for: mediaID)
-            if let item = cachingPlayerItems.removeValue(forKey: mediaID) {
-                item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-                item.asset.cancelLoading()
-            }
-            if let player = playerCache.removeValue(forKey: mediaID) {
-                releasePlayer(player)
-                releasedPlayers += 1
-            }
-            assetCache.removeValue(forKey: mediaID)
-            cacheTimestamps.removeValue(forKey: mediaID)
-            resourceLoaderDelegates.removeValue(forKey: mediaID)
-            cleanupTweetMappings(for: mediaID)
+            protectedPreloadMids.remove(mediaID)
+            preloadedPlayerMids.remove(mediaID)
+            preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
             LocalHTTPServer.shared.cancelDownloads(for: mediaID)
         }
 
-        print("🎬 [SharedAssetCache] Suspended feed activity for fullscreen \(String(protectedMediaID.prefix(8))): cancelled \(mediaIDsToCancel.count), released \(releasedPlayers) players")
+        var releasedPlayers = 0
+        for mediaID in stalePreloadedPlayers {
+            if let player = playerCache.removeValue(forKey: mediaID) {
+                // Do not call releasePlayer() here. A player listed as a stale preload can
+                // still be referenced by a feed cell or VideoStateCache after fullscreen
+                // handoff/return; replaceCurrentItem(nil) would mutate that shared AVPlayer
+                // and leave the feed with a cached player shell that has no currentItem.
+                player.pause()
+                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                releasedPlayers += 1
+            }
+            cacheTimestamps.removeValue(forKey: mediaID)
+        }
+
+        for (mediaID, player) in playerCache where !protected.contains(mediaID) {
+            player.pause()
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        }
+
+        print("🎬 [SharedAssetCache] Suspended feed activity for fullscreen \(String(protectedMediaID.prefix(8))): cancelled \(preloadIDs.count) preload(s), released \(releasedPlayers) preloaded player(s)")
+    }
+
+    /// Fullscreen could not reuse a cached player for this media, so any feed/preload
+    /// work for the same mid is now stale. Cancel only the in-flight work, keep finished
+    /// cache entries, and let fullscreen start a primary load with the local proxy priority.
+    @MainActor func prepareUncachedFullscreenLoad(for mediaID: String) {
+        var cancelledWork = 0
+
+        if loadingTasks[mediaID] != nil {
+            cancelAssetLoadTask(for: mediaID)
+            cancelledWork += 1
+        }
+        if preloadTasks[mediaID] != nil {
+            cancelPreloadTaskEntry(for: mediaID)
+            cancelledWork += 1
+        }
+        if inFlightPlayerCreations[mediaID] != nil || activeCreationTasks[mediaID] != nil {
+            cancelPlayerCreationTasks(for: mediaID)
+            cancelledWork += 1
+        }
+        if let item = cachingPlayerItems.removeValue(forKey: mediaID) {
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            item.asset.cancelLoading()
+            cancelledWork += 1
+        }
+
+        preloadedPlayerMids.remove(mediaID)
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+
+        if cancelledWork > 0 {
+            print("🎬 [SharedAssetCache] Prepared uncached fullscreen load for \(shortMID(mediaID)): cancelled \(cancelledWork) stale feed/preload work item(s)")
+        }
     }
 
     /// MEMORY FIX: Immediately release player and all video data when video goes out of sight

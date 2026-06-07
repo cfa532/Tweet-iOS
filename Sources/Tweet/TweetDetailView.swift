@@ -725,7 +725,6 @@ private struct DetailSingletonVideoPlayerView: View {
         isThisVideoPreparing
             || (manager.currentVideoMid == mid
                 && manager.isBuffering
-                && !isThisVideoReady
                 && !manager.isPlaybackRendering
                 && !didThisVideoFailToLoad)
     }
@@ -1375,7 +1374,7 @@ struct TweetDetailView: View {
             commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)
 
             // Rebuild video list on re-enter (deactivate clears it, onChange won't fire if count unchanged)
-            commentsVideoCoordinator.buildVideoList(from: comments)
+            commentsVideoCoordinator.buildVideoList(from: comments, outerTweetId: displayTweet.mid)
 
             // Ensure bottom navigation bar is visible when detail view appears
             // Always post notification to ensure ContentView state is synced
@@ -1391,7 +1390,7 @@ struct TweetDetailView: View {
         }
         .onChange(of: comments.count) { _, _ in
             // Rebuild video list for fullscreen navigation when comments change
-            commentsVideoCoordinator.buildVideoList(from: comments)
+            commentsVideoCoordinator.buildVideoList(from: comments, outerTweetId: displayTweet.mid)
             TweetDetailCommentsCache.shared.setComments(comments, for: displayTweet.mid)
         }
         .onChange(of: displayTweet.mid) { _, _ in
@@ -1694,13 +1693,19 @@ struct TweetDetailView: View {
                     coordinator: commentsVideoCoordinator,
                     scrollCoordinateSpace: "commentsScroll"
                 )
-                .environment(\.videoListProvider, { videoMid, cellTweetId, attachmentIndex in
+                .environment(\.videoListProvider, { videoMid, outerTweetId, mediaTweetId, attachmentIndex in
                     let list = commentsVideoCoordinator.getVideoListForFullscreen()
                     guard !list.isEmpty else { return nil }
                     let startIndex = list.firstIndex(where: {
-                        $0.videoMid == videoMid && $0.cellTweetId == cellTweetId
+                        $0.videoMid == videoMid &&
+                        $0.contextTweetId == outerTweetId &&
+                        $0.mediaTweetId == mediaTweetId &&
+                        $0.attachmentIndex == attachmentIndex
                     }) ?? list.firstIndex(where: {
-                        $0.videoMid == videoMid
+                        $0.videoMid == videoMid &&
+                        $0.contextTweetId == displayTweet.mid &&
+                        $0.mediaTweetId == mediaTweetId &&
+                        $0.attachmentIndex == attachmentIndex
                     }) ?? 0
                     return (list, startIndex)
                 })
@@ -2098,6 +2103,7 @@ struct CommentVideoTrackingWrapper: View {
         if visibilityRatio > 0 {
             coordinator.reportVideoVisible(
                 commentId: comment.mid,
+                outerTweetId: parentTweet.mid,
                 videoMid: videoInfo.attachment.mid,
                 attachmentIndex: videoInfo.index,
                 visibilityRatio: visibilityRatio,
