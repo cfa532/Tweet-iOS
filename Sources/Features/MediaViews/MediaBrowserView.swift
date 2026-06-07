@@ -33,6 +33,7 @@ struct MediaBrowserView: View {
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
+    @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
     private var attachments: [MimeiFileType] {
         // Audio is handled by the compact playlist player; the browser pages visual media only.
         let allAttachments = currentTweet.attachments ?? []
@@ -129,6 +130,12 @@ struct MediaBrowserView: View {
                 },
                 loadImageIfNeededClosure: { attachment, index in
                     loadImageIfNeeded(for: attachment, at: index)
+                },
+                cleanupNonVisibleImagesClosure: { index in
+                    cleanupNonVisibleImages(attachments: attachments, currentIndex: index)
+                },
+                cleanupImageStatesClosure: {
+                    cleanupImageStates(attachments: attachments)
                 }
             )
             .onAppear {
@@ -256,6 +263,8 @@ struct MediaBrowserView: View {
         let resetControlsTimer: () -> Void
         let onShareVisibilityChange: (Bool) -> Void
         let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
+        let cleanupNonVisibleImagesClosure: (Int) -> Void
+        let cleanupImageStatesClosure: () -> Void
 
         /// Find the next video attachment index after the current index (skips images/audio).
         /// Returns nil if there is no next video in this tweet.
@@ -365,7 +374,7 @@ struct MediaBrowserView: View {
                         previousIndex = newIndex
                         
                         // Clean up non-visible images to free memory
-                        cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
+                        cleanupNonVisibleImagesClosure(newIndex)
 
                         loadSelectedVideoIfNeeded(reason: "indexChanged")
                     }
@@ -440,7 +449,7 @@ struct MediaBrowserView: View {
                 // This allows videos that were already playing to continue, and only the exiting video to resume if needed
                 
                 // Clean up all image states to free memory
-                cleanupImageStates(attachments: attachments, imageStates: $imageStates, baseUrl: baseUrl)
+                cleanupImageStatesClosure()
             }
         }
         
@@ -629,19 +638,7 @@ struct MediaBrowserView: View {
             // ✅ Load original image in background and replace compressed cache
             // This ensures fullscreen views use the highest quality image
             guard let url = attachment.getUrl(baseUrl) else { return }
-            Task {
-                if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
-                    from: url,
-                    for: attachment,
-                    baseUrl: baseUrl,
-                    replaceCompressedCache: true
-                ) {
-                    // Update image state with original image
-                    await MainActor.run {
-                        self.imageStates[index] = .loaded(originalImage)
-                    }
-                }
-            }
+            startOriginalImageLoad(for: attachment, at: index, url: url)
             return
         }
         
@@ -666,21 +663,37 @@ struct MediaBrowserView: View {
                 
                 // ✅ Load original image in background and replace compressed cache
                 // This ensures fullscreen and detail views use the highest quality image
-                Task {
-                    if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
-                        from: url,
-                        for: attachment,
-                        baseUrl: baseUrl,
-                        replaceCompressedCache: true
-                    ) {
-                        // Update image state with original image
-                        await MainActor.run {
-                            self.imageStates[index] = .loaded(originalImage)
-                        }
-                    }
-                }
+                startOriginalImageLoad(for: attachment, at: index, url: url)
             } else {
                 self.imageStates[index] = .error
+            }
+        }
+    }
+
+    private func startOriginalImageLoad(for attachment: MimeiFileType, at index: Int, url: URL) {
+        originalImageTasks[index]?.cancel()
+        originalImageTasks[index] = Task {
+            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                from: url,
+                for: attachment,
+                baseUrl: baseUrl,
+                replaceCompressedCache: true,
+                priority: .critical
+            ) {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.originalImageTasks[index] != nil,
+                          self.attachments.indices.contains(index),
+                          self.attachments[index].mid == attachment.mid else { return }
+                    self.imageStates[index] = .loaded(originalImage)
+                }
+            }
+
+            await MainActor.run {
+                if self.originalImageTasks[index]?.isCancelled != false {
+                    return
+                }
+                self.originalImageTasks.removeValue(forKey: index)
             }
         }
     }
@@ -705,6 +718,20 @@ struct MediaBrowserView: View {
         imageStates.wrappedValue.removeAll()
         
     }
+
+    private func cleanupImageStates(attachments: [MimeiFileType]) {
+        for task in originalImageTasks.values {
+            task.cancel()
+        }
+        originalImageTasks.removeAll()
+
+        for (index, attachment) in attachments.enumerated() {
+            let loadId = "browser_\(index)_\(attachment.mid)"
+            GlobalImageLoadManager.shared.cancelLoad(id: loadId)
+        }
+
+        imageStates.removeAll()
+    }
     
     private static func cleanupNonVisibleImages(attachments: [MimeiFileType], currentIndex: Int, imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
         // Since we're using compressed images (small), we can keep more in memory
@@ -724,6 +751,23 @@ struct MediaBrowserView: View {
                 // Remove from image states
                 imageStates.wrappedValue.removeValue(forKey: index)
             }
+        }
+    }
+
+    private func cleanupNonVisibleImages(attachments: [MimeiFileType], currentIndex: Int) {
+        let keepRange = max(0, currentIndex - 2)...min(attachments.count - 1, currentIndex + 2)
+
+        let indexesToRemove = imageStates.keys.filter { index in
+            !keepRange.contains(index) && index < attachments.count
+        }
+
+        for index in indexesToRemove {
+            let attachment = attachments[index]
+            let loadId = "browser_\(index)_\(attachment.mid)"
+            GlobalImageLoadManager.shared.cancelLoad(id: loadId)
+            originalImageTasks[index]?.cancel()
+            originalImageTasks.removeValue(forKey: index)
+            imageStates.removeValue(forKey: index)
         }
     }
 }
@@ -1007,6 +1051,7 @@ struct SingletonVideoPlayerView: View {
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
     @State private var hasAttemptedReload = false
+    @State private var thumbnailRefreshTick = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -1026,20 +1071,17 @@ struct SingletonVideoPlayerView: View {
                     // No player, no item, or different video — show lastframe as placeholder.
                     // This covers the load-failed case (currentVideoMid set to nil, currentItem nil)
                     // and the initial loading state before the first item is attached.
-                    if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
-                        Image(uiImage: thumbnail)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                    } else {
-                        Color.black
-                    }
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.5)
+                    loadingPoster
+                }
+
+                if manager.currentVideoMid == mid && !manager.isItemReady && manager.singletonPlayer?.currentItem != nil {
+                    loadingPoster
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
                 }
 
                 // Show buffering spinner when waiting for data (non-interactive overlay)
-                if manager.isBuffering && manager.currentVideoMid == mid {
+                if manager.isBuffering && manager.currentVideoMid == mid && manager.isItemReady {
                     ZStack {
                         Color.black.opacity(0.15)
                         ProgressView()
@@ -1075,6 +1117,10 @@ struct SingletonVideoPlayerView: View {
                         hasAttemptedReload = false
                     }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .videoThumbnailCached)) { notification in
+                    guard notification.userInfo?["mediaID"] as? String == mid else { return }
+                    thumbnailRefreshTick += 1
+                }
                 .onChange(of: manager.singletonPlayer?.currentItem) { _, newItem in
                     // Reset reload flag when player item is cleared so a failed load can retry.
                     if newItem == nil && (manager.currentVideoMid == nil || manager.currentVideoMid == mid) {
@@ -1093,9 +1139,27 @@ struct SingletonVideoPlayerView: View {
                         }
                     }
                 }
-            }
         }
     }
+
+    @ViewBuilder
+    private var loadingPoster: some View {
+        ZStack {
+            if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.black
+            }
+
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.5)
+        }
+        .id(thumbnailRefreshTick)
+    }
+}
 
 // MARK: - Simple AVPlayerViewController Wrapper
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {

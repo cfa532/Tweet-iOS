@@ -1544,9 +1544,41 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 return
             }
 
+            if self.rebuildUnknownPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
+                return
+            }
+
             self.applyAVPlayerBufferDefaults(to: player)
             self.updateLoadingSpinnerForPlayback(player)
         }
+    }
+
+    @discardableResult
+    private func rebuildUnknownPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
+        guard coordinatorWantsToPlay,
+              videoCellState == .playing,
+              player.currentItem?.status == .unknown,
+              bufferedAhead >= 1.0,
+              !isVideoAtEnd(player),
+              let mid = attachment?.mid else { return false }
+
+        let resumeTime = player.currentTime()
+        if resumeTime.isValid, resumeTime.seconds.isFinite {
+            pendingRecoverySeekTime = resumeTime
+        }
+
+        print("\(logPrefix) 🔄 \(reason): item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player")
+        preserveFrameToCache(useVideoOutput: false)
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid)
+        VideoStateCache.shared.clearCachedState(for: mid)
+        SharedAssetCache.shared.softResetPlayer(for: mid)
+        return reacquirePlayerForCurrentVideo(
+            reason: "unknownItemBufferedRecovery",
+            transitionState: imageView.image != nil ? .thumbnail : .playerLoading,
+            requireLoadableVisibleVideo: true,
+            wantsPlayback: true
+        )
     }
 
     @discardableResult
@@ -2997,6 +3029,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Save video position before fullscreen
         saveVideoPositionForFullscreen()
+        captureLastFrameIfPossible(reason: "openFullscreen")
 
         // Build video list from the feed's coordinator and pass to fullscreen manager
         let coordinator = videoCoordinator ?? VideoPlaybackCoordinator.shared
@@ -3277,7 +3310,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return true
         }
         guard let item = player?.currentItem else { return false }
-        return item.status == .unknown
+        if item.status == .unknown {
+            guard let player else { return true }
+            let hasWaitedLongEnough = Date().timeIntervalSince(lastPlaybackRequestDate) > 12.0
+            if hasWaitedLongEnough && bufferedTimeAhead(for: player) >= 1.0 {
+                return false
+            }
+            return true
+        }
+        return false
     }
 
     var isRecentlyPlaying: Bool {

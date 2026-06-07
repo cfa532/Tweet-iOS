@@ -373,6 +373,7 @@ struct DetailMediaCell: View {
     let showMuteButton: Bool
     @State private var hasRestoredPosition = false // Track if we've restored position
     @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
+    @State private var originalImageTask: Task<Void, Never>? = nil
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
@@ -517,6 +518,9 @@ struct DetailMediaCell: View {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
             }
+
+            originalImageTask?.cancel()
+            originalImageTask = nil
         }
 
     }
@@ -558,19 +562,7 @@ struct DetailMediaCell: View {
             
             // ✅ Load original image in background and replace compressed cache
             // This ensures detail view uses the highest quality image
-            Task {
-                if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
-                    from: url,
-                    for: attachment,
-                    baseUrl: baseUrl,
-                    replaceCompressedCache: true
-                ) {
-                    // Update image with original
-                    await MainActor.run {
-                        self.image = originalImage
-                    }
-                }
-            }
+            startOriginalImageLoad(url: url, baseUrl: baseUrl)
             return
         }
         
@@ -594,19 +586,32 @@ struct DetailMediaCell: View {
             // ✅ Load original image in background and replace compressed cache
             // This ensures detail view uses the highest quality image
             if loadedImage != nil {
-                Task {
-                    if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
-                        from: url,
-                        for: attachment,
-                        baseUrl: baseUrl,
-                        replaceCompressedCache: true
-                    ) {
-                        // Update image with original
-                        await MainActor.run {
-                            self.image = originalImage
-                        }
-                    }
+                startOriginalImageLoad(url: url, baseUrl: baseUrl)
+            }
+        }
+    }
+
+    private func startOriginalImageLoad(url: URL, baseUrl: URL) {
+        let expectedMid = attachment.mid
+        originalImageTask?.cancel()
+        originalImageTask = Task {
+            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                from: url,
+                for: attachment,
+                baseUrl: baseUrl,
+                replaceCompressedCache: true,
+                priority: .critical
+            ) {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.attachment.mid == expectedMid,
+                          self.originalImageTask != nil else { return }
+                    self.image = originalImage
                 }
+            }
+
+            await MainActor.run {
+                self.originalImageTask = nil
             }
         }
     }

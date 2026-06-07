@@ -3023,7 +3023,6 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
     private var persistedBytes: Int64
     private var headersSent = false
     private var connectionDead = false
-    private var fillOnlyMode = false
     var onConnectionDead: (() -> Void)?
 
     private lazy var segmentLabel: String = {
@@ -3080,9 +3079,8 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
             return
         }
 
-        if resumeOffset > 0 && http.statusCode == 206 {
-            fillOnlyMode = true
-        } else if resumeOffset > 0 {
+        let shouldStreamCachedPrefix = resumeOffset > 0 && http.statusCode == 206
+        if resumeOffset > 0 && http.statusCode != 206 {
             try? FileManager.default.removeItem(atPath: partialCachePath)
             resumeOffset = 0
             persistedBytes = 0
@@ -3096,11 +3094,6 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
             return
         }
 
-        if fillOnlyMode {
-            completionHandler(.allow)
-            return
-        }
-
         guard !connectionDead else {
             completionHandler(.allow)
             return
@@ -3111,7 +3104,10 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
             "Accept-Ranges": "bytes"
         ]
         if http.expectedContentLength > 0 {
-            headers["Content-Length"] = "\(http.expectedContentLength)"
+            let fullLength = shouldStreamCachedPrefix
+                ? Int64(resumeOffset) + http.expectedContentLength
+                : http.expectedContentLength
+            headers["Content-Length"] = "\(fullLength)"
         }
         let headerData = buildHeaders(200, headers)
         switch connection.state {
@@ -3123,6 +3119,9 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         }
         connection.send(content: headerData, isComplete: false, completion: .contentProcessed { _ in })
         headersSent = true
+        if shouldStreamCachedPrefix {
+            sendCachedPrefixToPlayer()
+        }
         completionHandler(.allow)
     }
 
@@ -3132,7 +3131,7 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         writePartialChunk(data)
         noteProgress(sessionKey)
 
-        guard !fillOnlyMode, !connectionDead else { return }
+        guard !connectionDead else { return }
         switch connection.state {
         case .cancelled, .failed:
             markConnectionDead()
@@ -3153,6 +3152,26 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         let release = onConnectionDead
         onConnectionDead = nil
         release?()
+    }
+
+    private func sendCachedPrefixToPlayer() {
+        guard resumeOffset > 0, !connectionDead else { return }
+        let prefixURL = URL(fileURLWithPath: partialCachePath)
+        guard let prefixData = try? Data(contentsOf: prefixURL),
+              prefixData.count >= Int(resumeOffset) else {
+            if !connectionDead {
+                sendFallbackError(connection)
+                markConnectionDead()
+            }
+            return
+        }
+
+        let bytesToSend = prefixData.prefix(Int(resumeOffset))
+        guard !bytesToSend.isEmpty else { return }
+        connection.send(content: Data(bytesToSend), isComplete: false, completion: .contentProcessed { [weak self] error in
+            guard let self, error != nil, !self.connectionDead else { return }
+            self.markConnectionDead()
+        })
     }
 
     private func openPartialFile(append: Bool) -> Bool {
@@ -3231,11 +3250,6 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
                 if !connectionDead { connection.cancel() }
                 return
             }
-            if fillOnlyMode {
-                connection.cancel()
-                print("⚠️ [HLS SEGMENT \(shortId)] \(segmentLabel) resume failed, \(persistedBytes / 1024)KB cached partial: \(nsError.domain) \(nsError.code)")
-                return
-            }
             if !connectionDead && !headersSent {
                 sendFallbackError(connection)
                 BlackList.shared.recordFailure(mediaID)
@@ -3275,12 +3289,6 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
             return
         }
         BlackList.shared.recordSuccess(mediaID)
-
-        if fillOnlyMode {
-            print("✅ [HLS SEGMENT \(shortId)] \(segmentLabel): \(persistedBytes / 1024)KB (resumed → disk cache)")
-            serveCompletedFile(cachePath, connection)
-            return
-        }
 
         if connectionDead {
             print("✅ [HLS SEGMENT \(shortId)] \(segmentLabel): \(persistedBytes / 1024)KB (background → disk cache)")
