@@ -1475,7 +1475,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
               lastActualPlaybackDate != .distantPast,
               !isVideoAtEnd(player) else { return }
 
-        let positionBucket = Int(seconds(from: player.currentTime()).rounded(.down))
+        let playbackPosition = seconds(from: player.currentTime())
+        let positionBucket = Int(playbackPosition.rounded(.down))
         let now = Date()
         if positionBucket == lastAdaptiveRebufferPositionBucket,
            now.timeIntervalSince(lastAdaptiveRebufferDate) < 2.0 {
@@ -1490,7 +1491,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let target = adaptiveResumeBufferTarget(for: player)
         let logKey = "\(reason)|\(adaptiveRebufferCount)|\(Int((target * 10).rounded()))"
         if logKey != lastAdaptiveRebufferLogKey || now.timeIntervalSince(lastAdaptiveRebufferLogDate) >= 8.0 {
-            print("\(logPrefix) 🧭 adaptive buffering (\(reason)): stall=\(adaptiveRebufferCount), target=\(String(format: "%.1f", target))s")
+            print("\(logPrefix) 🧭 adaptive buffering (\(reason)): pos=\(String(format: "%.1f", playbackPosition))s, stall=\(adaptiveRebufferCount), target=\(String(format: "%.1f", target))s")
             lastAdaptiveRebufferLogKey = logKey
             lastAdaptiveRebufferLogDate = now
         }
@@ -1646,7 +1647,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     self.lastPlaybackRequestDate = Date()
                     self.playbackStartupRecoveryTask = nil
                     self.playbackStartupRecoveryRequestDate = nil
-                    print("\(self.logPrefix) ⏳ \(label) (\(reason)): preserving player (buffered=\(String(format: "%.1f", bufferedAhead))s, target=\(String(format: "%.1f", targetBuffer))s, keepUp=\(keepUp), extension=\(self.playbackRecoveryProgressExtensionCount)/\(maxExtensions), progress=\(bufferProgressed), stagnant=\(self.playbackRecoveryStagnantCount))")
+                    let playbackPosition = self.seconds(from: player.currentTime())
+                    print("\(self.logPrefix) ⏳ \(label) (\(reason)): preserving player (pos=\(String(format: "%.1f", playbackPosition))s, buffered=\(String(format: "%.1f", bufferedAhead))s, target=\(String(format: "%.1f", targetBuffer))s, keepUp=\(keepUp), extension=\(self.playbackRecoveryProgressExtensionCount)/\(maxExtensions), progress=\(bufferProgressed), stagnant=\(self.playbackRecoveryStagnantCount))")
                     self.scheduleStartupRecovery(for: player, reason: "\(reason)-buffering")
                     return
                 }
