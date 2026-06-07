@@ -393,6 +393,10 @@ struct DetailMediaCell: View {
     private var baseUrl: URL? {
         return parentTweet.author?.baseUrl
     }
+
+    static func imageLoadId(for attachment: MimeiFileType) -> String {
+        "detail_\(attachment.mid)"
+    }
     
     var body: some View {
         Group {
@@ -442,7 +446,8 @@ struct DetailMediaCell: View {
                                         )
                                 } else {
                                     ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle())
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .scaleEffect(1.2)
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 }
                             } else {
@@ -541,9 +546,9 @@ struct DetailMediaCell: View {
         guard let baseUrl = baseUrl,
               let url = attachment.getUrl(baseUrl) else { return }
         
-        // ✅ FIX: Use only mid as request ID - cache key is based on mid, so request ID should match
-        // This ensures cached images are reused even when baseUrl changes
-        let loadId = attachment.mid
+        // Use a detail-specific request ID so feed cells disappearing during navigation
+        // cannot cancel the image load that is now visible in TweetDetailView.
+        let loadId = Self.imageLoadId(for: attachment)
         print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
         
         // First, try to get cached image immediately (disk check is OK in async context)
@@ -1356,7 +1361,7 @@ struct TweetDetailView: View {
             // SharedAssetCache/VideoStateCache, not GlobalImageLoadManager.
             if let attachments = displayTweet.attachments {
                 for attachment in attachments where attachment.type == .image {
-                    let mainLoadId = attachment.mid
+                    let mainLoadId = DetailMediaCell.imageLoadId(for: attachment)
                     print("DEBUG: [TweetDetailView] Cancelling image load: \(mainLoadId)")
                     GlobalImageLoadManager.shared.cancelLoad(id: mainLoadId)
                 }
