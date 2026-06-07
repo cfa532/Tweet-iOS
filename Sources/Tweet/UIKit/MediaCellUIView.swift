@@ -1610,7 +1610,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let hasNoRecentProgress = lastPlaybackProgressDate == .distantPast
             || now.timeIntervalSince(lastPlaybackProgressDate) >= 2.0
         let isStalledResume = lastActualPlaybackDate != .distantPast && hasNoRecentProgress
-        let hasUsableBuffer = bufferedAhead >= 2.0
+        let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
+        let requiredBuffer = keepUp ? 2.0 : (isStartup ? 4.0 : 5.0)
+        let hasUsableBuffer = bufferedAhead >= requiredBuffer
         guard (isStartup || isStalledResume), hasUsableBuffer else { return false }
 
         guard now.timeIntervalSince(lastStartupBufferReleaseDate) >= 8.0 else { return true }
@@ -1623,9 +1625,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         player.play()
         updateLoadingSpinnerForPlayback(player)
 
-        let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
         let label = isStartup ? "startup buffer ready" : "resume buffer ready"
-        print("\(logPrefix) ▶️ \(label) (\(reason)): nudging playback, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp)")
+        print("\(logPrefix) ▶️ \(label) (\(reason)): nudging playback, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, required=\(String(format: "%.1f", requiredBuffer))s, keepUp=\(keepUp)")
         return true
     }
 
