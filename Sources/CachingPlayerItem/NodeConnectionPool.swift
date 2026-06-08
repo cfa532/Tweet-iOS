@@ -6,7 +6,7 @@
 // Separate caps for primary and preload downloads per node:
 // Primary video:
 //   - Never waits — acquires a slot immediately.
-//   - Capped at primarySlotCap concurrent slots: 1 for HLS (sequential), 2 for progressive.
+//   - Capped at primarySlotCap concurrent slots: 2 for active playback paths.
 //   - Primary slots do NOT count toward the preload cap.
 // Non-primary (preloads):
 //   - Soft cap of maxPreloadSlots (3) concurrent downloads, counting only non-primary slots.

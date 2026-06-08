@@ -616,7 +616,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Fullscreen is the user's active media target. Clear any stale cancellation
         // from feed scroll cleanup and let the local proxy prioritize this video.
         LocalHTTPServer.shared.clearCancelledState(for: mid)
-        LocalHTTPServer.shared.setPrimaryMediaID(mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid, isHLS: mediaType == .hls_video)
         SharedAssetCache.shared.suspendFeedActivityForFullscreen(protecting: mid)
 
         // If we already have the correct item loaded (e.g. re-entering fullscreen after dismiss

@@ -836,10 +836,15 @@ class SharedAssetCache: ObservableObject {
         preloadedPlayerGraceExpirations[mediaID] = now.addingTimeInterval(preloadedPlayerGraceInterval)
     }
 
-    /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
+    /// Cancel in-flight preload/loading tasks for a specific mediaID.
     /// Called by VideoPlaybackCoordinator when the directional preload set changes and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
-        protectPreloadedPlayerBriefly(mediaID)
+        let isVisible = (visibleVideoMidCounts[mediaID] ?? 0) > 0
+        if isVisible {
+            protectPreloadedPlayerBriefly(mediaID)
+        } else {
+            preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+        }
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerMids.remove(mediaID)
 
@@ -854,7 +859,9 @@ class SharedAssetCache: ObservableObject {
         // Task cancellation alone doesn't stop already-running AVPlayer segment requests
         // since AVPlayer makes them independently via the local HTTP proxy.
         LocalHTTPServer.shared.cancelDownloads(for: mediaID)
-        // Don't release cached player — LRU handles eviction
+        if !isVisible, playerCache[mediaID] != nil {
+            clearPlayerForMediaID(mediaID, deleteDiskCache: false)
+        }
     }
 
     /// Fullscreen owns the user's active video. Match Android's behavior: stop preload
@@ -1943,17 +1950,22 @@ class SharedAssetCache: ObservableObject {
             }
             do {
                 let player = try await getOrCreatePlayer(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType)
+                try Task.checkCancellation()
                 await warmPreloadedPlayer(player, mediaID: mediaID)
+                try Task.checkCancellation()
 
                 if cachedThumbnail(for: mediaID) == nil,
                    let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID) {
+                    try Task.checkCancellation()
                     if await generateDecodedPreloadFrame(from: player, for: mediaID) == false,
                        cachedThumbnail(for: mediaID) == nil {
+                        try Task.checkCancellation()
                         generateThumbnail(from: readyAsset, for: mediaID)
                     }
                 }
 
-                await MainActor.run {
+                let didPublishPreload = await MainActor.run { () -> Bool in
+                    guard !Task.isCancelled else { return false }
                     if !self.visibleVideoMids.contains(mediaID), player.rate == 0 {
                         player.pause()
                         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
@@ -1965,9 +1977,12 @@ class SharedAssetCache: ObservableObject {
                         object: self,
                         userInfo: ["mediaID": mediaID]
                     )
+                    return true
                 }
 
-                print("🔮 [PLAYER PRELOAD] Warmed player for \(String(mediaID.prefix(8)))")
+                if didPublishPreload {
+                    print("🔮 [PLAYER PRELOAD] Warmed player for \(String(mediaID.prefix(8)))")
+                }
             } catch {
                 // Preload failure is non-critical
             }

@@ -202,6 +202,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Actively tracked directional video preloads — explicitly managed on scroll stop.
     private var activePreloadMids: Set<String> = []
     private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
+    private var directionalPreloadsSuppressedUntil: Date = .distantPast
     private let directionalPreloadRefreshInterval = FeedPlaybackTuning.directionalVideoPreloadRefreshInterval
     var directionalPlayerPreloadCount: Int = FeedPlaybackTuning.directionalVideoPreloadCount {
         didSet {
@@ -1156,7 +1157,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoIds = [identifier]
         cachedVisibilityRatios[identifier] = 0.7
         lastPrimarySwitchTime = Date()
-        LocalHTTPServer.shared.setPrimaryMediaID(video.videoMid)
+        let isHLSPrimary = resolveVideoURL(video)?.mediaType == .hls_video
+        LocalHTTPServer.shared.setPrimaryMediaID(video.videoMid, isHLS: isHLSPrimary)
+        if isHLSPrimary {
+            directionalPreloadsSuppressedUntil = Date().addingTimeInterval(10.0)
+            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "manual replay hls-startup")
+        } else {
+            directionalPreloadsSuppressedUntil = .distantPast
+        }
 
         delegate.shouldPlayVideo(withMid: video.videoMid)
         refreshDirectionalPreloads(reason: "manual replay", throttle: false)
@@ -1406,6 +1414,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func clearPreloadedTracking() {
         activePreloadMids.removeAll()
         lastDirectionalPreloadRefreshTime = 0
+        directionalPreloadsSuppressedUntil = .distantPast
         SharedAssetCache.shared.updateProtectedPreloadMids([])
         scrollCancelTimer?.invalidate()
         scrollCancelTimer = nil
@@ -1448,6 +1457,13 @@ class VideoPlaybackCoordinator: ObservableObject {
             let now = CACurrentMediaTime()
             guard now - lastDirectionalPreloadRefreshTime >= directionalPreloadRefreshInterval else { return }
             lastDirectionalPreloadRefreshTime = now
+        }
+
+        if Date() < directionalPreloadsSuppressedUntil {
+            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "\(reason) hls-startup")
+            activePreloadMids.removeAll()
+            SharedAssetCache.shared.updateProtectedPreloadMids([])
+            return
         }
 
         let preloadCount = max(0, directionalPlayerPreloadCount)
@@ -1613,11 +1629,15 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Set primary immediately so its segment requests bypass the concurrent download limit.
         let primaryMid = primary.videoMid
-        LocalHTTPServer.shared.setPrimaryMediaID(primaryMid)
+        let isHLSPrimary = resolveVideoURL(primary)?.mediaType == .hls_video
+        LocalHTTPServer.shared.setPrimaryMediaID(primaryMid, isHLS: isHLSPrimary)
 
-        // NodeConnectionPool now manages bandwidth: primary gets priority,
-        // preloads wait between segment/chunk requests when primary is starved.
-        // No need to cancel preload downloads here.
+        if isHLSPrimary {
+            directionalPreloadsSuppressedUntil = Date().addingTimeInterval(10.0)
+            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "primary hls-startup")
+        } else {
+            directionalPreloadsSuppressedUntil = .distantPast
+        }
 
         delegate.shouldPlayVideo(withMid: primary.videoMid)
         refreshDirectionalPreloads(reason: "primary selected", throttle: false)
@@ -1761,7 +1781,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoIds = [nextVideo.identifier]
         // Mirror startPrimaryVideoPlayback: clear cancelledMediaID so a preloaded-then-cancelled
         // player can resume downloading immediately without waiting for a new CachingPlayerItem.
-        LocalHTTPServer.shared.setPrimaryMediaID(nextVideo.videoMid)
+        let nextIsHLSPrimary = resolveVideoURL(nextVideo)?.mediaType == .hls_video
+        LocalHTTPServer.shared.setPrimaryMediaID(nextVideo.videoMid, isHLS: nextIsHLSPrimary)
+        if nextIsHLSPrimary {
+            directionalPreloadsSuppressedUntil = Date().addingTimeInterval(10.0)
+            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "next hls-startup")
+        } else {
+            directionalPreloadsSuppressedUntil = .distantPast
+        }
 
         // Direct delegate call — no broadcast notification
         if let delegate = mediaCellDelegates[nextVideo.identifier] {

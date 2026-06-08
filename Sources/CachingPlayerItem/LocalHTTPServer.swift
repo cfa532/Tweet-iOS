@@ -221,6 +221,183 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     }
 }
 
+// MARK: - HLS Segment Streaming Delegate
+private final class HLSSegmentStreamingDelegate: NSObject, URLSessionDataDelegate {
+    private let connection: NWConnection
+    private let mediaID: String
+    private let cachePath: String
+    private let tempCachePath: String
+    private let fileHandle: FileHandle?
+    private let roleLabel: String
+    private let segmentName: String
+    private let contentType: String
+    private let startDate: Date
+    private let sessionCleanup: () -> Void
+    private let buildHeaders: (Int, [String: String]) -> Data
+    private let onProgress: () -> Void
+    var onConnectionDead: (() -> Void)?
+
+    private let writeLock = NSLock()
+    private var sentBytesCount: Int64 = 0
+    private var didReceiveSuccessfulResponse = false
+    private var didLogFirstByte = false
+
+    init(
+        connection: NWConnection,
+        mediaID: String,
+        cachePath: String,
+        tempCachePath: String,
+        fileHandle: FileHandle?,
+        roleLabel: String,
+        segmentName: String,
+        contentType: String,
+        startDate: Date,
+        sessionCleanup: @escaping () -> Void,
+        buildHeaders: @escaping (Int, [String: String]) -> Data,
+        onProgress: @escaping () -> Void
+    ) {
+        self.connection = connection
+        self.mediaID = mediaID
+        self.cachePath = cachePath
+        self.tempCachePath = tempCachePath
+        self.fileHandle = fileHandle
+        self.roleLabel = roleLabel
+        self.segmentName = segmentName
+        self.contentType = contentType
+        self.startDate = startDate
+        self.sessionCleanup = sessionCleanup
+        self.buildHeaders = buildHeaders
+        self.onProgress = onProgress
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            completionHandler(.cancel)
+            return
+        }
+
+        didReceiveSuccessfulResponse = (200...299).contains(httpResponse.statusCode)
+
+        var headers: [String: String] = [
+            "Content-Type": contentType,
+            "Accept-Ranges": "bytes"
+        ]
+        if let cl = httpResponse.allHeaderFields["Content-Length"] as? String {
+            headers["Content-Length"] = cl
+        }
+        if let cr = httpResponse.allHeaderFields["Content-Range"] as? String {
+            headers["Content-Range"] = cr
+        }
+
+        switch connection.state {
+        case .cancelled, .failed:
+            completionHandler(.allow)
+            return
+        default:
+            break
+        }
+
+        let headerData = buildHeaders(httpResponse.statusCode, headers)
+        connection.send(content: headerData, completion: .contentProcessed { [weak self] error in
+            guard let self = self, error != nil else { return }
+            let release = self.onConnectionDead
+            self.onConnectionDead = nil
+            release?()
+        })
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        autoreleasepool {
+            guard !data.isEmpty else { return }
+            onProgress()
+            if !didLogFirstByte {
+                didLogFirstByte = true
+                let ms = Int(Date().timeIntervalSince(startDate) * 1000)
+                print("📊 [HLS SEG] first mid=\(String(mediaID.prefix(8))) role=\(roleLabel) seg=\(segmentName) ttfb=\(ms)ms")
+            }
+
+            switch connection.state {
+            case .cancelled, .failed:
+                let release = self.onConnectionDead
+                self.onConnectionDead = nil
+                release?()
+            default:
+                connection.send(content: data, completion: .contentProcessed { [weak self] error in
+                    guard let self = self, error != nil else { return }
+                    let release = self.onConnectionDead
+                    self.onConnectionDead = nil
+                    release?()
+                })
+            }
+
+            guard didReceiveSuccessfulResponse, let fileHandle = fileHandle else { return }
+
+            writeLock.lock()
+            defer { writeLock.unlock() }
+            do {
+                if #available(iOS 13.0, *) {
+                    try fileHandle.write(contentsOf: data)
+                } else {
+                    fileHandle.write(data)
+                }
+                sentBytesCount += Int64(data.count)
+            } catch {
+                print("❌ [HLS CACHE WRITE] Failed for \(mediaID): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        writeLock.lock()
+        if #available(iOS 13.0, *) {
+            try? fileHandle?.synchronize()
+        } else {
+            fileHandle?.synchronizeFile()
+        }
+        try? fileHandle?.close()
+        writeLock.unlock()
+
+        defer { sessionCleanup() }
+
+        if let error = error {
+            let nsError = error as NSError
+            let isTransient = nsError.code == NSURLErrorCancelled ||
+                              nsError.code == NSURLErrorTimedOut ||
+                              nsError.code == NSURLErrorNetworkConnectionLost ||
+                              nsError.code == NSURLErrorNotConnectedToInternet
+            if !isTransient {
+                print("❌ [HLS DOWNLOAD \(String(mediaID.prefix(8)))] Failed: \(nsError.domain) \(nsError.code)")
+                BlackList.shared.recordFailure(mediaID)
+            } else {
+                print("📊 [HLS SEG] stop mid=\(String(mediaID.prefix(8))) role=\(roleLabel) seg=\(segmentName) error=\(nsError.code) bytes=\(sentBytesCount / 1024)KB")
+            }
+            try? FileManager.default.removeItem(atPath: tempCachePath)
+        } else if didReceiveSuccessfulResponse && sentBytesCount > 0 {
+            do {
+                try? FileManager.default.removeItem(atPath: cachePath)
+                try FileManager.default.moveItem(atPath: tempCachePath, toPath: cachePath)
+                BlackList.shared.recordSuccess(mediaID)
+                let ms = Int(Date().timeIntervalSince(startDate) * 1000)
+                print("📊 [HLS SEG] done mid=\(String(mediaID.prefix(8))) role=\(roleLabel) seg=\(segmentName) bytes=\(sentBytesCount / 1024)KB time=\(ms)ms")
+                if LocalHTTPServer.verboseLogsEnabled {
+                    print("✅ [HLS DOWNLOAD \(String(mediaID.prefix(8)))] Complete: \(sentBytesCount / 1024)KB")
+                }
+            } catch {
+                print("⚠️ [HLS CACHE] Failed to publish segment cache: \(error.localizedDescription)")
+                try? FileManager.default.removeItem(atPath: tempCachePath)
+            }
+        } else {
+            try? FileManager.default.removeItem(atPath: tempCachePath)
+        }
+
+        connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
+                        completion: .contentProcessed { _ in })
+    }
+}
+
 // MARK: - Active Downloads Actor (Swift 6 Concurrency-Safe)
 /// Tracks which segment downloads are in progress using a simple Set.
 /// Waiters poll with Task.sleep — no CheckedContinuation, no leak risk.
@@ -319,6 +496,35 @@ public class LocalHTTPServer: @unchecked Sendable {
     private var mediaCache: [String: String] = [:] // mediaID -> cachePath
     /// Truncate a mediaID to 8 chars for log readability.
     private func shortMID(_ id: String) -> String { id.count > 8 ? String(id.prefix(8)) : id }
+    private func isPlaylistPath(_ path: String) -> Bool {
+        let cleanPath = path.components(separatedBy: "?")[0].components(separatedBy: "#")[0]
+        return URL(fileURLWithPath: cleanPath).pathExtension.lowercased() == "m3u8"
+    }
+
+    private func isHLSSegmentPath(_ path: String) -> Bool {
+        let cleanPath = path.components(separatedBy: "?")[0].components(separatedBy: "#")[0]
+        let url = URL(fileURLWithPath: cleanPath)
+        let ext = url.pathExtension.lowercased()
+        if ["ts", "m4s", "aac", "ac3", "ec3", "vtt", "webvtt"].contains(ext) {
+            return true
+        }
+
+        let name = url.lastPathComponent.lowercased()
+        return ext == "mp4" && (name.hasPrefix("init") || name.contains(".init."))
+    }
+
+    private func proxyRequestKind(path: String, pathComponents: [String]) -> String {
+        if pathComponents.count <= 2 { return "progressive-root" }
+        if isPlaylistPath(path) { return "playlist" }
+        if isHLSSegmentPath(path) { return "hls-segment" }
+        return "progressive-file"
+    }
+
+    private func proxyLogFileName(path: String, pathComponents: [String]) -> String {
+        if pathComponents.count <= 2 { return "root" }
+        let cleanPath = path.components(separatedBy: "?")[0].components(separatedBy: "#")[0]
+        return URL(fileURLWithPath: cleanPath).lastPathComponent
+    }
 
     private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
     private let mediaLock = NSLock() // Protects mediaCache and mediaRealURLs
@@ -357,7 +563,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     // Streaming download sessions
     private var streamingSessions: [String: URLSession] = [:]
     private var streamingSessionLastProgress: [String: Date] = [:]
+    private var hlsSegmentLastProgress: [String: Date] = [:]
     private let streamingSessionsLock = NSLock()
+    private var recentProgressivePreloadDefers: [String: Date] = [:]
+    private let progressivePreloadDefersLock = NSLock()
 
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
     private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
@@ -368,6 +577,8 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     // Primary video tracking — used to set isPrimary when acquiring NodeConnectionPool slots.
     private var currentPrimaryMediaID: String?
+    private var currentPrimaryIsHLS = false
+    private var currentPrimarySetDate: Date = .distantPast
     private let primaryMediaIDLock = NSLock()
 
     // Tracks which mediaID_offset combos are actively writing to the disk cache.
@@ -774,6 +985,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         streamingSessions.removeAll()
         streamingSessionLastProgress.removeAll()
+        hlsSegmentLastProgress.removeAll()
         streamingSessionsLock.unlock()
 
         // 3. Fire-and-forget: cancel tracked active downloads
@@ -803,6 +1015,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             self.streamingSessions.removeAll()
             self.streamingSessionLastProgress.removeAll()
+            self.hlsSegmentLastProgress.removeAll()
             self.streamingSessionsLock.unlock()
 
             // Reset connection pool
@@ -831,6 +1044,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             streamingSessions.removeValue(forKey: key)
             streamingSessionLastProgress.removeValue(forKey: key)
         }
+        hlsSegmentLastProgress = hlsSegmentLastProgress.filter { !$0.key.contains(mediaID) }
         streamingSessionsLock.unlock()
 
         // 3. Release cache writer slot so a future request can write to disk
@@ -861,10 +1075,12 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     /// Set the current primary mediaID so its segment requests bypass the concurrent download limit.
     /// Called immediately when the coordinator selects a primary (before the 1s cancel-others debounce).
-    public func setPrimaryMediaID(_ mediaID: String?) {
+    public func setPrimaryMediaID(_ mediaID: String?, isHLS: Bool = false) {
         primaryMediaIDLock.lock()
         let previousPrimary = currentPrimaryMediaID
         currentPrimaryMediaID = mediaID
+        currentPrimaryIsHLS = mediaID != nil && isHLS
+        currentPrimarySetDate = mediaID != nil ? Date() : .distantPast
         primaryMediaIDLock.unlock()
         if let mediaID {
             // Clear cancelled state so a preloaded-then-cancelled player can download once primary.
@@ -893,6 +1109,8 @@ public class LocalHTTPServer: @unchecked Sendable {
     public func clearPrimaryRestriction() {
         primaryMediaIDLock.lock()
         currentPrimaryMediaID = nil
+        currentPrimaryIsHLS = false
+        currentPrimarySetDate = .distantPast
         primaryMediaIDLock.unlock()
     }
 
@@ -908,6 +1126,38 @@ public class LocalHTTPServer: @unchecked Sendable {
         defer { primaryMediaIDLock.unlock() }
         guard let primary = currentPrimaryMediaID else { return false }
         return mediaID == primary
+    }
+
+    private func shouldDeferNonPrimaryProgressiveRequest(for mediaID: String) -> Bool {
+        primaryMediaIDLock.lock()
+        defer { primaryMediaIDLock.unlock() }
+        guard let primary = currentPrimaryMediaID,
+              primary != mediaID,
+              currentPrimaryIsHLS else { return false }
+        return Date().timeIntervalSince(currentPrimarySetDate) < 10.0
+    }
+
+    private func recordProgressivePreloadDefer(for mediaID: String) {
+        progressivePreloadDefersLock.lock()
+        let now = Date()
+        recentProgressivePreloadDefers[mediaID] = now
+        recentProgressivePreloadDefers = recentProgressivePreloadDefers.filter {
+            now.timeIntervalSince($0.value) < 30.0
+        }
+        progressivePreloadDefersLock.unlock()
+    }
+
+    public func wasRecentlyDeferredProgressivePreload(_ mediaID: String, within interval: TimeInterval = 15.0) -> Bool {
+        progressivePreloadDefersLock.lock()
+        let now = Date()
+        let lastDefer = recentProgressivePreloadDefers[mediaID]
+        recentProgressivePreloadDefers = recentProgressivePreloadDefers.filter {
+            now.timeIntervalSince($0.value) < 30.0
+        }
+        progressivePreloadDefersLock.unlock()
+
+        guard let lastDefer else { return false }
+        return now.timeIntervalSince(lastDefer) <= interval
     }
 
     /// Thread-safe lookup of a registered real URL — safe to call from async contexts.
@@ -1203,8 +1453,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func handleGetRequest(path: String, method: String, requestLines: [String], connection: NWConnection, completion: @escaping () -> Void) async {
+        let requestPath = path.components(separatedBy: "?")[0].components(separatedBy: "#")[0]
+
         // Health check endpoint
-        if path == "/health" {
+        if requestPath == "/health" {
             let headers = [
                 "Content-Length": "0",
                 "Content-Type": "text/plain"
@@ -1216,7 +1468,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // FORMAT: /ipfs/hash or /ipfs/hash/path (e.g., /ipfs/QmAbc... or /ipfs/QmAbc.../master.m3u8)
         // Extract mediaID from /ipfs/ path
-        let pathComponents = path.components(separatedBy: "/").filter { !$0.isEmpty }
+        let pathComponents = requestPath.components(separatedBy: "/").filter { !$0.isEmpty }
         guard pathComponents.count >= 2, pathComponents[0] == "ipfs" else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()
@@ -1226,9 +1478,24 @@ public class LocalHTTPServer: @unchecked Sendable {
         let mediaID = pathComponents[1]
         
         // Reconstruct relative path for real URL requests
-        let relativePath = path
-        
-        // Removed repetitive request log
+        let relativePath = requestPath
+        let requestKind = proxyRequestKind(path: relativePath, pathComponents: pathComponents)
+        let isPrimaryRequest = isCurrentPrimary(mediaID)
+        let roleLabel = isPrimaryRequest ? "primary" : "preload"
+
+        // A cancelled non-primary player is a stale preload/off-screen AVPlayer. Drop it before
+        // serving cache or starting network work; fresh visible/primary players clear this state
+        // during registration/acquire.
+        if !isPrimaryRequest {
+            let isCancelled = await activeDownloadsActor.isMediaIDCancelled(mediaID)
+            if isCancelled {
+                connection.cancel()
+                completion()
+                return
+            }
+        }
+
+        print("📊 [PROXY REQ] mid=\(shortMID(mediaID)) role=\(roleLabel) kind=\(requestKind) file=\(proxyLogFileName(path: relativePath, pathComponents: pathComponents))")
         
         // Check if mediaID is blacklisted before attempting fetch
         if BlackList.shared.isBlacklisted(mediaID) {
@@ -1285,7 +1552,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         if isUsableCachedFile(atPath: potentialCachePath.path) {
             // CACHE HIT - serve immediately without needing real URL
             
-            if relativePath.hasSuffix(".m3u8") {
+            if isPlaylistPath(relativePath) {
                 // For playlists, rewrite URLs to localhost
                 if let data = try? Data(contentsOf: potentialCachePath),
                    let playlistString = String(data: data, encoding: .utf8) {
@@ -1341,11 +1608,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        // Check if this is a playlist (.m3u8), segment (.ts), or progressive video
-        if relativePath.hasSuffix(".m3u8") {
+        // Check if this is a playlist, HLS segment, or progressive video
+        if isPlaylistPath(relativePath) {
             handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
-        } else if relativePath.hasSuffix(".ts") {
+        } else if isHLSSegmentPath(relativePath) {
             await handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
         } else {
@@ -1392,9 +1659,12 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
+        let segmentName = URL(fileURLWithPath: cachePath).lastPathComponent
 
         // Check cache first — always serve cached content regardless of concurrency
         if isUsableCachedFile(atPath: cachePath) {
+            let role = isCurrentPrimary(mediaID) ? "primary" : "preload"
+            print("📊 [HLS SEG] hit mid=\(shortMID(mediaID)) role=\(role) seg=\(segmentName)")
             autoreleasepool {
                 serveFile(path: cachePath, connection: connection, method: method)
             }
@@ -1416,18 +1686,18 @@ public class LocalHTTPServer: @unchecked Sendable {
         let downloadKey = cachePath
 
         // Deduplicate concurrent requests for the same segment.
-        // When a NEW video becomes primary, setPrimaryMediaID clears stale preload dedup
-        // entries so the primary player's requests claim immediately. Re-selecting the same
-        // primary does NOT clear entries (prevents cancel-retry storm on background downloads).
-        // If in-flight: poll for the cache file to appear on disk.
-        //   Primary: 10s timeout (background IPFS download writing to disk).
-        //   Non-primary: 120s timeout (IPFS DHT lookups can take 30-90s).
+        // If the active AVPlayer re-requests a segment while the old proxy connection is
+        // still filling a .part file, wait briefly, then let the active request take over.
+        // Waiting for the whole segment strands foreground playback behind a background
+        // cache fill and shows up as repeated pauses at segment boundaries.
         if !(await activeDownloadsActor.startIfNotInFlight(for: downloadKey)) {
             // Another task is downloading this segment. Poll for the cache file to appear.
-            // Primary: 10s timeout (NWConnection died mid-stream, IPFS continues to disk;
-            //   without polling, AVPlayer cancel-retries in a tight loop — dozens per second).
+            // Primary: short takeover window. If the cache is not complete quickly, the
+            //   foreground request starts its own stream so AVPlayer receives bytes now.
             // Non-primary: 120s timeout (IPFS DHT lookups can take 30-90s).
-            let maxPolls = isCurrentPrimary(mediaID) ? 20 : 240
+            let isPrimaryDuplicate = isCurrentPrimary(mediaID)
+            let maxPolls = isPrimaryDuplicate ? 16 : 240
+            let duplicateWaitStart = Date()
             switch connection.state {
             case .cancelled, .failed: return
             default: break
@@ -1447,6 +1717,20 @@ public class LocalHTTPServer: @unchecked Sendable {
                 switch connection.state {
                 case .cancelled, .failed: return
                 default: break
+                }
+                if isPrimaryDuplicate {
+                    let now = Date()
+                    let lastProgress = streamingSessionsLock.withLock {
+                        hlsSegmentLastProgress[downloadKey]
+                    }
+                    let idleTime = lastProgress.map { now.timeIntervalSince($0) } ?? Double.infinity
+                    let waitTime = now.timeIntervalSince(duplicateWaitStart)
+                    let shouldTakeOver = lastProgress == nil ? waitTime >= 4.0 : idleTime >= 3.0
+                    if shouldTakeOver {
+                        let idleLabel = idleTime.isFinite ? "\(Int(idleTime * 1000))ms" : "none"
+                        print("📊 [HLS SEG] takeover mid=\(shortMID(mediaID)) role=primary seg=\(segmentName) wait=\(Int(waitTime * 1000))ms idle=\(idleLabel)")
+                        break
+                    }
                 }
             }
 
@@ -1474,7 +1758,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         var isPrimary = isCurrentPrimary(mediaID)
-        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary)
+        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
         // Non-primary rejected: poll up to 5s. Re-check isCurrentPrimary each iteration
         // so a preload promoted to primary gets a slot immediately.
         if !slotAcquired && !isPrimary {
@@ -1482,7 +1766,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 switch connection.state { case .cancelled, .failed: return; default: break }
                 isPrimary = isCurrentPrimary(mediaID)
-                slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary)
+                slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
                 if slotAcquired || isPrimary { break }
             }
         }
@@ -1498,16 +1782,164 @@ public class LocalHTTPServer: @unchecked Sendable {
         // fires, the second release would decrement the wrong slot count.
         let slotGuard = SlotReleaseGuard()
 
-        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method,
-                      onConnectionDead: slotAcquired ? {
-                          Task { if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) } }
-                      } : nil) {
+        streamHLSSegmentAndCache(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID,
+                                 isPrimaryRequest: isPrimary,
+                                 onConnectionDead: slotAcquired ? {
+                                     Task { if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) } }
+                                 } : nil) {
             Task {
                 await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey)
                 if slotAcquired {
                     if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) }
                 }
             }
+        }
+    }
+
+    private func streamHLSSegmentAndCache(
+        url: URL,
+        cachePath: String,
+        connection: NWConnection,
+        method: String,
+        mediaID: String,
+        isPrimaryRequest: Bool,
+        onConnectionDead: (() -> Void)? = nil,
+        completion: (() -> Void)? = nil
+    ) {
+        guard canBypassInitialization(url: url) else {
+            print("⚠️ [LocalHTTPServer] App not initialized, refusing HLS segment fetch for \(url.path)")
+            sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
+            completion?()
+            return
+        }
+
+        let sessionKey = "\(mediaID)/stream/\(URL(fileURLWithPath: cachePath).lastPathComponent)_\(ObjectIdentifier(connection).hashValue)"
+        let roleLabel = isPrimaryRequest ? "primary" : "preload"
+        let segmentName = URL(fileURLWithPath: cachePath).lastPathComponent
+        let contentType = getMimeType(for: cachePath)
+
+        if method == "HEAD" {
+            var headRequest = URLRequest(url: url)
+            headRequest.httpMethod = "HEAD"
+            headRequest.timeoutInterval = 30
+            connectionPool.dataTask(with: headRequest) { [weak self] _, response, error in
+                guard let self = self else {
+                    completion?()
+                    return
+                }
+
+                if let error = error {
+                    let nsError = error as NSError
+                    if nsError.code != NSURLErrorCancelled {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
+                    self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                    completion?()
+                    return
+                }
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    BlackList.shared.recordFailure(mediaID)
+                    self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                    completion?()
+                    return
+                }
+
+                var headers: [String: String] = [
+                    "Content-Type": contentType,
+                    "Accept-Ranges": "bytes"
+                ]
+                if let cl = httpResponse.allHeaderFields["Content-Length"] as? String {
+                    headers["Content-Length"] = cl
+                }
+                if let cr = httpResponse.allHeaderFields["Content-Range"] as? String {
+                    headers["Content-Range"] = cr
+                }
+                self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: headers, body: nil)
+                completion?()
+            }.resume()
+            return
+        }
+
+        let cacheURL = URL(fileURLWithPath: cachePath)
+        let cacheDirectory = cacheURL.deletingLastPathComponent()
+        let tempCachePath = "\(cachePath).\(ObjectIdentifier(connection).hashValue).part"
+        do {
+            try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(atPath: tempCachePath)
+            FileManager.default.createFile(atPath: tempCachePath, contents: nil)
+        } catch {
+            print("⚠️ [HLS CACHE] Failed to prepare segment cache: \(error.localizedDescription)")
+            sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+            completion?()
+            return
+        }
+
+        guard let fileHandle = try? FileHandle(forWritingTo: URL(fileURLWithPath: tempCachePath)) else {
+            print("⚠️ [HLS CACHE] Failed to open segment cache for writing")
+            sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+            completion?()
+            return
+        }
+
+        let progressUpdate: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            self.streamingSessionsLock.lock()
+            self.streamingSessionLastProgress[sessionKey] = Date()
+            self.hlsSegmentLastProgress[cachePath] = Date()
+            self.streamingSessionsLock.unlock()
+        }
+
+        let sessionCleanup: () -> Void = { [weak self] in
+            guard let self = self else {
+                completion?()
+                return
+            }
+            self.streamingSessionsLock.lock()
+            self.streamingSessions.removeValue(forKey: sessionKey)
+            self.streamingSessionLastProgress.removeValue(forKey: sessionKey)
+            self.hlsSegmentLastProgress.removeValue(forKey: cachePath)
+            self.streamingSessionsLock.unlock()
+            completion?()
+        }
+
+        let delegate = HLSSegmentStreamingDelegate(
+            connection: connection,
+            mediaID: mediaID,
+            cachePath: cachePath,
+            tempCachePath: tempCachePath,
+            fileHandle: fileHandle,
+            roleLabel: roleLabel,
+            segmentName: segmentName,
+            contentType: contentType,
+            startDate: Date(),
+            sessionCleanup: sessionCleanup,
+            buildHeaders: { [weak self] statusCode, headers in
+                self?.buildHTTPHeaderData(statusCode: statusCode, headers: headers) ?? Data()
+            },
+            onProgress: progressUpdate
+        )
+        delegate.onConnectionDead = onConnectionDead
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 90
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 300
+
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        streamingSessionsLock.lock()
+        streamingSessions[sessionKey] = session
+        streamingSessionLastProgress[sessionKey] = Date()
+        hlsSegmentLastProgress[cachePath] = Date()
+        streamingSessionsLock.unlock()
+
+        print("📊 [HLS SEG] start mid=\(shortMID(mediaID)) role=\(roleLabel) seg=\(segmentName)")
+        session.dataTask(with: request).resume()
+        if Self.verboseLogsEnabled {
+            print("📡 [HLS DOWNLOAD \(shortMID(mediaID))] \(url.lastPathComponent)")
         }
     }
     
@@ -1613,13 +2045,22 @@ public class LocalHTTPServer: @unchecked Sendable {
             return should
         }
         if shouldLog {
+            let missRole = isCurrentPrimary(mediaID) ? "primary" : "preload"
+            print("📊 [PROG] net mid=\(shortMID(mediaID)) role=\(missRole) range=\(rangeStr)")
         }
-        
+
+        if shouldDeferNonPrimaryProgressiveRequest(for: mediaID) {
+            recordProgressivePreloadDefer(for: mediaID)
+            print("📊 [PROG] defer mid=\(shortMID(mediaID)) role=preload range=\(rangeStr) reason=hls-primary-startup")
+            connection.cancel()
+            return
+        }
+
         // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
         // Primary: bypasses soft cap. Non-primary: polls up to 5s with primary promotion.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
-        // Progressive video can use 2 parallel range requests; HLS segments are sequential (cap=1).
+        // Progressive video can use 2 parallel range requests.
         var isPrimary = isCurrentPrimary(mediaID)
         var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
         if !slotAcquired && !isPrimary {
@@ -2019,7 +2460,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 statusCode = 206
             }
-            let _ = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
+            let cacheRole = isCurrentPrimary(mediaID) ? "primary" : "preload"
+            print("📊 [PROG] hit mid=\(shortMID(mediaID)) role=\(cacheRole) range=\(start)-\(actualEnd) bytes=\(requestedLength / 1024)KB")
             
             if method == "HEAD" {
                 sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
@@ -2204,7 +2646,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Extract mediaID from cachePath for BlackList tracking
         let pathComponents = cachePath.components(separatedBy: "/")
         let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
-        let isSegment = cachePath.hasSuffix(".ts")
+        let isSegment = isHLSSegmentPath(cachePath)
 
         let maxAttempts = isSegment ? 3 : 1  // Retry segment downloads (like ExoPlayer)
         fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: 1, maxAttempts: maxAttempts, completion: completion)
@@ -2222,7 +2664,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Extract mediaID from cachePath for BlackList tracking
         let pathComponents = cachePath.components(separatedBy: "/")
         let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
-        let isSegment = cachePath.hasSuffix(".ts")
+        let isSegment = isHLSSegmentPath(cachePath)
         let maxAttempts = isSegment ? 3 : 1  // Retry segment downloads (like ExoPlayer)
 
         downloadWithRetry(url: url, cachePath: cachePath, mediaID: mediaID, attempt: 1, maxAttempts: maxAttempts, completion: completion)
@@ -2316,7 +2758,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     }
                     do {
                         try dataToCache.write(to: cacheURL, options: .atomic)
-                        if cachePath.hasSuffix(".ts") {
+                        if self.isHLSSegmentPath(cachePath) {
                             try? FileManager.default.removeItem(atPath: "\(cachePath).part")
                         }
                     } catch {
@@ -2433,7 +2875,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     }
                     do {
                         try dataToCache.write(to: cacheURL, options: .atomic)
-                        if cachePath.hasSuffix(".ts") {
+                        if self.isHLSSegmentPath(cachePath) {
                             try? FileManager.default.removeItem(atPath: "\(cachePath).part")
                         }
                     } catch {
@@ -2574,6 +3016,15 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Extract the directory path for relative URL resolution
         // For http://server/ipfs/hash/720p/playlist.m3u8 → /ipfs/hash/720p
         let playlistDirectory = baseURL.deletingLastPathComponent().path
+        let localhostURLForPath: (String) -> String = { pathString in
+            if pathString.hasPrefix("http://") || pathString.hasPrefix("https://") {
+                return pathString
+            }
+            if pathString.hasPrefix("/") {
+                return "\(Constants.LOCAL_HOST):\(self.port)\(pathString)"
+            }
+            return "\(Constants.LOCAL_HOST):\(self.port)\(playlistDirectory)/\(pathString)"
+        }
         
         // CRITICAL: Add #EXT-X-PLAYLIST-TYPE:VOD if missing (tells AVPlayer it's VOD, not live)
         if modified.contains("#EXTINF:") && !modified.contains("#EXT-X-PLAYLIST-TYPE") {
@@ -2602,35 +3053,34 @@ public class LocalHTTPServer: @unchecked Sendable {
             for match in matches.reversed() {
                 if let range = Range(match.range, in: modified) {
                     let pathString = String(modified[range])
-                    let localhostURL: String
-                    if pathString.hasPrefix("/") {
-                        // Absolute path: /ipfs/QmHash/720p/playlist.m3u8 -> http://127.0.0.1:port/ipfs/QmHash/720p/playlist.m3u8
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(pathString)"
-                    } else {
-                        // Relative path: 720p/playlist.m3u8 -> http://127.0.0.1:port/playlistDirectory/720p/playlist.m3u8
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(playlistDirectory)/\(pathString)"
-                    }
+                    let localhostURL = localhostURLForPath(pathString)
                     modified.replaceSubrange(range, with: localhostURL)
                 }
             }
         }
         
-        // Rewrite .ts URLs (segments) - handles both relative and absolute paths
-        let segmentPattern = "^([^#\\n\\r]+\\.ts)$"
+        // Rewrite HLS media segment URLs - handles both relative and absolute paths.
+        let segmentPattern = "^([^#\\n\\r]+\\.(?:ts|m4s|aac|ac3|ec3|vtt|webvtt)(?:\\?[^\\n\\r]*)?)$"
         if let segmentRegex = try? NSRegularExpression(pattern: segmentPattern, options: [.anchorsMatchLines]) {
             let matches = segmentRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
             for match in matches.reversed() {
                 if let range = Range(match.range, in: modified) {
                     let pathString = String(modified[range])
-                    let localhostURL: String
-                    if pathString.hasPrefix("/") {
-                        // Absolute path: /ipfs/QmHash/segment000.ts -> http://127.0.0.1:port/ipfs/QmHash/segment000.ts
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(pathString)"
-                    } else {
-                        // Relative path: segment000.ts -> http://127.0.0.1:port/playlistDirectory/segment000.ts
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(playlistDirectory)/\(pathString)"
-                    }
+                    let localhostURL = localhostURLForPath(pathString)
                     modified.replaceSubrange(range, with: localhostURL)
+                }
+            }
+        }
+
+        // Rewrite fMP4 init maps inside EXT-X-MAP tags, e.g. URI="init.mp4".
+        let mapPattern = "(#EXT-X-MAP:[^\\n\\r]*URI=\")([^\"]+)(\")"
+        if let mapRegex = try? NSRegularExpression(pattern: mapPattern) {
+            let matches = mapRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
+            for match in matches.reversed() where match.numberOfRanges == 4 {
+                if let uriRange = Range(match.range(at: 2), in: modified) {
+                    let pathString = String(modified[uriRange])
+                    let localhostURL = localhostURLForPath(pathString)
+                    modified.replaceSubrange(uriRange, with: localhostURL)
                 }
             }
         }
@@ -2645,6 +3095,18 @@ public class LocalHTTPServer: @unchecked Sendable {
             return "application/vnd.apple.mpegurl"
         case "ts":
             return "video/mp2t"
+        case "m4s":
+            return "video/iso.segment"
+        case "mp4", "m4v":
+            return "video/mp4"
+        case "aac":
+            return "audio/aac"
+        case "ac3":
+            return "audio/ac3"
+        case "ec3":
+            return "audio/eac3"
+        case "vtt", "webvtt":
+            return "text/vtt"
         default:
             return "application/octet-stream"
         }
