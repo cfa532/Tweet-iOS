@@ -1410,6 +1410,41 @@ class VideoPlaybackCoordinator: ObservableObject {
         return result
     }
 
+    /// Videos with a partially visible media cell should be prepared before off-screen
+    /// directional guesses. They are visible UI, even if they are below the autoplay threshold.
+    private func getLoadVisibleVideosToPreload(count: Int) -> [VideoPlaybackInfo] {
+        guard count > 0, !loadVisibleMediaCells.isEmpty else { return [] }
+
+        let orderedVideos = scrollDirection ? allVideos : Array(allVideos.reversed())
+        var result: [VideoPlaybackInfo] = []
+        var seenMids = Set<String>()
+
+        for video in orderedVideos {
+            guard result.count < count else { break }
+            guard video.isInVisibleMediaRange,
+                  loadVisibleMediaCells.contains(video.identifier),
+                  video.identifier != primaryVideoId,
+                  !seenMids.contains(video.videoMid) else { continue }
+            result.append(video)
+            seenMids.insert(video.videoMid)
+        }
+
+        return result
+    }
+
+    private func uniquePreloadVideos(_ videos: [VideoPlaybackInfo]) -> [VideoPlaybackInfo] {
+        var result: [VideoPlaybackInfo] = []
+        var seenMids = Set<String>()
+
+        for video in videos {
+            guard !seenMids.contains(video.videoMid) else { continue }
+            result.append(video)
+            seenMids.insert(video.videoMid)
+        }
+
+        return result
+    }
+
     /// Clear preloaded video tracking (called when video list is rebuilt)
     private func clearPreloadedTracking() {
         activePreloadMids.removeAll()
@@ -1459,13 +1494,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             lastDirectionalPreloadRefreshTime = now
         }
 
-        if Date() < directionalPreloadsSuppressedUntil {
-            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "\(reason) hls-startup")
-            activePreloadMids.removeAll()
-            SharedAssetCache.shared.updateProtectedPreloadMids([])
-            return
-        }
-
         let preloadCount = max(0, directionalPlayerPreloadCount)
         guard preloadCount > 0 else {
             cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
@@ -1474,7 +1502,12 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
-        let nextVideos = getNextVideosInScrollDirection(count: preloadCount)
+        let loadVisibleVideos = getLoadVisibleVideosToPreload(count: preloadCount)
+        let remainingDirectionalCount = max(0, preloadCount - loadVisibleVideos.count)
+        let directionalVideos = Date() < directionalPreloadsSuppressedUntil
+            ? []
+            : getNextVideosInScrollDirection(count: remainingDirectionalCount)
+        let nextVideos = uniquePreloadVideos(loadVisibleVideos + directionalVideos)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
 
         // Keep on-screen work alive, then cancel any older directional preloads.
@@ -1490,7 +1523,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         if !newPreloadMids.isEmpty {
-            print("🎬 [COORD] \(reason): preloading \(newPreloadMids.count) directional players")
+            let mids = nextVideos.map { shortMID($0.videoMid) }.joined(separator: ",")
+            print("🎬 [COORD] \(reason): preloading \(newPreloadMids.count) players (loadVisible=\(loadVisibleVideos.count), directional=\(directionalVideos.count), mids=\(mids))")
         }
     }
 

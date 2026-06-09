@@ -522,7 +522,14 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     private func proxyLogFileName(path: String, pathComponents: [String]) -> String {
         if pathComponents.count <= 2 { return "root" }
-        let cleanPath = path.components(separatedBy: "?")[0].components(separatedBy: "#")[0]
+        return pathComponents.dropFirst(2).joined(separator: "/")
+    }
+
+    private func hlsSegmentLogName(for url: URL, mediaID: String) -> String {
+        let cleanPath = url.path.components(separatedBy: "?")[0].components(separatedBy: "#")[0]
+        if let range = cleanPath.range(of: "/ipfs/\(mediaID)/") {
+            return String(cleanPath[range.upperBound...])
+        }
         return URL(fileURLWithPath: cleanPath).lastPathComponent
     }
 
@@ -1659,7 +1666,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
-        let segmentName = URL(fileURLWithPath: cachePath).lastPathComponent
+        let segmentName = hlsSegmentLogName(for: fullRealURL, mediaID: mediaID)
 
         // Check cache first — always serve cached content regardless of concurrency
         if isUsableCachedFile(atPath: cachePath) {
@@ -1782,7 +1789,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // fires, the second release would decrement the wrong slot count.
         let slotGuard = SlotReleaseGuard()
 
-        streamHLSSegmentAndCache(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID,
+        streamHLSSegmentAndCache(url: fullRealURL, cachePath: cachePath, segmentName: segmentName, connection: connection, method: method, mediaID: mediaID,
                                  isPrimaryRequest: isPrimary,
                                  onConnectionDead: slotAcquired ? {
                                      Task { if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) } }
@@ -1799,6 +1806,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func streamHLSSegmentAndCache(
         url: URL,
         cachePath: String,
+        segmentName: String,
         connection: NWConnection,
         method: String,
         mediaID: String,
@@ -1813,9 +1821,8 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
 
-        let sessionKey = "\(mediaID)/stream/\(URL(fileURLWithPath: cachePath).lastPathComponent)_\(ObjectIdentifier(connection).hashValue)"
+        let sessionKey = "\(mediaID)/stream/\(segmentName)_\(ObjectIdentifier(connection).hashValue)"
         let roleLabel = isPrimaryRequest ? "primary" : "preload"
-        let segmentName = URL(fileURLWithPath: cachePath).lastPathComponent
         let contentType = getMimeType(for: cachePath)
 
         if method == "HEAD" {

@@ -293,6 +293,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastBufferingWaitPositionBucket: Int = -1
     private var lastBufferingWaitLogKey: String?
     private var lastBufferingWaitLogDate: Date = .distantPast
+    private var lastAVPlayerDiagnosticsLogDate: Date = .distantPast
     private var lastSlowLoadWaitLogDate: Date = .distantPast
     private var lastStartupBufferReleaseDate: Date = .distantPast
     private var startupBufferReleaseUntil: Date = .distantPast
@@ -1592,6 +1593,59 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         player.currentItem?.preferredForwardBufferDuration = 0
     }
 
+    private func compactAVLogURI(_ uri: String?) -> String {
+        guard let uri, !uri.isEmpty else { return "nil" }
+        if let url = URL(string: uri) {
+            let path = url.path
+            if let range = path.range(of: "/ipfs/") {
+                return String(path[range.lowerBound...])
+            }
+            return url.lastPathComponent.isEmpty ? path : url.lastPathComponent
+        }
+        if uri.count > 160 {
+            return "...\(uri.suffix(160))"
+        }
+        return uri
+    }
+
+    private func loadedRangeSummary(for item: AVPlayerItem) -> String {
+        let ranges = item.loadedTimeRanges.map { value -> String in
+            let range = value.timeRangeValue
+            let start = seconds(from: range.start)
+            let end = start + seconds(from: range.duration)
+            return "\(String(format: "%.1f", start))-\(String(format: "%.1f", end))"
+        }
+        return ranges.isEmpty ? "none" : ranges.joined(separator: ", ")
+    }
+
+    private func logAVPlayerDiagnosticsIfNeeded(for player: AVPlayer, reason: String, force: Bool = false) {
+        let now = Date()
+        guard force || now.timeIntervalSince(lastAVPlayerDiagnosticsLogDate) >= 8.0 else { return }
+        lastAVPlayerDiagnosticsLogDate = now
+
+        guard let item = player.currentItem else {
+            print("\(logPrefix) 🧾 AV diag (\(reason)): no current item")
+            return
+        }
+
+        let pos = seconds(from: player.currentTime())
+        let dur = seconds(from: item.duration)
+        let waitReason = player.reasonForWaitingToPlay?.rawValue ?? "nil"
+        let ranges = loadedRangeSummary(for: item)
+        let itemError = item.error.map { "\(($0 as NSError).domain) \(($0 as NSError).code)" } ?? "nil"
+        print("\(logPrefix) 🧾 AV diag (\(reason)): pos=\(String(format: "%.1f", pos))/\(String(format: "%.1f", dur)), itemStatus=\(item.status.rawValue), timeControl=\(player.timeControlStatus.rawValue), waitReason=\(waitReason), keepUp=\(item.isPlaybackLikelyToKeepUp), bufEmpty=\(item.isPlaybackBufferEmpty), ranges=[\(ranges)], itemError=\(itemError)")
+
+        if let event = item.accessLog()?.events.last {
+            print("\(logPrefix) 🧾 AV access: uri=\(compactAVLogURI(event.uri)), indicated=\(String(format: "%.0f", event.indicatedBitrate))bps, observed=\(String(format: "%.0f", event.observedBitrate))bps, transfer=\(String(format: "%.2f", event.transferDuration))s, downloaded=\(String(format: "%.1f", event.segmentsDownloadedDuration))s, bytes=\(event.numberOfBytesTransferred), requests=\(event.numberOfMediaRequests), stalls=\(event.numberOfStalls), dropped=\(event.numberOfDroppedVideoFrames), startup=\(String(format: "%.2f", event.startupTime))s, overdue=\(event.downloadOverdue)")
+        } else {
+            print("\(logPrefix) 🧾 AV access: none")
+        }
+
+        if let event = item.errorLog()?.events.last {
+            print("\(logPrefix) 🧾 AV error: uri=\(compactAVLogURI(event.uri)), status=\(event.errorStatusCode), domain=\(event.errorDomain), comment=\(event.errorComment ?? "nil")")
+        }
+    }
+
     private func noteBufferingWaitIfNeeded(for player: AVPlayer, reason: String) {
         guard coordinatorWantsToPlay,
               lastActualPlaybackDate != .distantPast,
@@ -1613,6 +1667,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let logKey = "\(reason)|\(bufferingWaitCount)"
         if logKey != lastBufferingWaitLogKey || now.timeIntervalSince(lastBufferingWaitLogDate) >= 8.0 {
             print("\(logPrefix) ⏳ buffering wait (\(reason)): pos=\(String(format: "%.1f", playbackPosition))s, stall=\(bufferingWaitCount)")
+            logAVPlayerDiagnosticsIfNeeded(for: player, reason: "buffering-\(reason)")
             lastBufferingWaitLogKey = logKey
             lastBufferingWaitLogDate = now
         }
@@ -1705,6 +1760,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             let recoverySeconds = self.seconds(from: player.currentTime())
             if now.timeIntervalSince(self.lastSlowLoadWaitLogDate) >= 10.0 {
                 print("\(self.logPrefix) ⏳ \(label) (\(reason)): still waiting, keeping AVPlayer alive, pos=\(String(format: "%.1f", recoverySeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, itemStatus=\(status), timeControl=\(player.timeControlStatus.rawValue)")
+                self.logAVPlayerDiagnosticsIfNeeded(for: player, reason: "\(label)-\(reason)", force: true)
                 self.lastSlowLoadWaitLogDate = now
             }
 
@@ -4021,6 +4077,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastBufferingWaitPositionBucket = -1
         lastBufferingWaitLogKey = nil
         lastBufferingWaitLogDate = .distantPast
+        lastAVPlayerDiagnosticsLogDate = .distantPast
         lastSlowLoadWaitLogDate = .distantPast
         lastStartupBufferReleaseDate = .distantPast
         startupBufferReleaseUntil = .distantPast
