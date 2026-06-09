@@ -358,6 +358,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return "[VIDEO-\(shortMid)]"
     }
 
+    private var canDriveForegroundPlayback: Bool {
+        UIApplication.shared.applicationState == .active
+    }
+
     private func logVerbose(_ message: String) {
         guard Self.verboseLogsEnabled else { return }
         print("\(logPrefix) \(message)")
@@ -1364,7 +1368,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard coordinatorWantsToPlay else { return false }
         if Date() < suppressPrimarySpinnerUntil,
            imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay,
-           player.map({ hasVisiblePlaybackProgress(for: $0) }) ?? true {
+           player.map({ isVisibleVideoFrameReady($0) }) ?? true {
             return false
         }
         guard let player else { return true }
@@ -1372,6 +1376,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func shouldDebouncePrimarySpinner(for player: AVPlayer? = nil) -> Bool {
+        if let player {
+            let isEstablishedStall = lastActualPlaybackDate != .distantPast
+                && !isVideoAtEnd(player)
+                && !isVisibleVideoFrameReady(player)
+                && (bufferingWaitCount > 0
+                    || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    || player.timeControlStatus == .paused)
+            if isEstablishedStall {
+                return false
+            }
+        }
+
         if imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
             return true
         }
@@ -1521,6 +1537,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// is waiting. Do not issue extra play/seek commands here; AVPlayer owns buffering.
     private func monitorPlaybackIfWaiting(_ player: AVPlayer, reason: String) {
         guard coordinatorWantsToPlay,
+              canDriveForegroundPlayback,
               player.currentItem?.status == .readyToPlay,
               player.timeControlStatus != .playing,
               !isVideoAtEnd(player) else { return }
@@ -1560,6 +1577,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                   let player,
                   self.player === player,
                   self.coordinatorWantsToPlay,
+                  self.canDriveForegroundPlayback,
                   self.videoCellState == .playing,
                   self.lastPlaybackRequestDate == requestDate,
                   !self.isVideoAtEnd(player),
@@ -1600,6 +1618,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     @discardableResult
     private func releaseStartupBufferIfReady(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
         guard coordinatorWantsToPlay,
+              canDriveForegroundPlayback,
               videoCellState == .playing,
               player.currentItem?.status == .readyToPlay,
               player.timeControlStatus != .playing,
@@ -2098,6 +2117,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     /// Start playback if coordinator wants to play and player isn't already playing.
     private func requestPlaybackStartIfNeeded(_ player: AVPlayer, reason: String) {
+        guard canDriveForegroundPlayback else {
+            logVerbose("⏸️ requestPlayback(\(reason)): skipped, app not active")
+            return
+        }
         guard coordinatorWantsToPlay else {
             logVerbose("⏸️ requestPlayback(\(reason)): skipped, coordinatorWantsToPlay=false")
             return
@@ -2136,6 +2159,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     guard !Task.isCancelled, let self,
                           let player = self.player,
                           self.coordinatorWantsToPlay,
+                          self.canDriveForegroundPlayback,
                           player.currentItem?.status == .unknown else { return }
                     print("\(self.logPrefix) ⏰ statusKVO fallback: item still .unknown after 2s, enabling network + play")
                     player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
@@ -2187,6 +2211,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func actuallyStartPlayback(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
+        guard canDriveForegroundPlayback else {
+            logVerbose("⏸️ actuallyStartPlayback skipped, app not active")
+            return
+        }
 
         // Show player layer (may have been hidden for non-primary .playerReady)
         videoPlayerView.isHidden = false
@@ -2523,6 +2551,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
+                let canDrivePlayback = self.canDriveForegroundPlayback
 
                 // Diagnostic logging for all timeControlStatus transitions
                 let statusName: String
@@ -2585,13 +2614,15 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                             }
                         }
                     }
-                } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+                } else if canDrivePlayback,
+                          player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                           self.videoCellState == .playing || self.videoCellState == .playerReady {
                     guard !self.isVideoAtEnd(player) else { return }
                     self.noteBufferingWaitIfNeeded(for: player, reason: "waiting")
                     self.updateLoadingSpinnerForPlayback(player)
                     self.monitorPlaybackIfWaiting(player, reason: "timeControl-waiting")
-                } else if player.timeControlStatus == .paused
+                } else if canDrivePlayback,
+                            player.timeControlStatus == .paused
                             && self.coordinatorWantsToPlay
                             && self.videoCellState == .playing
                             && !self.isVideoAtEnd(player) {
@@ -2611,6 +2642,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                       item.isPlaybackLikelyToKeepUp,
                       let player = self.player,
                       self.coordinatorWantsToPlay,
+                      self.canDriveForegroundPlayback,
                       self.videoCellState == .playing,
                       player.timeControlStatus != .playing,
                       !self.isVideoAtEnd(player) else { return }
@@ -2741,6 +2773,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     ) -> Bool {
         let playAction: (AVPlayer) -> Void = { [weak self] player in
             guard let self else { return }
+            guard self.canDriveForegroundPlayback else { return }
             player.play()
             self.resetPlaybackProgressTracking(to: player.currentTime())
             afterPlay(player)
@@ -3514,7 +3547,17 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard videoCellState == .playing || videoCellState == .paused || videoCellState == .playerReady else { return }
         if let player {
             saveCurrentPosition(player: player, wasPlaying: player.rate > 0 || coordinatorWantsToPlay)
+            player.pause()
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         }
+        coordinatorWantsToPlay = false
+        playbackStartupRecoveryTask?.cancel()
+        playbackStartupRecoveryTask = nil
+        playbackStartupRecoveryRequestDate = nil
+        statusUnknownFallbackTask?.cancel()
+        statusUnknownFallbackTask = nil
+        cancelDelayedPrimarySpinner()
+        loadingSpinner.stopAnimating()
         _ = preserveFrameToCache(skipImageView: videoCellState == .playing)
 
         let thumbnail = imageView.image ?? cachedPlaybackCoverForCurrentVideo()

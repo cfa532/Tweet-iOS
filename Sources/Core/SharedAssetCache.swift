@@ -1933,9 +1933,10 @@ class SharedAssetCache: ObservableObject {
             return
         }
 
-        // Cancel existing preload task for this media
-        preloadTasks[mediaID]?.cancel()
-        preloadTasks.removeValue(forKey: mediaID)
+        // A visibility pass can request the same directional preload several times
+        // (primary selection, scroll-stop, viewport refresh). Let the first task finish
+        // instead of stacking duplicate warm/post-notification work on the same player.
+        guard preloadTasks[mediaID] == nil else { return }
 
         let task = Task {
             defer {
