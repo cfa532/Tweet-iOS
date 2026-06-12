@@ -530,10 +530,12 @@ class TweetTableViewController: UITableViewController {
         // UIKit .fullScreen modal dismissal because the SwiftUI view stays in the hierarchy
         // while the modal is presented, so the .feedViewDidAppear notification is never
         // posted through that path.  Re-evaluate visibility here to fill the gap.
-        // The 0.25s delay lets the dismiss cross-dissolve animation complete before we
-        // start playing, which prevents audio starting while the transition is still visible.
+        // The delay lets the dismiss/pop animation and destination teardown complete
+        // before we resume the shared player. Detail teardown pauses the same AVPlayer;
+        // resuming too early creates a visible play/pause flicker on the feed cell.
         if isMovingToParent == false {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            let resumeDelay: TimeInterval = NavigationStateManager.shared.isDetailViewActive ? 0.4 : 0.25
+            DispatchQueue.main.asyncAfter(deadline: .now() + resumeDelay) { [weak self] in
                 guard let self else { return }
                 // Overlay dismiss timer will handle resume — don't compete
                 guard !self.videoCoordinator.isOverlayDismissPending else { return }

@@ -1212,8 +1212,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Used when returning to the feed (e.g. from user profile) so the video resumes instead of stopping.
     /// Does nothing if there is no primary, primary is no longer visible, or delegate is missing.
     func requestResumePrimaryPlaybackIfVisible() {
-        guard phase == .primaryPlaying,
-              let primaryId = primaryVideoId,
+        guard let primaryId = primaryVideoId,
               let primary = visibleVideos.first(where: { $0.identifier == primaryId }),
               isVideoOnScreen(primary),
               let delegate = mediaCellDelegates[primaryId] else {
@@ -1223,6 +1222,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         if !onScreenMediaCells.isEmpty, !onScreenMediaCells.contains(primaryId) {
             return
         }
+        phase = .primaryPlaying
+        currentlyPlayingVideoIds = [primaryId]
+        LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
         delegate.shouldPlayVideo(withMid: primary.videoMid)
     }
 

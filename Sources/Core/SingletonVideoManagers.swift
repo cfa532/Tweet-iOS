@@ -41,6 +41,76 @@ protocol VideoPlayerLifecycleManager: AnyObject {
     func recoverFromBackground()
 }
 
+private func feedStyleBufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+    let currentSeconds = CMTimeGetSeconds(player.currentTime())
+    guard currentSeconds.isFinite else { return 0 }
+
+    var bestBufferAhead: Double = 0
+    for value in item.loadedTimeRanges {
+        let range = value.timeRangeValue
+        let start = CMTimeGetSeconds(range.start)
+        let duration = CMTimeGetSeconds(range.duration)
+        guard start.isFinite, duration.isFinite else { continue }
+
+        let end = start + duration
+        if currentSeconds >= start && currentSeconds <= end {
+            return max(0, end - currentSeconds)
+        } else if end > currentSeconds {
+            bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
+        }
+    }
+    return max(0, bestBufferAhead)
+}
+
+private func feedStyleRequiredBufferAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+    if item.isPlaybackLikelyToKeepUp {
+        return 0.75
+    }
+
+    let currentSeconds = CMTimeGetSeconds(player.currentTime())
+    let isStartup = currentSeconds.isFinite && currentSeconds < 1.0
+    return isStartup ? 2.0 : 2.5
+}
+
+private func fullscreenRequiredBufferAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+    let currentSeconds = CMTimeGetSeconds(player.currentTime())
+    let isStartup = currentSeconds.isFinite && currentSeconds < 1.0
+    if isStartup {
+        return 2.0
+    }
+
+    return item.isPlaybackLikelyToKeepUp ? 2.0 : 5.0
+}
+
+@discardableResult
+private func applyPrePlayBuffering(
+    to player: AVPlayer,
+    item: AVPlayerItem,
+    requiredBuffer: (AVPlayerItem, AVPlayer) -> Double
+) -> (bufferedAhead: Double, requiredBuffer: Double, keepUp: Bool) {
+    item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+    item.preferredForwardBufferDuration = 0
+
+    let bufferedAhead = feedStyleBufferedTimeAhead(for: item, player: player)
+    let required = requiredBuffer(item, player)
+    if bufferedAhead >= required {
+        player.automaticallyWaitsToMinimizeStalling = false
+    } else {
+        player.automaticallyWaitsToMinimizeStalling = true
+    }
+    return (bufferedAhead, required, item.isPlaybackLikelyToKeepUp)
+}
+
+@discardableResult
+private func applyFeedStylePrePlayBuffering(to player: AVPlayer, item: AVPlayerItem) -> (bufferedAhead: Double, requiredBuffer: Double, keepUp: Bool) {
+    applyPrePlayBuffering(to: player, item: item, requiredBuffer: feedStyleRequiredBufferAhead)
+}
+
+@discardableResult
+private func applyFullscreenPrePlayBuffering(to player: AVPlayer, item: AVPlayerItem) -> (bufferedAhead: Double, requiredBuffer: Double, keepUp: Bool) {
+    applyPrePlayBuffering(to: player, item: item, requiredBuffer: fullscreenRequiredBufferAhead)
+}
+
 extension VideoPlayerLifecycleManager {
     /// Default implementation: Check if player is broken
     func isPlayerBroken() -> Bool {
@@ -1262,7 +1332,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         let bufferedAhead = bufferedTimeAhead(for: playerItem, player: player)
         let keepUp = playerItem.isPlaybackLikelyToKeepUp
-        let requiredBuffer = keepUp ? 2.0 : 5.0
+        let requiredBuffer = fullscreenRequiredBufferAhead(for: playerItem, player: player)
         if playerItem.status == .readyToPlay,
            !isSeekingToRestoredPosition,
            player.timeControlStatus != .playing,
@@ -1312,12 +1382,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             guard self.isActive else { return }
                             let bufferedAhead = self.bufferedTimeAhead(for: observedItem, player: player)
 
-                            // Only resume when we have at least 2 seconds of buffer
+                            let requiredBuffer = fullscreenRequiredBufferAhead(for: observedItem, player: player)
                             let remaining = self.timeRemaining(for: observedItem, player: player)
                             if let remaining, remaining <= 1.0 {
                                 print("🎬 [FullScreenVideoManager] retry buffer near-end \(self.shortMID(self.currentVideoMid)): remaining=\(String(format: "%.2f", remaining))")
                                 self.scheduleNearEndAutoAdvance(for: observedItem)
-                            } else if bufferedAhead >= 2.0 {
+                            } else if bufferedAhead >= requiredBuffer {
                                 // Bail if fullscreen was dismissed while waiting for buffer.
                                 // deactivate() sets isActive=false + pauses the player, but the
                                 // KVO callback may already be enqueued on the main actor — this
@@ -1328,7 +1398,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
 
-                                print("🎬 [FullScreenVideoManager] retry buffer ready \(self.shortMID(self.currentVideoMid)): bufferedAhead=\(String(format: "%.2f", bufferedAhead)), \(self.playerDiagnostic(player, item: observedItem))")
+                                print("🎬 [FullScreenVideoManager] retry buffer ready \(self.shortMID(self.currentVideoMid)): bufferedAhead=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), \(self.playerDiagnostic(player, item: observedItem))")
                                 player.play()
                                 self.isPlaying = true
                                 self.isBuffering = false
@@ -1533,15 +1603,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
     private func startFullscreenPlayback(player: AVPlayer?, item: AVPlayerItem, log: String) {
         guard let player else { return }
-        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
-        let keepUp = item.isPlaybackLikelyToKeepUp
-        if bufferedAhead > 0 && ((bufferedAhead < 1.5 && !keepUp) || (bufferedAhead >= 2.0 && keepUp)) {
-            player.automaticallyWaitsToMinimizeStalling = false
-        } else {
-            player.automaticallyWaitsToMinimizeStalling = true
-        }
-        print("🎬 [FullScreenVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), \(playerDiagnostic(player, item: item))")
+        let bufferPolicy = applyFullscreenPrePlayBuffering(to: player, item: item)
+        print("🎬 [FullScreenVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(playerDiagnostic(player, item: item))")
         player.play()
         isPlaying = true
         isBuffering = player.timeControlStatus != .playing
@@ -2782,14 +2845,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         setupDetailVideoOutput(for: item)
         startDetailRenderingObserver(player: player, item: item)
         resetDetailRenderingProgress(to: player.currentTime())
-        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
-        let keepUp = item.isPlaybackLikelyToKeepUp
-        if bufferedAhead > 0 && ((bufferedAhead < 1.5 && !keepUp) || (bufferedAhead >= 2.0 && keepUp)) {
-            player.automaticallyWaitsToMinimizeStalling = false
-        } else {
-            player.automaticallyWaitsToMinimizeStalling = true
-        }
-        print("📱 [DetailVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), \(detailDiagnostic(player, item: item))")
+        let bufferPolicy = applyFeedStylePrePlayBuffering(to: player, item: item)
+        print("📱 [DetailVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(detailDiagnostic(player, item: item))")
         player.play()
         isPlaying = true
         isBuffering = shouldKeepDetailBuffering(player: player, item: item)
@@ -2919,7 +2976,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
             let bufferedAhead = self.bufferedTimeAhead(for: item, player: player)
             let keepUp = item.isPlaybackLikelyToKeepUp
-            let requiredBuffer = keepUp ? 2.0 : 5.0
+            let requiredBuffer = feedStyleRequiredBufferAhead(for: item, player: player)
             guard bufferedAhead >= requiredBuffer else {
                 guard self.detailStartupRecoveryAttemptCount < 4 else {
                     if self.rebuildDetailItemAfterStall(player: player, item: item, mid: mid, reason: "no buffer after recovery attempts") {
@@ -2944,7 +3001,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             }
 
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            self.currentPlayer?.automaticallyWaitsToMinimizeStalling = false
+            _ = self.currentPlayer.map { applyFeedStylePrePlayBuffering(to: $0, item: item) }
             print("📱 [DetailVideoManager] recovery play nudge \(self.shortMID(mid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(self.detailDiagnostic(player, item: item))")
             self.currentPlayer?.play()
 

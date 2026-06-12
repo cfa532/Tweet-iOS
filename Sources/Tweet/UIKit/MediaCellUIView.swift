@@ -2101,6 +2101,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
         replayButton.isHidden = true
+        restoreVisibleLoadingStateIfNeeded(reason: "coordinatorPlay")
 
         // A foreground-visible primary should autoplay even if it finished before
         // backgrounding. Treat an explicit coordinator play as replay intent.
@@ -3471,6 +3472,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               let parentTweet = parentTweet else { return }
 
         print("\(logPrefix) 🔄 Manual video retry")
+        preserveFrameToCache(skipImageView: imageView.image != nil)
+        restoreCachedPosterForFailureIfNeeded()
         retryButton.isHidden = true
         replayButton.isHidden = true
         coordinatorWantsToPlay = false
@@ -3483,8 +3486,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         } else {
             // Player was cleared (initial load failure / item.status == .failed).
             // acquirePlayer creates a fresh player that reuses preserved disk cache.
-            restoreCachedPosterForFailureIfNeeded()
-            transitionTo(imageView.image != nil ? .thumbnail : .noContent)
+            transitionTo(imageView.image != nil ? .playerLoading : .noContent)
             acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
         }
     }
@@ -3514,7 +3516,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         removePlayerTimeObserver()
         videoPlayerView.setPlayer(nil)
         player?.pause()
-        player?.replaceCurrentItem(with: nil)
         player = nil
     }
 
@@ -3760,6 +3761,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 }
             }
 
+            restoreVisibleLoadingStateIfNeeded(reason: "becameVisible")
+
             if isVideoAttachment && shouldAcquirePlayer {
                 schedulePlayerAcquireIfNeeded()
             }
@@ -3878,6 +3881,51 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 || Date().timeIntervalSince(lastPlaybackRequestDate) < 45.0
         }
         return false
+    }
+
+    private func restoreVisibleLoadingStateIfNeeded(reason: String) {
+        guard isVisible,
+              isVideoAttachment,
+              shouldLoadVideo,
+              let mid = attachment?.mid else { return }
+
+        let activePlayer: AVPlayer
+        if let player {
+            activePlayer = player
+        } else if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
+                  cachedPlayer.currentItem != nil {
+            configurePlayer(cachedPlayer)
+            activePlayer = cachedPlayer
+        } else {
+            return
+        }
+
+        guard let item = activePlayer.currentItem,
+              !isVideoAtEnd(activePlayer),
+              !isVisibleVideoFrameReady(activePlayer) else { return }
+
+        let isStillLoading = item.status == .unknown
+            || activePlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            || activePlayer.timeControlStatus == .paused
+            || activePlayer.rate > 0
+
+        guard isStillLoading else { return }
+
+        restoreCachedPosterForFailureIfNeeded()
+        let canKeepCurrentVisual = videoCellState == .paused
+            || videoCellState == .playerReady
+            || videoCellState == .playing
+
+        if videoCellState != .playerLoading && !canKeepCurrentVisual {
+            transitionTo(.playerLoading)
+        }
+
+        if coordinatorWantsToPlay {
+            requestPlaybackStartIfNeeded(activePlayer, reason: "restoreVisibleLoadingState-\(reason)")
+            updateLoadingSpinnerForPlayback(activePlayer)
+        } else {
+            loadingSpinner.startAnimating()
+        }
     }
 
     /// True when coordinator commanded play but the player/item is still being acquired or loaded.
