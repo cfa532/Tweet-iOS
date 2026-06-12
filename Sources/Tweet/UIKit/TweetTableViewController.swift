@@ -2191,8 +2191,8 @@ class TweetTableViewController: UITableViewController {
                 (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
             let isTweetVisible = ratio >= FeedPlaybackTuning.tweetVisibleRatio
 
-            // Avoid kicking off media work for a row that only has a sliver on screen.
-            // Autoplay still uses the stricter 50% media-cell threshold returned as `playable`.
+            // Loading uses a small threshold; autoplay still uses the stricter
+            // media-cell threshold returned as `playable`.
             tweetCell.tweetContentView.setMediaVisible(isRowLoadVisible)
             let mediaVisibility = tweetCell.tweetContentView.mediaVisibilityIdentifiers(
                 visibleRect: visibleRect,

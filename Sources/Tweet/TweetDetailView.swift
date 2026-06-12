@@ -724,13 +724,16 @@ private struct DetailSingletonVideoPlayerView: View {
         (shouldLoad && !isThisVideoLoaded && !didThisVideoFailToLoad)
             || isThisVideoPreparing
             || (manager.currentVideoMid == mid
-                && manager.isBuffering
-                && !manager.isPlaybackRendering
+                && (manager.isBuffering || !manager.isPlaybackRendering)
                 && !didThisVideoFailToLoad)
     }
 
     private var shouldShowPlaceholder: Bool {
-        !isThisVideoLoaded || isThisVideoPreparing
+        !isThisVideoLoaded
+            || isThisVideoPreparing
+            || (manager.currentVideoMid == mid
+                && !manager.isPlaybackRendering
+                && !didThisVideoFailToLoad)
     }
 
     var body: some View {

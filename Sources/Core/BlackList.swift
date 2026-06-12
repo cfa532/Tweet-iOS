@@ -38,6 +38,8 @@ class BlackList {
     /// Process-local failure guard. This resets when the app process restarts.
     private var sessionFailureCounts: [MimeiId: Int] = [:]
     private var sessionBlockedResources: Set<MimeiId> = []
+    private var lastFailureRecordedAt: [MimeiId: TimeInterval] = [:]
+    private let failureDedupWindow: TimeInterval = 20
     
     // MARK: - Public Methods
     
@@ -54,6 +56,7 @@ class BlackList {
             let wasInCandidates = candidates.removeValue(forKey: mimeiId) != nil
             sessionFailureCounts.removeValue(forKey: mimeiId)
             sessionBlockedResources.remove(mimeiId)
+            lastFailureRecordedAt.removeValue(forKey: mimeiId)
             
             if wasInCandidates {
                 print("[BlackList] Removed \(mimeiId) from candidates after successful access")
@@ -70,6 +73,12 @@ class BlackList {
     func recordFailure(_ mimeiId: MimeiId) {
         queue.sync(flags: .barrier) {
             let now = Date().timeIntervalSince1970
+            if let lastFailure = lastFailureRecordedAt[mimeiId],
+               now - lastFailure < failureDedupWindow {
+                return
+            }
+            lastFailureRecordedAt[mimeiId] = now
+
             let sessionFailureCount = (sessionFailureCounts[mimeiId] ?? 0) + 1
             sessionFailureCounts[mimeiId] = sessionFailureCount
             if sessionFailureCount >= sessionBlockFailureCount,

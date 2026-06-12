@@ -2247,7 +2247,9 @@ public class LocalHTTPServer: @unchecked Sendable {
 
                     if nsError.code != NSURLErrorCancelled, attempt < maxAttempts, isRetryable {
                         let delay = Double(attempt) // 1s, 2s backoff
-                        print("🔄 [LocalHTTPServer] Download retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
+                        if LocalHTTPServer.verboseLogsEnabled {
+                            print("🔄 [LocalHTTPServer] Download retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
+                        }
                         DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                             self.downloadWithRetry(url: url, cachePath: cachePath, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                         }
@@ -2274,7 +2276,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // Retry on server errors (5xx)
                 if httpResponse.statusCode >= 500, attempt < maxAttempts {
                     let delay = Double(attempt)
-                    print("🔄 [LocalHTTPServer] Download retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
+                    if LocalHTTPServer.verboseLogsEnabled {
+                        print("🔄 [LocalHTTPServer] Download retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
+                    }
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.downloadWithRetry(url: url, cachePath: cachePath, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                     }
@@ -2350,7 +2354,9 @@ public class LocalHTTPServer: @unchecked Sendable {
 
                     if nsError.code != NSURLErrorCancelled, attempt < maxAttempts, isRetryable {
                         let delay = Double(attempt) // 1s, 2s backoff
-                        print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
+                        if LocalHTTPServer.verboseLogsEnabled {
+                            print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
+                        }
                         DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                             self.fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                         }
@@ -2379,7 +2385,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // Retry on server errors (5xx)
                 if httpResponse.statusCode >= 500, attempt < maxAttempts {
                     let delay = Double(attempt)
-                    print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
+                    if LocalHTTPServer.verboseLogsEnabled {
+                        print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
+                    }
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                     }

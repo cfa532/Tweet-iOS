@@ -21,6 +21,61 @@ private struct CacheMetadata: Codable {
 }
 // CachingPlayerItem is now integrated directly
 
+@MainActor
+final class VideoPlaybackSessionStore {
+    static let shared = VideoPlaybackSessionStore()
+
+    struct DecodedFrameSnapshot {
+        let time: CMTime
+        let updatedAt: Date
+    }
+
+    private struct Session {
+        var lastDecodedFrameTime: CMTime?
+        var lastUpdatedAt: Date = .distantPast
+    }
+
+    private var sessions: [String: Session] = [:]
+
+    private init() {}
+
+    func noteDecodedFrame(mediaID: String, time: CMTime) {
+        guard time.isValid, !time.isIndefinite else { return }
+        let seconds = CMTimeGetSeconds(time)
+        guard seconds.isFinite, seconds >= 0 else { return }
+
+        var session = sessions[mediaID] ?? Session()
+        session.lastDecodedFrameTime = time
+        session.lastUpdatedAt = Date()
+        sessions[mediaID] = session
+    }
+
+    func decodedFrameSnapshot(for mediaID: String, beforeOrAt currentTime: CMTime) -> DecodedFrameSnapshot? {
+        guard let session = sessions[mediaID],
+              let time = session.lastDecodedFrameTime,
+              time.isValid,
+              !time.isIndefinite else { return nil }
+        let decodedSeconds = CMTimeGetSeconds(time)
+        guard decodedSeconds.isFinite, decodedSeconds > 0.25 else { return nil }
+
+        let currentSeconds = CMTimeGetSeconds(currentTime)
+        if currentSeconds.isFinite,
+           decodedSeconds > currentSeconds + 0.5 {
+            return nil
+        }
+
+        return DecodedFrameSnapshot(time: time, updatedAt: session.lastUpdatedAt)
+    }
+
+    func trustedVisibleTime(for mediaID: String, beforeOrAt currentTime: CMTime) -> CMTime? {
+        decodedFrameSnapshot(for: mediaID, beforeOrAt: currentTime)?.time
+    }
+
+    func reset(mediaID: String) {
+        sessions.removeValue(forKey: mediaID)
+    }
+}
+
 /// Shared asset cache for video players with background loading and priority management
 @MainActor
 class SharedAssetCache: ObservableObject {
@@ -701,11 +756,8 @@ class SharedAssetCache: ObservableObject {
     
     /// Cache a player instance for immediate reuse
     func cachePlayer(_ player: AVPlayer, for mediaID: String) {
-        // Remove old player if exists - do this asynchronously to avoid blocking
         if let oldPlayer = playerCache[mediaID], oldPlayer !== player {
-            Task.detached {
-                oldPlayer.pause()
-            }
+            releasePlayer(oldPlayer)
         }
         
         playerCache[mediaID] = player
@@ -1036,12 +1088,24 @@ class SharedAssetCache: ObservableObject {
     /// downloads finish so the next player can use them immediately.
     @MainActor func softResetPlayer(for mediaID: String) {
         if let player = playerCache.removeValue(forKey: mediaID) {
-            player.pause()
-            player.replaceCurrentItem(with: nil)
+            if playerHasLoadedData(player) {
+                playerCache[mediaID] = player
+                print("🔄 [SOFT RESET] Skipped for \(mediaID) — player has loaded data")
+                return
+            }
+            releasePlayer(player)
         }
         // Keep: assetCache, cachingPlayerItems, cachingPlayerDelegates,
         //        resourceLoaderDelegates, diskCacheStatus, active downloads
         print("🔄 [SOFT RESET] Player removed for \(mediaID) — asset/downloads preserved")
+    }
+
+    private func playerHasLoadedData(_ player: AVPlayer) -> Bool {
+        guard let item = player.currentItem else { return false }
+        return item.loadedTimeRanges.contains { value in
+            let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
+            return duration.isFinite && duration > 0
+        }
     }
 
     /// - Parameter deleteDiskCache: When true (default), also deletes the on-disk HLS segment cache.

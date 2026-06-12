@@ -518,7 +518,6 @@ class MediaGridUIView: UIView {
             let visibleArea = max(0, intersection.width) * max(0, intersection.height)
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
-            // Keep loading tied to actual media-cell geometry, not just table-row visibility.
             let isLoadVisible = isGridVisible &&
                 visibleArea > 0 &&
                 (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
