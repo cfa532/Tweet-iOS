@@ -1797,6 +1797,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Handle foreground recovery - intelligently decide whether to preserve or reset state
     /// Decision: Preserve if user didn't explicitly scroll away (flag set on background)
     @objc private func handleForegroundRecovery(_ notification: Notification) {
+        clearFinishedAutoplayGateForForeground()
         
         // CRITICAL: Use flag to track if user explicitly scrolled away
         // Flag is set when app enters background (if playback was active)
@@ -1835,6 +1836,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                         let firstVideo = visibleVideos[0]
                         primaryVideoId = firstVideo.identifier
                         currentlyPlayingVideoIds = [firstVideo.identifier]
+                        LocalHTTPServer.shared.setPrimaryMediaID(firstVideo.videoMid)
 
                         // Direct delegate call — no broadcast notification
                         if let delegate = mediaCellDelegates[firstVideo.identifier] {
@@ -1844,6 +1846,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                         // Primary is first or only video - resume it
                         primaryVideoId = primary.identifier
                         currentlyPlayingVideoIds = [primary.identifier]
+                        LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
 
                         // Direct delegate call — no broadcast notification
                         if let delegate = mediaCellDelegates[primary.identifier] {
@@ -1892,6 +1895,25 @@ class VideoPlaybackCoordinator: ObservableObject {
                 RunLoop.main.add(timer, forMode: .common)
                 playbackDebounceTimer = timer
             }
+        }
+    }
+
+    /// Foreground return is a fresh autoplay decision for whatever is onscreen.
+    /// Normal finish handling still advances to the next video; this only removes
+    /// the finished gate when the app itself comes back and recomputes visibility.
+    private func clearFinishedAutoplayGateForForeground() {
+        let candidates = visibleVideos.filter { video in
+            onScreenMediaCells.isEmpty || onScreenMediaCells.contains(video.identifier)
+        }
+        guard !candidates.isEmpty else { return }
+
+        for video in candidates {
+            VideoStateCache.shared.clearVideoFinished(video.identifier)
+        }
+
+        if let finishedId = finishedPrimaryIdentifier,
+           candidates.contains(where: { $0.identifier == finishedId }) {
+            finishedPrimaryIdentifier = nil
         }
     }
 }

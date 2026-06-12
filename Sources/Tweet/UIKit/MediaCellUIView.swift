@@ -1820,12 +1820,21 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         coordinatorWantsToPlay = true
         replayButton.isHidden = true
 
-        // Don't auto-replay a video that already played to completion this session.
-        // The user can still tap to watch it fullscreen; this only suppresses coordinator autoplay.
+        // A foreground-visible primary should autoplay even if it finished before
+        // backgrounding. Treat an explicit coordinator play as replay intent.
         if let id = videoIdentifier, VideoStateCache.shared.isVideoFinished(id) {
-            coordinatorWantsToPlay = false
-            updateReplayButtonVisibility()
-            return
+            VideoStateCache.shared.clearVideoFinished(id)
+            clearFeedResumeState(for: mid)
+            replayButton.isHidden = true
+            if let player, isActuallyPlayerReady(player) {
+                cancelDelayedPrimarySpinner()
+                loadingSpinner.stopAnimating()
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
+                    self.requestPlaybackStartIfNeeded(player, reason: "coordinatorPlay-finishedReplay")
+                }
+                return
+            }
         }
 
         // A video that finished, left the viewport, and came back should autoplay
@@ -3540,15 +3549,21 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return SharedAssetCache.shared.cachedThumbnail(for: mid)
     }
 
-    /// Show cached thumbnail over the video player layer before background cleanup.
-    /// Called by TweetTableViewController for all visible cells before video memory is released.
-    func showThumbnailForBackground() {
+    /// Save playback state and quiet foreground-only recovery before backgrounding.
+    /// The player/cache owns visual recovery; adding a synthetic cover here races
+    /// foreground playback and causes visible still-frame flicker.
+    func prepareVideoForBackground() {
         guard isVideoAttachment, isVisible else { return }
         guard videoCellState == .playing || videoCellState == .paused || videoCellState == .playerReady else { return }
         if let player {
             saveCurrentPosition(player: player, wasPlaying: player.rate > 0 || coordinatorWantsToPlay)
             player.pause()
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        }
+        if videoPlayerView.isLayerReadyForDisplay {
+            hasRenderedFrameForCurrentPlayer = true
+            videoPlayerView.isHidden = false
+            hideImageViewImmediately()
         }
         coordinatorWantsToPlay = false
         playbackStartupRecoveryTask?.cancel()
@@ -3558,12 +3573,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         statusUnknownFallbackTask = nil
         cancelDelayedPrimarySpinner()
         loadingSpinner.stopAnimating()
-        _ = preserveFrameToCache(skipImageView: videoCellState == .playing)
-
-        let thumbnail = imageView.image ?? cachedPlaybackCoverForCurrentVideo()
-        guard let thumbnail else { return }
-        imageView.image = thumbnail
-        imageView.isHidden = false
     }
 
     /// Refresh visible playback after foreground without tearing down a healthy layer.
@@ -3597,16 +3606,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let needsResumeSeek = !(currentTime.isValid && currentTime.seconds.isFinite && currentTime.seconds > 0.25)
         if needsResumeSeek, let savedResumeTime {
             pendingRecoverySeekTime = savedResumeTime
-        }
-
-        // Background snapshots are useful in the app switcher, but when playback
-        // resumes the player should reveal its own frame instead of crossfading
-        // from a potentially different cover image.
-        if coordinatorWantsToPlay {
-            hideImageViewImmediately()
-        } else if let cachedFrame = cachedPlaybackCoverForCurrentVideo() {
-            imageView.image = cachedFrame
-            imageView.isHidden = false
         }
 
         if videoPlayerView.isLayerReadyForDisplay {
