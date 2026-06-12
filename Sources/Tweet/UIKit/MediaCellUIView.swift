@@ -690,6 +690,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
            self.attachmentIndex == attachmentIndex,
            self.attachment != nil {
             self.aspectRatio = aspectRatio
+            self.shouldLoadVideo = shouldLoadVideo
+            self.cellTweetId = cellTweetId
+            self.isSingleMedia = isSingleMedia
             self.parentViewController = parentViewController
             return
         }
@@ -1041,6 +1044,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 return
             }
 
+            if shouldRebuildCachedFeedPlayer(cachedPlayer, mid: mid, source: "VideoStateCache") {
+                rebuildCachedFeedPlayer(cachedPlayer, mid: mid)
+                acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
+                return
+            }
+
             let isAtEnd = isVideoAtEnd(cachedPlayer)
 
             // Reset finished videos to beginning
@@ -1060,6 +1069,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            cachedPlayer.currentItem != nil {
             cachedPlayer.isMuted = MuteState.shared.isMuted
+            if shouldRebuildCachedFeedPlayer(cachedPlayer, mid: mid, source: "SharedAssetCache") {
+                rebuildCachedFeedPlayer(cachedPlayer, mid: mid)
+                acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
+                return
+            }
             if isVideoAtEnd(cachedPlayer) {
                 clearFeedResumeState(for: mid)
                 cachedPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
@@ -1071,6 +1085,42 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         // TIER 3: Async loading
         acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
+    }
+
+    private func shouldRebuildCachedFeedPlayer(_ player: AVPlayer, mid: String, source: String) -> Bool {
+        guard let item = player.currentItem else { return true }
+
+        if player.error != nil || item.error != nil || item.status == .failed {
+            return true
+        }
+
+        guard coordinatorWantsToPlay,
+              isVisible,
+              !isVideoAtEnd(player) else { return false }
+
+        let bufferedAhead = bufferedTimeAhead(for: player)
+        let isWaitingWithoutBuffer = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            && bufferedAhead < 0.25
+        let isUnknownAndWaiting = item.status == .unknown
+            && player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+
+        if isWaitingWithoutBuffer || isUnknownAndWaiting {
+            print("\(logPrefix) 🔄 \(source) cached player looks wedged for \(mid): status=\(item.status.rawValue), timeControl=\(player.timeControlStatus.rawValue), buffered=\(String(format: "%.1f", bufferedAhead))s - rebuilding from proxy cache")
+            return true
+        }
+
+        return false
+    }
+
+    private func rebuildCachedFeedPlayer(_ player: AVPlayer, mid: String) {
+        let resumeTime = player.currentTime()
+        if resumeTime.isValid, resumeTime.seconds.isFinite, resumeTime.seconds > 0.25 {
+            pendingRecoverySeekTime = resumeTime
+        }
+
+        player.pause()
+        VideoStateCache.shared.clearCachedState(for: mid)
+        SharedAssetCache.shared.softResetPlayer(for: mid)
     }
 
     private func acquirePlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {

@@ -7,6 +7,7 @@
 
 @preconcurrency import Foundation
 import SwiftUI
+import UIKit
 
 private final class ObserverHolder: @unchecked Sendable {
     var observer: NSObjectProtocol?
@@ -66,6 +67,70 @@ struct MediaGridView: View, Equatable {
     }
     
     var body: some View {
+        let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
+
+        UIKitMediaGridRepresentable(
+            parentTweet: parentTweet,
+            attachments: attachments,
+            isEmbedded: isEmbedded,
+            cellTweetId: cellTweetId,
+            shouldLoadVideo: shouldLoadVideo,
+            isVisible: isVisible
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .aspectRatio(gridAspectRatio, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .id("mediagrid_\(parentTweet.mid)")
+        .onAppear {
+            if hasInitialized {
+                isVisible = true
+                return
+            }
+
+            hasInitialized = true
+            isVisible = true
+
+            let hasVideos = attachments.contains(where: { $0.type == .video || $0.type == .hls_video })
+            let hasAudio = attachments.contains(where: { $0.type == .audio })
+
+            if hasVideos || hasAudio {
+                Task.detached(priority: .background) {
+                    await videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                }
+
+                if !shouldLoadVideo, videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
+                    shouldLoadVideo = true
+                }
+            }
+        }
+        .onDisappear {
+            isVisible = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
+            guard let tweetId = notification.userInfo?["tweetId"] as? String,
+                  tweetId == parentTweet.mid,
+                  !isVisible else { return }
+            shouldLoadVideo = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
+            guard let tweetId = notification.userInfo?["tweetId"] as? String,
+                  tweetId == parentTweet.mid else { return }
+            shouldLoadVideo = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
+            shouldLoadVideo = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .overlayCoverageChanged)) { notification in
+            guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
+            if !isCovered, isVisible {
+                shouldLoadVideo = true
+            }
+        }
+    }
+
+#if false
+    private var legacyBody: some View {
         // Use cached dimensions to prevent repeated UIScreen.main calls
         let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
         // Use different width for embedded vs regular tweets
@@ -694,6 +759,96 @@ struct MediaGridView: View, Equatable {
                 shouldLoadVideo = true
             }
         }
+    }
+#endif
+}
+
+private struct UIKitMediaGridRepresentable: UIViewRepresentable {
+    let parentTweet: Tweet
+    let attachments: [MimeiFileType]
+    let isEmbedded: Bool
+    let cellTweetId: String?
+    let shouldLoadVideo: Bool
+    let isVisible: Bool
+
+    func makeUIView(context: Context) -> MediaGridUIView {
+        let gridView = MediaGridUIView()
+        gridView.isUserInteractionEnabled = true
+        return gridView
+    }
+
+    func updateUIView(_ uiView: MediaGridUIView, context: Context) {
+        if let parentViewController = uiView.nearestViewController ?? UIApplication.shared.topMostViewController {
+            configure(uiView, parentViewController: parentViewController)
+        } else {
+            DispatchQueue.main.async {
+                guard let parentViewController = uiView.nearestViewController ?? UIApplication.shared.topMostViewController else { return }
+                configure(uiView, parentViewController: parentViewController)
+            }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: MediaGridUIView, context: Context) -> CGSize? {
+        let fallbackWidth = isEmbedded
+            ? max(10, UIScreen.main.bounds.width - 80)
+            : max(10, UIScreen.main.bounds.width - 64)
+        let width = proposal.width ?? fallbackWidth
+        let height = ceil(MediaGridViewModel.calculateHeight(for: attachments, gridWidth: width))
+        return CGSize(width: width, height: max(10, height))
+    }
+
+    private func configure(_ uiView: MediaGridUIView, parentViewController: UIViewController) {
+        uiView.configure(
+            tweet: parentTweet,
+            attachments: attachments,
+            isEmbedded: isEmbedded,
+            cellTweetId: cellTweetId,
+            shouldLoadVideo: shouldLoadVideo,
+            parentViewController: parentViewController
+        )
+        uiView.isGridVisible = isVisible
+        uiView.setNeedsLayout()
+    }
+}
+
+private extension UIView {
+    var nearestViewController: UIViewController? {
+        var responder: UIResponder? = self
+        while let next = responder?.next {
+            if let viewController = next as? UIViewController {
+                return viewController
+            }
+            responder = next
+        }
+        return nil
+    }
+}
+
+private extension UIApplication {
+    var topMostViewController: UIViewController? {
+        connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .rootViewController?
+            .topMostPresentedViewController
+    }
+}
+
+private extension UIViewController {
+    var topMostPresentedViewController: UIViewController {
+        if let presentedViewController {
+            return presentedViewController.topMostPresentedViewController
+        }
+        if let navigationController = self as? UINavigationController,
+           let visibleViewController = navigationController.visibleViewController {
+            return visibleViewController.topMostPresentedViewController
+        }
+        if let tabBarController = self as? UITabBarController,
+           let selectedViewController = tabBarController.selectedViewController {
+            return selectedViewController.topMostPresentedViewController
+        }
+        return self
     }
 }
 

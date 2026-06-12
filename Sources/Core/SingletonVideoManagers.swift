@@ -306,6 +306,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         retryWorkItem = nil
         loadingMid = nil
         loadingStartedAt = nil
+        fullscreenStallItemRebuildCount = 0
         bufferObserver?.invalidate()
         bufferObserver = nil
         cleanupObservers()         // removes timeControlStatus, buffer, loaded-ranges KVO
@@ -455,6 +456,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         loadGeneration += 1
         loadingMid = nil
         loadingStartedAt = nil
+        fullscreenStallItemRebuildCount = 0
         retryWorkItem?.cancel()
         retryWorkItem = nil
         bufferObserver?.invalidate()
@@ -549,6 +551,22 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         return nil
     }
+
+    private func shouldResetCachedFeedPlayerForFocusedPlayback(_ player: AVPlayer, item: AVPlayerItem) -> Bool {
+        let hasPlayerFailure = item.status == .failed || player.error != nil || item.error != nil
+        let isNearEnd = timeRemaining(for: item, player: player).map { $0 <= 0.5 } ?? false
+
+        guard item.status != .failed,
+              player.error == nil,
+              item.error == nil,
+              !isNearEnd else {
+            return hasPlayerFailure
+        }
+
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        return player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            && bufferedAhead < 0.25
+    }
     
     // Independent singleton player for fullscreen mode
     @Published var singletonPlayer: AVPlayer?
@@ -576,6 +594,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     // Retry mechanism for seeking
     private var retryWorkItem: DispatchWorkItem?
     private var bufferObserver: NSKeyValueObservation?
+    private var fullscreenStallItemRebuildCount = 0
     
     // Waiting for data observer
     private var timeControlStatusObserver: NSKeyValueObservation?
@@ -751,6 +770,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         loadingStartedAt = Date()
         hasRestoredPosition = false // Reset restoration flag when loading new video
         isSeekingToRestoredPosition = false // Reset seeking flag
+        fullscreenStallItemRebuildCount = 0
         isItemReady = false // Will be set true when playerItem.status becomes .readyToPlay
 
         // Remove old observer if exists
@@ -782,7 +802,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedPlayerItem = cachedPlayer.currentItem {
             print("🎬 [FullScreenVideoManager] Using cached feed asset for \(shortMID(mid)): cached=\(playerDiagnostic(cachedPlayer, item: cachedPlayerItem))")
-            let playerItem = AVPlayerItem(asset: cachedPlayerItem.asset)
+            let cachedAsset = cachedPlayerItem.asset
+            let shouldResetFeedPlayer = shouldResetCachedFeedPlayerForFocusedPlayback(cachedPlayer, item: cachedPlayerItem)
+            let playerItem = AVPlayerItem(asset: cachedAsset)
+            if shouldResetFeedPlayer {
+                print("🎬 [FullScreenVideoManager] Resetting wedged feed player after creating fullscreen item \(shortMID(mid))")
+                VideoStateCache.shared.clearCachedState(for: mid)
+                SharedAssetCache.shared.softResetPlayer(for: mid)
+            }
             self.loadingMid = nil
             self.loadingStartedAt = nil
 
@@ -1266,8 +1293,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             return
         }
 
-        // If player is stuck (not playing and rate is 0), force a seek to trigger reload
-        if player.rate == 0 && player.timeControlStatus != .playing {
+        // If player is stuck, force a seek to trigger segment loading. AVPlayer can
+        // remain at rate > 0 while waiting, so timeControlStatus is the stronger signal.
+        let isWaitingWithoutBuffer = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            && bufferedAhead < 0.25
+        if player.timeControlStatus != .playing && (player.rate == 0 || isWaitingWithoutBuffer) {
             let currentTime = player.currentTime()
             print("🎬 [FullScreenVideoManager] retry seek-current \(shortMID(currentVideoMid)): target=\(String(format: "%.2f", currentTime.seconds)), \(playerDiagnostic(player, item: playerItem))")
             
@@ -1277,7 +1307,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             
             // Force seek to current position to trigger segment download
             player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player, weak playerItem] finished in
-                guard finished, let self = self, let player = player, let item = playerItem else { return }
+                guard let self = self else { return }
+                guard finished, let player = player, let item = playerItem else {
+                    Task { @MainActor in
+                        guard self.isActive else { return }
+                        self.startRetryMonitoring()
+                    }
+                    return
+                }
 
                 Task { @MainActor in
                     // Bail if fullscreen was dismissed while seek was in flight.
@@ -1285,44 +1322,36 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
                     // Wait for buffered data before calling play()
                     self.bufferObserver = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self, weak player] observedItem, _ in
-                        let hasData = !observedItem.loadedTimeRanges.isEmpty
-                        var bufferedDuration: Double = 0
-                        if !observedItem.loadedTimeRanges.isEmpty {
-                            let timeRange = observedItem.loadedTimeRanges[0].timeRangeValue
-                            bufferedDuration = CMTimeGetSeconds(timeRange.duration)
-                        }
+                        guard let self, let player else { return }
+                        Task { @MainActor in
+                            guard self.isActive else { return }
+                            let bufferedAhead = self.bufferedTimeAhead(for: observedItem, player: player)
 
-                        // Only resume when we have at least 2 seconds of buffer
-                        let remaining = player.flatMap { self?.timeRemaining(for: observedItem, player: $0) }
-                        if let remaining, remaining <= 1.0 {
-                            Task { @MainActor in
-                                print("🎬 [FullScreenVideoManager] retry buffer near-end \(self?.shortMID(self?.currentVideoMid) ?? "nil"): remaining=\(String(format: "%.2f", remaining))")
-                                self?.scheduleNearEndAutoAdvance(for: observedItem)
-                            }
-                        } else if hasData && bufferedDuration >= 2.0 {
-                            Task { @MainActor in
-                                guard let self = self, let player = player else { return }
+                            // Only resume when we have at least 2 seconds of buffer
+                            let remaining = self.timeRemaining(for: observedItem, player: player)
+                            if let remaining, remaining <= 1.0 {
+                                print("🎬 [FullScreenVideoManager] retry buffer near-end \(self.shortMID(self.currentVideoMid)): remaining=\(String(format: "%.2f", remaining))")
+                                self.scheduleNearEndAutoAdvance(for: observedItem)
+                            } else if bufferedAhead >= 2.0 {
                                 // Bail if fullscreen was dismissed while waiting for buffer.
                                 // deactivate() sets isActive=false + pauses the player, but the
                                 // KVO callback may already be enqueued on the main actor — this
                                 // guard prevents the stale play() call from re-starting audio.
-                                guard self.isActive else { return }
                                 guard self.isPlaying || self.wasPlayingBeforeWaiting else { return }
 
                                 // Clean up observer
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
 
-                                // Resume playback
-                                if player.rate == 0 {
-                                    print("🎬 [FullScreenVideoManager] retry buffer ready \(self.shortMID(self.currentVideoMid)): buffered=\(String(format: "%.2f", bufferedDuration)), \(self.playerDiagnostic(player, item: observedItem))")
-                                    player.play()
-                                }
+                                print("🎬 [FullScreenVideoManager] retry buffer ready \(self.shortMID(self.currentVideoMid)): bufferedAhead=\(String(format: "%.2f", bufferedAhead)), \(self.playerDiagnostic(player, item: observedItem))")
+                                player.play()
+                                self.isPlaying = true
+                                self.isBuffering = false
+                                self.wasPlayingBeforeWaiting = false
 
                                 // Continue monitoring for future stalls
                                 self.startRetryMonitoring()
                             }
-                        } else if hasData {
                         }
                     }
 
@@ -1331,11 +1360,19 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         Task { @MainActor in
                             guard let self = self else { return }
                             guard self.isActive else { return }
-                            if self.bufferObserver != nil {
+                            if self.bufferObserver != nil,
+                               self.singletonPlayer?.currentItem === item {
                                 print("🎬 [FullScreenVideoManager] retry buffer timeout \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(self.singletonPlayer, item: self.singletonPlayer?.currentItem))")
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
-                                self.startRetryMonitoring()
+                                if let player = self.singletonPlayer,
+                                   let item = player.currentItem,
+                                   let mid = self.currentVideoMid,
+                                   self.fullscreenStallItemRebuildCount < 1 {
+                                    self.rebuildFullscreenItemAfterStall(player: player, item: item, mid: mid)
+                                } else {
+                                    self.startRetryMonitoring()
+                                }
                             }
                         }
                     }
@@ -1345,6 +1382,44 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // Player is playing, continue monitoring
             startRetryMonitoring()
         }
+    }
+
+    private func rebuildFullscreenItemAfterStall(player: AVPlayer, item: AVPlayerItem, mid: String) {
+        guard isActive,
+              singletonPlayer === player,
+              player.currentItem === item,
+              currentVideoMid == mid else { return }
+
+        fullscreenStallItemRebuildCount += 1
+        let resumeTime = player.currentTime()
+        let duration = item.duration
+        if resumeTime.isValid, resumeTime.seconds.isFinite, resumeTime.seconds > 0.25 {
+            saveFullscreenPlaybackState(
+                videoMid: mid,
+                currentTime: resumeTime,
+                wasPlaying: true,
+                duration: duration
+            )
+        }
+
+        print("🎬 [FullScreenVideoManager] rebuilding stalled fullscreen item \(shortMID(mid)): resume=\(String(format: "%.2f", resumeTime.seconds)), \(playerDiagnostic(player, item: item))")
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid)
+
+        let replacementItem = AVPlayerItem(asset: item.asset)
+        replacementItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        player.replaceCurrentItem(with: replacementItem)
+
+        hasRestoredPosition = false
+        isSeekingToRestoredPosition = false
+        isItemReady = false
+        isBuffering = true
+        isPlaying = true
+        wasPlayingBeforeWaiting = true
+
+        setupVideoCompletionObserver(replacementItem)
+        setupTimeControlStatusObserver()
+        startPlaybackWithSeekIfNeeded(playerItem: replacementItem, mid: mid)
     }
     
     /// Resolve the next playable video in the list, scanning forward from the given index.
@@ -1620,6 +1695,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         singletonPlayer?.pause()
         singletonPlayer?.replaceCurrentItem(with: nil)
         LocalHTTPServer.shared.clearPrimaryRestriction()
+        fullscreenStallItemRebuildCount = 0
 
         isItemReady = false
         currentVideoMid = nil
@@ -2306,7 +2382,14 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedItem = cachedPlayer.currentItem {
             print("📱 [DetailVideoManager] Using cached feed asset \(shortMID(mid)): cached=\(detailDiagnostic(cachedPlayer, item: cachedItem))")
-            let playerItem = AVPlayerItem(asset: cachedItem.asset)
+            let cachedAsset = cachedItem.asset
+            let shouldResetFeedPlayer = shouldResetCachedFeedPlayerForFocusedPlayback(cachedPlayer, item: cachedItem)
+            let playerItem = AVPlayerItem(asset: cachedAsset)
+            if shouldResetFeedPlayer {
+                print("📱 [DetailVideoManager] Resetting wedged feed player after creating detail item \(shortMID(mid))")
+                VideoStateCache.shared.clearCachedState(for: mid)
+                SharedAssetCache.shared.softResetPlayer(for: mid)
+            }
             playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             AudioSessionManager.shared.activateForVideoPlayback()
             if currentPlayer == nil {
@@ -2452,6 +2535,19 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
 
         return nil
+    }
+
+    private func shouldResetCachedFeedPlayerForFocusedPlayback(_ player: AVPlayer, item: AVPlayerItem) -> Bool {
+        guard item.status != .failed,
+              player.error == nil,
+              item.error == nil,
+              !isVideoAtEnd(player) else {
+            return item.status == .failed || player.error != nil || item.error != nil
+        }
+
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        return player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            && bufferedAhead < 0.25
     }
 
     private func seekAndPlay(playerItem: AVPlayerItem, mid: String) {

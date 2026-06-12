@@ -563,6 +563,7 @@ struct ChatVideoContainer: View {
     @State private var showFullScreen = false
     @State private var isPlaying = false
     @State private var isLoading = true
+    @State private var wasPlayingBeforeFullscreen = false
     @State private var videoCompletionObserver: NSObjectProtocol?
     @State private var cancellables = Set<AnyCancellable>()
     @ObservedObject private var muteState = MuteState.shared
@@ -653,7 +654,7 @@ struct ChatVideoContainer: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        showFullScreen = true
+                        openFullscreen()
                     }
 
                 // Bottom bar: play/mute buttons (separate from fullscreen tap)
@@ -772,10 +773,12 @@ struct ChatVideoContainer: View {
             }
         }
         .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
-            // Resume playing when returning from fullscreen
-            if let player = player, isPlaying {
+            if let player, wasPlayingBeforeFullscreen {
                 player.play()
+                isPlaying = true
+                isLoading = player.timeControlStatus != .playing
             }
+            wasPlayingBeforeFullscreen = false
         }) {
             // Create a temporary tweet-like structure for the video
             let tempTweet = createFullScreenVideoTweet()
@@ -788,6 +791,22 @@ struct ChatVideoContainer: View {
     }
     
     // MARK: - Helper Functions
+
+    private func openFullscreen() {
+        if let player {
+            wasPlayingBeforeFullscreen = isPlaying ||
+                player.rate > 0 ||
+                player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            if wasPlayingBeforeFullscreen {
+                player.pause()
+                isPlaying = false
+                isLoading = false
+            }
+        } else {
+            wasPlayingBeforeFullscreen = false
+        }
+        showFullScreen = true
+    }
     
     private func createFullScreenVideoTweet() -> Tweet {
         let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? HproseInstance.shared.appUser.mid)

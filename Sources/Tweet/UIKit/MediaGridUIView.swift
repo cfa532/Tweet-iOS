@@ -75,8 +75,30 @@ class MediaGridUIView: UIView {
         shouldLoadVideo: Bool,
         parentViewController: UIViewController
     ) {
-        // Skip if same tweet
-        if currentTweetId == tweet.mid { return }
+        let isSameGrid = currentTweetId == tweet.mid &&
+            self.attachments.map(\.mid) == attachments.map(\.mid)
+        if isSameGrid {
+            self.isEmbedded = isEmbedded
+            self.cellTweetId = cellTweetId
+            self.shouldLoadVideo = shouldLoadVideo
+            self.parentViewController = parentViewController
+            let displayCount = min(cellViews.count, attachments.count, 4)
+            for i in 0..<displayCount {
+                let cellView = cellViews[i]
+                cellView.videoCoordinator = videoCoordinator
+                cellView.configure(
+                    parentTweet: tweet,
+                    attachmentIndex: originalAttachmentIndex(i),
+                    aspectRatio: cellView.bounds.height > 0 ? Float(cellView.bounds.width / cellView.bounds.height) : 1.0,
+                    shouldLoadVideo: shouldLoadVideo,
+                    isEmbedded: isEmbedded,
+                    cellTweetId: cellTweetId,
+                    isSingleMedia: attachments.count == 1,
+                    parentViewController: parentViewController
+                )
+            }
+            return
+        }
         currentTweetId = tweet.mid
         self.parentTweet = tweet
         self.attachments = attachments
