@@ -152,10 +152,11 @@ struct ProfileView: View {
                     userInfo: ["isVisible": true]
                 )
             }
-            .onReceive(NotificationCenter.default.publisher(for: .showBarsAfterScrollEnd)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .showBarsAfterScrollEnd)) { notification in
                 guard !isNavigationVisible else { return }
                 isNavigationVisible = true
-                postNavigationVisibilityNotification(isVisible: true)
+                let animated = notification.userInfo?["animated"] as? Bool ?? false
+                postNavigationVisibilityNotification(isVisible: true, animated: animated)
             }
             .onReceive(NotificationCenter.default.publisher(for: .imageCached)) { notification in
                 guard isProfileAvatarCacheNotification(notification) else { return }
@@ -558,10 +559,10 @@ struct ProfileView: View {
     }
     
     // Helper to post navigation visibility notification with throttling
-    private func postNavigationVisibilityNotification(isVisible: Bool) {
+    private func postNavigationVisibilityNotification(isVisible: Bool, animated: Bool = true) {
         // Throttle notifications to prevent excessive posting during rapid scroll
         let now = Date()
-        if let lastTime = lastNotificationTime, now.timeIntervalSince(lastTime) < notificationThrottleInterval {
+        if animated, let lastTime = lastNotificationTime, now.timeIntervalSince(lastTime) < notificationThrottleInterval {
             return
         }
         
@@ -569,7 +570,7 @@ struct ProfileView: View {
         NotificationCenter.default.post(
             name: .navigationVisibilityChanged,
             object: nil,
-            userInfo: ["isVisible": isVisible]
+            userInfo: ["isVisible": isVisible, "animated": animated]
         )
     }
     

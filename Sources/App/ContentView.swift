@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
     @State private var isNavigationVisible = true
+    @State private var animateNavigationVisibility = true
     @State private var shouldHideHeight = false // Flag for TweetDetailView to hide height
     @State private var navigationPath = NavigationPath()
     @State private var chatNavigationPath = NavigationPath()
@@ -201,8 +202,8 @@ struct ContentView: View {
             .shadow(color: Color(.systemBlue).opacity(isNavigationVisible ? 0.3 : 0.0), radius: 1, x: 0, y: -1)
             .opacity(isNavigationVisible ? 1.0 : 0.3)
             .allowsHitTesting(true)
-            .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
-            .animation(.easeInOut(duration: 0.25), value: shouldHideHeight)
+            .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: isNavigationVisible)
+            .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: shouldHideHeight)
         }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -350,11 +351,26 @@ struct ContentView: View {
                     
                     // Check if TweetDetailView wants height hidden (only affects TweetDetailView)
                     let hideHeight = notification.userInfo?["hideHeight"] as? Bool ?? false
+                    let animated = notification.userInfo?["animated"] as? Bool ?? true
                     
                     print("[ContentView] Navigation visibility changed to: \(isVisible), hideHeight: \(hideHeight)")
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        self.isNavigationVisible = isVisible
-                        self.shouldHideHeight = hideHeight && !isVisible // Only hide height when hidden and flag is set
+                    if animated {
+                        self.animateNavigationVisibility = true
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            self.isNavigationVisible = isVisible
+                            self.shouldHideHeight = hideHeight && !isVisible // Only hide height when hidden and flag is set
+                        }
+                    } else {
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            self.animateNavigationVisibility = false
+                            self.isNavigationVisible = isVisible
+                            self.shouldHideHeight = hideHeight && !isVisible // Only hide height when hidden and flag is set
+                        }
+                        DispatchQueue.main.async {
+                            self.animateNavigationVisibility = true
+                        }
                     }
                 }
             }

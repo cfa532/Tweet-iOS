@@ -105,6 +105,7 @@ class TweetTableViewController: UITableViewController {
     private var lastCallbackOffset: CGFloat = 0  // Only updated when onScroll fires — gives accumulated delta
     private var isCompensatingForBarAppearance: Bool = false  // Compensate contentOffset when header expands
     private var compensationBaseOriginY: CGFloat?
+    private var lastBarAppearanceRequestTime: CFTimeInterval = 0
     private var lastHeaderHeight: CGFloat = 0
     private var lastHeaderLayoutWidth: CGFloat = 0
     private var lastFooterHeight: CGFloat = 0
@@ -1865,11 +1866,21 @@ class TweetTableViewController: UITableViewController {
     /// **without animation**.  The instant frame change is then compensated in
     /// `viewDidLayoutSubviews` so visible content stays at the same screen position.
     private func showBarsWithoutAnimation() {
+        let now = CACurrentMediaTime()
+        guard now - lastBarAppearanceRequestTime > FeedPlaybackTuning.barAppearanceCompensationTimeout else {
+            return
+        }
+        lastBarAppearanceRequestTime = now
+
         // Record baseline before the header expands
         isCompensatingForBarAppearance = true
         compensationBaseOriginY = view.convert(CGPoint.zero, to: nil).y
 
-        NotificationCenter.default.post(name: .showBarsAfterScrollEnd, object: nil)
+        NotificationCenter.default.post(
+            name: .showBarsAfterScrollEnd,
+            object: nil,
+            userInfo: ["animated": false]
+        )
 
         // Safety timeout — stop compensating even if layout never fires
         DispatchQueue.main.asyncAfter(deadline: .now() + FeedPlaybackTuning.barAppearanceCompensationTimeout) { [weak self] in
