@@ -335,16 +335,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             }
         }
 
-        // Clear the current item so the player truly stops: no decoding, no buffers, no resource use.
-        // Re-opening fullscreen will reattach an item (from cache when possible).
-        singletonPlayer?.replaceCurrentItem(with: nil)
         currentVideoMid = nil
         currentTweetId = nil
         currentCellTweetId = nil
         currentVideoIndex = 0
         LocalHTTPServer.shared.clearPrimaryRestriction()
 
-        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, player item cleared")
+        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, shared player preserved")
     }
 
     /// Set the feed's video list for fullscreen browsing (called before presenting MediaBrowserView)
@@ -759,7 +756,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 )
             }
             player.pause()
-            player.replaceCurrentItem(with: nil)
+            singletonPlayer = nil
         }
 
         // Bump generation so any prior async completions are ignored.
@@ -796,40 +793,29 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         self.currentCellTweetId = cellTweetId
         self.currentVideoIndex = videoIndex
         
-        // Create a fresh fullscreen item from the cached feed asset when available.
-        // The fullscreen player stays independent from the feed AVPlayer.
+        // Borrow the canonical feed player when available. This is intentionally
+        // shared across feed/detail/fullscreen so buffered data and recovered
+        // playback position survive surface switches.
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedPlayerItem = cachedPlayer.currentItem {
-            print("🎬 [FullScreenVideoManager] Using cached feed asset for \(shortMID(mid)): cached=\(playerDiagnostic(cachedPlayer, item: cachedPlayerItem))")
-            let cachedAsset = cachedPlayerItem.asset
-            let shouldResetFeedPlayer = shouldResetCachedFeedPlayerForFocusedPlayback(cachedPlayer, item: cachedPlayerItem)
-            let playerItem = AVPlayerItem(asset: cachedAsset)
-            if shouldResetFeedPlayer {
-                print("🎬 [FullScreenVideoManager] Resetting wedged feed player after creating fullscreen item \(shortMID(mid))")
-                VideoStateCache.shared.clearCachedState(for: mid)
-                SharedAssetCache.shared.softResetPlayer(for: mid)
-            }
+            print("🎬 [FullScreenVideoManager] Borrowing shared feed player for \(shortMID(mid)): cached=\(playerDiagnostic(cachedPlayer, item: cachedPlayerItem))")
             self.loadingMid = nil
             self.loadingStartedAt = nil
 
             // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
             AudioSessionManager.shared.activateForVideoPlayback()
 
-            if self.singletonPlayer == nil {
-                self.singletonPlayer = AVPlayer(playerItem: playerItem)
-            } else {
-                self.singletonPlayer?.replaceCurrentItem(with: playerItem)
-            }
+            self.singletonPlayer = cachedPlayer
 
             applyStartupAudioMuteIfNeeded()
 
             // CRITICAL: Setup fullscreen's unique functionality
-            self.setupVideoCompletionObserver(playerItem)
+            self.setupVideoCompletionObserver(cachedPlayerItem)
             self.setupTimeControlStatusObserver()
             self.startRetryMonitoring()
 
             // Start playback — compute seek target once, seek once, then play
-            self.startPlaybackWithSeekIfNeeded(playerItem: playerItem, mid: mid)
+            self.startPlaybackWithSeekIfNeeded(playerItem: cachedPlayerItem, mid: mid)
             return
         }
 
@@ -839,26 +825,27 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // No cached player - load video asynchronously
         Task.detached(priority: .userInitiated) {
             do {
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: tweetId, mediaType: mediaType)
-                let playerItem = await AVPlayerItem(asset: asset)
+                let sharedPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: mid, tweetId: tweetId, mediaType: mediaType)
                 
                 await MainActor.run {
                     // Ignore stale completions
                     guard self.loadGeneration == generation, self.currentVideoMid == mid else {
                         return
                     }
+                    guard let playerItem = sharedPlayer.currentItem else {
+                        self.loadingMid = nil
+                        self.loadingStartedAt = nil
+                        self.isBuffering = false
+                        self.isPlaying = false
+                        return
+                    }
                     self.loadingMid = nil
                     self.loadingStartedAt = nil
-                    print("🎬 [FullScreenVideoManager] Async asset load ready for \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
+                    print("🎬 [FullScreenVideoManager] Shared player load ready for \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
                     // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
                     AudioSessionManager.shared.activateForVideoPlayback()
                     
-                    // Create or reuse singleton player
-                    if self.singletonPlayer == nil {
-                        self.singletonPlayer = AVPlayer(playerItem: playerItem)
-                    } else {
-                        self.singletonPlayer?.replaceCurrentItem(with: playerItem)
-                    }
+                    self.singletonPlayer = sharedPlayer
                     
                     self.applyStartupAudioMuteIfNeeded()
                     
@@ -884,8 +871,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     self.loadingStartedAt = nil
 
                     print("ERROR: [FullScreenVideoManager] Failed to load video: \(error)")
-                    // Clear state but keep the pre-created player alive
-                    self.singletonPlayer?.replaceCurrentItem(with: nil)
+                    self.singletonPlayer = nil
                     self.currentVideoMid = nil
                     self.currentTweetId = nil
                     self.currentCellTweetId = nil
@@ -1690,9 +1676,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             )
         }
 
-        // Keep the pre-created player alive — just remove the current item.
+        // Keep the shared player item alive so feed can resume with the same
+        // buffer and position when fullscreen closes.
         singletonPlayer?.pause()
-        singletonPlayer?.replaceCurrentItem(with: nil)
         LocalHTTPServer.shared.clearPrimaryRestriction()
         fullscreenStallItemRebuildCount = 0
 
@@ -2357,7 +2343,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     wasPlaying: player.rate > 0, context: .detailView, duration: d)
             }
             player.pause()
-            player.replaceCurrentItem(with: nil)
+            currentPlayer = nil
         }
 
         // Bump generation to ignore stale async completions
@@ -2395,32 +2381,21 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             print("📱 [DetailVideoManager] Pending live handoff \(shortMID(mid)): \(String(format: "%.2f", pendingFeedResumeTime.seconds))s")
         }
 
-        // Detail owns its AVPlayer instance. SharedAssetCache is used only for
-        // lower-level asset/segment reuse, never for borrowing the feed's live player.
+        // Borrow the canonical feed player when available. This keeps one AVPlayer
+        // moving across feed/detail/fullscreen instead of restarting decode/buffer
+        // state on every surface switch.
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedItem = cachedPlayer.currentItem {
-            print("📱 [DetailVideoManager] Using cached feed asset \(shortMID(mid)): cached=\(detailDiagnostic(cachedPlayer, item: cachedItem))")
-            let cachedAsset = cachedItem.asset
-            let shouldResetFeedPlayer = shouldResetCachedFeedPlayerForFocusedPlayback(cachedPlayer, item: cachedItem)
-            let playerItem = AVPlayerItem(asset: cachedAsset)
-            if shouldResetFeedPlayer {
-                print("📱 [DetailVideoManager] Resetting wedged feed player after creating detail item \(shortMID(mid))")
-                VideoStateCache.shared.clearCachedState(for: mid)
-                SharedAssetCache.shared.softResetPlayer(for: mid)
-            }
-            playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            print("📱 [DetailVideoManager] Borrowing shared feed player \(shortMID(mid)): cached=\(detailDiagnostic(cachedPlayer, item: cachedItem))")
+            cachedItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             AudioSessionManager.shared.activateForVideoPlayback()
-            if currentPlayer == nil {
-                currentPlayer = AVPlayer(playerItem: playerItem)
-            } else {
-                currentPlayer?.replaceCurrentItem(with: playerItem)
-            }
+            currentPlayer = cachedPlayer
             resetDetailRenderingProgress(to: currentPlayer?.currentTime() ?? .zero)
-            setupDetailVideoOutput(for: playerItem)
+            setupDetailVideoOutput(for: cachedItem)
             applyStartupAudioMuteIfNeeded()
-            setupDetailCompletionObserver(playerItem)
+            setupDetailCompletionObserver(cachedItem)
             setupDetailTimeControlObserver()
-            startDetailPlayback(playerItem: playerItem, mid: mid)
+            startDetailPlayback(playerItem: cachedItem, mid: mid)
             return
         }
 
@@ -2428,18 +2403,19 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         print("📱 [DetailVideoManager] Async asset load start \(shortMID(mid)): url=\(url.absoluteString)")
         Task.detached(priority: .userInitiated) {
             do {
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: mid, mediaType: mediaType)
-                let playerItem = await AVPlayerItem(asset: asset)
+                let sharedPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: mid, tweetId: mid, mediaType: mediaType)
                 await MainActor.run {
                     guard self.loadGeneration == generation, self.currentVideoMid == mid else { return }
-                    print("📱 [DetailVideoManager] Async asset load ready \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
+                    guard let playerItem = sharedPlayer.currentItem else {
+                        self.isBuffering = false
+                        self.isPlaying = false
+                        self.isPlaybackRendering = false
+                        return
+                    }
+                    print("📱 [DetailVideoManager] Shared player load ready \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
                     playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                     AudioSessionManager.shared.activateForVideoPlayback()
-                    if self.currentPlayer == nil {
-                        self.currentPlayer = AVPlayer(playerItem: playerItem)
-                    } else {
-                        self.currentPlayer?.replaceCurrentItem(with: playerItem)
-                    }
+                    self.currentPlayer = sharedPlayer
                     self.resetDetailRenderingProgress(to: self.currentPlayer?.currentTime() ?? .zero)
                     self.setupDetailVideoOutput(for: playerItem)
                     self.applyStartupAudioMuteIfNeeded()
@@ -2952,7 +2928,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     print("📱 [DetailVideoManager] recovery gave up \(self.shortMID(mid)): attempts=\(self.detailStartupRecoveryAttemptCount), \(self.detailDiagnostic(player, item: item))")
                     player.pause()
                     self.removeDetailRenderingObservers()
-                    player.replaceCurrentItem(with: nil)
                     self.isPlaying = false
                     self.isBuffering = true
                     self.isItemReady = false
@@ -3331,21 +3306,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             videoCompletionObserver = nil
         }
         
-        if let ownedPlayer = currentPlayer {
-            // Owned player: destroy completely so AVPlayerViewController cannot restart it.
-            let rawMediaID = currentVideoMid
-            let cacheKey = rawMediaID.map { "tweetDetail_\($0)" }
-
-            ownedPlayer.pause()
-            ownedPlayer.replaceCurrentItem(with: nil)
-            print("DEBUG: [DetailVideoManager] Replaced player item with nil to stop playback")
-
-            if let key = cacheKey {
-                Task { @MainActor in
-                    SharedAssetCache.shared.removeInvalidPlayer(for: key)
-                }
-            }
-        }
+        currentPlayer?.pause()
 
         currentPlayer = nil
         currentVideoMid = nil
