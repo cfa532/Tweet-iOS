@@ -488,7 +488,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Use scheduleStartPrimary (0.3s debounce) to give updateOnScreenMediaCells time to
         // populate the correct visible set before we attempt primary selection.
         if phase == .idle {
-            print("🎬 [COORD] registerDelegate: \(shortIdent(identifier)) registered (phase=idle, kicking playback)")
             scheduleStartPrimary()
         }
     }

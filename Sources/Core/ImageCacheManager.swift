@@ -600,7 +600,6 @@ class ImageCacheManager: @unchecked Sendable {
             // Write compressed data to disk
             do {
                 try compressedImage.write(to: compressedFileURL)
-                print("DEBUG: [ImageCacheManager] Successfully cached compressed image to disk for \(key)")
             } catch {
                 print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
             }
