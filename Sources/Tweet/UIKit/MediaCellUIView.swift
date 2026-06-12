@@ -1631,7 +1631,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             || now.timeIntervalSince(lastPlaybackProgressDate) >= 2.0
         let isStalledResume = lastActualPlaybackDate != .distantPast && hasNoRecentProgress
         let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
-        let requiredBuffer = 0.5
+        let requiredBuffer: Double
+        if keepUp {
+            requiredBuffer = 0.75
+        } else if isStartup {
+            requiredBuffer = 2.0
+        } else {
+            requiredBuffer = 2.5
+        }
         let hasUsableBuffer = bufferedAhead >= requiredBuffer
         guard hasUsableBuffer else { return false }
 
@@ -1639,6 +1646,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.currentItem?.preferredForwardBufferDuration = 0
         player.automaticallyWaitsToMinimizeStalling = false
+        lastPlaybackRequestDate = now
+        resetPlaybackProgressTracking(to: player.currentTime())
         player.play()
         updateLoadingSpinnerForPlayback(player)
 
@@ -1666,19 +1675,32 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               !isVideoAtEnd(player),
               let mid = attachment?.mid else { return false }
 
+        // If playback has already shown real progress, do not tear down the
+        // visible layer. Rebuilding at that point causes frames -> black -> reload.
+        guard lastActualPlaybackDate == .distantPast else {
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            player.currentItem?.preferredForwardBufferDuration = 0
+            player.automaticallyWaitsToMinimizeStalling = true
+            lastPlaybackRequestDate = Date()
+            resetPlaybackProgressTracking(to: player.currentTime())
+            player.play()
+            updateLoadingSpinnerForPlayback(player)
+            print("\(logPrefix) ⏳ \(reason): item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered after playback — keeping existing player")
+            return true
+        }
+
         let resumeTime = player.currentTime()
         if resumeTime.isValid, resumeTime.seconds.isFinite {
             pendingRecoverySeekTime = resumeTime
         }
 
-        print("\(logPrefix) 🔄 \(reason): item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player")
-        preserveFrameToCache(useVideoOutput: false)
+        print("\(logPrefix) 🔄 \(reason): item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered before playback — rebuilding feed player")
         LocalHTTPServer.shared.clearCancelledState(for: mid)
         LocalHTTPServer.shared.setPrimaryMediaID(mid)
         VideoStateCache.shared.clearCachedState(for: mid)
         SharedAssetCache.shared.softResetPlayer(for: mid)
         return reacquirePlayerForCurrentVideo(
-            reason: "unknownItemBufferedRecovery",
+            reason: "unknownItemBufferedStartupRecovery",
             transitionState: imageView.image != nil ? .thumbnail : .playerLoading,
             requireLoadableVisibleVideo: true,
             wantsPlayback: true
