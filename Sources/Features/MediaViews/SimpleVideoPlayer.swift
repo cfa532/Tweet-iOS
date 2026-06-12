@@ -3830,65 +3830,35 @@ struct SimpleVideoPlayer: View {
                 return
             }
             
-            // Loan the feed cell's AVPlayer directly — it already has rendered frames,
-            // so no black flash. The player stays in SharedAssetCache; when the detail
-            // view closes, clearCurrentVideo() just pauses (does not destroy the item)
-            // and the feed cell resumes seamlessly.
+            LocalHTTPServer.shared.clearCancelledState(for: mid)
+            LocalHTTPServer.shared.setPrimaryMediaID(mid)
+
+            // Detail uses its own player instance. SharedAssetCache may reuse the
+            // underlying asset/segments, but the live feed AVPlayer is never borrowed.
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
-               cachedPlayer.currentItem != nil {
+               let cachedItem = cachedPlayer.currentItem {
+                print("📱 [DetailVideoManager] Reusing cached feed asset for detail-owned player \(mid)")
+                let playerItem = AVPlayerItem(asset: cachedItem.asset)
+                playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                let newPlayer = AVPlayer(playerItem: playerItem)
+                newPlayer.isMuted = false
 
-                let loanTime = cachedPlayer.currentTime()
-                let safeLoanTime = (loanTime.isValid && loanTime.seconds.isFinite) ? loanTime : .zero
-                print("📱 [DetailVideoManager] Loaning feed player for \(mid) at \(safeLoanTime.seconds)s, status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
-                VideoStateCache.shared.cacheVideoState(
-                    for: mid,
-                    player: cachedPlayer,
-                    time: safeLoanTime,
-                    wasPlaying: cachedPlayer.rate > 0,
-                    originalMuteState: MuteState.shared.isMuted
-                )
-
-                // Tell the feed cell to nil its reference so its MuteState
-                // subscription and other handlers don't interfere with the loaned player.
-                NotificationCenter.default.post(
-                    name: .videoPlayerLoaned,
-                    object: nil,
-                    userInfo: ["videoMid": mid]
-                )
-
-                cachedPlayer.isMuted = false
-
-                // Stop old singleton player if exists
                 DetailVideoManager.shared.currentPlayer?.pause()
-
-                // Store loaned player in singleton
-                DetailVideoManager.shared.currentPlayer = cachedPlayer
+                DetailVideoManager.shared.currentPlayer = newPlayer
                 DetailVideoManager.shared.currentVideoMid = mid
-                DetailVideoManager.shared.isPlayerLoaned = true
 
-                // Assign immediately — skip configurePlayer's .playerLoading transition
-                self.player = cachedPlayer
-                if cachedPlayer.currentItem?.status == .readyToPlay {
-                    self.loadingState = .loaded
+                self.player = newPlayer
+                self.loadingState = playerItem.status == .readyToPlay ? .loaded : .loading
+                self.configurePlayer(newPlayer)
+
+                if playerItem.status != .readyToPlay {
+                    newPlayer.play()
                 }
-                // else: loadingState stays .loading (set at line 3779)
-
-                // DEADLOCK FIX: Enable network loading while paused and proactively
-                // call play() for not-yet-ready items. Without this, a paused player
-                // with canUseNetworkResourcesForLiveStreamingWhilePaused=false (default)
-                // never fetches HLS data, so status stays .unknown forever.
-                if let item = cachedPlayer.currentItem, item.status != .readyToPlay {
-                    item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-                    cachedPlayer.play()
-                    print("📱 [DetailVideoManager] Kicked data fetch on unknown-status loaned player")
-                }
-
-                self.configurePlayer(cachedPlayer)
                 return
             }
-            
-            // No cached player - load fresh
-            print("📱 [DetailVideoManager] No cached player for \(mid) - loading fresh")
+
+            print("📱 [DetailVideoManager] Loading detail-owned player for \(mid)")
+            SharedAssetCache.shared.prepareUncachedFocusedLoad(for: mid, owner: "detail")
             setupPlayerTask?.cancel()
             setupPlayerTask = Task.detached(priority: .userInitiated) {
                 do {
@@ -3921,7 +3891,7 @@ struct SimpleVideoPlayer: View {
                         DetailVideoManager.shared.currentVideoMid = mid
 
                         self.player = newPlayer
-                        self.loadingState = .loaded
+                        self.loadingState = playerItem.status == .readyToPlay ? .loaded : .loading
                         self.configurePlayer(newPlayer)
 
                         // Kick-start data fetching if item isn't ready yet
@@ -3955,6 +3925,7 @@ struct SimpleVideoPlayer: View {
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 // Respect global mute state for embedded previews
                 newPlayer.isMuted = MuteState.shared.isMuted
+                self.loadingState = playerItem.status == .readyToPlay ? .loaded : .loading
                 self.configurePlayer(newPlayer)
                 return
             }
@@ -4451,11 +4422,9 @@ struct SimpleVideoPlayer: View {
                                 }
                                 attempts += 1
                             }
-                            // If still not ready after waiting, give normal playback a chance (it will gate on readiness).
+                            // If still not ready after waiting, give normal playback a chance
+                            // while keeping the loading affordance visible.
                             if self.player === capturedPlayer {
-                                if self.loadingState.isLoading {
-                                    self.loadingState = .loaded
-                                }
                                 self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
                             }
                         }

@@ -605,6 +605,7 @@ struct ChatVideoContainer: View {
                         if shouldPlay && isChatScreenVisible {
                             player.play()
                             isPlaying = true
+                            isLoading = player.timeControlStatus != .playing
                         }
                         setupVideoCompletionObserver(for: player)
                     }
@@ -661,8 +662,10 @@ struct ChatVideoContainer: View {
                         guard let player = player else { return }
                         if isPlaying {
                             player.pause()
+                            isLoading = false
                         } else {
                             player.play()
+                            isLoading = player.timeControlStatus != .playing
                         }
                         isPlaying.toggle()
                     } label: {
@@ -714,18 +717,17 @@ struct ChatVideoContainer: View {
                         isChatScreenVisible: isChatScreenVisible,
                         receiptId: receiptId
                     )
-                    
                     await MainActor.run {
                         player = loadedPlayer
-                        
                         // Check if player is already ready to play
-                        if let playerItem = loadedPlayer?.currentItem {
+                        if let loadedPlayer, let playerItem = loadedPlayer.currentItem {
+                            setupPlayerPlaybackObserver(for: loadedPlayer)
                             if playerItem.status == .readyToPlay {
                                 // Hide loading spinner immediately if already ready
-                                isLoading = false
+                                isLoading = isPlaying && loadedPlayer.timeControlStatus != .playing
                             } else {
                                 // Observe player item status to hide spinner when ready
-                                setupPlayerReadyObserver(for: playerItem)
+                                setupPlayerReadyObserver(for: loadedPlayer)
                             }
                         } else {
                             // No player item, hide spinner
@@ -756,11 +758,12 @@ struct ChatVideoContainer: View {
                 )
                 await MainActor.run {
                     player = loadedPlayer
-                    if let playerItem = loadedPlayer?.currentItem {
+                    if let loadedPlayer, let playerItem = loadedPlayer.currentItem {
+                        setupPlayerPlaybackObserver(for: loadedPlayer)
                         if playerItem.status == .readyToPlay {
-                            isLoading = false
+                            isLoading = isPlaying && loadedPlayer.timeControlStatus != .playing
                         } else {
-                            setupPlayerReadyObserver(for: playerItem)
+                            setupPlayerReadyObserver(for: loadedPlayer)
                         }
                     } else {
                         isLoading = false
@@ -825,17 +828,37 @@ struct ChatVideoContainer: View {
             videoCompletionObserver = nil
         }
     }
-    
-    private func setupPlayerReadyObserver(for playerItem: AVPlayerItem) {
+
+    private func setupPlayerPlaybackObserver(for player: AVPlayer) {
+        player.publisher(for: \.timeControlStatus)
+            .receive(on: DispatchQueue.main)
+            .sink { status in
+                if status == .playing {
+                    isLoading = false
+                } else if status == .waitingToPlayAtSpecifiedRate && isPlaying {
+                    isLoading = true
+                } else if !isPlaying {
+                    isLoading = false
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func setupPlayerReadyObserver(for player: AVPlayer) {
         // Observe player item status to hide loading spinner when ready
+        guard let playerItem = player.currentItem else {
+            isLoading = false
+            return
+        }
         playerItem.publisher(for: \.status)
             .receive(on: DispatchQueue.main)
-            .sink { [weak playerItem] status in
+            .sink { [weak playerItem, weak player] status in
                 guard playerItem != nil else { return }
-                
+
                 if status == .readyToPlay {
-                    // Hide loading spinner once video is ready
-                    isLoading = false
+                    // Keep loading only if this chat video is actively trying to play
+                    // and AVPlayer is still waiting to render.
+                    isLoading = isPlaying && player?.timeControlStatus != .playing
                     print("DEBUG: [ChatVideoContainer] Video ready for \(attachment.mid)")
                 } else if status == .failed {
                     // Hide spinner on failure too
@@ -1354,4 +1377,3 @@ struct ChatMultipleAttachmentsLoader: View {
         }
     }
 }
-

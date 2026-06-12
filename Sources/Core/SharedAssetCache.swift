@@ -901,10 +901,11 @@ class SharedAssetCache: ObservableObject {
         print("🎬 [SharedAssetCache] Suspended feed activity for fullscreen \(String(protectedMediaID.prefix(8))): cancelled \(preloadIDs.count) preload(s), released \(releasedPlayers) preloaded player(s)")
     }
 
-    /// Fullscreen could not reuse a cached player for this media, so any feed/preload
-    /// work for the same mid is now stale. Cancel only the in-flight work, keep finished
-    /// cache entries, and let fullscreen start a primary load with the local proxy priority.
-    @MainActor func prepareUncachedFullscreenLoad(for mediaID: String) {
+    /// A focused video surface could not reuse a cached player for this media, so
+    /// any feed/preload work for the same mid is now stale. Cancel only the in-flight
+    /// work, keep finished cache entries, and let the focused surface start a primary
+    /// load with the local proxy priority.
+    @MainActor func prepareUncachedFocusedLoad(for mediaID: String, owner: String) {
         var cancelledWork = 0
 
         if loadingTasks[mediaID] != nil {
@@ -931,8 +932,13 @@ class SharedAssetCache: ObservableObject {
         LocalHTTPServer.shared.cancelDownloads(for: mediaID)
 
         if cancelledWork > 0 {
-            print("🎬 [SharedAssetCache] Prepared uncached fullscreen load for \(shortMID(mediaID)): cancelled \(cancelledWork) stale feed/preload work item(s)")
+            print("🎬 [SharedAssetCache] Prepared uncached \(owner) load for \(shortMID(mediaID)): cancelled \(cancelledWork) stale feed/preload work item(s)")
         }
+    }
+
+    /// Fullscreen-specific compatibility wrapper.
+    @MainActor func prepareUncachedFullscreenLoad(for mediaID: String) {
+        prepareUncachedFocusedLoad(for: mediaID, owner: "fullscreen")
     }
 
     /// MEMORY FIX: Immediately release player and all video data when video goes out of sight

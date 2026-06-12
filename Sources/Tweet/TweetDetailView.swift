@@ -1174,7 +1174,7 @@ struct TweetDetailView: View {
                                             mid: attachment.mid,
                                             mediaType: attachment.type,
                                             aspectRatio: attachment.aspectRatio,
-                                            shouldLoad: false
+                                            shouldLoad: attachment.mid == firstMainTweetVideoToAutoplay?.mid
                                         )
                                         .trackAttachmentVideoVisibility(
                                             attachmentIndex: origIdx,
