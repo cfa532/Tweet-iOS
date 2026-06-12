@@ -88,6 +88,7 @@ class MediaGridUIView: UIView {
         self.shouldLoadVideo = shouldLoadVideo
         self.parentViewController = parentViewController
         hasInitialized = false
+        seedIntrinsicHeightIfNeeded(for: attachments, isEmbedded: isEmbedded)
 
         guard !attachments.isEmpty else { return }
 
@@ -149,11 +150,11 @@ class MediaGridUIView: UIView {
 
         let gridWidth = bounds.width
         let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-        let gridHeight = max(10, gridWidth / gridAspectRatio)
+        let gridHeight = ceil(max(10, gridWidth / gridAspectRatio))
 
         // Notify Auto Layout of the new height so the parent container self-sizes correctly.
         // This is the UIKit equivalent of Compose's fillMaxWidth() — no hardcoded offsets needed.
-        if gridHeight != computedGridHeight {
+        if abs(gridHeight - computedGridHeight) > 1.0 {
             computedGridHeight = gridHeight
             invalidateIntrinsicContentSize()
         }
@@ -202,6 +203,27 @@ class MediaGridUIView: UIView {
     override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric,
                height: computedGridHeight > 0 ? computedGridHeight : UIView.noIntrinsicMetric)
+    }
+
+    private func seedIntrinsicHeightIfNeeded(for attachments: [MimeiFileType], isEmbedded: Bool) {
+        guard !attachments.isEmpty else { return }
+
+        let knownWidth = bounds.width > 0 ? bounds.width : superview?.bounds.width ?? 0
+        let estimatedWidth = knownWidth > 0 ? knownWidth : estimatedGridWidth(isEmbedded: isEmbedded)
+        let estimatedHeight = ceil(MediaGridViewModel.calculateHeight(for: attachments, gridWidth: estimatedWidth))
+        guard estimatedHeight > 0, abs(estimatedHeight - computedGridHeight) > 1.0 else { return }
+
+        computedGridHeight = estimatedHeight
+        invalidateIntrinsicContentSize()
+    }
+
+    private func estimatedGridWidth(isEmbedded: Bool) -> CGFloat {
+        let screenWidth = UIScreen.main.bounds.width
+        let containerWidth = isEmbedded
+            ? max(10, screenWidth - 79)
+            : max(10, screenWidth - 32 - 34)
+        // TweetBodyUIView pins the grid 2pt inside its media container.
+        return max(10, containerWidth - 2)
     }
 
     // MARK: - Frame Calculations
