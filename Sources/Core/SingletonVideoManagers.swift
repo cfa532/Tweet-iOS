@@ -489,16 +489,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             return
         }
 
-        if let player = singletonPlayer, player.currentItem != nil {
-            VideoStateCache.shared.cacheVideoState(
-                for: videoMid,
-                player: player,
-                time: currentTime,
-                wasPlaying: wasPlaying,
-                originalMuteState: player.isMuted
-            )
-        }
-
         PersistentVideoStateManager.shared.saveState(
             videoMid: videoMid,
             currentTime: currentTime,
@@ -2362,13 +2352,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             let t = player.currentTime()
             if t.isValid && t.seconds.isFinite && t.seconds > 0.25 {
                 let d = player.currentItem?.duration ?? .invalid
-                VideoStateCache.shared.cacheVideoState(
-                    for: oldMid,
-                    player: player,
-                    time: t,
-                    wasPlaying: player.rate > 0,
-                    originalMuteState: player.isMuted
-                )
                 PersistentVideoStateManager.shared.saveState(
                     videoMid: oldMid, currentTime: t,
                     wasPlaying: player.rate > 0, context: .detailView, duration: d)
@@ -2880,13 +2863,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
            resumeTime.seconds.isFinite,
            resumeTime.seconds > 0.25 {
             pendingFeedResumeTime = resumeTime
-            VideoStateCache.shared.cacheVideoState(
-                for: mid,
-                player: player,
-                time: resumeTime,
-                wasPlaying: true,
-                originalMuteState: player.isMuted
-            )
             PersistentVideoStateManager.shared.saveState(
                 videoMid: mid,
                 currentTime: resumeTime,
@@ -3315,13 +3291,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             if currentTime.isValid && currentTime.seconds.isFinite && currentTime.seconds > 0.25 {
                 let wasPlaying = player.rate > 0
                 let duration = player.currentItem?.duration ?? .invalid
-                VideoStateCache.shared.cacheVideoState(
-                    for: videoMid,
-                    player: player,
-                    time: currentTime,
-                    wasPlaying: wasPlaying,
-                    originalMuteState: player.isMuted
-                )
                 PersistentVideoStateManager.shared.saveState(
                     videoMid: videoMid,
                     currentTime: currentTime,

@@ -2154,7 +2154,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if player.timeControlStatus == .playing {
                 return
             }
-            monitorPlaybackIfWaiting(player, reason: "coordinatorPlay-alreadyPlayingState")
+            requestPlaybackStartIfNeeded(player, reason: "coordinatorPlay-resumePlayingState")
             return
         }
 
