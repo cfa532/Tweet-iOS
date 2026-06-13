@@ -124,8 +124,9 @@ protocol SharedDisplayLinkObserver {
 
 // MARK: - Shared Video Player Manager
 
-/// Shared video player coordinator for Twitter-style video playback
-/// Ensures only one video plays at a time while leveraging SimpleVideoPlayer instances
+/// Legacy shared video player coordinator.
+/// Feed playback is now owned by VideoPlaybackCoordinator's delegate route; this type is kept
+/// only so older debug/state APIs do not disappear while SharedDisplayLinkManager remains in this file.
 /// 
 /// Video Identification:
 /// Videos are identified by a composite key: `cellTweetId + videoMid + attachmentIndex`
@@ -135,6 +136,7 @@ protocol SharedDisplayLinkObserver {
 ///
 /// This allows the same video file to appear in multiple tweets (retweets, quotes) and be treated as separate instances.
 @MainActor
+@available(*, deprecated, message: "Feed playback is owned by VideoPlaybackCoordinator; this legacy manager must not route play/pause commands.")
 class SharedVideoPlayerManager: ObservableObject {
     static let shared = SharedVideoPlayerManager()
 
@@ -157,19 +159,29 @@ class SharedVideoPlayerManager: ObservableObject {
 
     /// Debug: Track playback history
     private var playbackHistory: [String] = []
+    private let commandRoutingEnabled = false
 
     private init() {
         print("🎬 [SHARED PLAYER] Initialized - Coordinating single video playback")
+    }
+
+    private func rejectLegacyCommand(_ command: String) {
+        print("⚠️ [SHARED PLAYER] Ignoring legacy \(command); use VideoPlaybackCoordinator delegate routing")
     }
 
     // MARK: - Public API
 
     /// Request to play a specific video instance (coordinates to ensure only one plays)
     /// - Parameters:
-    ///   - videoId: Full identifier (cellTweetId_videoMid_attachmentIndex)
+    ///   - videoId: Full identifier (outerTweetId_mediaTweetId_videoMid_attachmentIndex)
     ///   - videoMid: The attachment's mid (for notification routing)
     ///   - cellTweetId: The visible cell's tweet ID (retweet ID for retweets, quoting tweet ID for quotes)
     func playVideo(videoId: String, videoMid: String, cellTweetId: String) {
+        guard commandRoutingEnabled else {
+            rejectLegacyCommand("playVideo")
+            return
+        }
+
         // If already playing this video instance, no action needed (prevent duplicate notifications)
         if currentlyPlayingVideoId == videoId {
             print("🎬 [SHARED PLAYER] Already coordinating playback for \(videoId) - ignoring duplicate request")
@@ -209,6 +221,11 @@ class SharedVideoPlayerManager: ObservableObject {
 
     /// Pause the currently playing video
     func pauseCurrentVideo() {
+        guard commandRoutingEnabled else {
+            rejectLegacyCommand("pauseCurrentVideo")
+            return
+        }
+
         guard let videoId = currentlyPlayingVideoId,
               let videoMid = currentVideoMid else { return }
 
@@ -235,6 +252,11 @@ class SharedVideoPlayerManager: ObservableObject {
 
     /// Stop the currently playing video
     func stopCurrentVideo() {
+        guard commandRoutingEnabled else {
+            rejectLegacyCommand("stopCurrentVideo")
+            return
+        }
+
         guard let videoId = currentlyPlayingVideoId,
               let videoMid = currentVideoMid else { return }
 
@@ -259,6 +281,12 @@ class SharedVideoPlayerManager: ObservableObject {
 
     /// Seek to specific time in current video
     func seekToTime(_ time: CMTime, completion: ((Bool) -> Void)? = nil) {
+        guard commandRoutingEnabled else {
+            rejectLegacyCommand("seekToTime")
+            completion?(false)
+            return
+        }
+
         guard let videoId = currentlyPlayingVideoId else {
             completion?(false)
             return

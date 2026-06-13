@@ -85,7 +85,7 @@ class VideoStateCache {
     // This prevents black screen when SwiftUI recreates the view
     private var stoppedByCoordinatorMids: Set<String> = []
 
-    // Track videos that played to completion (by videoIdentifier = tweetId_videoMid_index).
+    // Track videos that played to completion (by videoIdentifier = outerTweetId_mediaTweetId_videoMid_index).
     // Prevents coordinator from auto-replaying finished videos when they scroll back into view.
     private var finishedVideoIdentifiers = Set<String>()
 
@@ -230,6 +230,15 @@ class VideoStateCache {
         cache.removeAll()
         finishedVideoIdentifiers.removeAll()
     }
+
+    /// Clear only cached player/time references for memory pressure.
+    /// Finished-video bookkeeping is intentionally preserved so foreground resume
+    /// does not auto-replay videos that already completed in the feed.
+    func clearPlaybackCacheForMemoryPressure() {
+        cache.removeAll()
+        visibleVideoMids.removeAll()
+        stoppedByCoordinatorMids.removeAll()
+    }
     
     /// Clear stale cached states (older than expiration interval)
     func clearStaleCache() {
@@ -282,6 +291,12 @@ final class VideoLastFrameCache {
     func clearAll() {
         cache.removeAllObjects()
         timestamps.removeAll()
+    }
+
+    func keepOnly(_ midsToKeep: Set<String>) {
+        for mid in Array(timestamps.keys) where !midsToKeep.contains(mid) {
+            clear(for: mid)
+        }
     }
 }
 
@@ -3279,6 +3294,7 @@ struct SimpleVideoPlayer: View {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
                         for: url,
+                        mediaID: mid,
                         tweetId: parentTweetId,
                         mediaType: mediaType
                     )
@@ -3820,65 +3836,35 @@ struct SimpleVideoPlayer: View {
                 return
             }
             
-            // Loan the feed cell's AVPlayer directly — it already has rendered frames,
-            // so no black flash. The player stays in SharedAssetCache; when the detail
-            // view closes, clearCurrentVideo() just pauses (does not destroy the item)
-            // and the feed cell resumes seamlessly.
+            LocalHTTPServer.shared.clearCancelledState(for: mid)
+            LocalHTTPServer.shared.setPrimaryMediaID(mid)
+
+            // Detail uses its own player instance. SharedAssetCache may reuse the
+            // underlying asset/segments, but the live feed AVPlayer is never borrowed.
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
-               cachedPlayer.currentItem != nil {
+               let cachedItem = cachedPlayer.currentItem {
+                print("📱 [DetailVideoManager] Reusing cached feed asset for detail-owned player \(mid)")
+                let playerItem = AVPlayerItem(asset: cachedItem.asset)
+                playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                let newPlayer = AVPlayer(playerItem: playerItem)
+                newPlayer.isMuted = false
 
-                let loanTime = cachedPlayer.currentTime()
-                let safeLoanTime = (loanTime.isValid && loanTime.seconds.isFinite) ? loanTime : .zero
-                print("📱 [DetailVideoManager] Loaning feed player for \(mid) at \(safeLoanTime.seconds)s, status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
-                VideoStateCache.shared.cacheVideoState(
-                    for: mid,
-                    player: cachedPlayer,
-                    time: safeLoanTime,
-                    wasPlaying: cachedPlayer.rate > 0,
-                    originalMuteState: MuteState.shared.isMuted
-                )
-
-                // Tell the feed cell to nil its reference so its MuteState
-                // subscription and other handlers don't interfere with the loaned player.
-                NotificationCenter.default.post(
-                    name: .videoPlayerLoaned,
-                    object: nil,
-                    userInfo: ["videoMid": mid]
-                )
-
-                cachedPlayer.isMuted = false
-
-                // Stop old singleton player if exists
                 DetailVideoManager.shared.currentPlayer?.pause()
-
-                // Store loaned player in singleton
-                DetailVideoManager.shared.currentPlayer = cachedPlayer
+                DetailVideoManager.shared.currentPlayer = newPlayer
                 DetailVideoManager.shared.currentVideoMid = mid
-                DetailVideoManager.shared.isPlayerLoaned = true
 
-                // Assign immediately — skip configurePlayer's .playerLoading transition
-                self.player = cachedPlayer
-                if cachedPlayer.currentItem?.status == .readyToPlay {
-                    self.loadingState = .loaded
+                self.player = newPlayer
+                self.loadingState = playerItem.status == .readyToPlay ? .loaded : .loading
+                self.configurePlayer(newPlayer)
+
+                if playerItem.status != .readyToPlay {
+                    newPlayer.play()
                 }
-                // else: loadingState stays .loading (set at line 3779)
-
-                // DEADLOCK FIX: Enable network loading while paused and proactively
-                // call play() for not-yet-ready items. Without this, a paused player
-                // with canUseNetworkResourcesForLiveStreamingWhilePaused=false (default)
-                // never fetches HLS data, so status stays .unknown forever.
-                if let item = cachedPlayer.currentItem, item.status != .readyToPlay {
-                    item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-                    cachedPlayer.play()
-                    print("📱 [DetailVideoManager] Kicked data fetch on unknown-status loaned player")
-                }
-
-                self.configurePlayer(cachedPlayer)
                 return
             }
-            
-            // No cached player - load fresh
-            print("📱 [DetailVideoManager] No cached player for \(mid) - loading fresh")
+
+            print("📱 [DetailVideoManager] Loading detail-owned player for \(mid)")
+            SharedAssetCache.shared.prepareUncachedFocusedLoad(for: mid, owner: "detail")
             setupPlayerTask?.cancel()
             setupPlayerTask = Task.detached(priority: .userInitiated) {
                 do {
@@ -3911,7 +3897,7 @@ struct SimpleVideoPlayer: View {
                         DetailVideoManager.shared.currentVideoMid = mid
 
                         self.player = newPlayer
-                        self.loadingState = .loaded
+                        self.loadingState = playerItem.status == .readyToPlay ? .loaded : .loading
                         self.configurePlayer(newPlayer)
 
                         // Kick-start data fetching if item isn't ready yet
@@ -3945,6 +3931,7 @@ struct SimpleVideoPlayer: View {
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 // Respect global mute state for embedded previews
                 newPlayer.isMuted = MuteState.shared.isMuted
+                self.loadingState = playerItem.status == .readyToPlay ? .loaded : .loading
                 self.configurePlayer(newPlayer)
                 return
             }
@@ -4018,7 +4005,7 @@ struct SimpleVideoPlayer: View {
                 try Task.checkCancellation()
                 
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: parentTweetId, mediaType: mediaType)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaID: mid, tweetId: parentTweetId, mediaType: mediaType)
 
                 // Check cancellation again after async operation
                 try Task.checkCancellation()
@@ -4441,11 +4428,9 @@ struct SimpleVideoPlayer: View {
                                 }
                                 attempts += 1
                             }
-                            // If still not ready after waiting, give normal playback a chance (it will gate on readiness).
+                            // If still not ready after waiting, give normal playback a chance
+                            // while keeping the loading affordance visible.
                             if self.player === capturedPlayer {
-                                if self.loadingState.isLoading {
-                                    self.loadingState = .loaded
-                                }
                                 self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
                             }
                         }
@@ -5112,8 +5097,10 @@ struct SimpleVideoPlayer: View {
         
         // Notify the coordinator that video finished (include full identifier: tweet id + video id + index when available)
         var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweetId ?? ""]
-        if let cellId = cellTweetId ?? parentTweetId, let idx = attachmentIndex {
-            userInfo["videoIdentifier"] = "\(cellId)_\(mid)_\(idx)"
+        if let mediaTweetId = parentTweetId,
+           let idx = attachmentIndex {
+            let outerTweetId = cellTweetId ?? mediaTweetId
+            userInfo["videoIdentifier"] = "\(outerTweetId)_\(mediaTweetId)_\(mid)_\(idx)"
         }
         NotificationCenter.default.post(
             name: .videoDidFinishPlaying,

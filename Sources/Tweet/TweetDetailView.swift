@@ -363,6 +363,12 @@ struct SelectableTextView: UIViewRepresentable {
 
 // Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
 @available(iOS 16.0, *)
+@MainActor
+private enum DetailImageLoadRegistry {
+    static var activeCompressedLoads: Set<String> = []
+}
+
+@available(iOS 16.0, *)
 struct DetailMediaCell: View {
     @ObservedObject var parentTweet: Tweet
     let attachmentIndex: Int
@@ -373,6 +379,8 @@ struct DetailMediaCell: View {
     let showMuteButton: Bool
     @State private var hasRestoredPosition = false // Track if we've restored position
     @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
+    @State private var imageCacheObserver: NSObjectProtocol? = nil
+    @State private var originalImageTask: Task<Void, Never>? = nil
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
@@ -392,6 +400,10 @@ struct DetailMediaCell: View {
     
     private var baseUrl: URL? {
         return parentTweet.author?.baseUrl
+    }
+
+    static func imageLoadId(for attachment: MimeiFileType) -> String {
+        "detail_\(attachment.mid)"
     }
     
     var body: some View {
@@ -442,7 +454,8 @@ struct DetailMediaCell: View {
                                         )
                                 } else {
                                     ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle())
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .scaleEffect(1.2)
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 }
                             } else {
@@ -492,6 +505,7 @@ struct DetailMediaCell: View {
             
             // Setup foreground observer to reload resources if released during background
             setupForegroundObserver()
+            setupImageCacheObserver()
         }
         .onDisappear {
             // For videos in detail view, post notification to save state
@@ -512,6 +526,16 @@ struct DetailMediaCell: View {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
             }
+            if let observer = imageCacheObserver {
+                NotificationCenter.default.removeObserver(observer)
+                imageCacheObserver = nil
+            }
+            if attachment.type == .image {
+                DetailImageLoadRegistry.activeCompressedLoads.remove(Self.imageLoadId(for: attachment))
+            }
+
+            originalImageTask?.cancel()
+            originalImageTask = nil
         }
 
     }
@@ -536,15 +560,47 @@ struct DetailMediaCell: View {
             self.loadImage()
         }
     }
+
+    private func setupImageCacheObserver() {
+        guard attachment.type == .image else { return }
+        guard imageCacheObserver == nil else { return }
+
+        imageCacheObserver = NotificationCenter.default.addObserver(
+            forName: .imageCached,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard notification.userInfo?["avatarId"] as? String == self.attachment.mid else { return }
+            if self.image == nil || self.loading {
+                self.updateImageFromMemoryCache()
+            }
+        }
+    }
+
+    @discardableResult
+    private func updateImageFromMemoryCache() -> Bool {
+        guard let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) else {
+            return false
+        }
+        image = cachedImage
+        loading = false
+        return true
+    }
     
     private func loadImage() {
         guard let baseUrl = baseUrl,
               let url = attachment.getUrl(baseUrl) else { return }
         
-        // ✅ FIX: Use only mid as request ID - cache key is based on mid, so request ID should match
-        // This ensures cached images are reused even when baseUrl changes
-        let loadId = attachment.mid
+        // Use a detail-specific request ID so feed cells disappearing during navigation
+        // cannot cancel the image load that is now visible in TweetDetailView.
+        let loadId = Self.imageLoadId(for: attachment)
         print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
+
+        if updateImageFromMemoryCache() {
+            print("DEBUG: [TweetDetailView] Found memory cached image for \(loadId)")
+            startOriginalImageLoad(url: url, baseUrl: baseUrl)
+            return
+        }
         
         // First, try to get cached image immediately (disk check is OK in async context)
         if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
@@ -553,25 +609,20 @@ struct DetailMediaCell: View {
             
             // ✅ Load original image in background and replace compressed cache
             // This ensures detail view uses the highest quality image
-            Task {
-                if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
-                    from: url,
-                    for: attachment,
-                    baseUrl: baseUrl,
-                    replaceCompressedCache: true
-                ) {
-                    // Update image with original
-                    await MainActor.run {
-                        self.image = originalImage
-                    }
-                }
-            }
+            startOriginalImageLoad(url: url, baseUrl: baseUrl)
+            return
+        }
+
+        if DetailImageLoadRegistry.activeCompressedLoads.contains(loadId) {
+            print("♻️ [TweetDetailView] Waiting for shared detail image load \(loadId)")
+            loading = true
             return
         }
         
         // If no cached image, start loading with global manager
         print("DEBUG: [TweetDetailView] Starting network load for \(loadId)")
         loading = true
+        DetailImageLoadRegistry.activeCompressedLoads.insert(loadId)
         
         // Detail-visible images should outrank preload/background image work.
         GlobalImageLoadManager.shared.loadImageCriticalPriority(
@@ -581,27 +632,49 @@ struct DetailMediaCell: View {
             baseUrl: baseUrl
         ) { loadedImage in
             print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
+            DetailImageLoadRegistry.activeCompressedLoads.remove(loadId)
             // Completion is already @MainActor, update state immediately without additional Task wrapper
             // The extra Task wrapper was causing a delay in UI updates, making spinners stick
             self.image = loadedImage
             self.loading = false
+
+            if loadedImage != nil {
+                NotificationCenter.default.post(
+                    name: .imageCached,
+                    object: nil,
+                    userInfo: ["avatarId": attachment.mid]
+                )
+            }
             
             // ✅ Load original image in background and replace compressed cache
             // This ensures detail view uses the highest quality image
             if loadedImage != nil {
-                Task {
-                    if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
-                        from: url,
-                        for: attachment,
-                        baseUrl: baseUrl,
-                        replaceCompressedCache: true
-                    ) {
-                        // Update image with original
-                        await MainActor.run {
-                            self.image = originalImage
-                        }
-                    }
+                startOriginalImageLoad(url: url, baseUrl: baseUrl)
+            }
+        }
+    }
+
+    private func startOriginalImageLoad(url: URL, baseUrl: URL) {
+        let expectedMid = attachment.mid
+        originalImageTask?.cancel()
+        originalImageTask = Task {
+            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                from: url,
+                for: attachment,
+                baseUrl: baseUrl,
+                replaceCompressedCache: true,
+                priority: .critical
+            ) {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.attachment.mid == expectedMid,
+                          self.originalImageTask != nil else { return }
+                    self.image = originalImage
                 }
+            }
+
+            await MainActor.run {
+                self.originalImageTask = nil
             }
         }
     }
@@ -622,7 +695,7 @@ private struct DetailSingletonVideoPlayerView: View {
     let shouldLoad: Bool
 
     @ObservedObject private var manager = DetailVideoManager.shared
-    @StateObject private var controls = DetailVideoControlsModel()
+    @State private var handoffThumbnail: UIImage?
 
     private var isThisVideoLoaded: Bool {
         manager.currentVideoMid == mid && manager.currentPlayer?.currentItem != nil
@@ -649,16 +722,26 @@ private struct DetailSingletonVideoPlayerView: View {
     }
 
     private var shouldShowLoadingSpinner: Bool {
-        isThisVideoPreparing
+        if manager.currentVideoMid == mid,
+           manager.isPlaybackRendering,
+           !manager.isBuffering {
+            return false
+        }
+
+        return (shouldLoad && !isThisVideoLoaded && !didThisVideoFailToLoad)
+            || isThisVideoPreparing
             || (manager.currentVideoMid == mid
-                && manager.isBuffering
-                && !isThisVideoReady
-                && !manager.isPlaybackRendering
+                && (manager.isBuffering || !manager.isPlaybackRendering)
                 && !didThisVideoFailToLoad)
     }
 
     private var shouldShowPlaceholder: Bool {
-        !isThisVideoLoaded || isThisVideoPreparing
+        didThisVideoFailToLoad
+            || !isThisVideoLoaded
+            || isThisVideoPreparing
+            || (manager.currentVideoMid == mid
+                && !manager.isPlaybackRendering
+                && !didThisVideoFailToLoad)
     }
 
     var body: some View {
@@ -669,54 +752,71 @@ private struct DetailSingletonVideoPlayerView: View {
                 DetailAVPlayerView(
                     player: player
                 )
-                    .id(ObjectIdentifier(player))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onAppear {
-                        controls.attach(to: player)
-                    }
             }
 
             if shouldShowPlaceholder {
                 thumbnailOrBlack
-            }
-
-            if isThisVideoLoaded {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        controls.surfaceTapped()
-                    }
-
-                DetailVideoControlsOverlay(
-                    isVisible: controls.showsControls,
-                    isPlaying: controls.isPlaying,
-                    currentTime: controls.currentTime,
-                    duration: controls.duration,
-                    isMuted: controls.isMuted,
-                    playAction: controls.playButtonTapped,
-                    seekAction: controls.seek(to:),
-                    muteAction: controls.toggleMute
-                )
+                    .allowsHitTesting(false)
             }
 
             if shouldShowLoadingSpinner {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     .scaleEffect(1.5)
+                    .allowsHitTesting(false)
+            }
+
+            if didThisVideoFailToLoad {
+                retryButton
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .videoThumbnailCached)) { notification in
+            guard notification.userInfo?["mediaID"] as? String == mid else { return }
+            if handoffThumbnail == nil {
+                handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
+            }
+        }
+        .onAppear {
+            if handoffThumbnail == nil {
+                handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
             }
         }
     }
 
     @ViewBuilder
     private var thumbnailOrBlack: some View {
-        if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
-            Image(uiImage: thumbnail)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-        } else {
-            Color.black
+        Group {
+            if let thumbnail = handoffThumbnail ?? SharedAssetCache.shared.cachedThumbnail(for: mid) {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.black
+            }
         }
     }
+
+    private var retryButton: some View {
+        Button {
+            manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 52, height: 52)
+                .background(Color.black.opacity(0.55))
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Retry video"))
+        .help("Retry video")
+    }
+
 }
 
 // MARK: - Detail AVPlayerViewController Wrapper
@@ -727,7 +827,7 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.player = player
-        vc.showsPlaybackControls = false
+        vc.showsPlaybackControls = true
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
         return vc
@@ -737,287 +837,13 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         if vc.player !== player {
             vc.player = player
         }
-        if vc.showsPlaybackControls {
-            vc.showsPlaybackControls = false
-        }
-    }
-}
-
-@MainActor
-private final class DetailVideoControlsModel: ObservableObject {
-    @Published var showsControls = false
-    @Published var isPlaying = false
-    @Published var currentTime: Double = 0
-    @Published var duration: Double = 0
-    @Published var isMuted = false
-
-    private weak var player: AVPlayer?
-    private var timeControlObserver: NSKeyValueObservation?
-    private var itemStatusObserver: NSKeyValueObservation?
-    private var timeObserverToken: Any?
-    private weak var timeObserverPlayer: AVPlayer?
-    private var hideControlsTask: Task<Void, Never>?
-
-    func attach(to player: AVPlayer) {
-        guard self.player !== player else {
-            updateFromPlayer()
-            return
-        }
-
-        self.player = player
-        player.isMuted = false
-        isMuted = false
-        timeControlObserver?.invalidate()
-        itemStatusObserver?.invalidate()
-        removeTimeObserver()
-        hideControlsTask?.cancel()
-
-        timeControlObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] _, _ in
-            Task { @MainActor in
-                self?.updateFromPlayer()
-            }
-        }
-
-        itemStatusObserver = player.observe(\.currentItem?.status, options: [.new, .initial]) { [weak self] _, _ in
-            Task { @MainActor in
-                self?.updateFromPlayer()
-            }
-        }
-
-        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
-        timeObserverPlayer = player
-        timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
-            Task { @MainActor in
-                guard let self else { return }
-                self.currentTime = Self.validSeconds(time)
-                self.duration = Self.validSeconds(player?.currentItem?.duration ?? .zero)
-            }
+        if !vc.showsPlaybackControls {
+            vc.showsPlaybackControls = true
         }
     }
 
-    func surfaceTapped() {
-        guard let player,
-              player.timeControlStatus == .playing else { return }
-
-        hideControlsTask?.cancel()
-        hideControlsTask = nil
-        player.pause()
-        isPlaying = false
-        showsControls = true
-    }
-
-    func toggleMute() {
-        guard let player else { return }
-        player.isMuted.toggle()
-        isMuted = player.isMuted
-    }
-
-    func playButtonTapped() {
-        guard let player else { return }
-
-        hideControlsTask?.cancel()
-        hideControlsTask = nil
-
-        if isAtEnd(player) {
-            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak player] _ in
-                Task { @MainActor in
-                    player?.play()
-                }
-            }
-        } else {
-            player.play()
-        }
-
-        showsControls = true
-        isPlaying = true
-        scheduleControlsHide()
-    }
-
-    func seek(to seconds: Double) {
-        guard let player else { return }
-        let target = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-        currentTime = seconds
-        showsControls = true
-    }
-
-    private func updateFromPlayer() {
-        guard let player,
-              player.currentItem?.status == .readyToPlay else {
-            hideControlsTask?.cancel()
-            hideControlsTask = nil
-            showsControls = false
-            return
-        }
-
-        switch player.timeControlStatus {
-        case .paused:
-            hideControlsTask?.cancel()
-            hideControlsTask = nil
-            isPlaying = false
-            showsControls = true
-        case .playing:
-            isPlaying = true
-            scheduleControlsHide()
-        case .waitingToPlayAtSpecifiedRate:
-            isPlaying = false
-            showsControls = false
-        @unknown default:
-            isPlaying = false
-            showsControls = false
-        }
-
-        currentTime = Self.validSeconds(player.currentTime())
-        duration = Self.validSeconds(player.currentItem?.duration ?? .zero)
-        isMuted = player.isMuted
-    }
-
-    private func scheduleControlsHide() {
-        hideControlsTask?.cancel()
-        hideControlsTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let self,
-                  let player = self.player,
-                  player.timeControlStatus == .playing else { return }
-            self.showsControls = false
-            self.hideControlsTask = nil
-        }
-    }
-
-    private func isAtEnd(_ player: AVPlayer) -> Bool {
-        guard let item = player.currentItem else { return false }
-        let duration = item.duration.seconds
-        let current = player.currentTime().seconds
-        guard duration.isFinite, duration > 0, current.isFinite else { return false }
-        return current >= duration - 0.25
-    }
-
-    private func removeTimeObserver() {
-        if let timeObserverToken, let timeObserverPlayer {
-            timeObserverPlayer.removeTimeObserver(timeObserverToken)
-        }
-        timeObserverToken = nil
-        timeObserverPlayer = nil
-    }
-
-    private static func validSeconds(_ time: CMTime) -> Double {
-        let seconds = time.seconds
-        return seconds.isFinite && seconds > 0 ? seconds : 0
-    }
-
-    deinit {
-        timeControlObserver?.invalidate()
-        itemStatusObserver?.invalidate()
-        if let timeObserverToken, let timeObserverPlayer {
-            timeObserverPlayer.removeTimeObserver(timeObserverToken)
-        }
-        hideControlsTask?.cancel()
-    }
-}
-
-private struct DetailVideoControlsOverlay: View {
-    let isVisible: Bool
-    let isPlaying: Bool
-    let currentTime: Double
-    let duration: Double
-    let isMuted: Bool
-    let playAction: () -> Void
-    let seekAction: (Double) -> Void
-    let muteAction: () -> Void
-
-    @State private var scrubValue: Double = 0
-    @State private var isScrubbing = false
-
-    var body: some View {
-        ZStack {
-            if isVisible {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button(action: muteAction) {
-                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .background(.black.opacity(0.48))
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(.white.opacity(0.24), lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.top, 12)
-                    .padding(.trailing, 12)
-                    Spacer()
-                }
-
-                if !isPlaying {
-                    Button(action: playAction) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 34, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 74, height: 74)
-                            .background(.black.opacity(0.48))
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(.white.opacity(0.28), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
-                    }
-                    .buttonStyle(.plain)
-                    .transition(.opacity)
-                }
-
-                VStack {
-                    Spacer()
-                    HStack(spacing: 10) {
-                        Text(formatTime(isScrubbing ? scrubValue : currentTime))
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, alignment: .leading)
-
-                        Slider(
-                            value: Binding(
-                                get: { isScrubbing ? scrubValue : min(currentTime, max(duration, 0)) },
-                                set: { scrubValue = $0 }
-                            ),
-                            in: 0...max(duration, 0.1),
-                            onEditingChanged: { editing in
-                                isScrubbing = editing
-                                if !editing {
-                                    seekAction(scrubValue)
-                                }
-                            }
-                        )
-                        .tint(.white)
-
-                        Text(formatTime(duration))
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.86))
-                            .frame(width: 44, alignment: .trailing)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.black.opacity(0.42))
-                }
-                .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.18), value: isVisible)
-        .onChange(of: currentTime) { _, newValue in
-            guard !isScrubbing else { return }
-            scrubValue = newValue
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func formatTime(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0:00" }
-        let total = Int(seconds.rounded(.down))
-        return "\(total / 60):\(String(format: "%02d", total % 60))"
+    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: ()) {
+        vc.player = nil
     }
 }
 
@@ -1302,7 +1128,7 @@ struct TweetDetailView: View {
             commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)
 
             // Rebuild video list on re-enter (deactivate clears it, onChange won't fire if count unchanged)
-            commentsVideoCoordinator.buildVideoList(from: comments)
+            commentsVideoCoordinator.buildVideoList(from: comments, outerTweetId: displayTweet.mid)
 
             // Ensure bottom navigation bar is visible when detail view appears
             // Always post notification to ensure ContentView state is synced
@@ -1318,7 +1144,7 @@ struct TweetDetailView: View {
         }
         .onChange(of: comments.count) { _, _ in
             // Rebuild video list for fullscreen navigation when comments change
-            commentsVideoCoordinator.buildVideoList(from: comments)
+            commentsVideoCoordinator.buildVideoList(from: comments, outerTweetId: displayTweet.mid)
             TweetDetailCommentsCache.shared.setComments(comments, for: displayTweet.mid)
         }
         .onChange(of: displayTweet.mid) { _, _ in
@@ -1328,11 +1154,12 @@ struct TweetDetailView: View {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
 
-            // Mark detail view as inactive
-            NavigationStateManager.shared.setDetailViewActive(false)
-
-            // Deactivate manager - this handles session end and lifecycle teardown
+            // Deactivate manager first so feed resume cannot race detail's observer
+            // teardown/state save while both surfaces point at the shared AVPlayer.
             DetailVideoManager.shared.deactivate()
+
+            // Mark detail view as inactive only after handoff state is established.
+            NavigationStateManager.shared.setDetailViewActive(false)
 
             // Deactivate comments video playback coordinator
             commentsVideoCoordinator.deactivate()
@@ -1356,7 +1183,7 @@ struct TweetDetailView: View {
             // SharedAssetCache/VideoStateCache, not GlobalImageLoadManager.
             if let attachments = displayTweet.attachments {
                 for attachment in attachments where attachment.type == .image {
-                    let mainLoadId = attachment.mid
+                    let mainLoadId = DetailMediaCell.imageLoadId(for: attachment)
                     print("DEBUG: [TweetDetailView] Cancelling image load: \(mainLoadId)")
                     GlobalImageLoadManager.shared.cancelLoad(id: mainLoadId)
                 }
@@ -1400,7 +1227,7 @@ struct TweetDetailView: View {
                                             mid: attachment.mid,
                                             mediaType: attachment.type,
                                             aspectRatio: attachment.aspectRatio,
-                                            shouldLoad: false
+                                            shouldLoad: attachment.mid == firstMainTweetVideoToAutoplay?.mid
                                         )
                                         .trackAttachmentVideoVisibility(
                                             attachmentIndex: origIdx,
@@ -1621,13 +1448,19 @@ struct TweetDetailView: View {
                     coordinator: commentsVideoCoordinator,
                     scrollCoordinateSpace: "commentsScroll"
                 )
-                .environment(\.videoListProvider, { videoMid, cellTweetId, attachmentIndex in
+                .environment(\.videoListProvider, { videoMid, outerTweetId, mediaTweetId, attachmentIndex in
                     let list = commentsVideoCoordinator.getVideoListForFullscreen()
                     guard !list.isEmpty else { return nil }
                     let startIndex = list.firstIndex(where: {
-                        $0.videoMid == videoMid && $0.cellTweetId == cellTweetId
+                        $0.videoMid == videoMid &&
+                        $0.contextTweetId == outerTweetId &&
+                        $0.mediaTweetId == mediaTweetId &&
+                        $0.attachmentIndex == attachmentIndex
                     }) ?? list.firstIndex(where: {
-                        $0.videoMid == videoMid
+                        $0.videoMid == videoMid &&
+                        $0.contextTweetId == displayTweet.mid &&
+                        $0.mediaTweetId == mediaTweetId &&
+                        $0.attachmentIndex == attachmentIndex
                     }) ?? 0
                     return (list, startIndex)
                 })
@@ -2025,6 +1858,7 @@ struct CommentVideoTrackingWrapper: View {
         if visibilityRatio > 0 {
             coordinator.reportVideoVisible(
                 commentId: comment.mid,
+                outerTweetId: parentTweet.mid,
                 videoMid: videoInfo.attachment.mid,
                 attachmentIndex: videoInfo.index,
                 visibilityRatio: visibilityRatio,

@@ -138,12 +138,13 @@ struct HomeView: View {
                 navigationPath.append(commentNav)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .showBarsAfterScrollEnd)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .showBarsAfterScrollEnd)) { notification in
             // Show bars WITHOUT animation so the frame change is instant.
             // TweetTableViewController compensates contentOffset in viewDidLayoutSubviews.
             guard !isNavigationVisible else { return }
             isNavigationVisible = true
-            postNavigationVisibilityNotification(isVisible: true)
+            let animated = notification.userInfo?["animated"] as? Bool ?? false
+            postNavigationVisibilityNotification(isVisible: true, animated: animated)
             lastVisibilityChangeTime = Date()
         }
         .onDisappear {
@@ -236,10 +237,10 @@ struct HomeView: View {
     }
     
     // Helper to post navigation visibility notification with throttling
-    private func postNavigationVisibilityNotification(isVisible: Bool) {
+    private func postNavigationVisibilityNotification(isVisible: Bool, animated: Bool = true) {
         // Throttle notifications to prevent excessive posting during rapid scroll
         let now = Date()
-        if let lastTime = lastNotificationTime, now.timeIntervalSince(lastTime) < notificationThrottleInterval {
+        if animated, let lastTime = lastNotificationTime, now.timeIntervalSince(lastTime) < notificationThrottleInterval {
             return
         }
 
@@ -247,7 +248,7 @@ struct HomeView: View {
         NotificationCenter.default.post(
             name: .navigationVisibilityChanged,
             object: nil,
-            userInfo: ["isVisible": isVisible]
+            userInfo: ["isVisible": isVisible, "animated": animated]
         )
     }
 

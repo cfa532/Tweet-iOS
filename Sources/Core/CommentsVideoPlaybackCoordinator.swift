@@ -12,12 +12,13 @@ import Combine
 
 /// Tracks video information within a comment
 struct CommentVideoInfo: Equatable, Hashable {
+    let outerTweetId: String
     let commentId: String
     let videoMid: String
     let attachmentIndex: Int
 
     var identifier: String {
-        "\(commentId)_\(videoMid)_\(attachmentIndex)"
+        "\(outerTweetId)_\(commentId)_\(videoMid)_\(attachmentIndex)"
     }
 }
 
@@ -37,6 +38,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
     /// Ordered list of all video attachments across comments (for fullscreen swipe-between-videos)
     private(set) var allVideos: [VideoPlaybackInfo] = []
+    private var currentOuterTweetId: String?
 
     // MARK: - Private State
 
@@ -46,12 +48,12 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
     /// Debounce timer for visibility updates
     private var visibilityDebounceTimer: Timer?
-    private let debounceInterval: TimeInterval = 0.15
+    private let debounceInterval = FeedPlaybackTuning.videoVisibilityThrottleInterval
 
     /// New videos can start once half of the media is visible.
-    private let startVisibilityRatio: CGFloat = 0.50
+    private let startVisibilityRatio = FeedPlaybackTuning.videoStartVisibilityRatio
     /// Stop the current video early as the user scrolls it away, matching feed behavior.
-    private let continueVisibilityRatio: CGFloat = 0.70
+    private let continueVisibilityRatio = FeedPlaybackTuning.videoContinueVisibilityRatio
 
     /// Track if coordinator is active
     private var isActive: Bool = false
@@ -91,6 +93,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoInfo = nil
         visibleCommentVideos.removeAll()
         allVideos.removeAll()
+        currentOuterTweetId = nil
         isMainTweetVideoVisible = false
         visibilityDebounceTimer?.invalidate()
         visibilityDebounceTimer = nil
@@ -99,13 +102,15 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
     /// Build the ordered video list from all comments (for fullscreen navigation)
     /// Call whenever the comments array changes (initial load, pagination, new comment)
-    func buildVideoList(from comments: [Tweet]) {
+    func buildVideoList(from comments: [Tweet], outerTweetId: String) {
+        currentOuterTweetId = outerTweetId
         var videos: [VideoPlaybackInfo] = []
         for comment in comments {
             guard let attachments = comment.attachments else { continue }
             for (index, attachment) in attachments.enumerated() {
                 if attachment.type == .video || attachment.type == .hls_video {
                     videos.append(VideoPlaybackInfo(
+                        outerTweetId: outerTweetId,
                         cellTweetId: comment.mid,
                         mediaTweetId: comment.mid,
                         videoMid: attachment.mid,
@@ -131,6 +136,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     ///   - yPosition: The Y position of the video in the scroll coordinate space
     func reportVideoVisible(
         commentId: String,
+        outerTweetId: String? = nil,
         videoMid: String,
         attachmentIndex: Int,
         visibilityRatio: CGFloat,
@@ -139,6 +145,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         guard isActive else { return }
 
         let info = CommentVideoInfo(
+            outerTweetId: outerTweetId ?? currentOuterTweetId ?? commentId,
             commentId: commentId,
             videoMid: videoMid,
             attachmentIndex: attachmentIndex
@@ -185,10 +192,15 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         yPosition: CGFloat
     ) {
         guard isActive else { return }
-        // Synthetic commentId must not contain underscores — stopCurrentVideo() splits on "_"
-        // and expects commentId_videoMid_attachmentIndex format (videoMid at index 1).
+        // Synthetic comment id keeps main attachment videos in the same visibility map
+        // as comment videos while the outer tweet id remains part of the identifier.
         let syntheticId = "att\(attachmentIndex)"
-        let info = CommentVideoInfo(commentId: syntheticId, videoMid: videoMid, attachmentIndex: attachmentIndex)
+        let info = CommentVideoInfo(
+            outerTweetId: currentOuterTweetId ?? syntheticId,
+            commentId: syntheticId,
+            videoMid: videoMid,
+            attachmentIndex: attachmentIndex
+        )
         visibleCommentVideos[syntheticId] = (info: info, ratio: visibilityRatio, yPosition: yPosition)
         scheduleVisibilityUpdate()
     }
@@ -293,6 +305,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 @available(iOS 16.0, *)
 struct CommentVideoVisibilityTracker: ViewModifier {
     let commentId: String
+    let outerTweetId: String?
     let videoMid: String
     let attachmentIndex: Int
     let coordinator: CommentsVideoPlaybackCoordinator
@@ -333,6 +346,7 @@ struct CommentVideoVisibilityTracker: ViewModifier {
         if visibilityRatio > 0 {
             coordinator.reportVideoVisible(
                 commentId: commentId,
+                outerTweetId: outerTweetId,
                 videoMid: videoMid,
                 attachmentIndex: attachmentIndex,
                 visibilityRatio: visibilityRatio,
@@ -349,6 +363,7 @@ extension View {
     /// Track video visibility for comments video playback coordination
     func trackCommentVideoVisibility(
         commentId: String,
+        outerTweetId: String? = nil,
         videoMid: String,
         attachmentIndex: Int,
         coordinator: CommentsVideoPlaybackCoordinator,
@@ -356,6 +371,7 @@ extension View {
     ) -> some View {
         self.modifier(CommentVideoVisibilityTracker(
             commentId: commentId,
+            outerTweetId: outerTweetId,
             videoMid: videoMid,
             attachmentIndex: attachmentIndex,
             coordinator: coordinator,

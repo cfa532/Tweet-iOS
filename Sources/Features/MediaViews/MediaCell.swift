@@ -28,8 +28,8 @@ class VideoVisibilityManager: ObservableObject {
 // MARK: - Video List Provider Environment Key
 
 /// Closure type for providing a video list for fullscreen navigation.
-/// Parameters: (videoMid, cellTweetId, attachmentIndex) → (list, startIndex)?
-typealias VideoListProvider = (_ videoMid: String, _ cellTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
+/// Parameters: (videoMid, outerTweetId, mediaTweetId, attachmentIndex) → (list, startIndex)?
+typealias VideoListProvider = (_ videoMid: String, _ outerTweetId: String, _ mediaTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
 
 private struct VideoListProviderKey: EnvironmentKey {
     static let defaultValue: VideoListProvider? = nil
@@ -65,6 +65,16 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     @State private var isInViewport: Bool = false
     @ObservedObject private var muteState = MuteState.shared
     @Environment(\.videoListProvider) private var videoListProvider
+
+    private var videoIdentifier: String? {
+        guard let attachments = parentTweet.attachments,
+              attachmentIndex >= 0,
+              attachmentIndex < attachments.count else { return nil }
+        let attachment = attachments[attachmentIndex]
+        let mediaTweetId = parentTweet.mid
+        let outerTweetId = cellTweetId ?? mediaTweetId
+        return "\(outerTweetId)_\(mediaTweetId)_\(attachment.mid)_\(attachmentIndex)"
+    }
 
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
@@ -186,8 +196,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             updateEffectiveBaseUrl()
 
             // MEMORY FIX: Mark video as visible to prevent eviction
-            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
-                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
+            if isVideoAttachment, attachment.getUrl(effectiveBaseUrl) != nil {
+                let mediaID = attachment.mid
                 SharedAssetCache.shared.markAsVisible(mediaID)
                 VideoStateCache.shared.markAsVisible(attachment.mid)
                 print("👁️ [MediaCell] Marked video as visible: \(attachment.mid) (mediaID: \(mediaID))")
@@ -208,8 +218,9 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             setupForegroundObserver()
 
             // Phase 3: Register as delegate for direct video control communication
-            let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
-            VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: videoId)
+            if let videoIdentifier {
+                VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: videoIdentifier)
+            }
         }
         .onDisappear {
             // Set visibility to false immediately when cell disappears
@@ -225,13 +236,14 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             }
 
             // Phase 3: Unregister delegate
-            let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
-            VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: videoId)
+            if let videoIdentifier {
+                VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: videoIdentifier)
+            }
 
             // MEMORY FIX: Mark video as not visible when cell disappears
             // Cleanup is handled by background timer (every 10s) to preserve preloading
-            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
-                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
+            if isVideoAttachment, attachment.getUrl(effectiveBaseUrl) != nil {
+                let mediaID = attachment.mid
 
                 // Mark as not visible (allows cleanup after grace period)
                 SharedAssetCache.shared.markAsNotVisible(mediaID)
@@ -271,7 +283,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
 
             // If notification includes full videoId, validate it matches our instance
             if let videoId = notification.userInfo?["videoId"] as? String {
-                let ourVideoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
+                let ourVideoId = videoIdentifier ?? ""
                 guard videoId == ourVideoId else {
                     print("⚠️ [MediaCell] Ignoring play command for different instance - expected: \(ourVideoId), got: \(videoId)")
                     return
@@ -286,8 +298,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
 
             print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
 
-            // Always allow playback when we receive a direct command for this instance
-            // The SharedVideoPlayerManager has already ensured only one video plays at a time
+            // Always allow playback when we receive a direct command for this instance.
+            // VideoPlaybackCoordinator owns the single-primary decision.
             shouldAutoPlay = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in
@@ -346,7 +358,12 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 // Set video list for fullscreen navigation if provider is available (e.g. comments)
                 if isVideoAttachment,
                    let provider = videoListProvider,
-                   let (list, startIndex) = provider(attachment.mid, cellTweetId ?? parentTweet.mid, attachmentIndex) {
+                   let (list, startIndex) = provider(
+                    attachment.mid,
+                    cellTweetId ?? parentTweet.mid,
+                    parentTweet.mid,
+                    attachmentIndex
+                   ) {
                     FullScreenVideoManager.shared.setVideoList(list, startIndex: startIndex)
                 }
             } else {
@@ -684,9 +701,9 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         // Clear all caches and force reload by toggling shouldLoadVideo
         print("🔄 [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
-        if let url = attachment.getUrl(effectiveBaseUrl) {
+        if attachment.getUrl(effectiveBaseUrl) != nil {
             // Clear player cache
-            SharedAssetCache.shared.removeInvalidPlayer(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
+            SharedAssetCache.shared.removeInvalidPlayer(for: attachment.mid)
             
             // Clear video state cache
             VideoStateCache.shared.clearCache(for: attachment.mid)
@@ -694,7 +711,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             // Clear asset cache
             Task {
                 await MainActor.run {
-                    SharedAssetCache.shared.clearAssetCache(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
+                    SharedAssetCache.shared.clearAssetCache(for: attachment.mid)
                     print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
                 }
             }
@@ -721,7 +738,8 @@ extension MediaCell {
 
         print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
 
-        // Always allow playback when we receive a direct command for this instance
+        // Always allow playback when we receive a direct command for this instance.
+        // VideoPlaybackCoordinator owns the single-primary decision.
         shouldAutoPlay = true
     }
 

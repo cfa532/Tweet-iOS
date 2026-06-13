@@ -20,9 +20,31 @@ class NavigationStateManager {
 
     /// Track if detail view is currently active (TweetDetailView or CommentDetailView)
     @Published var isDetailViewActive = false
+    @Published private(set) var isDetailNavigationPending = false
+    private var shouldPreserveFeedPlaybackForPendingDetail = false
+
+    var shouldPreserveFeedForDetailTransition: Bool {
+        isDetailNavigationPending && shouldPreserveFeedPlaybackForPendingDetail
+    }
+
+    func markDetailNavigationPending(source: String, preserveFeedPlayback: Bool) {
+        isDetailNavigationPending = true
+        shouldPreserveFeedPlaybackForPendingDetail = preserveFeedPlayback
+        print("DEBUG: [NAVIGATION STATE] Detail navigation pending from \(source)")
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, !self.isDetailViewActive else { return }
+            self.isDetailNavigationPending = false
+            self.shouldPreserveFeedPlaybackForPendingDetail = false
+        }
+    }
 
     func setDetailViewActive(_ active: Bool) {
         isDetailViewActive = active
+        if !active {
+            isDetailNavigationPending = false
+            shouldPreserveFeedPlaybackForPendingDetail = false
+        }
         print("DEBUG: [NAVIGATION STATE] Detail view active: \(active)")
     }
 }
@@ -39,6 +61,76 @@ protocol VideoPlayerLifecycleManager: AnyObject {
     func isPlayerBroken() -> Bool
     func clearBrokenPlayer()
     func recoverFromBackground()
+}
+
+private func feedStyleBufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+    let currentSeconds = CMTimeGetSeconds(player.currentTime())
+    guard currentSeconds.isFinite else { return 0 }
+
+    var bestBufferAhead: Double = 0
+    for value in item.loadedTimeRanges {
+        let range = value.timeRangeValue
+        let start = CMTimeGetSeconds(range.start)
+        let duration = CMTimeGetSeconds(range.duration)
+        guard start.isFinite, duration.isFinite else { continue }
+
+        let end = start + duration
+        if currentSeconds >= start && currentSeconds <= end {
+            return max(0, end - currentSeconds)
+        } else if end > currentSeconds {
+            bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
+        }
+    }
+    return max(0, bestBufferAhead)
+}
+
+private func feedStyleRequiredBufferAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+    if item.isPlaybackLikelyToKeepUp {
+        return 0.75
+    }
+
+    let currentSeconds = CMTimeGetSeconds(player.currentTime())
+    let isStartup = currentSeconds.isFinite && currentSeconds < 1.0
+    return isStartup ? 2.0 : 2.5
+}
+
+private func fullscreenRequiredBufferAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+    let currentSeconds = CMTimeGetSeconds(player.currentTime())
+    let isStartup = currentSeconds.isFinite && currentSeconds < 1.0
+    if isStartup {
+        return 2.0
+    }
+
+    return item.isPlaybackLikelyToKeepUp ? 2.0 : 5.0
+}
+
+@discardableResult
+private func applyPrePlayBuffering(
+    to player: AVPlayer,
+    item: AVPlayerItem,
+    requiredBuffer: (AVPlayerItem, AVPlayer) -> Double
+) -> (bufferedAhead: Double, requiredBuffer: Double, keepUp: Bool) {
+    item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+    item.preferredForwardBufferDuration = 0
+
+    let bufferedAhead = feedStyleBufferedTimeAhead(for: item, player: player)
+    let required = requiredBuffer(item, player)
+    if bufferedAhead >= required {
+        player.automaticallyWaitsToMinimizeStalling = false
+    } else {
+        player.automaticallyWaitsToMinimizeStalling = true
+    }
+    return (bufferedAhead, required, item.isPlaybackLikelyToKeepUp)
+}
+
+@discardableResult
+private func applyFeedStylePrePlayBuffering(to player: AVPlayer, item: AVPlayerItem) -> (bufferedAhead: Double, requiredBuffer: Double, keepUp: Bool) {
+    applyPrePlayBuffering(to: player, item: item, requiredBuffer: feedStyleRequiredBufferAhead)
+}
+
+@discardableResult
+private func applyFullscreenPrePlayBuffering(to player: AVPlayer, item: AVPlayerItem) -> (bufferedAhead: Double, requiredBuffer: Double, keepUp: Bool) {
+    applyPrePlayBuffering(to: player, item: item, requiredBuffer: fullscreenRequiredBufferAhead)
 }
 
 extension VideoPlayerLifecycleManager {
@@ -140,6 +232,7 @@ extension VideoPlayerLifecycleManager {
         // CRITICAL: Also save to persistent storage so it survives player recreation
         if let detailManager = self as? DetailVideoManager,
            let videoMid = detailManager.currentVideoMid {
+            SharedAssetCache.shared.protectBackgroundPoster(for: videoMid)
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
                 currentTime: currentTime,
@@ -149,6 +242,7 @@ extension VideoPlayerLifecycleManager {
             )
         } else if let fullscreenManager = self as? FullScreenVideoManager,
                   let videoMid = fullscreenManager.currentVideoMid {
+            SharedAssetCache.shared.protectBackgroundPoster(for: videoMid)
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
                 currentTime: currentTime,
@@ -189,6 +283,10 @@ extension VideoPlayerLifecycleManager {
         } else {
             print("DEBUG: [\(managerName)] State already saved by willResignActive")
         }
+
+        // Background policy: keep resume metadata/posters, but drop the actual
+        // AVPlayer/AVPlayerItem memory. Foreground recovery recreates on demand.
+        clearBrokenPlayer()
     }
     
     func handleAppWillEnterForeground() {
@@ -231,15 +329,33 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var isActive: Bool = false
     var isFullscreenActive: Bool { isActive }
+    private var feedHandoffMid: String?
+    private var feedHandoffExpiresAt: Date = .distantPast
     
     /// Activate manager when fullscreen view appears
     func activateForFullscreen() {
         // Pause any detail view videos when entering fullscreen mode
         // This ensures videos playing in TweetDetailView or CommentDetailView are paused
         // when opening attachments in fullscreen, but can resume when fullscreen closes
-        if DetailVideoManager.shared.getPlayer()?.rate ?? 0 > 0 {
-            DetailVideoManager.shared.pausePlayer()
-            print("🎬 [FullScreenVideoManager] Paused detail view videos before activating fullscreen")
+        if let detailPlayer = DetailVideoManager.shared.getPlayer() {
+            let currentTime = detailPlayer.currentTime()
+            if let videoMid = DetailVideoManager.shared.currentVideoMid,
+               detailPlayer.currentItem != nil,
+               currentTime.isValid,
+               currentTime.seconds.isFinite,
+               currentTime.seconds > 0.25 {
+                PersistentVideoStateManager.shared.saveState(
+                    videoMid: videoMid,
+                    currentTime: currentTime,
+                    wasPlaying: detailPlayer.rate > 0,
+                    context: .detailView,
+                    duration: detailPlayer.currentItem?.duration ?? .invalid
+                )
+            }
+            if detailPlayer.rate > 0 {
+                DetailVideoManager.shared.pausePlayer()
+                print("🎬 [FullScreenVideoManager] Paused detail view videos before activating fullscreen")
+            }
         }
 
         guard !isActive else { return }
@@ -249,7 +365,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     }
     
     /// Deactivate manager when fullscreen view disappears
-    func deactivate() {
+    func deactivate(transferPlaybackToUnderlyingSurface: Bool = false) {
         guard isActive else { return }
         isActive = false
         teardownAppLifecycleNotifications()
@@ -264,15 +380,15 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let wasPlaying = player.rate > 0
             let currentTime = player.currentTime()
             let duration = player.currentItem?.duration ?? .invalid
-            PersistentVideoStateManager.shared.saveState(
-                videoMid: videoMid, currentTime: currentTime,
-                wasPlaying: wasPlaying, context: .fullScreen, duration: duration)
-            PersistentVideoStateManager.shared.saveState(
-                videoMid: videoMid, currentTime: currentTime,
-                wasPlaying: wasPlaying, context: .mediaCell, duration: duration)
+            saveFullscreenPlaybackState(
+                videoMid: videoMid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                duration: duration
+            )
         }
 
-        // CRITICAL: Set intent flags to false BEFORE calling pause().
+        // CRITICAL: Set intent flags to false BEFORE optional pause().
         // AVFoundation fires KVO callbacks (timeControlStatus, loadedTimeRanges, etc.)
         // on background threads when the player pauses. Those callbacks run
         // updateBufferingState which checks isPlaying/wasPlayingBeforeWaiting to decide
@@ -281,13 +397,18 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // audio right after we intentionally stopped it. Setting them first prevents this.
         isPlaying = false
         wasPlayingBeforeWaiting = false
-        singletonPlayer?.pause()
+        if !transferPlaybackToUnderlyingSurface {
+            singletonPlayer?.pause()
+        }
 
         // Cancel all timers and observers that could wake the player back up.
-        // Without this, retryWorkItem fires after 3 s, sees rate==0, and calls
-        // player.play() — causing audio to bleed into the feed after dismiss.
+        // Without this, retryWorkItem can fire after dismissal and mutate a
+        // player now owned by feed/detail.
         retryWorkItem?.cancel()
         retryWorkItem = nil
+        loadingMid = nil
+        loadingStartedAt = nil
+        fullscreenStallItemRebuildCount = 0
         bufferObserver?.invalidate()
         bufferObserver = nil
         cleanupObservers()         // removes timeControlStatus, buffer, loaded-ranges KVO
@@ -297,9 +418,20 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
         isBuffering = false
 
+        let releasedBrokenBorrowedPlayer: Bool
+        if isUsingBorrowedFeedPlayer,
+           let player = singletonPlayer,
+           let item = player.currentItem,
+           let videoMid = currentVideoMid {
+            releasedBrokenBorrowedPlayer = releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(player, item: item, mid: videoMid, owner: "fullscreen dismiss")
+        } else {
+            releasedBrokenBorrowedPlayer = false
+        }
+
         // Capture a still frame from the singleton player so the feed cell has a
         // thumbnail cover while its own player layer re-initialises on return.
-        if let player = singletonPlayer,
+        if !releasedBrokenBorrowedPlayer,
+           let player = singletonPlayer,
            let asset = player.currentItem?.asset,
            let videoMid = currentVideoMid,
            SharedAssetCache.shared.cachedThumbnail(for: videoMid) == nil {
@@ -316,12 +448,46 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             }
         }
 
-        // Clear the current item so the player truly stops: no decoding, no buffers, no resource use.
-        // Re-opening fullscreen will reattach an item (from cache when possible).
-        singletonPlayer?.replaceCurrentItem(with: nil)
+        if transferPlaybackToUnderlyingSurface && !releasedBrokenBorrowedPlayer {
+            feedHandoffMid = currentVideoMid
+            feedHandoffExpiresAt = Date().addingTimeInterval(2.0)
+            if let player = singletonPlayer,
+               let mid = currentVideoMid {
+                VideoSurfaceHandoffRegistry.shared.beginTransfer(
+                    mediaID: mid,
+                    player: player,
+                    source: "fullscreen"
+                )
+            }
+        } else {
+            feedHandoffMid = nil
+            feedHandoffExpiresAt = .distantPast
+        }
+
+        currentVideoMid = nil
+        currentTweetId = nil
+        currentCellTweetId = nil
+        currentVideoIndex = 0
+        isUsingBorrowedFeedPlayer = false
+        if releasedBrokenBorrowedPlayer {
+            singletonPlayer = nil
+        }
         LocalHTTPServer.shared.clearPrimaryRestriction()
 
-        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, player item cleared")
+        let cleanupResult = releasedBrokenBorrowedPlayer ? "broken shared player released" : "shared player preserved"
+        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, \(cleanupResult)")
+    }
+
+    func isTransferringPlayerToFeed(_ player: AVPlayer, mid: String) -> Bool {
+        if VideoSurfaceHandoffRegistry.shared.isActiveTransfer(mediaID: mid, player: player) {
+            return true
+        }
+        guard singletonPlayer === player,
+              feedHandoffMid == mid,
+              Date() <= feedHandoffExpiresAt else {
+            return false
+        }
+        return true
     }
 
     /// Set the feed's video list for fullscreen browsing (called before presenting MediaBrowserView)
@@ -432,6 +598,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
         loadGeneration += 1
         loadingMid = nil
+        loadingStartedAt = nil
+        fullscreenStallItemRebuildCount = 0
+        loadFailedVideoMid = nil
         retryWorkItem?.cancel()
         retryWorkItem = nil
         bufferObserver?.invalidate()
@@ -439,11 +608,115 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         cleanupObservers()
         singletonPlayer?.pause()
         singletonPlayer?.replaceCurrentItem(with: nil)
+        singletonPlayer = nil
         isItemReady = false
         isBuffering = false
         isPlaying = false
+        loadFailedVideoMid = nil
     }
-    
+
+    private func saveFullscreenPlaybackState(
+        videoMid: String,
+        currentTime: CMTime,
+        wasPlaying: Bool,
+        duration: CMTime
+    ) {
+        PersistentVideoStateManager.shared.saveState(
+            videoMid: videoMid,
+            currentTime: currentTime,
+            wasPlaying: wasPlaying,
+            context: .fullScreen,
+            duration: duration
+        )
+
+        guard currentTime.isValid,
+              currentTime.seconds.isFinite,
+              currentTime.seconds > 0.25 else {
+            return
+        }
+
+        PersistentVideoStateManager.shared.saveState(
+            videoMid: videoMid,
+            currentTime: currentTime,
+            wasPlaying: wasPlaying,
+            context: .mediaCell,
+            duration: duration
+        )
+    }
+
+    private func validResumeTime(_ time: CMTime?, duration: CMTime? = nil) -> CMTime? {
+        guard let time,
+              time.isValid,
+              time.seconds.isFinite,
+              time.seconds > 0.25 else { return nil }
+
+        if let duration,
+           duration.isValid,
+           duration.seconds.isFinite,
+           duration.seconds > 0,
+           duration.seconds - time.seconds <= 0.5 {
+            return .zero
+        }
+
+        return time
+    }
+
+    private func crossSurfaceResumeTime(for mid: String, duration: CMTime? = nil) -> CMTime? {
+        if DetailVideoManager.shared.currentVideoMid == mid,
+           let currentTime = validResumeTime(DetailVideoManager.shared.currentPlayer?.currentTime(), duration: duration) {
+            return currentTime
+        }
+
+        if let feedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
+           let currentTime = validResumeTime(feedPlayer.currentTime(), duration: duration) {
+            return currentTime
+        }
+
+        if let cachedPlayback = VideoStateCache.shared.getCachedPlaybackInfo(for: mid),
+           let currentTime = validResumeTime(cachedPlayback.time, duration: duration) {
+            return currentTime
+        }
+
+        if let latest = PersistentVideoStateManager.shared.latestState(
+            videoMid: mid,
+            excluding: .fullScreen,
+            duration: duration
+        ) {
+            return latest.currentTime
+        }
+
+        return nil
+    }
+
+    private func shouldResetCachedFeedPlayerForFocusedPlayback(_ player: AVPlayer, item: AVPlayerItem) -> Bool {
+        let hasPlayerFailure = item.status == .failed || player.error != nil || item.error != nil
+        if hasPlayerFailure { return true }
+
+        let isNearEnd = timeRemaining(for: item, player: player).map { $0 <= 0.5 } ?? false
+        if isNearEnd { return false }
+
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        let isWaitingOrColdUnknown = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            || item.status == .unknown
+        return isWaitingOrColdUnknown
+            && bufferedAhead < 0.25
+            && !item.isPlaybackLikelyToKeepUp
+    }
+
+    @discardableResult
+    private func releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(_ player: AVPlayer, item: AVPlayerItem, mid: String, owner: String) -> Bool {
+        guard shouldResetCachedFeedPlayerForFocusedPlayback(player, item: item) else { return false }
+
+        let deleteDiskCache = item.status == .failed || player.error != nil || item.error != nil
+        print("🎬 [FullScreenVideoManager] Releasing broken shared feed player before \(owner) \(shortMID(mid)): deleteDiskCache=\(deleteDiskCache), \(playerDiagnostic(player, item: item))")
+        item.cancelPendingSeeks()
+        player.pause()
+        SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: deleteDiskCache)
+        VideoStateCache.shared.clearCachedState(for: mid)
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        return true
+    }
+
     // Independent singleton player for fullscreen mode
     @Published var singletonPlayer: AVPlayer?
     @Published var currentVideoMid: String?
@@ -455,6 +728,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// True once the current item has status .readyToPlay (i.e. first frame decoded).
     /// Used by SingletonVideoPlayerView to show a thumbnail cover while the item loads.
     @Published var isItemReady = false
+    @Published private(set) var loadFailedVideoMid: String?
     
     // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)?
@@ -470,6 +744,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     // Retry mechanism for seeking
     private var retryWorkItem: DispatchWorkItem?
     private var bufferObserver: NSKeyValueObservation?
+    private var fullscreenStallItemRebuildCount = 0
+    private let fullscreenRetryBufferTimeout: TimeInterval = 12.0
     
     // Waiting for data observer
     private var timeControlStatusObserver: NSKeyValueObservation?
@@ -480,6 +756,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var wasPlayingBeforeWaiting = false
     private var hasRestoredPosition = false // Track if we've restored position from saved state
     private var isSeekingToRestoredPosition = false // Track if we're currently seeking to restored position
+    private var isUsingBorrowedFeedPlayer = false
     
     // Debouncing for buffering state to prevent rapid spinner blinking during seeks
     private var bufferingDebounceTask: DispatchWorkItem?
@@ -490,6 +767,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
     private var loadGeneration: Int = 0
     private var loadingMid: String?
+    private var loadingStartedAt: Date?
 
     // MARK: - Navigation Debounce
     /// Prevent multiple rapid swipe-ups (or duplicate gesture endings) from racing navigation.
@@ -503,6 +781,32 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if now < nextNavigationAllowedAt { return false }
         nextNavigationAllowedAt = now.addingTimeInterval(navigationDebounceInterval)
         return true
+    }
+
+    private func shortMID(_ mid: String?) -> String {
+        guard let mid else { return "nil" }
+        return mid.count > 8 ? String(mid.prefix(8)) : mid
+    }
+
+    private func playerDiagnostic(_ player: AVPlayer?, item: AVPlayerItem?) -> String {
+        let player = player ?? singletonPlayer
+        let item = item ?? player?.currentItem
+        let pos = player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+        let dur = item.map { CMTimeGetSeconds($0.duration) } ?? 0
+        let buffered = {
+            guard let player, let item else { return 0.0 }
+            return bufferedTimeAhead(for: item, player: player)
+        }()
+        let ranges = item?.loadedTimeRanges.map { value in
+            let range = value.timeRangeValue
+            return "\(String(format: "%.1f", CMTimeGetSeconds(range.start)))-\(String(format: "%.1f", CMTimeGetSeconds(range.end)))"
+        }.joined(separator: ",") ?? "none"
+        let reason = player?.reasonForWaitingToPlay?.rawValue ?? "nil"
+        let status = item?.status.rawValue ?? -1
+        let timeControl = player?.timeControlStatus.rawValue ?? -1
+        let keepUp = item?.isPlaybackLikelyToKeepUp ?? false
+        let empty = item?.isPlaybackBufferEmpty ?? true
+        return "pos=\(String(format: "%.2f", pos)), dur=\(String(format: "%.2f", dur)), buffered=\(String(format: "%.2f", buffered)), itemStatus=\(status), timeControl=\(timeControl), reason=\(reason), keepUp=\(keepUp), empty=\(empty), ranges=[\(ranges)]"
     }
 
     // MARK: - Prewarm (startup UX)
@@ -533,14 +837,26 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         prewarmTask?.cancel()
         prewarmTask = Task { @MainActor in
-            SharedAssetCache.shared.preloadAsset(for: url, tweetId: nil, mediaType: mediaType)
+            SharedAssetCache.shared.preloadAsset(for: url, mediaID: mediaID, tweetId: nil, mediaType: mediaType)
         }
     }
     
     /// Load and play a video in the singleton player
     func loadVideo(url: URL, mid: String, tweetId: String, cellTweetId: String, videoIndex: Int, mediaType: MediaType) {
+        print("🎬 [FullScreenVideoManager] loadVideo start \(shortMID(mid)): mediaType=\(mediaType), current=\(shortMID(currentVideoMid)), loading=\(shortMID(loadingMid)), hasItem=\(singletonPlayer?.currentItem != nil)")
+        // CRITICAL: If we're already loading this exact video, ignore duplicate calls.
+        // TabView/container/page onAppear can all fire for the selected page. The first
+        // load owns the handoff; repeating the suspend step can interrupt unrelated feed work
+        // while adding no new progress for this video.
+        if loadingMid == mid && currentVideoMid == mid {
+            let age = loadingStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+            print("♻️ [FullScreenVideoManager] Duplicate load ignored for \(String(mid.prefix(8))) (age: \(String(format: "%.1f", age))s, itemAttached: \(singletonPlayer?.currentItem != nil))")
+            return
+        }
+
         // Fullscreen is the user's active media target. Clear any stale cancellation
         // from feed scroll cleanup and let the local proxy prioritize this video.
+        loadFailedVideoMid = nil
         LocalHTTPServer.shared.clearCancelledState(for: mid)
         LocalHTTPServer.shared.setPrimaryMediaID(mid)
         SharedAssetCache.shared.suspendFeedActivityForFullscreen(protecting: mid)
@@ -552,6 +868,33 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if currentVideoMid == mid,
            currentTweetId == tweetId,
            !isPlayerBroken() {
+            print("🎬 [FullScreenVideoManager] Reusing existing player for \(shortMID(mid)): \(playerDiagnostic(singletonPlayer, item: singletonPlayer?.currentItem))")
+            guard let currentItem = singletonPlayer?.currentItem else { return }
+            if isSeekingToRestoredPosition {
+                return
+            }
+            if hasRestoredPosition,
+               let player = singletonPlayer,
+               player.currentItem === currentItem,
+               player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate || player.rate > 0 {
+                isPlaying = true
+                isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                return
+            }
+            if currentItem.status != .readyToPlay {
+                // Duplicate onAppear calls can arrive while the fresh fullscreen item is
+                // still .unknown. Do not rebuild observers here: that can invalidate the
+                // deferred item-status observer that will call seekOnceAndPlay() on ready.
+                isPlaying = true
+                currentItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                if itemStatusObserver == nil {
+                    startPlaybackWithSeekIfNeeded(playerItem: currentItem, mid: mid)
+                } else {
+                    singletonPlayer?.play()
+                }
+                return
+            }
+
             setupTimeControlStatusObserver()
             if isItemReady {
                 // Item is ready — rewind if at end, then play.
@@ -561,17 +904,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     capturedPlayer?.play()
                 }
             } else {
-                // Item exists but not yet ready — mark intent; itemStatusObserver will play when ready.
-                isPlaying = true
-                singletonPlayer?.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-                singletonPlayer?.play()
+                isItemReady = true
+                seekOnceAndPlay(playerItem: currentItem, mid: mid)
             }
-            return
-        }
-        
-        // CRITICAL: If we're already loading this exact video, ignore duplicate calls
-        // This prevents race conditions from multiple onAppear handlers calling loadVideo
-        if loadingMid == mid && currentVideoMid == mid {
             return
         }
         
@@ -581,23 +916,28 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             if let oldMid = currentVideoMid, player.currentItem != nil {
                 let t = player.currentTime()
                 let d = player.currentItem?.duration ?? .invalid
-                PersistentVideoStateManager.shared.saveState(
-                    videoMid: oldMid, currentTime: t, wasPlaying: player.rate > 0,
-                    context: .fullScreen, duration: d)
-                PersistentVideoStateManager.shared.saveState(
-                    videoMid: oldMid, currentTime: t, wasPlaying: player.rate > 0,
-                    context: .mediaCell, duration: d)
+                saveFullscreenPlaybackState(
+                    videoMid: oldMid,
+                    currentTime: t,
+                    wasPlaying: player.rate > 0,
+                    duration: d
+                )
             }
             player.pause()
-            player.replaceCurrentItem(with: nil)
+            singletonPlayer = nil
         }
 
         // Bump generation so any prior async completions are ignored.
         loadGeneration += 1
         let generation = loadGeneration
         loadingMid = mid
+        loadingStartedAt = Date()
+        feedHandoffMid = nil
+        feedHandoffExpiresAt = .distantPast
+        isUsingBorrowedFeedPlayer = false
         hasRestoredPosition = false // Reset restoration flag when loading new video
         isSeekingToRestoredPosition = false // Reset seeking flag
+        fullscreenStallItemRebuildCount = 0
         isItemReady = false // Will be set true when playerItem.status becomes .readyToPlay
 
         // Remove old observer if exists
@@ -616,7 +956,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         // Clean up timeControlStatus observers
         cleanupObservers()
-        isBuffering = false
+        isBuffering = true
         
         // Store current video info
         self.currentVideoMid = mid
@@ -624,70 +964,64 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         self.currentCellTweetId = cellTweetId
         self.currentVideoIndex = videoIndex
         
-        // CRITICAL: Create new playerItem from cached asset to avoid network timeout
-        // The cached player already has the asset loaded, so we create a new playerItem from that asset
-        // This avoids network requests while allowing the new playerItem to be associated with our player
+        // Borrow the canonical feed player when available. This is intentionally
+        // shared across feed/detail/fullscreen so buffered data and recovered
+        // playback position survive surface switches.
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedPlayerItem = cachedPlayer.currentItem {
-
-            // Create new playerItem from cached asset (fast, no network request).
-            // NOTE: Reusing cachedPlayerItem directly was attempted (loan path) but
-            // AVFoundation's XPC renderer doesn't process replaceCurrentItem(nil) before
-            // the subsequent replaceCurrentItem(item) on singletonPlayer even when both
-            // calls are in the same synchronous Task body, causing a reliable crash:
-            // "AVPlayerItem cannot be associated with more than one instance of AVPlayer"
-            // Using AVPlayerItem(asset:) gives us a fresh item that avoids this constraint
-            // while still sharing the same underlying AVURLAsset (local HTTP proxy URL).
-            let playerItem = AVPlayerItem(asset: cachedPlayerItem.asset)
-
-            // No Task wrapper needed — class is @MainActor, already on main thread.
-            // Executing synchronously eliminates the 1+ frame delay before item attachment.
-            self.loadingMid = nil
-
-            // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
-            AudioSessionManager.shared.activateForVideoPlayback()
-
-            // Create or reuse singleton player (fullscreen's unique player instance)
-            if self.singletonPlayer == nil {
-                self.singletonPlayer = AVPlayer(playerItem: playerItem)
+            if releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(cachedPlayer, item: cachedPlayerItem, mid: mid, owner: "fullscreen borrow") {
+                self.loadingMid = mid
+                self.loadingStartedAt = Date()
             } else {
-                self.singletonPlayer?.replaceCurrentItem(with: playerItem)
+                print("🎬 [FullScreenVideoManager] Borrowing shared feed player for \(shortMID(mid)): cached=\(playerDiagnostic(cachedPlayer, item: cachedPlayerItem))")
+                self.loadingMid = nil
+                self.loadingStartedAt = nil
+
+                // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
+                AudioSessionManager.shared.activateForVideoPlayback()
+
+                self.singletonPlayer = cachedPlayer
+                self.isUsingBorrowedFeedPlayer = true
+
+                applyStartupAudioMuteIfNeeded()
+
+                // CRITICAL: Setup fullscreen's unique functionality
+                self.setupVideoCompletionObserver(cachedPlayerItem)
+                self.setupTimeControlStatusObserver()
+
+                // Start playback — compute seek target once, seek once, then play
+                self.startPlaybackWithSeekIfNeeded(playerItem: cachedPlayerItem, mid: mid)
+                return
             }
-
-            applyStartupAudioMuteIfNeeded()
-
-            // CRITICAL: Setup fullscreen's unique functionality
-            self.setupVideoCompletionObserver(playerItem)
-            self.setupTimeControlStatusObserver()
-            self.startRetryMonitoring()
-
-            // Start playback — compute seek target once, seek once, then play
-            self.startPlaybackWithSeekIfNeeded(playerItem: playerItem, mid: mid)
-            return
         }
+
+        SharedAssetCache.shared.prepareUncachedFullscreenLoad(for: mid)
+        print("🎬 [FullScreenVideoManager] Async asset load start for \(shortMID(mid)): url=\(url.absoluteString)")
         
         // No cached player - load video asynchronously
         Task.detached(priority: .userInitiated) {
             do {
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweetId, mediaType: mediaType)
-                let playerItem = await AVPlayerItem(asset: asset)
+                let sharedPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: mid, tweetId: tweetId, mediaType: mediaType)
                 
                 await MainActor.run {
                     // Ignore stale completions
                     guard self.loadGeneration == generation, self.currentVideoMid == mid else {
                         return
                     }
+                    guard let playerItem = sharedPlayer.currentItem else {
+                        self.loadingMid = nil
+                        self.loadingStartedAt = nil
+                        self.isBuffering = false
+                        self.isPlaying = false
+                        return
+                    }
                     self.loadingMid = nil
-
+                    self.loadingStartedAt = nil
+                    print("🎬 [FullScreenVideoManager] Shared player load ready for \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
                     // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
                     AudioSessionManager.shared.activateForVideoPlayback()
                     
-                    // Create or reuse singleton player
-                    if self.singletonPlayer == nil {
-                        self.singletonPlayer = AVPlayer(playerItem: playerItem)
-                    } else {
-                        self.singletonPlayer?.replaceCurrentItem(with: playerItem)
-                    }
+                    self.singletonPlayer = sharedPlayer
                     
                     self.applyStartupAudioMuteIfNeeded()
                     
@@ -710,15 +1044,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         return
                     }
                     self.loadingMid = nil
+                    self.loadingStartedAt = nil
 
                     print("ERROR: [FullScreenVideoManager] Failed to load video: \(error)")
-                    // Clear state but keep the pre-created player alive
-                    self.singletonPlayer?.replaceCurrentItem(with: nil)
-                    self.currentVideoMid = nil
-                    self.currentTweetId = nil
-                    self.currentCellTweetId = nil
-                    self.currentVideoIndex = 0
-                    self.isPlaying = false
+                    self.failFullscreenVideoLoad(reason: "async player creation failed: \(error.localizedDescription)", deleteDiskCache: true)
                 }
             }
         }
@@ -761,8 +1090,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
         wasPlayingBeforeWaiting = false
-        hasRestoredPosition = false
-        isSeekingToRestoredPosition = false
         
         // Cancel any pending buffering debounce task
         bufferingDebounceTask?.cancel()
@@ -810,7 +1137,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // IMPORTANT: Don't trust isPlaybackBufferEmpty alone - it can be stuck at true after backgrounding
             // even when we have plenty of buffered data. Only show spinner if buffer is truly insufficient.
             let hasSignificantBuffer = hasBufferedData && bufferedDuration >= 1.0
-            let shouldShowSpinner = !isActivelyRendering && (
+            let wantsPlayback = wasPlaying || self.wasPlayingBeforeWaiting || self.isPlaying
+            let shouldShowSpinner = !isActivelyRendering && wantsPlayback && (
                 isWaiting
                     || (isBufferEmpty && !hasSignificantBuffer)
                     || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
@@ -855,63 +1183,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 let isAlreadyWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 let wantsToPlay = self.isPlaying || self.wasPlayingBeforeWaiting
                 
-                // CRITICAL: Check for saved state and restore position BEFORE playing
+                // Position restoration is owned by startPlaybackWithSeekIfNeeded().
+                // KVO can fire repeatedly during attachment and buffering; doing seeks
+                // here creates duplicate handoff seeks and momentary freezes.
                 if !self.hasRestoredPosition && !self.isSeekingToRestoredPosition && isReadyToPlay && hasEnoughBuffer {
-                    // First check if video finished in mediaCell - if so, restart from beginning
-                    if let videoMid = self.currentVideoMid {
-                        let duration = item.duration
-                        if duration.isValid && duration.seconds > 0 {
-                            if VideoStateCache.shared.hasVideoFinishedInMediaCell(for: videoMid, duration: duration) {
-                                self.isSeekingToRestoredPosition = true
-                                
-                                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                                    guard finished, let self = self else { return }
-                                    Task { @MainActor in
-                                        self.hasRestoredPosition = true
-                                        self.isSeekingToRestoredPosition = false
-                                        self.startFullscreenPlayback(player: player, item: item, log: "after feed-finished rewind")
-                                        self.wasPlayingBeforeWaiting = false
-                                    }
-                                }
-                                return // CRITICAL: Don't play yet, wait for seek to complete
-                            }
-                        }
-                    }
-                    
-                    if let videoMid = self.currentVideoMid,
-                       PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen),
-                       let savedState = PersistentVideoStateManager.shared.getState(videoMid: videoMid, context: .fullScreen) {
-                        // CRITICAL: Validate saved time before seeking to prevent crash
-                        guard savedState.currentTime.isValid && savedState.currentTime.seconds.isFinite else {
-                            PersistentVideoStateManager.shared.clearState(videoMid: videoMid, context: .fullScreen)
-                            self.hasRestoredPosition = true
-                            self.isSeekingToRestoredPosition = false
-                            self.startFullscreenPlayback(player: player, item: item, log: "after invalid saved state")
-                            self.wasPlayingBeforeWaiting = false
-                            return
-                        }
-                        
-                        // Mark as seeking to prevent multiple attempts and prevent playing
-                        self.isSeekingToRestoredPosition = true
-                        
-                        player.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                            guard finished, let self = self else { return }
-                            Task { @MainActor in
-                                
-                                // Mark as restored and clear seeking flag
-                                self.hasRestoredPosition = true
-                                self.isSeekingToRestoredPosition = false
-                                
-                                // CRITICAL: Fullscreen should always auto-play, regardless of wasPlaying state
-                                self.startFullscreenPlayback(player: player, item: item, log: "after saved-position seek")
-                                self.wasPlayingBeforeWaiting = false
-                            }
-                        }
-                        return // CRITICAL: Don't play yet, wait for seek to complete
-                    } else {
-                        // No saved state to restore, mark as restored so we don't check again
-                        self.hasRestoredPosition = true
-                    }
+                    self.hasRestoredPosition = true
                 }
                 
                 // Don't play if we're currently seeking to restored position
@@ -966,15 +1242,23 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
         
         // Observe item status changes
-        self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { _, _ in
+        self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async {
+                guard let self else { return }
+                print("🎬 [FullScreenVideoManager] itemStatus \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(player, item: playerItem))")
+                if playerItem.status == .failed {
+                    self.failFullscreenVideoLoad(reason: "item status failed", deleteDiskCache: true)
+                    return
+                }
                 updateBufferingState()
             }
         }
         
         // Observe timeControlStatus as backup
-        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { _, _ in
+        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] _, _ in
             DispatchQueue.main.async {
+                guard let self else { return }
+                print("🎬 [FullScreenVideoManager] timeControl \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(player, item: playerItem))")
                 updateBufferingState()
             }
         }
@@ -1035,11 +1319,77 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             }
         }
     }
+
+    private func failFullscreenVideoLoad(reason: String, deleteDiskCache: Bool, advanceToNext: Bool = true) {
+        guard let failedMid = currentVideoMid else { return }
+        let nextVideo = advanceToNext ? resolveNextVideo(after: videoListIndex) : nil
+
+        print("❌ [FullScreenVideoManager] \(reason) - releasing fullscreen player \(shortMID(failedMid)), deleteDiskCache=\(deleteDiskCache)")
+
+        loadGeneration += 1
+        loadingMid = nil
+        loadingStartedAt = nil
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        bufferObserver?.invalidate()
+        bufferObserver = nil
+        cleanupObservers()
+
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
+        }
+
+        if let player = singletonPlayer {
+            player.pause()
+            player.currentItem?.cancelPendingSeeks()
+            player.currentItem?.asset.cancelLoading()
+            SharedAssetCache.shared.clearPlayerForMediaID(failedMid, deleteDiskCache: deleteDiskCache)
+            player.replaceCurrentItem(with: nil)
+        } else {
+            SharedAssetCache.shared.clearPlayerForMediaID(failedMid, deleteDiskCache: deleteDiskCache)
+        }
+
+        VideoStateCache.shared.clearCachedState(for: failedMid)
+        LocalHTTPServer.shared.clearPrimaryRestriction()
+
+        singletonPlayer = nil
+        isPlaying = false
+        wasPlayingBeforeWaiting = false
+        isBuffering = false
+        isItemReady = false
+        isUsingBorrowedFeedPlayer = false
+        isSeekingToRestoredPosition = false
+        hasRestoredPosition = false
+        fullscreenStallItemRebuildCount = 0
+        loadFailedVideoMid = failedMid
+
+        if let nextVideo {
+            videoListIndex = nextVideo.listIndex
+            currentVideoMid = nil
+            currentTweetId = nil
+            currentCellTweetId = nil
+            currentVideoIndex = 0
+            onNavigateToNextVideo?(nextVideo.tweet, nextVideo.videoIndex, nextVideo.cellTweetId)
+        } else {
+            currentVideoMid = nil
+            currentTweetId = nil
+            currentCellTweetId = nil
+            currentVideoIndex = 0
+        }
+    }
     
     /// Start monitoring for playback stalls and auto-retry
     private func startRetryMonitoring() {
+        guard !isUsingBorrowedFeedPlayer else {
+            retryWorkItem?.cancel()
+            retryWorkItem = nil
+            return
+        }
+
         // Cancel existing monitoring
         retryWorkItem?.cancel()
+        print("🎬 [FullScreenVideoManager] retryMonitor scheduled \(shortMID(currentVideoMid)): \(playerDiagnostic(singletonPlayer, item: singletonPlayer?.currentItem))")
         
         // Create new retry work item
         let workItem = DispatchWorkItem { [weak self] in
@@ -1060,17 +1410,56 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard isActive else { return }
         guard let player = singletonPlayer, let playerItem = player.currentItem else { return }
         guard isPlaying || wasPlayingBeforeWaiting else { return }
+        print("🎬 [FullScreenVideoManager] retryCheck \(shortMID(currentVideoMid)): \(playerDiagnostic(player, item: playerItem))")
+
+        if playerItem.status == .failed || player.error != nil || playerItem.error != nil {
+            failFullscreenVideoLoad(reason: "retry detected failed item", deleteDiskCache: true)
+            return
+        }
 
         if let remaining = timeRemaining(for: playerItem, player: player),
            remaining <= 1.0,
            player.timeControlStatus != .playing {
+            print("🎬 [FullScreenVideoManager] retryCheck near end \(shortMID(currentVideoMid)): remaining=\(String(format: "%.2f", remaining))")
             scheduleNearEndAutoAdvance(for: playerItem)
             return
         }
 
-        // If player is stuck (not playing and rate is 0), force a seek to trigger reload
-        if player.rate == 0 && player.timeControlStatus != .playing {
+        if playerItem.status == .readyToPlay,
+           !hasRestoredPosition,
+           !isSeekingToRestoredPosition,
+           bufferedTimeAhead(for: playerItem, player: player) >= 2.0,
+           let mid = currentVideoMid {
+            print("🎬 [FullScreenVideoManager] retry recovered missed ready path \(shortMID(mid)): \(playerDiagnostic(player, item: playerItem))")
+            seekOnceAndPlay(playerItem: playerItem, mid: mid)
+            return
+        }
+
+        let bufferedAhead = bufferedTimeAhead(for: playerItem, player: player)
+        let keepUp = playerItem.isPlaybackLikelyToKeepUp
+        let requiredBuffer = fullscreenRequiredBufferAhead(for: playerItem, player: player)
+        if playerItem.status == .readyToPlay,
+           !isSeekingToRestoredPosition,
+           player.timeControlStatus != .playing,
+           bufferedAhead >= requiredBuffer {
+            playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            player.automaticallyWaitsToMinimizeStalling = false
+            print("🎬 [FullScreenVideoManager] retry buffer nudge \(shortMID(currentVideoMid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(playerDiagnostic(player, item: playerItem))")
+            player.play()
+            isPlaying = true
+            isBuffering = false
+            wasPlayingBeforeWaiting = false
+            startRetryMonitoring()
+            return
+        }
+
+        // If player is stuck, force a seek to trigger segment loading. AVPlayer can
+        // remain at rate > 0 while waiting, so timeControlStatus is the stronger signal.
+        let isWaitingWithoutBuffer = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            && bufferedAhead < 0.25
+        if player.timeControlStatus != .playing && (player.rate == 0 || isWaitingWithoutBuffer) {
             let currentTime = player.currentTime()
+            print("🎬 [FullScreenVideoManager] retry seek-current \(shortMID(currentVideoMid)): target=\(String(format: "%.2f", currentTime.seconds)), \(playerDiagnostic(player, item: playerItem))")
             
             // Clean up old observer
             bufferObserver?.invalidate()
@@ -1078,7 +1467,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             
             // Force seek to current position to trigger segment download
             player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player, weak playerItem] finished in
-                guard finished, let self = self, let player = player, let item = playerItem else { return }
+                guard let self = self else { return }
+                guard finished, let player = player, let item = playerItem else {
+                    Task { @MainActor in
+                        guard self.isActive else { return }
+                        self.startRetryMonitoring()
+                    }
+                    return
+                }
 
                 Task { @MainActor in
                     // Bail if fullscreen was dismissed while seek was in flight.
@@ -1086,54 +1482,57 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
                     // Wait for buffered data before calling play()
                     self.bufferObserver = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self, weak player] observedItem, _ in
-                        let hasData = !observedItem.loadedTimeRanges.isEmpty
-                        var bufferedDuration: Double = 0
-                        if !observedItem.loadedTimeRanges.isEmpty {
-                            let timeRange = observedItem.loadedTimeRanges[0].timeRangeValue
-                            bufferedDuration = CMTimeGetSeconds(timeRange.duration)
-                        }
+                        guard let self, let player else { return }
+                        Task { @MainActor in
+                            guard self.isActive else { return }
+                            let bufferedAhead = self.bufferedTimeAhead(for: observedItem, player: player)
 
-                        // Only resume when we have at least 2 seconds of buffer
-                        let remaining = player.flatMap { self?.timeRemaining(for: observedItem, player: $0) }
-                        if let remaining, remaining <= 1.0 {
-                            Task { @MainActor in
-                                self?.scheduleNearEndAutoAdvance(for: observedItem)
-                            }
-                        } else if hasData && bufferedDuration >= 2.0 {
-	                            Task { @MainActor in
-	                                guard let self = self, let player = player else { return }
+                            let requiredBuffer = fullscreenRequiredBufferAhead(for: observedItem, player: player)
+                            let remaining = self.timeRemaining(for: observedItem, player: player)
+                            if let remaining, remaining <= 1.0 {
+                                print("🎬 [FullScreenVideoManager] retry buffer near-end \(self.shortMID(self.currentVideoMid)): remaining=\(String(format: "%.2f", remaining))")
+                                self.scheduleNearEndAutoAdvance(for: observedItem)
+                            } else if bufferedAhead >= requiredBuffer {
                                 // Bail if fullscreen was dismissed while waiting for buffer.
                                 // deactivate() sets isActive=false + pauses the player, but the
                                 // KVO callback may already be enqueued on the main actor — this
                                 // guard prevents the stale play() call from re-starting audio.
-                                guard self.isActive else { return }
                                 guard self.isPlaying || self.wasPlayingBeforeWaiting else { return }
 
                                 // Clean up observer
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
 
-                                // Resume playback
-                                if player.rate == 0 {
-                                    player.play()
-                                }
+                                print("🎬 [FullScreenVideoManager] retry buffer ready \(self.shortMID(self.currentVideoMid)): bufferedAhead=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), \(self.playerDiagnostic(player, item: observedItem))")
+                                player.play()
+                                self.isPlaying = true
+                                self.isBuffering = false
+                                self.wasPlayingBeforeWaiting = false
 
                                 // Continue monitoring for future stalls
                                 self.startRetryMonitoring()
                             }
-                        } else if hasData {
                         }
                     }
 
-                    // Safety timeout: if no data after 20 seconds, give up this retry and continue monitoring
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
+                    // Safety timeout: if no data arrives, rebuild once; after that fail and release.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + self.fullscreenRetryBufferTimeout) { [weak self] in
                         Task { @MainActor in
                             guard let self = self else { return }
                             guard self.isActive else { return }
-                            if self.bufferObserver != nil {
+                            if self.bufferObserver != nil,
+                               self.singletonPlayer?.currentItem === item {
+                                print("🎬 [FullScreenVideoManager] retry buffer timeout \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(self.singletonPlayer, item: self.singletonPlayer?.currentItem))")
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
-                                self.startRetryMonitoring()
+                                if let player = self.singletonPlayer,
+                                   let item = player.currentItem,
+                                   let mid = self.currentVideoMid,
+                                   self.fullscreenStallItemRebuildCount < 1 {
+                                    self.rebuildFullscreenItemAfterStall(player: player, item: item, mid: mid)
+                                } else {
+                                    self.failFullscreenVideoLoad(reason: "retry buffer timeout after rebuild", deleteDiskCache: false)
+                                }
                             }
                         }
                     }
@@ -1143,6 +1542,50 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // Player is playing, continue monitoring
             startRetryMonitoring()
         }
+    }
+
+    private func rebuildFullscreenItemAfterStall(player: AVPlayer, item: AVPlayerItem, mid: String) {
+        guard isActive,
+              singletonPlayer === player,
+              player.currentItem === item,
+              currentVideoMid == mid else { return }
+
+        fullscreenStallItemRebuildCount += 1
+        let resumeTime = player.currentTime()
+        let duration = item.duration
+        if resumeTime.isValid, resumeTime.seconds.isFinite, resumeTime.seconds > 0.25 {
+            saveFullscreenPlaybackState(
+                videoMid: mid,
+                currentTime: resumeTime,
+                wasPlaying: true,
+                duration: duration
+            )
+        }
+
+        print("🎬 [FullScreenVideoManager] rebuilding stalled fullscreen item \(shortMID(mid)): resume=\(String(format: "%.2f", resumeTime.seconds)), \(playerDiagnostic(player, item: item))")
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid)
+
+        let replacementItem = AVPlayerItem(asset: item.asset)
+        replacementItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        player.replaceCurrentItem(with: replacementItem)
+        NotificationCenter.default.post(
+            name: .videoPlayerItemReplaced,
+            object: nil,
+            userInfo: ["mediaID": mid]
+        )
+
+        hasRestoredPosition = false
+        isSeekingToRestoredPosition = false
+        isItemReady = false
+        isBuffering = true
+        isPlaying = true
+        wasPlayingBeforeWaiting = true
+
+        setupVideoCompletionObserver(replacementItem)
+        setupTimeControlStatusObserver()
+        startPlaybackWithSeekIfNeeded(playerItem: replacementItem, mid: mid)
+        startRetryMonitoring()
     }
     
     /// Resolve the next playable video in the list, scanning forward from the given index.
@@ -1185,6 +1628,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// performs a single seek (or none), then calls play(). If the item isn't ready
     /// yet, sets up a KVO observer to defer until readyToPlay.
     private func startPlaybackWithSeekIfNeeded(playerItem: AVPlayerItem, mid: String) {
+        print("🎬 [FullScreenVideoManager] startPlaybackWithSeekIfNeeded \(shortMID(mid)): \(playerDiagnostic(singletonPlayer, item: playerItem))")
         guard playerItem.status == .readyToPlay else {
             // Item not ready — observe status and retry when ready
             self.isPlaying = true // Mark as "should be playing"
@@ -1193,6 +1637,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
                 guard let self = self else { return }
                 DispatchQueue.main.async {
+                    print("🎬 [FullScreenVideoManager] deferred itemStatus \(self.shortMID(mid)): \(self.playerDiagnostic(self.singletonPlayer, item: item))")
                     if item.status == .readyToPlay {
                         self.isItemReady = true
                         self.seekOnceAndPlay(playerItem: item, mid: mid)
@@ -1200,6 +1645,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         self.itemStatusObserver = nil
                     } else if item.status == .failed {
                         print("❌ [FullScreenVideoManager] PlayerItem failed: \(item.error?.localizedDescription ?? "unknown")")
+                        self.failFullscreenVideoLoad(reason: "deferred item status failed", deleteDiskCache: true)
                     }
                 }
             }
@@ -1211,6 +1657,15 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
     /// Compute the single correct seek target and play. Called only when item is readyToPlay.
     private func seekOnceAndPlay(playerItem: AVPlayerItem, mid: String) {
+        print("🎬 [FullScreenVideoManager] seekOnceAndPlay \(shortMID(mid)): \(playerDiagnostic(singletonPlayer, item: playerItem))")
+        if isUsingBorrowedFeedPlayer {
+            hasRestoredPosition = true
+            isSeekingToRestoredPosition = false
+            startFullscreenPlayback(player: singletonPlayer, item: playerItem, log: "borrowed feed player")
+            print("▶️ [FullScreenVideoManager] Playing borrowed feed player without seek")
+            return
+        }
+
         // Determine where to seek (nil = no seek needed)
         let seekTarget: CMTime? = {
             let duration = playerItem.duration
@@ -1220,9 +1675,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 print("🔄 [FullScreenVideoManager] Video \(mid) finished in mediaCell - restarting")
                 return .zero
             }
-            // 2) Saved position to restore
-            if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
-               let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen) {
+            // 2) Position handed off from feed/detail or the freshest saved state
+            if !isUsingBorrowedFeedPlayer,
+               let handoffTime = crossSurfaceResumeTime(for: mid, duration: duration) {
+                print("🔄 [FullScreenVideoManager] Restoring handoff position: \(handoffTime.seconds)s")
+                return handoffTime
+            }
+            // 3) Saved fullscreen position to restore
+            if !isUsingBorrowedFeedPlayer,
+               PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
+               let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen, duration: duration) {
                 if saved.currentTime.isValid && saved.currentTime.seconds.isFinite {
                     print("🔄 [FullScreenVideoManager] Restoring position: \(saved.currentTime.seconds)s")
                     return saved.currentTime
@@ -1230,7 +1692,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     PersistentVideoStateManager.shared.clearState(videoMid: mid, context: .fullScreen)
                 }
             }
-            // 3) At/near end → rewind
+            // 4) At/near end → rewind
             if duration.isValid && duration.seconds > 0 {
                 let remaining = duration.seconds - playerItem.currentTime().seconds
                 if remaining <= 0.5 { return .zero }
@@ -1239,14 +1701,30 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }()
 
         if let target = seekTarget {
+            if let player = singletonPlayer,
+               isNear(player.currentTime(), target, tolerance: 0.35) {
+                hasRestoredPosition = true
+                isSeekingToRestoredPosition = false
+                startFullscreenPlayback(player: player, item: playerItem, log: "near handoff target")
+                return
+            }
+            isSeekingToRestoredPosition = true
+            isBuffering = true
+            print("🎬 [FullScreenVideoManager] Seeking \(shortMID(mid)) to \(String(format: "%.2f", target.seconds))s before play")
             self.singletonPlayer?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                guard finished, let self = self else { return }
+                guard let self = self else { return }
                 DispatchQueue.main.async {
+                    self.isSeekingToRestoredPosition = false
+                    guard finished else { return }
+                    self.hasRestoredPosition = true
+                    print("🎬 [FullScreenVideoManager] Seek finished \(self.shortMID(mid)): \(self.playerDiagnostic(self.singletonPlayer, item: playerItem))")
                     self.startFullscreenPlayback(player: self.singletonPlayer, item: playerItem, log: "after seek to \(target.seconds)s")
                     print("▶️ [FullScreenVideoManager] Playing after seek to \(target.seconds)s")
                 }
             }
         } else {
+            hasRestoredPosition = true
+            isSeekingToRestoredPosition = false
             startFullscreenPlayback(player: singletonPlayer, item: playerItem, log: "immediate")
             print("▶️ [FullScreenVideoManager] Playing immediately (no seek needed)")
         }
@@ -1254,17 +1732,18 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
     private func startFullscreenPlayback(player: AVPlayer?, item: AVPlayerItem, log: String) {
         guard let player else { return }
-        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
-        let keepUp = item.isPlaybackLikelyToKeepUp
-        if bufferedAhead > 0 && ((bufferedAhead < 1.5 && !keepUp) || (bufferedAhead >= 2.0 && keepUp)) {
-            player.automaticallyWaitsToMinimizeStalling = false
-        } else {
-            player.automaticallyWaitsToMinimizeStalling = true
-        }
+        let bufferPolicy = applyFullscreenPrePlayBuffering(to: player, item: item)
+        print("🎬 [FullScreenVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(playerDiagnostic(player, item: item))")
         player.play()
         isPlaying = true
         isBuffering = player.timeControlStatus != .playing
+    }
+
+    private func isNear(_ lhs: CMTime, _ rhs: CMTime, tolerance: Double) -> Bool {
+        let left = CMTimeGetSeconds(lhs)
+        let right = CMTimeGetSeconds(rhs)
+        guard left.isFinite, right.isFinite else { return false }
+        return abs(left - right) <= tolerance
     }
 
     private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
@@ -1388,35 +1867,26 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let currentTime = player.currentTime()
             let duration = player.currentItem?.duration ?? .invalid
 
-            // Save to fullScreen context
-            PersistentVideoStateManager.shared.saveState(
+            saveFullscreenPlaybackState(
                 videoMid: videoMid,
                 currentTime: currentTime,
                 wasPlaying: wasPlaying,
-                context: .fullScreen,
-                duration: duration
-            )
-
-            // ALSO save to mediaCell context so MediaCell can resume from this position
-            PersistentVideoStateManager.shared.saveState(
-                videoMid: videoMid,
-                currentTime: currentTime,
-                wasPlaying: wasPlaying,
-                context: .mediaCell,
                 duration: duration
             )
         }
 
-        // Keep the pre-created player alive — just remove the current item
+        // Keep the shared player item alive so feed can resume with the same
+        // buffer and position when fullscreen closes.
         singletonPlayer?.pause()
-        singletonPlayer?.replaceCurrentItem(with: nil)
         LocalHTTPServer.shared.clearPrimaryRestriction()
+        fullscreenStallItemRebuildCount = 0
 
         isItemReady = false
         currentVideoMid = nil
         currentTweetId = nil
         currentCellTweetId = nil
         currentVideoIndex = 0
+        isUsingBorrowedFeedPlayer = false
         isPlaying = false
         videoList = []
         videoListIndex = 0
@@ -1441,7 +1911,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         
     }
-    
+
     /// Pause current playback
     func pause() {
         singletonPlayer?.pause()
@@ -1516,6 +1986,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Check if we have saved state to restore
         let shouldRestore = currentVideoMid.map { videoMid in
             PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen)
+                || PersistentVideoStateManager.shared.latestState(videoMid: videoMid, excluding: .fullScreen) != nil
         } ?? false
         
         if shouldRestore {
@@ -1644,6 +2115,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     // MARK: - Lifecycle Management
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var isActive: Bool = false
+    private var feedHandoffMid: String?
+    private var feedHandoffExpiresAt: Date = .distantPast
     
     /// Activate manager when detail view appears
     func activateForDetail() {
@@ -1691,14 +2164,12 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         mainTweetBaseUrl = nil
 
         // Cancel the delayed clear from endDetailViewSession() — we're about to clear immediately.
-        // Without this, the delayed task fires 0.3s later when the feed cell may have already
-        // reclaimed the loaned player, printing a confusing "Replaced player item with nil" message.
         scheduledClearTask?.cancel()
         scheduledClearTask = nil
 
         // CRITICAL: Clear the current video player so isDetailViewActive() returns false
         // This allows feed videos to resume playback when returning from detail view
-        clearCurrentVideo()
+        clearCurrentVideo(preserveSharedFeedPlayback: true)
 
         print("📱 [DetailVideoManager] Deactivated - lifecycle observers removed, player cleared")
     }
@@ -1721,6 +2192,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 guard let self,
                       source == "commentsCoordinator",
                       self.mainTweetAttachmentMids.contains(videoMid) else { return }
+                if self.currentVideoMid == videoMid,
+                   let player = self.currentPlayer,
+                   let item = player.currentItem {
+                    if player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate || player.rate > 0 {
+                        print("📱 [DetailVideoManager] Coordinator play ignored (already active): \(videoMid)")
+                        return
+                    }
+                    print("📱 [DetailVideoManager] Coordinator resume: \(videoMid)")
+                    self.startDetailPlayback(player: player, item: item, log: "coordinator resume same-video")
+                    return
+                }
                 if let baseUrl = self.mainTweetBaseUrl,
                    let entry = self.mainTweetAttachments.first(where: { $0.mid == videoMid }),
                    let url = entry.getUrl(baseUrl) {
@@ -1829,16 +2311,31 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         activeDetailViewCount = max(0, activeDetailViewCount - 1)
         guard activeDetailViewCount == 0 else { return }
 
-        // Pause immediately to prevent audio bleed when leaving detail, but don't clear yet.
-        // Clearing too early causes black flashes during push transitions.
-        currentPlayer?.pause()
-        isPlaying = false
+        // If detail borrowed the feed player, leaving detail is an ownership transfer.
+        // Do not pause the player here; the feed will reattach and resume ownership.
+        if let player = currentPlayer,
+           let mid = currentVideoMid,
+           isSharedFeedPlayer(player, mid: mid) {
+            if let item = player.currentItem,
+               releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(player, item: item, mid: mid, owner: "detail session end") {
+                currentPlayer = nil
+                isPlaying = false
+                feedHandoffMid = nil
+                feedHandoffExpiresAt = .distantPast
+            } else {
+                player.currentItem?.cancelPendingSeeks()
+                markFeedHandoff(mid: mid)
+            }
+        } else {
+            currentPlayer?.pause()
+            isPlaying = false
+        }
 
         scheduledClearTask?.cancel()
         scheduledClearTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
             guard self.activeDetailViewCount == 0 else { return }
-            self.clearCurrentVideo()
+            self.clearCurrentVideo(preserveSharedFeedPlayback: true)
         }
     }
 
@@ -1896,6 +2393,10 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     }
     
     func clearBrokenPlayer() {
+        if let player = currentPlayer,
+           let videoMid = currentVideoMid {
+            preserveDetailFrameToCache(player: player, mediaID: videoMid)
+        }
         if hasKVOObserver, let playerItem = currentPlayer?.currentItem {
             playerItem.removeObserver(self, forKeyPath: "status")
             hasKVOObserver = false
@@ -1905,6 +2406,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             videoCompletionObserver = nil
         }
         currentPlayer?.pause()
+        currentPlayer?.replaceCurrentItem(with: nil)
+        removeDetailRenderingObservers()
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
@@ -1912,6 +2415,9 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isPlaybackRendering = false
         isItemReady = false
         loadFailedVideoMid = nil
+        detailStallItemRebuildCount = 0
+        pendingFeedResumeTime = nil
+        activeFeedHandoffTime = nil
     }
     
     @Published var currentPlayer: AVPlayer?
@@ -1948,25 +2454,48 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     @Published private(set) var loadFailedVideoMid: String?
     private var itemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
+    private var detailPlaybackProgressObserver: Any?
+    private weak var detailPlaybackProgressPlayer: AVPlayer?
+    private var detailVideoOutput: AVPlayerItemVideoOutput?
+    private weak var detailVideoOutputItem: AVPlayerItem?
+    private weak var detailStartupRecoveryItem: AVPlayerItem?
+    private var detailPlaybackStartSeconds: Double = 0
     private var detailStartupRecoveryTask: Task<Void, Never>?
+    private var detailStartupRecoveryAttemptCount = 0
+    private var detailStallItemRebuildCount = 0
+    private let detailStartupRecoveryDelay: UInt64 = 1_500_000_000
+    private let detailStartupRecoveryMaxAttempts = 4
     private var pendingFeedResumeTime: CMTime?
+    private var activeFeedHandoffTime: CMTime?
+    private var isUsingBorrowedFeedPlayer = false
+    private var isSeekingToStartupPosition = false
     private var startupAudioMuteUntil: Date = .distantPast
     private var startupAudioUnmuteTask: Task<Void, Never>?
 
-    /// When true, the current player was borrowed from the feed cell's SharedAssetCache.
-    /// clearCurrentVideo() must NOT call replaceCurrentItem(with: nil) on a loaned player,
-    /// otherwise the feed cell's AVPlayer would be destroyed and need full recreation.
-    var isPlayerLoaned = false
+    private func shortMID(_ mid: String?) -> String {
+        guard let mid else { return "nil" }
+        return mid.count > 8 ? String(mid.prefix(8)) : mid
+    }
 
-    /// Called by the feed cell when it reclaims a loaned player.
-    /// Nils references and cancels pending cleanup so deactivate() won't pause the reclaimed player.
-    func disownLoanedPlayer() {
-        scheduledClearTask?.cancel()
-        scheduledClearTask = nil
-        currentPlayer = nil
-        currentVideoMid = nil
-        isPlaying = false
-        isPlayerLoaned = false
+    private func detailDiagnostic(_ player: AVPlayer?, item: AVPlayerItem?) -> String {
+        let player = player ?? currentPlayer
+        let item = item ?? player?.currentItem
+        let pos = player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+        let dur = item.map { CMTimeGetSeconds($0.duration) } ?? 0
+        let buffered = {
+            guard let player, let item else { return 0.0 }
+            return bufferedTimeAhead(for: item, player: player)
+        }()
+        let ranges = item?.loadedTimeRanges.map { value in
+            let range = value.timeRangeValue
+            return "\(String(format: "%.1f", CMTimeGetSeconds(range.start)))-\(String(format: "%.1f", CMTimeGetSeconds(range.end)))"
+        }.joined(separator: ",") ?? "none"
+        let reason = player?.reasonForWaitingToPlay?.rawValue ?? "nil"
+        let status = item?.status.rawValue ?? -1
+        let timeControl = player?.timeControlStatus.rawValue ?? -1
+        let keepUp = item?.isPlaybackLikelyToKeepUp ?? false
+        let empty = item?.isPlaybackBufferEmpty ?? true
+        return "pos=\(String(format: "%.2f", pos)), dur=\(String(format: "%.2f", dur)), buffered=\(String(format: "%.2f", buffered)), itemStatus=\(status), timeControl=\(timeControl), reason=\(reason), keepUp=\(keepUp), empty=\(empty), ranges=[\(ranges)]"
     }
 
     /// Check if detail view is currently active (safe for Sendable contexts)
@@ -1977,6 +2506,34 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
     private var videoCompletionObserver: NSObjectProtocol?
     private var hasKVOObserver = false // Track if KVO observer was added
+
+    private func isSharedFeedPlayer(_ player: AVPlayer, mid: String) -> Bool {
+        SharedAssetCache.shared.getCachedPlayer(for: mid) === player
+    }
+
+    private func markFeedHandoff(mid: String, player: AVPlayer? = nil) {
+        feedHandoffMid = mid
+        feedHandoffExpiresAt = Date().addingTimeInterval(2.0)
+        if let player = player ?? currentPlayer {
+            VideoSurfaceHandoffRegistry.shared.beginTransfer(
+                mediaID: mid,
+                player: player,
+                source: "detail"
+            )
+        }
+    }
+
+    func isTransferringPlayerToFeed(_ player: AVPlayer, mid: String) -> Bool {
+        if VideoSurfaceHandoffRegistry.shared.isActiveTransfer(mediaID: mid, player: player) {
+            return true
+        }
+        guard isSharedFeedPlayer(player, mid: mid),
+              feedHandoffMid == mid,
+              Date() <= feedHandoffExpiresAt else {
+            return false
+        }
+        return true
+    }
     
     /// Setup audio interruption notifications to handle incoming calls
     private func setupAudioInterruptionNotifications() {
@@ -1988,54 +2545,72 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     /// Load and play a video in the detail view's singleton player.
     /// Only ONE video plays at a time — the selected page in the detail TabView.
     func loadVideo(url: URL, mid: String, mediaType: MediaType) {
+        print("📱 [DetailVideoManager] loadVideo start \(shortMID(mid)): mediaType=\(mediaType), current=\(shortMID(currentVideoMid)), hasItem=\(currentPlayer?.currentItem != nil)")
         // Fast path: same video already loaded and healthy
         if currentVideoMid == mid, currentPlayer?.currentItem != nil, !isPlayerBroken() {
+            print("📱 [DetailVideoManager] Reusing existing player \(shortMID(mid)): \(detailDiagnostic(currentPlayer, item: currentPlayer?.currentItem))")
+            if isSeekingToStartupPosition {
+                return
+            }
             loadFailedVideoMid = nil
             applyStartupAudioMuteIfNeeded()
-            if currentPlayer?.currentItem?.status == .readyToPlay {
+            if let player = currentPlayer,
+               let item = player.currentItem,
+               item.status == .readyToPlay {
                 isItemReady = true
-                isBuffering = false
-            }
-            if isItemReady {
+                isBuffering = !isPlaybackRendering
                 isPlaying = true
+
+                if !isUsingBorrowedFeedPlayer,
+                   let pendingFeedResumeTime,
+                   !isNear(player.currentTime(), pendingFeedResumeTime, tolerance: 0.35),
+                   seekPendingFeedResumeIfNeeded(playerItem: item, mid: mid, log: "same-video feed handoff") {
+                    return
+                }
+                pendingFeedResumeTime = nil
+
+                if player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate || player.rate > 0 {
+                    isBuffering = shouldKeepDetailBuffering(player: player, item: item)
+                    return
+                }
+
                 // Rewind if at end, then play
-                if let item = currentPlayer?.currentItem {
-                    if item.duration.isValid && item.duration.seconds > 0,
-                       (item.duration.seconds - item.currentTime().seconds) < 0.5 {
-                        let player = currentPlayer
-                        currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                            Task { @MainActor [weak self] in
-                                self?.startDetailPlayback(player: player, item: item, log: "same-video rewind")
-                            }
+                if item.duration.isValid && item.duration.seconds > 0,
+                   (item.duration.seconds - item.currentTime().seconds) < 0.5 {
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
+                        Task { @MainActor [weak self, weak player] in
+                            self?.startDetailPlayback(player: player, item: item, log: "same-video rewind")
                         }
-                    } else {
-                        startDetailPlayback(player: currentPlayer, item: item, log: "same-video")
                     }
                 } else {
-                    currentPlayer?.play()
+                    startDetailPlayback(player: currentPlayer, item: item, log: "same-video resume")
                 }
             } else {
                 isPlaying = true // intent — KVO will play when ready
             }
             return
         }
-        let wasLoanedPlayer = isPlayerLoaned
+
+        // Detail is the active video target. Clear stale proxy cancellation from
+        // feed scrolling and give this media primary priority without borrowing
+        // the feed's live AVPlayer.
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid)
 
         // Save old video position before switching
-        if let player = currentPlayer, player.currentItem != nil, currentVideoMid != mid {
+        if let player = currentPlayer,
+           let oldMid = currentVideoMid,
+           player.currentItem != nil,
+           oldMid != mid {
             let t = player.currentTime()
-            if t.isValid && t.seconds.isFinite {
+            if t.isValid && t.seconds.isFinite && t.seconds > 0.25 {
                 let d = player.currentItem?.duration ?? .invalid
                 PersistentVideoStateManager.shared.saveState(
-                    videoMid: currentVideoMid ?? "", currentTime: t,
+                    videoMid: oldMid, currentTime: t,
                     wasPlaying: player.rate > 0, context: .detailView, duration: d)
             }
             player.pause()
-            if isPlayerLoaned {
-                player.isMuted = MuteState.shared.isMuted
-            } else {
-                player.replaceCurrentItem(with: nil)
-            }
+            currentPlayer = nil
         }
 
         // Bump generation to ignore stale async completions
@@ -2044,6 +2619,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isItemReady = false
         isBuffering = true
         isPlaybackRendering = false
+        isSeekingToStartupPosition = false
+        isUsingBorrowedFeedPlayer = false
         loadFailedVideoMid = nil
 
         // Clean up old observers
@@ -2051,8 +2628,12 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         itemStatusObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+        removeDetailRenderingObservers()
         detailStartupRecoveryTask?.cancel()
         detailStartupRecoveryTask = nil
+        detailStartupRecoveryItem = nil
+        detailStartupRecoveryAttemptCount = 0
+        detailStallItemRebuildCount = 0
         if let obs = videoCompletionObserver {
             NotificationCenter.default.removeObserver(obs)
             videoCompletionObserver = nil
@@ -2061,65 +2642,66 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             pi.removeObserver(self, forKeyPath: "status")
             hasKVOObserver = false
         }
-        if wasLoanedPlayer {
-            currentPlayer = nil
-        }
 
         currentVideoMid = mid
-        isPlayerLoaned = false
-        pendingFeedResumeTime = preferredFeedResumeTime(for: mid)
+        pendingFeedResumeTime = nil
+        activeFeedHandoffTime = nil
 
-        // Try cached player path first (fast, synchronous)
+        // Borrow the canonical feed player when available. This keeps one AVPlayer
+        // moving across feed/detail/fullscreen instead of restarting decode/buffer
+        // state on every surface switch.
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedItem = cachedPlayer.currentItem {
-            // Clear proxy cancelled state
-            LocalHTTPServer.shared.clearCancelledState(for: mid)
-
-            AudioSessionManager.shared.activateForVideoPlayback()
-
-            NotificationCenter.default.post(
-                name: .videoPlayerLoaned,
-                object: nil,
-                userInfo: ["videoMid": mid]
-            )
-
-            currentPlayer = cachedPlayer
-            isPlayerLoaned = true
-            applyStartupAudioMuteIfNeeded()
-
-            setupDetailCompletionObserver(cachedItem)
-            setupDetailTimeControlObserver()
-            if cachedItem.status == .failed {
-                print("❌ [DetailVideoManager] Cached player item failed: \(cachedItem.error?.localizedDescription ?? "unknown")")
-                loadFailedVideoMid = mid
-                isBuffering = false
-                isPlaying = false
-            } else if cachedItem.status == .readyToPlay {
-                isItemReady = true
-                isBuffering = false
-                seekAndPlay(playerItem: cachedItem, mid: mid)
+            if releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(cachedPlayer, item: cachedItem, mid: mid, owner: "detail borrow") {
+                pendingFeedResumeTime = nil
+                activeFeedHandoffTime = nil
             } else {
-                isBuffering = true
-                startDetailPlayback(playerItem: cachedItem, mid: mid)
+                print("📱 [DetailVideoManager] Borrowing shared feed player \(shortMID(mid)): cached=\(detailDiagnostic(cachedPlayer, item: cachedItem))")
                 cachedItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-                cachedPlayer.play()
+                AudioSessionManager.shared.activateForVideoPlayback()
+                currentPlayer = cachedPlayer
+                isUsingBorrowedFeedPlayer = true
+                isItemReady = cachedItem.status == .readyToPlay
+                isPlaybackRendering = false
+                isPlaying = true
+                isBuffering = true
+                pendingFeedResumeTime = nil
+                activeFeedHandoffTime = nil
+                resetDetailRenderingProgress(to: currentPlayer?.currentTime() ?? .zero)
+                setupDetailVideoOutput(for: cachedItem)
+                applyStartupAudioMuteIfNeeded()
+                setupDetailCompletionObserver(cachedItem)
+                setupDetailTimeControlObserver()
+                startDetailPlayback(playerItem: cachedItem, mid: mid)
+                return
             }
-            return
         }
 
-        // No cached player — load asynchronously
+        pendingFeedResumeTime = activeFeedHandoffTime(for: mid)
+        activeFeedHandoffTime = pendingFeedResumeTime
+        if let pendingFeedResumeTime {
+            print("📱 [DetailVideoManager] Pending cold-player handoff \(shortMID(mid)): \(String(format: "%.2f", pendingFeedResumeTime.seconds))s")
+        }
+
+        SharedAssetCache.shared.prepareUncachedFocusedLoad(for: mid, owner: "detail")
+        print("📱 [DetailVideoManager] Async asset load start \(shortMID(mid)): url=\(url.absoluteString)")
         Task.detached(priority: .userInitiated) {
             do {
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid, mediaType: mediaType)
-                let playerItem = await AVPlayerItem(asset: asset)
+                let sharedPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: mid, tweetId: mid, mediaType: mediaType)
                 await MainActor.run {
                     guard self.loadGeneration == generation, self.currentVideoMid == mid else { return }
-                    AudioSessionManager.shared.activateForVideoPlayback()
-                    if self.currentPlayer == nil {
-                        self.currentPlayer = AVPlayer(playerItem: playerItem)
-                    } else {
-                        self.currentPlayer?.replaceCurrentItem(with: playerItem)
+                    guard let playerItem = sharedPlayer.currentItem else {
+                        self.isBuffering = false
+                        self.isPlaying = false
+                        self.isPlaybackRendering = false
+                        return
                     }
+                    print("📱 [DetailVideoManager] Shared player load ready \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
+                    playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                    AudioSessionManager.shared.activateForVideoPlayback()
+                    self.currentPlayer = sharedPlayer
+                    self.resetDetailRenderingProgress(to: self.currentPlayer?.currentTime() ?? .zero)
+                    self.setupDetailVideoOutput(for: playerItem)
                     self.applyStartupAudioMuteIfNeeded()
                     self.setupDetailCompletionObserver(playerItem)
                     self.setupDetailTimeControlObserver()
@@ -2129,10 +2711,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 await MainActor.run {
                     guard self.loadGeneration == generation else { return }
                     print("❌ [DetailVideoManager] Failed to load video: \(error)")
-                    self.loadFailedVideoMid = mid
-                    self.isBuffering = false
-                    self.isPlaying = false
-                    self.isPlaybackRendering = false
+                    self.failDetailVideoLoad(reason: "async player creation failed: \(error.localizedDescription)", mid: mid, deleteDiskCache: true)
                 }
             }
         }
@@ -2170,51 +2749,57 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     }
 
     private func startDetailPlayback(playerItem: AVPlayerItem, mid: String) {
+        print("📱 [DetailVideoManager] startDetailPlayback item observer \(shortMID(mid)): \(detailDiagnostic(currentPlayer, item: playerItem))")
         isPlaying = true
         isBuffering = true
         itemStatusObserver = playerItem.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             guard let self = self else { return }
             DispatchQueue.main.async {
+                print("📱 [DetailVideoManager] itemStatus \(self.shortMID(mid)): \(self.detailDiagnostic(self.currentPlayer, item: item))")
                 guard !self.isItemReady else { return }
                 if item.status == .readyToPlay {
                     self.isItemReady = true
-                    self.isBuffering = false
+                    self.isBuffering = !self.isPlaybackRendering
                     self.loadFailedVideoMid = nil
                     self.itemStatusObserver?.invalidate()
                     self.itemStatusObserver = nil
                     self.seekAndPlay(playerItem: item, mid: mid)
                 } else if item.status == .failed {
                     print("❌ [DetailVideoManager] PlayerItem failed: \(item.error?.localizedDescription ?? "unknown")")
-                    self.loadFailedVideoMid = mid
-                    self.isBuffering = false
-                    self.isPlaying = false
-                    self.isPlaybackRendering = false
-                    self.itemStatusObserver?.invalidate()
-                    self.itemStatusObserver = nil
+                    self.failDetailVideoLoad(reason: "item status failed", mid: mid, deleteDiskCache: true)
                 }
             }
         }
         scheduleDetailStartupRecovery(for: playerItem, mid: mid)
     }
 
-    private func preferredFeedResumeTime(for mid: String) -> CMTime? {
+    private func activeFeedHandoffTime(for mid: String) -> CMTime? {
+        if FullScreenVideoManager.shared.currentVideoMid == mid,
+           let currentTime = FullScreenVideoManager.shared.singletonPlayer?.currentTime(),
+           currentTime.isValid,
+           currentTime.seconds.isFinite,
+           currentTime.seconds > 0.25 {
+            return currentTime
+        }
+
         if let player = SharedAssetCache.shared.getCachedPlayer(for: mid) {
+            if let decodedTime = VideoPlaybackSessionStore.shared.trustedVisibleTime(for: mid, beforeOrAt: player.currentTime()) {
+                return decodedTime
+            }
+
             let currentTime = player.currentTime()
             if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
                 return currentTime
             }
         }
 
-        if let cachedPlayback = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
-            let currentTime = cachedPlayback.time
-            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
-                return currentTime
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            let player = cachedState.player
+            if let decodedTime = VideoPlaybackSessionStore.shared.trustedVisibleTime(for: mid, beforeOrAt: player.currentTime()) {
+                return decodedTime
             }
-        }
 
-        if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .mediaCell),
-           let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .mediaCell) {
-            let currentTime = saved.currentTime
+            let currentTime = player.currentTime()
             if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
                 return currentTime
             }
@@ -2223,34 +2808,208 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         return nil
     }
 
-    private func seekAndPlay(playerItem: AVPlayerItem, mid: String) {
-        let duration = playerItem.duration
-        if let feedResumeTime = pendingFeedResumeTime {
+    private func markWaitingForStartupSeek() {
+        isSeekingToStartupPosition = true
+        isBuffering = true
+        isPlaybackRendering = false
+    }
+
+    @discardableResult
+    private func seekPendingFeedResumeIfNeeded(playerItem: AVPlayerItem, mid: String, log: String) -> Bool {
+        guard !isUsingBorrowedFeedPlayer else {
             pendingFeedResumeTime = nil
-            let savedSec = feedResumeTime.seconds
-            if savedSec.isFinite && savedSec > 0.25 {
-                if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
-                    let player = currentPlayer
-                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                        Task { @MainActor [weak self] in
-                            self?.applyStartupAudioMuteIfNeeded()
-                            self?.startDetailPlayback(player: player, item: playerItem, log: "continued from feed at end")
-                            print("▶️ [DetailVideoManager] Continued from feed at end - rewound")
-                        }
-                    }
-                    return
+            activeFeedHandoffTime = nil
+            return false
+        }
+        guard let feedResumeTime = pendingFeedResumeTime else { return false }
+        pendingFeedResumeTime = nil
+        activeFeedHandoffTime = feedResumeTime
+
+        let adjustedFeedResumeTime = bufferedLiveHandoffSeekTime(feedResumeTime, item: playerItem)
+        let savedSec = adjustedFeedResumeTime.seconds
+        guard savedSec.isFinite && savedSec > 0.25 else { return false }
+
+        let duration = playerItem.duration
+        if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
+            let player = currentPlayer
+            markWaitingForStartupSeek()
+            print("📱 [DetailVideoManager] Seek live handoff at end \(shortMID(mid)): saved=\(String(format: "%.2f", savedSec))")
+            currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.currentPlayer === player,
+                          player?.currentItem === playerItem,
+                          self.currentVideoMid == mid else { return }
+                    self.isSeekingToStartupPosition = false
+                    self.resetDetailRenderingProgress(to: .zero)
+                    self.applyStartupAudioMuteIfNeeded()
+                    self.startDetailPlayback(player: player, item: playerItem, log: "\(log) at end")
+                    print("▶️ [DetailVideoManager] Continued from live handoff at end - rewound")
                 }
-                let player = currentPlayer
-                currentPlayer?.seek(to: feedResumeTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                    guard finished else { return }
-                    Task { @MainActor [weak self] in
-                        self?.applyStartupAudioMuteIfNeeded()
-                        self?.startDetailPlayback(player: player, item: playerItem, log: "continued from feed")
-                        print("▶️ [DetailVideoManager] Continued from feed position \(savedSec)s")
-                    }
-                }
-                return
             }
+            return true
+        }
+
+        let player = currentPlayer
+        markWaitingForStartupSeek()
+        let originalSec = feedResumeTime.seconds
+        if originalSec.isFinite, abs(originalSec - savedSec) > 0.05 {
+            print("📱 [DetailVideoManager] Seek live handoff \(shortMID(mid)): target=\(String(format: "%.2f", savedSec)) adjusted from \(String(format: "%.2f", originalSec))")
+        } else {
+            print("📱 [DetailVideoManager] Seek live handoff \(shortMID(mid)): target=\(String(format: "%.2f", savedSec))")
+        }
+        if let player,
+           isNear(player.currentTime(), adjustedFeedResumeTime, tolerance: 0.35) {
+            isSeekingToStartupPosition = false
+            resetDetailRenderingProgress(to: player.currentTime())
+            applyStartupAudioMuteIfNeeded()
+            startDetailPlayback(player: player, item: playerItem, log: "\(log) near target")
+            print("▶️ [DetailVideoManager] Continued from live handoff near position \(savedSec)s")
+            return true
+        }
+
+        currentPlayer?.seek(to: adjustedFeedResumeTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.currentPlayer === player,
+                      player?.currentItem === playerItem,
+                      self.currentVideoMid == mid else { return }
+                self.isSeekingToStartupPosition = false
+                guard finished else { return }
+                self.resetDetailRenderingProgress(to: adjustedFeedResumeTime)
+                self.applyStartupAudioMuteIfNeeded()
+                self.startDetailPlayback(player: player, item: playerItem, log: log)
+                print("▶️ [DetailVideoManager] Continued from live handoff position \(savedSec)s")
+            }
+        }
+        return true
+    }
+
+    private func bufferedLiveHandoffSeekTime(_ requestedTime: CMTime, item: AVPlayerItem) -> CMTime {
+        let requestedSeconds = seconds(from: requestedTime)
+        guard requestedSeconds.isFinite else { return requestedTime }
+
+        let minimumBufferAhead = 1.5
+        var bestFallback: Double?
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = seconds(from: range.start)
+            let duration = seconds(from: range.duration)
+            guard start.isFinite, duration.isFinite, duration > 0 else { continue }
+
+            let end = start + duration
+            let safeEnd = max(start, end - minimumBufferAhead)
+            if requestedSeconds >= start, requestedSeconds <= end {
+                let adjustedSeconds = min(requestedSeconds, safeEnd)
+                return CMTime(seconds: adjustedSeconds, preferredTimescale: 600)
+            }
+
+            if end < requestedSeconds {
+                bestFallback = max(bestFallback ?? start, safeEnd)
+            }
+        }
+
+        if let bestFallback, requestedSeconds - bestFallback <= 3.0 {
+            return CMTime(seconds: bestFallback, preferredTimescale: 600)
+        }
+        return requestedTime
+    }
+
+    private func shouldResetCachedFeedPlayerForFocusedPlayback(_ player: AVPlayer, item: AVPlayerItem) -> Bool {
+        let hasPlayerFailure = item.status == .failed || player.error != nil || item.error != nil
+        if hasPlayerFailure { return true }
+
+        if isVideoAtEnd(player) { return false }
+
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        let isWaitingOrColdUnknown = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            || item.status == .unknown
+        return isWaitingOrColdUnknown
+            && bufferedAhead < 0.25
+            && !item.isPlaybackLikelyToKeepUp
+    }
+
+    @discardableResult
+    private func releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(_ player: AVPlayer, item: AVPlayerItem, mid: String, owner: String) -> Bool {
+        guard shouldResetCachedFeedPlayerForFocusedPlayback(player, item: item) else { return false }
+
+        let deleteDiskCache = item.status == .failed || player.error != nil || item.error != nil
+        print("📱 [DetailVideoManager] Releasing broken shared feed player before \(owner) \(shortMID(mid)): deleteDiskCache=\(deleteDiskCache), \(detailDiagnostic(player, item: item))")
+        item.cancelPendingSeeks()
+        player.pause()
+        SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: deleteDiskCache)
+        VideoStateCache.shared.clearCachedState(for: mid)
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        return true
+    }
+
+    private func failDetailVideoLoad(reason: String, mid: String, deleteDiskCache: Bool) {
+        guard currentVideoMid == mid || loadFailedVideoMid == mid else { return }
+        print("❌ [DetailVideoManager] \(reason) - releasing detail player \(shortMID(mid)), deleteDiskCache=\(deleteDiskCache)")
+
+        loadGeneration += 1
+        itemStatusObserver?.invalidate()
+        itemStatusObserver = nil
+        timeControlStatusObserver?.invalidate()
+        timeControlStatusObserver = nil
+        removeDetailRenderingObservers()
+        detailStartupRecoveryTask?.cancel()
+        detailStartupRecoveryTask = nil
+        detailStartupRecoveryItem = nil
+        detailStartupRecoveryAttemptCount = 0
+        detailStallItemRebuildCount = 0
+
+        if hasKVOObserver, let playerItem = currentPlayer?.currentItem {
+            playerItem.removeObserver(self, forKeyPath: "status")
+            hasKVOObserver = false
+        }
+
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
+        }
+
+        if let player = currentPlayer {
+            player.pause()
+            player.currentItem?.cancelPendingSeeks()
+            player.currentItem?.asset.cancelLoading()
+            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: deleteDiskCache)
+            player.replaceCurrentItem(with: nil)
+        } else {
+            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: deleteDiskCache)
+        }
+
+        VideoStateCache.shared.clearCachedState(for: mid)
+        LocalHTTPServer.shared.clearPrimaryRestriction()
+
+        currentPlayer = nil
+        currentVideoMid = nil
+        isPlaying = false
+        isBuffering = false
+        isPlaybackRendering = false
+        isSeekingToStartupPosition = false
+        isUsingBorrowedFeedPlayer = false
+        isItemReady = false
+        pendingFeedResumeTime = nil
+        activeFeedHandoffTime = nil
+        feedHandoffMid = nil
+        feedHandoffExpiresAt = .distantPast
+        loadFailedVideoMid = mid
+    }
+
+    private func seekAndPlay(playerItem: AVPlayerItem, mid: String) {
+        print("📱 [DetailVideoManager] seekAndPlay \(shortMID(mid)): \(detailDiagnostic(currentPlayer, item: playerItem))")
+        let duration = playerItem.duration
+
+        if seekPendingFeedResumeIfNeeded(playerItem: playerItem, mid: mid, log: "continued from live handoff") {
+            return
+        }
+
+        if isUsingBorrowedFeedPlayer {
+            applyStartupAudioMuteIfNeeded()
+            startDetailPlayback(player: currentPlayer, item: playerItem, log: "borrowed feed player")
+            print("▶️ [DetailVideoManager] Playing borrowed feed player without seek")
+            return
         }
 
         // Check PersistentVideoStateManager for saved position
@@ -2261,8 +3020,11 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 // If near end, restart from beginning
                 if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
                     let player = currentPlayer
+                    markWaitingForStartupSeek()
+                    print("📱 [DetailVideoManager] Seek saved position at end \(shortMID(mid)): saved=\(String(format: "%.2f", savedSec))")
                     currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                         Task { @MainActor [weak self] in
+                            self?.isSeekingToStartupPosition = false
                             self?.applyStartupAudioMuteIfNeeded()
                             self?.startDetailPlayback(player: player, item: playerItem, log: "saved position at end")
                             print("▶️ [DetailVideoManager] Playing from beginning (was at end)")
@@ -2271,9 +3033,12 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     return
                 }
                 let player = currentPlayer
+                markWaitingForStartupSeek()
+                print("📱 [DetailVideoManager] Seek saved position \(shortMID(mid)): target=\(String(format: "%.2f", savedSec))")
                 currentPlayer?.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                    guard finished else { return }
                     Task { @MainActor [weak self] in
+                        self?.isSeekingToStartupPosition = false
+                        guard finished else { return }
                         self?.applyStartupAudioMuteIfNeeded()
                         self?.startDetailPlayback(player: player, item: playerItem, log: "saved position")
                         print("▶️ [DetailVideoManager] Playing from saved position \(savedSec)s")
@@ -2287,8 +3052,11 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             let remaining = duration.seconds - playerItem.currentTime().seconds
             if remaining <= 0.5 {
                 let player = currentPlayer
+                markWaitingForStartupSeek()
+                print("📱 [DetailVideoManager] Seek rewind \(shortMID(mid)): remaining=\(String(format: "%.2f", remaining))")
                 currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                     Task { @MainActor [weak self] in
+                        self?.isSeekingToStartupPosition = false
                         self?.applyStartupAudioMuteIfNeeded()
                         self?.startDetailPlayback(player: player, item: playerItem, log: "rewind")
                         print("▶️ [DetailVideoManager] Playing from beginning (rewind)")
@@ -2319,21 +3087,53 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private func setupDetailTimeControlObserver() {
         timeControlStatusObserver?.invalidate()
         guard let player = currentPlayer else { return }
-        isPlaybackRendering = player.timeControlStatus == .playing
-        isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            && !isVideoAtEnd(player)
-        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+        if let item = player.currentItem {
+            setupDetailVideoOutput(for: item)
+            startDetailRenderingObserver(player: player, item: item)
+            _ = markDetailRenderingIfDecoded(player: player, item: item)
+        }
+        isBuffering = shouldKeepDetailBuffering(player: player, item: player.currentItem)
+        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                guard self.currentPlayer === player,
+                      self.currentVideoMid != nil,
+                      player.currentItem != nil else { return }
+                print("📱 [DetailVideoManager] timeControl \(self.shortMID(self.currentVideoMid)): \(self.detailDiagnostic(player, item: player.currentItem))")
                 let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 let isPlayingNow = player.timeControlStatus == .playing
-                self.isBuffering = isWaiting && !self.isVideoAtEnd(player)
-                self.isPlaybackRendering = isPlayingNow
+                if let item = player.currentItem {
+                    self.setupDetailVideoOutput(for: item)
+                    self.startDetailRenderingObserver(player: player, item: item)
+                    _ = self.markDetailRenderingIfDecoded(player: player, item: item)
+                }
+                let isBufferEdge = player.currentItem.map { self.isPlaybackAtBufferEdge(player: player, item: $0) } ?? false
+                self.isBuffering = self.shouldKeepDetailBuffering(player: player, item: player.currentItem)
+                if !self.isUsingBorrowedFeedPlayer,
+                   isWaiting,
+                   let item = player.currentItem {
+                    self.scheduleDetailStartupRecovery(for: item, mid: self.currentVideoMid)
+                }
                 if isPlayingNow {
+                    self.isSeekingToStartupPosition = false
                     self.isItemReady = true
-                    self.isBuffering = false
-                    self.detailStartupRecoveryTask?.cancel()
-                    self.detailStartupRecoveryTask = nil
+                    if self.isPlaybackRendering {
+                        if isBufferEdge {
+                            self.isBuffering = true
+                            if !self.isUsingBorrowedFeedPlayer,
+                               let item = player.currentItem {
+                                self.scheduleDetailStartupRecovery(for: item, mid: self.currentVideoMid)
+                            }
+                        } else {
+                            self.isBuffering = false
+                            self.detailStartupRecoveryTask?.cancel()
+                            self.detailStartupRecoveryTask = nil
+                            self.detailStartupRecoveryItem = nil
+                        }
+                    } else if !self.isUsingBorrowedFeedPlayer,
+                              let item = player.currentItem {
+                        self.scheduleDetailStartupRecovery(for: item, mid: self.currentVideoMid)
+                    }
                 }
                 if player.timeControlStatus == .playing && !player.automaticallyWaitsToMinimizeStalling {
                     player.automaticallyWaitsToMinimizeStalling = true
@@ -2345,26 +3145,134 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private func startDetailPlayback(player: AVPlayer?, item: AVPlayerItem, log: String) {
         guard let player else { return }
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
-        let keepUp = item.isPlaybackLikelyToKeepUp
-        if bufferedAhead > 0 && ((bufferedAhead < 1.5 && !keepUp) || (bufferedAhead >= 2.0 && keepUp)) {
-            player.automaticallyWaitsToMinimizeStalling = false
-        } else {
-            player.automaticallyWaitsToMinimizeStalling = true
-        }
+        setupDetailVideoOutput(for: item)
+        startDetailRenderingObserver(player: player, item: item)
+        resetDetailRenderingProgress(to: player.currentTime())
+        let bufferPolicy = applyFeedStylePrePlayBuffering(to: player, item: item)
+        print("📱 [DetailVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(detailDiagnostic(player, item: item))")
         player.play()
         isPlaying = true
-        isBuffering = player.timeControlStatus != .playing && !isVideoAtEnd(player)
+        isBuffering = shouldKeepDetailBuffering(player: player, item: item)
         if item.status == .readyToPlay {
             isItemReady = true
         }
-        scheduleDetailStartupRecovery(for: item, mid: currentVideoMid)
+        if !isUsingBorrowedFeedPlayer {
+            scheduleDetailStartupRecovery(for: item, mid: currentVideoMid)
+        }
+    }
+
+    private func shouldKeepDetailBuffering(player: AVPlayer, item: AVPlayerItem?) -> Bool {
+        guard !isVideoAtEnd(player) else { return false }
+        guard let item else { return true }
+
+        if isSeekingToStartupPosition { return true }
+        if player.timeControlStatus == .waitingToPlayAtSpecifiedRate { return true }
+        if isPlaying && player.timeControlStatus != .playing { return true }
+        if !isPlaybackRendering { return true }
+        if isPlaybackAtBufferEdge(player: player, item: item) { return true }
+        return false
+    }
+
+    private func isPlaybackAtBufferEdge(player: AVPlayer, item: AVPlayerItem) -> Bool {
+        guard item.status == .readyToPlay,
+              !isVideoAtEnd(player) else { return false }
+
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        return bufferedAhead < 0.35 || (item.isPlaybackBufferEmpty && bufferedAhead < 1.0)
+    }
+
+    @discardableResult
+    private func rebuildDetailItemAfterStall(player: AVPlayer, item: AVPlayerItem, mid: String?, reason: String) -> Bool {
+        guard currentPlayer === player,
+              player.currentItem === item,
+              currentVideoMid == mid,
+              detailStallItemRebuildCount < 1 else { return false }
+
+        detailStallItemRebuildCount += 1
+        let currentTime = player.currentTime()
+        let visibleResumeTime = mid.flatMap {
+            VideoPlaybackSessionStore.shared.trustedVisibleTime(for: $0, beforeOrAt: currentTime)
+        }
+        let durableHandoffTime = activeFeedHandoffTime ?? pendingFeedResumeTime
+        let resumeTime = visibleResumeTime ?? durableHandoffTime ?? (currentTime.isValid && currentTime.seconds.isFinite && currentTime.seconds > 0.25 ? currentTime : .invalid)
+        let duration = item.duration
+        if let mid,
+           resumeTime.isValid,
+           resumeTime.seconds.isFinite,
+           resumeTime.seconds > 0.25 {
+            pendingFeedResumeTime = resumeTime
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: mid,
+                currentTime: resumeTime,
+                wasPlaying: true,
+                context: .detailView,
+                duration: duration
+            )
+        }
+
+        let resumeDescription = resumeTime.isValid ? String(format: "%.2f", resumeTime.seconds) : "nil"
+        print("📱 [DetailVideoManager] rebuilding stalled detail item \(shortMID(mid)) (\(reason)): resume=\(resumeDescription), \(detailDiagnostic(player, item: item))")
+        if let mid {
+            LocalHTTPServer.shared.clearCancelledState(for: mid)
+            LocalHTTPServer.shared.setPrimaryMediaID(mid)
+        }
+
+        let replacementItem = AVPlayerItem(asset: item.asset)
+        replacementItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+
+        itemStatusObserver?.invalidate()
+        itemStatusObserver = nil
+        timeControlStatusObserver?.invalidate()
+        timeControlStatusObserver = nil
+        removeDetailRenderingObservers()
+        detailStartupRecoveryTask?.cancel()
+        detailStartupRecoveryTask = nil
+        detailStartupRecoveryItem = nil
+        detailStartupRecoveryAttemptCount = 0
+
+        player.pause()
+        player.replaceCurrentItem(with: replacementItem)
+        if let mid {
+            NotificationCenter.default.post(
+                name: .videoPlayerItemReplaced,
+                object: nil,
+                userInfo: ["mediaID": mid]
+            )
+        }
+        resetDetailRenderingProgress(to: .zero)
+        isPlaying = true
+        isBuffering = true
+        isItemReady = false
+        isPlaybackRendering = false
+        loadFailedVideoMid = nil
+
+        applyStartupAudioMuteIfNeeded()
+        setupDetailCompletionObserver(replacementItem)
+        setupDetailTimeControlObserver()
+        if let mid {
+            startDetailPlayback(playerItem: replacementItem, mid: mid)
+        } else {
+            startDetailPlayback(player: player, item: replacementItem, log: "rebuilt after stall")
+        }
+        return true
     }
 
     private func scheduleDetailStartupRecovery(for item: AVPlayerItem, mid: String?) {
+        guard !isUsingBorrowedFeedPlayer else { return }
+        guard let mid,
+              currentVideoMid == mid,
+              currentPlayer?.currentItem === item else { return }
+        if detailStartupRecoveryTask != nil,
+           detailStartupRecoveryItem === item {
+            return
+        }
+
         detailStartupRecoveryTask?.cancel()
+        detailStartupRecoveryItem = item
+        print("📱 [DetailVideoManager] recovery scheduled \(shortMID(mid)): \(detailDiagnostic(currentPlayer, item: item))")
+        let recoveryDelay = detailStartupRecoveryDelay
         detailStartupRecoveryTask = Task { @MainActor [weak self, weak item] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(nanoseconds: recoveryDelay)
             guard let self,
                   let item,
                   let player = self.currentPlayer,
@@ -2373,6 +3281,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                   self.isPlaying,
                   !self.isVideoAtEnd(player) else {
                 self?.detailStartupRecoveryTask = nil
+                self?.detailStartupRecoveryItem = nil
                 return
             }
 
@@ -2380,36 +3289,71 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 self.isItemReady = true
                 self.isBuffering = self.currentPlayer?.timeControlStatus == .waitingToPlayAtSpecifiedRate
             }
+            print("📱 [DetailVideoManager] recovery check \(self.shortMID(mid)): \(self.detailDiagnostic(player, item: item))")
+            self.detailStartupRecoveryAttemptCount += 1
 
-            guard self.currentPlayer?.timeControlStatus != .playing else {
+            if self.markDetailRenderingIfDecoded(player: player, item: item) {
                 self.isItemReady = true
-                self.isBuffering = false
+                self.detailStartupRecoveryAttemptCount = 0
                 self.detailStartupRecoveryTask = nil
+                self.detailStartupRecoveryItem = nil
+                return
+            }
+
+            let bufferedAhead = self.bufferedTimeAhead(for: item, player: player)
+            let keepUp = item.isPlaybackLikelyToKeepUp
+            let requiredBuffer = feedStyleRequiredBufferAhead(for: item, player: player)
+            guard bufferedAhead >= requiredBuffer else {
+                guard self.detailStartupRecoveryAttemptCount < self.detailStartupRecoveryMaxAttempts else {
+                    if self.rebuildDetailItemAfterStall(player: player, item: item, mid: mid, reason: "no buffer after recovery attempts") {
+                        return
+                    }
+                    print("📱 [DetailVideoManager] recovery gave up \(self.shortMID(mid)): attempts=\(self.detailStartupRecoveryAttemptCount), \(self.detailDiagnostic(player, item: item))")
+                    self.failDetailVideoLoad(reason: "recovery gave up with no buffer", mid: mid, deleteDiskCache: false)
+                    return
+                }
+                self.isBuffering = true
+                self.detailStartupRecoveryTask = nil
+                self.detailStartupRecoveryItem = nil
+                print("📱 [DetailVideoManager] recovery waiting for buffer \(self.shortMID(mid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(self.detailDiagnostic(player, item: item))")
+                self.scheduleDetailStartupRecovery(for: item, mid: mid)
                 return
             }
 
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            self.currentPlayer?.automaticallyWaitsToMinimizeStalling = false
+            _ = self.currentPlayer.map { applyFeedStylePrePlayBuffering(to: $0, item: item) }
+            print("📱 [DetailVideoManager] recovery play nudge \(self.shortMID(mid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(self.detailDiagnostic(player, item: item))")
             self.currentPlayer?.play()
 
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(nanoseconds: self.detailStartupRecoveryDelay)
             guard !Task.isCancelled,
                   self.currentPlayer?.currentItem === item,
                   self.currentVideoMid == mid else {
                 self.detailStartupRecoveryTask = nil
+                self.detailStartupRecoveryItem = nil
                 return
             }
 
-            if self.currentPlayer?.timeControlStatus == .playing {
+            if self.markDetailRenderingIfDecoded(player: player, item: item) {
                 self.isItemReady = true
-                self.isBuffering = false
+                self.detailStartupRecoveryAttemptCount = 0
             } else if item.status == .readyToPlay {
-                // A ready item with an attached player should not keep the whole DetailView
-                // under a permanent loading mask; AVPlayerViewController can show the frame.
+                if self.rebuildDetailItemAfterStall(player: player, item: item, mid: mid, reason: "no decoded frame after play nudge") {
+                    return
+                }
+                // Ready does not guarantee a visible frame. Keep the loading affordance
+                // while playback is still waiting/paused so DetailView does not show a
+                // black player with no feedback.
                 self.isItemReady = true
-                self.isBuffering = false
+                self.isBuffering = !self.isPlaybackRendering && !self.isVideoAtEnd(player)
+                self.detailStartupRecoveryTask = nil
+                self.detailStartupRecoveryItem = nil
+                self.scheduleDetailStartupRecovery(for: item, mid: mid)
+                return
             }
+            print("📱 [DetailVideoManager] recovery result \(self.shortMID(mid)): \(self.detailDiagnostic(self.currentPlayer, item: item)), isBuffering=\(self.isBuffering), isRendering=\(self.isPlaybackRendering)")
             self.detailStartupRecoveryTask = nil
+            self.detailStartupRecoveryItem = nil
         }
     }
 
@@ -2430,6 +3374,192 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             }
         }
         return max(0, bestBufferAhead)
+    }
+
+    private func isNear(_ lhs: CMTime, _ rhs: CMTime, tolerance: Double) -> Bool {
+        let left = CMTimeGetSeconds(lhs)
+        let right = CMTimeGetSeconds(rhs)
+        guard left.isFinite, right.isFinite else { return false }
+        return abs(left - right) <= tolerance
+    }
+
+    private func seconds(from time: CMTime) -> Double {
+        let seconds = CMTimeGetSeconds(time)
+        return seconds.isFinite ? seconds : 0
+    }
+
+    private func setupDetailVideoOutput(for item: AVPlayerItem) {
+        if detailVideoOutputItem === item, detailVideoOutput != nil { return }
+        if let previousItem = detailVideoOutputItem, let output = detailVideoOutput {
+            previousItem.remove(output)
+        }
+
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ])
+        item.add(output)
+        detailVideoOutput = output
+        detailVideoOutputItem = item
+    }
+
+    private func removeDetailRenderingObservers() {
+        if let observer = detailPlaybackProgressObserver,
+           let player = detailPlaybackProgressPlayer {
+            player.removeTimeObserver(observer)
+        }
+        detailPlaybackProgressObserver = nil
+        detailPlaybackProgressPlayer = nil
+
+        if let item = detailVideoOutputItem,
+           let output = detailVideoOutput {
+            item.remove(output)
+        }
+        detailVideoOutput = nil
+        detailVideoOutputItem = nil
+    }
+
+    private func resetDetailRenderingProgress(to time: CMTime = .zero) {
+        detailPlaybackStartSeconds = seconds(from: time)
+        isPlaybackRendering = false
+    }
+
+    private func detailDecodedFrameTime(for player: AVPlayer, item: AVPlayerItem) -> CMTime? {
+        guard detailVideoOutputItem === item,
+              let output = detailVideoOutput else { return nil }
+        let hostItemTime = output.itemTime(forHostTime: CACurrentMediaTime())
+        if hostItemTime.isValid, output.hasNewPixelBuffer(forItemTime: hostItemTime) {
+            return hostItemTime
+        }
+        let currentTime = player.currentTime()
+        if currentTime.isValid, output.hasNewPixelBuffer(forItemTime: currentTime) {
+            return currentTime
+        }
+        return nil
+    }
+
+    private func markDetailRenderingIfDecoded(player: AVPlayer, item: AVPlayerItem) -> Bool {
+        if let decodedTime = detailDecodedFrameTime(for: player, item: item) {
+            let decodedSeconds = seconds(from: decodedTime)
+            guard decodedSeconds + 0.25 >= detailPlaybackStartSeconds else { return false }
+            markDetailPlaybackRendering(player: player, item: item, visibleTime: decodedTime)
+            return true
+        }
+
+        let currentTime = player.currentTime()
+        let currentSeconds = seconds(from: currentTime)
+        let hasAdvanced = currentSeconds >= detailPlaybackStartSeconds + 0.25
+        let hasHealthyBuffer = item.status == .readyToPlay
+            && bufferedTimeAhead(for: item, player: player) >= 0.75
+
+        if player.timeControlStatus == .playing,
+           hasAdvanced,
+           hasHealthyBuffer {
+            markDetailPlaybackRendering(player: player, item: item, visibleTime: currentTime)
+            return true
+        }
+
+        return false
+    }
+
+    private func markDetailPlaybackRendering(player: AVPlayer, item: AVPlayerItem, visibleTime: CMTime) {
+        if let mediaID = currentVideoMid {
+            VideoPlaybackSessionStore.shared.noteDecodedFrame(mediaID: mediaID, time: visibleTime)
+        }
+        let visibleSeconds = seconds(from: visibleTime)
+        let hasAdvancedPastCover = visibleSeconds >= detailPlaybackStartSeconds + 0.25
+        isPlaybackRendering = true
+        isItemReady = true
+        detailStartupRecoveryAttemptCount = 0
+        isBuffering = shouldKeepDetailBuffering(player: player, item: item) || !hasAdvancedPastCover
+        if !isBuffering {
+            activeFeedHandoffTime = nil
+        }
+    }
+
+    private func preserveDetailFrameToCache(player: AVPlayer, mediaID: String) {
+        if let item = player.currentItem,
+           detailVideoOutputItem === item,
+           let output = detailVideoOutput {
+            let currentTime = player.currentTime()
+            let hostItemTime = output.itemTime(forHostTime: CACurrentMediaTime())
+            var candidateTimes: [CMTime] = [currentTime]
+            if hostItemTime.isValid {
+                candidateTimes.append(hostItemTime)
+            }
+            candidateTimes.append(contentsOf: [0.08, 0.2, 0.4].compactMap { backoff in
+                let seconds = max(0, self.seconds(from: currentTime) - backoff)
+                let time = CMTime(seconds: seconds, preferredTimescale: 600)
+                return time.isValid ? time : nil
+            })
+
+            var displayTime = CMTime.zero
+            for time in candidateTimes where time.isValid {
+                guard let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime) else {
+                    continue
+                }
+                let width = CVPixelBufferGetWidth(pixelBuffer)
+                let height = CVPixelBufferGetHeight(pixelBuffer)
+                guard width > 0, height > 0, width < 10000, height < 10000,
+                      let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720),
+                      !VideoFrameExtractor.isMostlyBlack(image) else {
+                    continue
+                }
+                let frameTime = displayTime.isValid ? displayTime : time
+                VideoPlaybackSessionStore.shared.noteDecodedFrame(mediaID: mediaID, time: frameTime)
+                SharedAssetCache.shared.updateCachedThumbnail(image, for: mediaID)
+                return
+            }
+        }
+
+        guard let asset = player.currentItem?.asset else { return }
+        let captureTime = player.currentTime()
+        guard captureTime.isValid, self.seconds(from: captureTime).isFinite else { return }
+
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 720, height: 720)
+        generator.requestedTimeToleranceBefore = .positiveInfinity
+        generator.requestedTimeToleranceAfter = .positiveInfinity
+        generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: captureTime)]) { _, cgImage, _, result, _ in
+            guard result == .succeeded, let cgImage else { return }
+            let image = UIImage(cgImage: cgImage)
+            Task { @MainActor in
+                guard !VideoFrameExtractor.isMostlyBlack(image) else { return }
+                VideoPlaybackSessionStore.shared.noteDecodedFrame(mediaID: mediaID, time: captureTime)
+                SharedAssetCache.shared.updateCachedThumbnail(image, for: mediaID)
+            }
+        }
+    }
+
+    private func startDetailRenderingObserver(player: AVPlayer, item: AVPlayerItem) {
+        if detailPlaybackProgressPlayer !== player || detailPlaybackProgressObserver == nil {
+            if let observer = detailPlaybackProgressObserver,
+               let oldPlayer = detailPlaybackProgressPlayer {
+                oldPlayer.removeTimeObserver(observer)
+            }
+            detailPlaybackProgressPlayer = player
+            detailPlaybackProgressObserver = player.addPeriodicTimeObserver(
+                forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
+                queue: .main
+            ) { [weak self, weak player, weak item] _ in
+                Task { @MainActor [weak self, weak player, weak item] in
+                    guard let self,
+                          let player,
+                          let item,
+                          self.currentPlayer === player,
+                          player.currentItem === item,
+                          !self.isVideoAtEnd(player) else { return }
+
+                    if self.markDetailRenderingIfDecoded(player: player, item: item) {
+                        self.detailStartupRecoveryTask?.cancel()
+                        self.detailStartupRecoveryTask = nil
+                        self.detailStartupRecoveryItem = nil
+                    } else if self.isPlaying {
+                        self.isBuffering = true
+                    }
+                }
+            }
+        }
     }
 
     private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
@@ -2476,7 +3606,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 // Create independent player with disk caching support
                 // Get the asset from SharedAssetCache (which uses CachingPlayerItem for HLS)
                 // but create our own independent player instance
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid)
+                let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: mid)
                 let playerItem = await AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 
@@ -2535,12 +3665,14 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     }
     
     /// Clear current video
-    func clearCurrentVideo() {
+    func clearCurrentVideo(preserveSharedFeedPlayback: Bool = false) {
         // Save playback state before clearing — but only if time is valid.
         if let player = currentPlayer,
            let videoMid = currentVideoMid {
+            preserveDetailFrameToCache(player: player, mediaID: videoMid)
+
             let currentTime = player.currentTime()
-            if currentTime.isValid && currentTime.seconds.isFinite {
+            if currentTime.isValid && currentTime.seconds.isFinite && currentTime.seconds > 0.25 {
                 let wasPlaying = player.rate > 0
                 let duration = player.currentItem?.duration ?? .invalid
                 PersistentVideoStateManager.shared.saveState(
@@ -2558,13 +3690,19 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         itemStatusObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+        removeDetailRenderingObservers()
         detailStartupRecoveryTask?.cancel()
         detailStartupRecoveryTask = nil
+        detailStartupRecoveryItem = nil
+        detailStartupRecoveryAttemptCount = 0
+        detailStallItemRebuildCount = 0
         isItemReady = false
         isBuffering = false
         isPlaybackRendering = false
+        isSeekingToStartupPosition = false
         loadFailedVideoMid = nil
         pendingFeedResumeTime = nil
+        activeFeedHandoffTime = nil
 
         // Remove legacy KVO observer before clearing (only if it was added)
         if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
@@ -2578,49 +3716,30 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             videoCompletionObserver = nil
         }
         
-        if isPlayerLoaned {
-            // Loaned player: just pause and restore mute — do NOT destroy the playerItem.
-            // The feed cell still references this AVPlayer and will resume on return.
+        if preserveSharedFeedPlayback,
+           let player = currentPlayer,
+           let mid = currentVideoMid,
+           isSharedFeedPlayer(player, mid: mid) {
+            if let item = player.currentItem,
+               releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(player, item: item, mid: mid, owner: "detail clear") {
+                currentPlayer = nil
+                feedHandoffMid = nil
+                feedHandoffExpiresAt = .distantPast
+            } else {
+                player.currentItem?.cancelPendingSeeks()
+                markFeedHandoff(mid: mid)
+            }
+        } else {
             currentPlayer?.pause()
-            currentPlayer?.isMuted = MuteState.shared.isMuted
-            if let player = currentPlayer,
-               let videoMid = currentVideoMid {
-                VideoStateCache.shared.cacheVideoState(
-                    for: videoMid,
-                    player: player,
-                    time: player.currentTime(),
-                    wasPlaying: false,
-                    originalMuteState: MuteState.shared.isMuted
-                )
-                SharedAssetCache.shared.cachePlayer(player, for: videoMid)
-                NotificationCenter.default.post(
-                    name: .videoPlayerReturned,
-                    object: nil,
-                    userInfo: ["videoMid": videoMid]
-                )
-            }
-            print("DEBUG: [DetailVideoManager] Returned loaned player (paused, mute restored)")
-        } else if let ownedPlayer = currentPlayer {
-            // Owned player: destroy completely so AVPlayerViewController cannot restart it.
-            let rawMediaID = currentVideoMid
-            let cacheKey = rawMediaID.map { "tweetDetail_\($0)" }
-
-            ownedPlayer.pause()
-            ownedPlayer.replaceCurrentItem(with: nil)
-            print("DEBUG: [DetailVideoManager] Replaced player item with nil to stop playback")
-
-            if let key = cacheKey {
-                Task { @MainActor in
-                    SharedAssetCache.shared.removeInvalidPlayer(for: key)
-                }
-            }
+            feedHandoffMid = nil
+            feedHandoffExpiresAt = .distantPast
         }
 
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
-        isPlayerLoaned = false
         isPlaybackRendering = false
+        isUsingBorrowedFeedPlayer = false
         loadFailedVideoMid = nil
     }
     
@@ -3018,7 +4137,7 @@ class ChatVideoManager: ObservableObject {
         }
 
         do {
-            let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaType: attachment.type)
+            let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: attachment.mid, mediaType: attachment.type)
             chatVideoPlayers[messageId] = player
             chatSessionMessages[receiptId, default: Set<String>()].insert(messageId)
             return player

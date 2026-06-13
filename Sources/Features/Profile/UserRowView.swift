@@ -112,8 +112,7 @@ struct UserRowView: View {
     }
 
     private var hasRenderableUser: Bool {
-        user.name?.realUserLabel != nil ||
-        user.username?.realUserLabel != nil
+        user.hasValidUsername
     }
 
     private var displayName: String {
@@ -410,8 +409,7 @@ struct UserRowView: View {
 
     private func hasRenderableIdentity(_ candidate: User?) -> Bool {
         guard let candidate else { return false }
-        return candidate.name?.realUserLabel != nil ||
-        candidate.username?.realUserLabel != nil
+        return candidate.hasValidUsername
     }
 
     private func hideAndBlacklistUser(taskCancellationToken: UUID, reason: String) async {

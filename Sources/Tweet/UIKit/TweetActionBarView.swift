@@ -862,7 +862,7 @@ class TweetActionBarView: UIView {
         // Fallback: use asset loading
         do {
             let mediaType: MediaType = isHLS ? .hls_video : .video
-            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid, mediaType: mediaType)
+            let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mediaID, tweetId: tweet.mid, mediaType: mediaType)
 
             async let durationLoad = asset.load(.duration)
             async let tracksLoad = asset.load(.tracks)

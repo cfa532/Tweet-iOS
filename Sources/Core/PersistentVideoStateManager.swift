@@ -18,6 +18,7 @@ class PersistentVideoStateManager: ObservableObject {
     // Storage for video states, isolated by context (detail vs fullscreen vs feed cell)
     // This prevents one surface (e.g. feed) from overwriting another (e.g. detail view).
     private var videoStates: [VideoPlaybackState.VideoContext: [String: VideoPlaybackState]] = [:]
+    private let stateFreshnessInterval: TimeInterval = 300
     
     /// Video playback state
     struct VideoPlaybackState {
@@ -122,6 +123,33 @@ class PersistentVideoStateManager: ObservableObject {
         
         return state
     }
+
+    /// Get the freshest valid playback state for a video across surfaces.
+    /// This lets independent feed/detail/fullscreen players resume the same video
+    /// from the user's most recent position without sharing AVPlayer ownership.
+    func latestState(
+        videoMid: String,
+        excluding excludedContext: VideoPlaybackState.VideoContext? = nil,
+        duration: CMTime? = nil
+    ) -> VideoPlaybackState? {
+        let freshnessCutoff = Date().addingTimeInterval(-stateFreshnessInterval)
+        var latest: VideoPlaybackState?
+
+        for context in VideoPlaybackState.VideoContext.allCases {
+            if let excludedContext, context == excludedContext { continue }
+            guard let state = getState(videoMid: videoMid, context: context, duration: duration) else { continue }
+            guard state.timestamp > freshnessCutoff else { continue }
+            guard state.currentTime.isValid,
+                  state.currentTime.seconds.isFinite,
+                  state.currentTime.seconds > 0.25 else { continue }
+
+            if latest == nil || state.timestamp > latest!.timestamp {
+                latest = state
+            }
+        }
+
+        return latest
+    }
     
     /// Remove saved state for a video
     func clearState(videoMid: String, context: VideoPlaybackState.VideoContext) {
@@ -173,8 +201,8 @@ class PersistentVideoStateManager: ObservableObject {
         // Context is isolated by dictionary key; this is a safety check.
         guard state.context == context else { return false }
         
-        // Only restore if saved within last 5 minutes
-        let fiveMinutesAgo = Date().addingTimeInterval(-300)
+        // Only restore if saved within the freshness window
+        let fiveMinutesAgo = Date().addingTimeInterval(-stateFreshnessInterval)
         guard state.timestamp > fiveMinutesAgo else {
             print("⚠️ [VIDEO STATE] State too old for \(videoMid): \(Date().timeIntervalSince(state.timestamp))s ago")
             return false

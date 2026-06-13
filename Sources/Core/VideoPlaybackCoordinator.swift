@@ -67,24 +67,46 @@ private enum VideoPlaybackPhase {
 }
 
 /// Canonical video tracking info.
-/// A video is indexed by both the tweet (cell) id and its own id so the same video in different cells is distinct.
+/// A video is indexed by both the outermost visible tweet id and its own media id so
+/// the same video in different feed/detail contexts is distinct.
 ///
-/// - `cellTweetId`: The tweet ID of the *feed cell* (retweet ID for retweets, quoting tweet ID for embedded/quoted media).
+/// - `outerTweetId`: The outermost tweet ID that owns the visible context (feed row/detail tweet).
+/// - `cellTweetId`: The tweet ID of the visible media cell/comment (retweet ID for retweets, quoting tweet ID for embedded/quoted media).
 /// - `mediaTweetId`: The tweet ID that actually owns the attachments (original tweet for retweets, embedded tweet for quoted media).
 /// - `videoMid`: The attachment/media id (same video content can appear in multiple cells).
 /// - `attachmentIndex`: The index in `mediaTweetId.attachments` (can be > 3; fullscreen needs this).
 ///
-/// `identifier` = cellTweetId + "_" + videoMid + "_" + attachmentIndex is the unique key for playback (one delegate per cell instance).
+/// `identifier` = outerTweetId + "_" + mediaTweetId + "_" + videoMid + "_" + attachmentIndex
+/// is the unique key for playback (one delegate per rendered media instance).
 /// Feed playback coordination only considers `attachmentIndex < 4` because `MediaGridView` only renders the first 4 items.
 struct VideoPlaybackInfo: Equatable {
+    let outerTweetId: String?
     let cellTweetId: String
     let mediaTweetId: String
     let videoMid: String
     let attachmentIndex: Int
 
-    /// Unique key for this video instance: tweet id + video id + index (same video in different cells has different identifiers).
+    init(
+        outerTweetId: String? = nil,
+        cellTweetId: String,
+        mediaTweetId: String,
+        videoMid: String,
+        attachmentIndex: Int
+    ) {
+        self.outerTweetId = outerTweetId
+        self.cellTweetId = cellTweetId
+        self.mediaTweetId = mediaTweetId
+        self.videoMid = videoMid
+        self.attachmentIndex = attachmentIndex
+    }
+
+    var contextTweetId: String {
+        outerTweetId ?? cellTweetId
+    }
+
+    /// Unique key for this video instance: outer tweet + media owner + video id + index.
     var identifier: String {
-        "\(cellTweetId)_\(videoMid)_\(attachmentIndex)"
+        "\(contextTweetId)_\(mediaTweetId)_\(videoMid)_\(attachmentIndex)"
     }
     
     var isInVisibleMediaRange: Bool {
@@ -180,7 +202,14 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Actively tracked directional video preloads — explicitly managed on scroll stop.
     private var activePreloadMids: Set<String> = []
     private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
-    private let directionalPreloadRefreshInterval: CFTimeInterval = 0.35
+    private let directionalPreloadRefreshInterval = FeedPlaybackTuning.directionalVideoPreloadRefreshInterval
+    var directionalPlayerPreloadCount: Int = FeedPlaybackTuning.directionalVideoPreloadCount {
+        didSet {
+            if directionalPlayerPreloadCount <= 0 {
+                clearPreloadedTracking()
+            }
+        }
+    }
 
     /// Timer: when scroll starts, gives in-flight preloads a brief grace period to finish.
     /// If scroll is still active after the delay, cancel off-screen directional preloads.
@@ -196,7 +225,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     // MARK: - Delegate-Based Communication (Phase 3)
 
     /// Registered MediaCell delegates for direct communication (keyed by video identifier:
-    /// cellTweetId_videoMid_attachmentIndex). This allows the same videoMid to have separate
+    /// outerTweetId_mediaTweetId_videoMid_attachmentIndex). This allows the same videoMid to have separate
     /// delegates when it appears in both a tweet and its retweet.
     private var mediaCellDelegates: [String: MediaCellDelegate] = [:]
 
@@ -386,6 +415,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
         guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
+        let source = notification.userInfo?["source"] as? String
                 
         isPlaybackSuppressedByOverlay = isCovered
         
@@ -394,17 +424,25 @@ class VideoPlaybackCoordinator: ObservableObject {
         overlayUncoverPlaybackTimer = nil
         
         if isCovered {
-            // Hard stop so no audio bleeds under the overlay, and so we don't preserve stale primary state.
-            stopAllVideos()
+            // Fullscreen media browser borrows the same shared AVPlayer as the feed.
+            // Do not pause it during coverage; ownership is transferring, not stopping.
+            if source != "MediaCellUIView.handleVideoTap" && source != "MediaBrowserView" {
+                // Hard stop so no audio bleeds under non-media overlays, and so we
+                // don't preserve stale primary state.
+                stopAllVideos()
+            }
             return
         }
         
         
         // Overlay dismissed: wait for layout to settle before restarting.
-        // 0.35s lets view transitions and cell layout complete. While this timer
+        // The settling delay lets view transitions and cell layout complete. While this timer
         // is pending (overlayUncoverPlaybackTimer != nil), other resume paths
         // (viewWillAppear, updateOnScreenMediaCells) defer to avoid double-evaluation.
-        let timer = Timer(timeInterval: 0.35, repeats: false) { [weak self] _ in
+        let settleDelay: TimeInterval = source == "MediaBrowserView"
+            ? 0.05
+            : FeedPlaybackTuning.overlayDismissSettleDelay
+        let timer = Timer(timeInterval: settleDelay, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.overlayUncoverPlaybackTimer = nil  // Settling period is over
@@ -459,7 +497,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Use scheduleStartPrimary (0.3s debounce) to give updateOnScreenMediaCells time to
         // populate the correct visible set before we attempt primary selection.
         if phase == .idle {
-            print("🎬 [COORD] registerDelegate: \(shortIdent(identifier)) registered (phase=idle, kicking playback)")
             scheduleStartPrimary()
         }
     }
@@ -802,7 +839,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         return videos
     }
     
-    /// Previously visible video identifiers (cellTweetId_videoMid_attachmentIndex).
+    /// Previously visible video identifiers (outerTweetId_mediaTweetId_videoMid_attachmentIndex).
     /// Using full identifiers (not bare videoMids) ensures the same video in a tweet
     /// and its retweet are tracked independently.
     private var previousVisibleIdentifiers: Set<String> = []
@@ -1184,8 +1221,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Used when returning to the feed (e.g. from user profile) so the video resumes instead of stopping.
     /// Does nothing if there is no primary, primary is no longer visible, or delegate is missing.
     func requestResumePrimaryPlaybackIfVisible() {
-        guard phase == .primaryPlaying,
-              let primaryId = primaryVideoId,
+        guard !isPlaybackSuppressedByOverlay,
+              isFeedVisible else {
+            return
+        }
+
+        guard let primaryId = primaryVideoId,
               let primary = visibleVideos.first(where: { $0.identifier == primaryId }),
               isVideoOnScreen(primary),
               let delegate = mediaCellDelegates[primaryId] else {
@@ -1195,6 +1236,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         if !onScreenMediaCells.isEmpty, !onScreenMediaCells.contains(primaryId) {
             return
         }
+        phase = .primaryPlaying
+        currentlyPlayingVideoIds = [primaryId]
+        LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
         delegate.shouldPlayVideo(withMid: primary.videoMid)
     }
 
@@ -1211,8 +1255,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Release all players via SharedAssetCache
         SharedAssetCache.shared.releaseAllPlayers()
 
-        // Clear video state cache to free memory (playback positions are preserved in PersistentVideoStateManager)
-        VideoStateCache.shared.clearAllCache()
+        // Clear player/time references to free memory while preserving finished-video gates.
+        // Playback positions are preserved in PersistentVideoStateManager.
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
 
         print("✅ [VIDEO MEMORY] All video players released for background")
     }
@@ -1282,8 +1327,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         return videosToPreload
     }
 
-    /// Resolve the video URL and tweet ID for a VideoPlaybackInfo entry.
-    private func resolveVideoURL(_ video: VideoPlaybackInfo) -> (url: URL, tweetId: String, mediaType: MediaType)? {
+    /// Resolve the video URL, media ID, and tweet ID for a VideoPlaybackInfo entry.
+    private func resolveVideoURL(_ video: VideoPlaybackInfo) -> (url: URL, mediaID: String, tweetId: String, mediaType: MediaType)? {
         guard let tweet = currentTweets.first(where: { $0.mid == video.mediaTweetId }) ?? Tweet.getInstance(for: video.mediaTweetId),
               let attachments = tweet.attachments,
               video.attachmentIndex < attachments.count else {
@@ -1301,20 +1346,20 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         guard let url = videoURL else { return nil }
-        return (url, tweet.mid, attachment.type)
+        return (url, attachment.mid, tweet.mid, attachment.type)
     }
 
     /// Preload video asset without starting playback
     private func preloadVideoAsset(_ video: VideoPlaybackInfo) {
         guard let resolved = resolveVideoURL(video) else { return }
-        SharedAssetCache.shared.preloadAsset(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+        SharedAssetCache.shared.preloadAsset(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
     /// Preload video player (asset + AVPlayer) for upcoming video in scroll direction.
     /// The pre-created player will be instantly available when the cell becomes visible.
     private func preloadVideoPlayer(_ video: VideoPlaybackInfo) {
         guard let resolved = resolveVideoURL(video) else { return }
-        SharedAssetCache.shared.preloadPlayer(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+        SharedAssetCache.shared.preloadPlayer(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
     /// Get up to `count` preloadable videos in the scroll direction that are not currently visible.
@@ -1420,7 +1465,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             lastDirectionalPreloadRefreshTime = now
         }
 
-        let nextVideos = getNextVideosInScrollDirection(count: 2)
+        let preloadCount = max(0, directionalPlayerPreloadCount)
+        guard preloadCount > 0 else {
+            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
+            activePreloadMids.removeAll()
+            SharedAssetCache.shared.updateProtectedPreloadMids([])
+            return
+        }
+
+        let nextVideos = getNextVideosInScrollDirection(count: preloadCount)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
 
         // Keep on-screen work alive, then cancel any older directional preloads.
@@ -1732,7 +1785,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
     
     /// Handle video finished notification.
-    /// Match by full identifier (cellTweetId_videoMid_attachmentIndex) so the same video in different cells is distinct.
+    /// Match by full identifier (outerTweetId_mediaTweetId_videoMid_attachmentIndex) so the same video in different cells is distinct.
     @objc private func handleVideoFinished(_ notification: Notification) {
         guard let videoMid = notification.userInfo?["videoMid"] as? String else {
             return
@@ -1759,6 +1812,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Handle foreground recovery - intelligently decide whether to preserve or reset state
     /// Decision: Preserve if user didn't explicitly scroll away (flag set on background)
     @objc private func handleForegroundRecovery(_ notification: Notification) {
+        clearFinishedAutoplayGateForForeground()
         
         // CRITICAL: Use flag to track if user explicitly scrolled away
         // Flag is set when app enters background (if playback was active)
@@ -1797,6 +1851,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                         let firstVideo = visibleVideos[0]
                         primaryVideoId = firstVideo.identifier
                         currentlyPlayingVideoIds = [firstVideo.identifier]
+                        LocalHTTPServer.shared.setPrimaryMediaID(firstVideo.videoMid)
 
                         // Direct delegate call — no broadcast notification
                         if let delegate = mediaCellDelegates[firstVideo.identifier] {
@@ -1806,6 +1861,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                         // Primary is first or only video - resume it
                         primaryVideoId = primary.identifier
                         currentlyPlayingVideoIds = [primary.identifier]
+                        LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
 
                         // Direct delegate call — no broadcast notification
                         if let delegate = mediaCellDelegates[primary.identifier] {
@@ -1854,6 +1910,25 @@ class VideoPlaybackCoordinator: ObservableObject {
                 RunLoop.main.add(timer, forMode: .common)
                 playbackDebounceTimer = timer
             }
+        }
+    }
+
+    /// Foreground return is a fresh autoplay decision for whatever is onscreen.
+    /// Normal finish handling still advances to the next video; this only removes
+    /// the finished gate when the app itself comes back and recomputes visibility.
+    private func clearFinishedAutoplayGateForForeground() {
+        let candidates = visibleVideos.filter { video in
+            onScreenMediaCells.isEmpty || onScreenMediaCells.contains(video.identifier)
+        }
+        guard !candidates.isEmpty else { return }
+
+        for video in candidates {
+            VideoStateCache.shared.clearVideoFinished(video.identifier)
+        }
+
+        if let finishedId = finishedPrimaryIdentifier,
+           candidates.contains(where: { $0.identifier == finishedId }) {
+            finishedPrimaryIdentifier = nil
         }
     }
 }

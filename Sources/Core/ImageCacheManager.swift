@@ -419,7 +419,7 @@ class ImageCacheManager: @unchecked Sendable {
     /// Use this for background cleanup - images will reload from disk when needed
     func clearMemoryCache() {
         cache.removeAllObjects()
-        cacheKeysQueue.async(flags: .barrier) {
+        cacheKeysQueue.sync(flags: .barrier) {
             self.memoryCachedKeys.removeAll()
             self.memoryCacheAccessTimes.removeAll()
             self.recentImageCache.removeAll()
@@ -463,6 +463,10 @@ class ImageCacheManager: @unchecked Sendable {
     
     private func getCompressedCacheFileURL(for key: String) -> URL {
         return cacheDirectory.appendingPathComponent("\(key)_compressed.jpg")
+    }
+
+    private func getOriginalCacheFileURL(for key: String) -> URL {
+        return cacheDirectory.appendingPathComponent("\(key)_original.jpg")
     }
     
     /// Get compressed image from memory cache only (safe for synchronous access in view body)
@@ -596,7 +600,6 @@ class ImageCacheManager: @unchecked Sendable {
             // Write compressed data to disk
             do {
                 try compressedImage.write(to: compressedFileURL)
-                print("DEBUG: [ImageCacheManager] Successfully cached compressed image to disk for \(key)")
             } catch {
                 print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
             }
@@ -685,25 +688,12 @@ class ImageCacheManager: @unchecked Sendable {
             return nil
         }
 
-        // Check if there's already an ongoing request for this image
-        let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
-            return ongoingRequests[cacheKey]
-        }
-
-        if let existingTask = existingTask {
-            // Critical priority always waits for the existing task
-            if priority != .critical {
-                let state = memoryDuplicateBlockState()
-                if state.blocked {
-                    print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate image request for \(cacheKey)")
-                    return nil
-                }
+        let registration = requestsQueue.sync(flags: .barrier) { () -> (task: Task<UIImage?, Never>, created: Bool) in
+            if let existingTask = ongoingRequests[cacheKey] {
+                return (existingTask, false)
             }
-            return await existingTask.value
-        }
 
-        // Create new request task
-        let task = Task<UIImage?, Never> {
+            let task = Task<UIImage?, Never> {
             var tempURL: URL?
             defer {
                 // ✅ CRITICAL MEMORY FIX: Always clean up temp file, even on error
@@ -739,15 +729,22 @@ class ImageCacheManager: @unchecked Sendable {
                 print("Error loading image from \(url): \(error.localizedDescription)")
                 return nil
             }
+            }
+
+            ongoingRequests[cacheKey] = task
+            return (task, true)
         }
-        
-        // Store the task to prevent duplicate requests
-        requestsQueue.async(flags: .barrier) {
-            self.ongoingRequests[cacheKey] = task
+
+        if !registration.created && priority != .critical {
+            let state = memoryDuplicateBlockState()
+            if state.blocked {
+                print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate image request for \(cacheKey)")
+                return nil
+            }
         }
-        
+
         // Wait for result
-        let result = await task.value
+        let result = await registration.task.value
         
         // Remove completed task
         requestsQueue.async(flags: .barrier) {
@@ -771,31 +768,19 @@ class ImageCacheManager: @unchecked Sendable {
         }
         let cacheKey = key + "_original"
 
-        // Check if there's already an ongoing request for this original image
-        let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
-            return ongoingRequests[cacheKey]
+        if let cachedOriginal = getOriginalImage(forKey: key) {
+            if replaceCompressedCache {
+                replaceCompressedCacheWithOriginal(image: cachedOriginal, for: key)
+            }
+            return cachedOriginal
         }
 
-        if let existingTask = existingTask {
-            // Critical priority always waits for the existing task
-            if priority != .critical {
-                let state = memoryDuplicateBlockState()
-                if state.blocked {
-                    print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate original image request for \(cacheKey)")
-                    return nil
-                }
+        let registration = requestsQueue.sync(flags: .barrier) { () -> (task: Task<UIImage?, Never>, created: Bool) in
+            if let existingTask = ongoingRequests[cacheKey] {
+                return (existingTask, false)
             }
 
-            let result = await existingTask.value
-            // Replace compressed cache if requested
-            if replaceCompressedCache, let originalImage = result {
-                replaceCompressedCacheWithOriginal(image: originalImage, for: key)
-            }
-            return result
-        }
-
-        // Create new request task
-        let task = Task<UIImage?, Never> {
+            let task = Task<UIImage?, Never> {
             var tempURL: URL?
             defer {
                 // ✅ CRITICAL MEMORY FIX: Always clean up temp file, even on error
@@ -838,15 +823,22 @@ class ImageCacheManager: @unchecked Sendable {
                 print("Error loading original image from \(url): \(error.localizedDescription)")
                 return nil
             }
+            }
+
+            ongoingRequests[cacheKey] = task
+            return (task, true)
         }
-        
-        // Store the task to prevent duplicate requests
-        requestsQueue.async(flags: .barrier) {
-            self.ongoingRequests[cacheKey] = task
+
+        if !registration.created && priority != .critical {
+            let state = memoryDuplicateBlockState()
+            if state.blocked {
+                print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate original image request for \(cacheKey)")
+                return nil
+            }
         }
-        
+
         // Wait for result
-        let result = await task.value
+        let result = await registration.task.value
         
         // Remove completed task
         requestsQueue.async(flags: .barrier) {
@@ -856,14 +848,38 @@ class ImageCacheManager: @unchecked Sendable {
         return result
     }
     
+    private func getOriginalImage(forKey key: String) -> UIImage? {
+        let cacheKey = "\(key)_original"
+        if let recentImage = recentImageFromMemory(forKey: cacheKey) {
+            markMemoryCacheAccess(forKey: cacheKey)
+            cache.setObject(recentImage, forKey: cacheKey as NSString, cost: imageMemoryCost(recentImage))
+            return recentImage
+        }
+
+        if let cachedImage = cache.object(forKey: cacheKey as NSString) {
+            markMemoryCacheAccess(forKey: cacheKey)
+            return cachedImage
+        }
+
+        let fileURL = getOriginalCacheFileURL(for: key)
+        if let image = UIImage(contentsOfFile: fileURL.path) {
+            cacheImageInMemory(image, forKey: cacheKey)
+            return image
+        }
+
+        return nil
+    }
+
     /// Replace compressed cache entry with original image
     /// - Parameters:
     ///   - image: The original image to cache
     ///   - key: The cache key (without _compressed or _original suffix)
     private func replaceCompressedCacheWithOriginal(image: UIImage, for key: String) {
         let compressedKey = "\(key)_compressed"
+        let originalKey = "\(key)_original"
         // Replace in memory cache
         cacheImageInMemory(image, forKey: compressedKey)
+        cacheImageInMemory(image, forKey: originalKey)
 
         Task { @MainActor in
             NotificationCenter.default.post(
@@ -873,13 +889,14 @@ class ImageCacheManager: @unchecked Sendable {
             )
         }
         
-        // Replace on disk (save original as compressed cache file)
+        // Replace on disk (save original as both high-res preview and explicit original cache)
         let compressedFileURL = getCompressedCacheFileURL(for: key)
+        let originalFileURL = getOriginalCacheFileURL(for: key)
         Task.detached(priority: .utility) {
-            // Save original image to compressed cache location
             if let jpegData = image.jpegData(compressionQuality: 1.0) {
                 try? jpegData.write(to: compressedFileURL)
-                print("✅ [ImageCacheManager] Replaced compressed cache with original image for \(key)")
+                try? jpegData.write(to: originalFileURL)
+                print("✅ [ImageCacheManager] Stored original image for \(key) as high-res preview and original cache")
             }
         }
     }

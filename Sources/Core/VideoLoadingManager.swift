@@ -30,7 +30,8 @@ class VideoLoadingManager: ObservableObject {
     
     // MARK: - Performance Management
     private var activeLoadingCount: Int = 0
-    private let maxConcurrentLoads: Int = 4 // Reduced from 8 to 4 for better stability during network issues
+    private let defaultMaxConcurrentLoads: Int = 4
+    private var maxConcurrentLoads: Int = 4 // Reduced from 8 to 4 for better stability during network issues
     private var loadingQueue: [String] = [] // Queue for pending video loads
     private var isProcessingQueue = false
     
@@ -40,7 +41,8 @@ class VideoLoadingManager: ObservableObject {
     private var isProcessingCancellations = false
     
     // MARK: - Configuration
-    private let preloadCount = 2 // MEMORY FIX: Preload next 2 videos (4 visible + 2 ahead = max 6 videos for grid layout)
+    private let defaultPreloadCount = FeedPlaybackTuning.directionalVideoPreloadCount
+    private var preloadCount = FeedPlaybackTuning.directionalVideoPreloadCount
     private let bufferDistance = 1 // Keep 1 tweet behind as buffer
     private let cancellationBatchSize = 10 // Process cancellations in batches
     
@@ -49,6 +51,22 @@ class VideoLoadingManager: ObservableObject {
     private var loadCountInLastMinute: Int = 0
     
     // MARK: - Public Methods
+
+    /// Tune the shared loader for the currently visible feed.
+    func configureForFeed(identifier: String) {
+        let nextPreloadCount = defaultPreloadCount
+        let nextMaxConcurrentLoads = defaultMaxConcurrentLoads
+
+        guard preloadCount != nextPreloadCount || maxConcurrentLoads != nextMaxConcurrentLoads else { return }
+
+        preloadCount = nextPreloadCount
+        maxConcurrentLoads = nextMaxConcurrentLoads
+
+        if preloadCount == 0 {
+            loadingQueue.removeAll()
+        }
+        updateVisibleTweetIds()
+    }
     
     /// Update the list of all tweet IDs (called when tweet list changes)
     func updateTweetList(_ tweetIds: [String]) async {
@@ -340,10 +358,12 @@ class VideoLoadingManager: ObservableObject {
         }
         
         // Add tweets within preload range
-        for i in 1...preloadCount {
-            let index = currentVisibleTweetIndex + i
-            if index < allTweetIds.count {
-                newVisibleIds.insert(allTweetIds[index])
+        if preloadCount > 0 {
+            for i in 1...preloadCount {
+                let index = currentVisibleTweetIndex + i
+                if index < allTweetIds.count {
+                    newVisibleIds.insert(allTweetIds[index])
+                }
             }
         }
         
@@ -355,17 +375,19 @@ class VideoLoadingManager: ObservableObject {
         // Note: Cancellations are now handled by background timer, not here
         
         // Trigger preloading for upcoming tweets with performance limits
-        for i in 1...preloadCount {
-            let index = currentVisibleTweetIndex + i
-            if index < allTweetIds.count {
-                let tweetId = allTweetIds[index]
-                if shouldPreloadVideos(for: tweetId) {
-                    if activeLoadingCount < maxConcurrentLoads {
-                        triggerVideoPreloading(for: tweetId)
-                    } else {
-                        // Add to queue if we're at capacity
-                        if !loadingQueue.contains(tweetId) {
-                            loadingQueue.append(tweetId)
+        if preloadCount > 0 {
+            for i in 1...preloadCount {
+                let index = currentVisibleTweetIndex + i
+                if index < allTweetIds.count {
+                    let tweetId = allTweetIds[index]
+                    if shouldPreloadVideos(for: tweetId) {
+                        if activeLoadingCount < maxConcurrentLoads {
+                            triggerVideoPreloading(for: tweetId)
+                        } else {
+                            // Add to queue if we're at capacity
+                            if !loadingQueue.contains(tweetId) {
+                                loadingQueue.append(tweetId)
+                            }
                         }
                     }
                 }

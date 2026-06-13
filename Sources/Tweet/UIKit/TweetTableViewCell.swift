@@ -29,6 +29,7 @@ class TweetTableViewCell: UITableViewCell {
     /// Parameter is the Auto Layout fitting height the cell wants — the controller
     /// should cache this and re-layout the table.
     var onHeightChanged: ((CGFloat) -> Void)?
+    var shouldDeferHeightOverflowCheck: (() -> Bool)?
     var onContentExpanded: (() -> Void)?
 
     // Padding constraints (updated per-configure to match list-level padding)
@@ -59,7 +60,7 @@ class TweetTableViewCell: UITableViewCell {
             lastReportedDesiredHeight = 0
         }
 
-        guard shouldCheckForHeightOverflow else { return }
+        guard shouldCheckForHeightOverflow() else { return }
 
         let now = CACurrentMediaTime()
         let widthChanged = abs(bounds.width - lastHeightOverflowCheckWidth) > 1
@@ -78,16 +79,17 @@ class TweetTableViewCell: UITableViewCell {
         }
     }
 
-    private var shouldCheckForHeightOverflow: Bool {
+    private func shouldCheckForHeightOverflow(allowDeferred: Bool = false) -> Bool {
         window != nil &&
         currentTweetId != nil &&
         onHeightChanged != nil &&
+        (allowDeferred || !(shouldDeferHeightOverflowCheck?() ?? false)) &&
         bounds.width > 0 &&
         bounds.height > 0
     }
 
     private func runHeightOverflowCheck(now: CFTimeInterval) {
-        guard shouldCheckForHeightOverflow else { return }
+        guard shouldCheckForHeightOverflow() else { return }
 
         lastHeightOverflowCheckTime = now
         lastHeightOverflowCheckWidth = bounds.width
@@ -105,6 +107,13 @@ class TweetTableViewCell: UITableViewCell {
             lastReportedDesiredHeight = desired
             onHeightChanged?(desired)
         }
+    }
+
+    func runDeferredHeightOverflowCheckIfNeeded() {
+        guard shouldCheckForHeightOverflow(allowDeferred: true) else { return }
+        pendingHeightOverflowCheck?.cancel()
+        pendingHeightOverflowCheck = nil
+        runHeightOverflowCheck(now: CACurrentMediaTime())
     }
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
@@ -188,6 +197,7 @@ class TweetTableViewCell: UITableViewCell {
         pendingHeightOverflowCheck?.cancel()
         pendingHeightOverflowCheck = nil
         onHeightChanged = nil
+        shouldDeferHeightOverflowCheck = nil
         onContentExpanded = nil
         currentTweetId = nil
         tweetContentView.prepareForReuse()

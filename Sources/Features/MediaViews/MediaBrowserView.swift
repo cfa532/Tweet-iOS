@@ -33,6 +33,7 @@ struct MediaBrowserView: View {
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
+    @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
     private var attachments: [MimeiFileType] {
         // Audio is handled by the compact playlist player; the browser pages visual media only.
         let allAttachments = currentTweet.attachments ?? []
@@ -129,6 +130,12 @@ struct MediaBrowserView: View {
                 },
                 loadImageIfNeededClosure: { attachment, index in
                     loadImageIfNeeded(for: attachment, at: index)
+                },
+                cleanupNonVisibleImagesClosure: { index in
+                    cleanupNonVisibleImages(attachments: attachments, currentIndex: index)
+                },
+                cleanupImageStatesClosure: {
+                    cleanupImageStates(attachments: attachments)
                 }
             )
             .onAppear {
@@ -138,12 +145,15 @@ struct MediaBrowserView: View {
                 setupFullScreenManager()
                 OverlayVisibilityCoordinator.shared.beginOverlayIfNeeded(id: "mediaBrowserView", source: "MediaBrowserView")
 
-                // NOTE: Don't broadcast stopAllVideos here.
-                // MediaCell videos will pause via overlay visibility detection once the fullscreen cover is presented.
+                // NOTE: Don't broadcast stopAllVideos here. Fullscreen borrows the
+                // feed's shared player, so overlay coverage should transfer ownership
+                // without a pause/resume cycle.
             }
             .onDisappear {
-                // Deactivate manager - this unregisters lifecycle observers and clears player
-                FullScreenVideoManager.shared.deactivate()
+                // Dismissal returns ownership of the shared player to feed/detail. Do not
+                // pause here, because feed reattaches the same AVPlayer during the modal
+                // transition and a pause/resume cycle causes a visible freeze.
+                FullScreenVideoManager.shared.deactivate(transferPlaybackToUnderlyingSurface: true)
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
                 
                 // CRITICAL: Clean up controls timer to prevent CPU cycles accumulation
@@ -256,6 +266,8 @@ struct MediaBrowserView: View {
         let resetControlsTimer: () -> Void
         let onShareVisibilityChange: (Bool) -> Void
         let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
+        let cleanupNonVisibleImagesClosure: (Int) -> Void
+        let cleanupImageStatesClosure: () -> Void
 
         /// Find the next video attachment index after the current index (skips images/audio).
         /// Returns nil if there is no next video in this tweet.
@@ -365,7 +377,7 @@ struct MediaBrowserView: View {
                         previousIndex = newIndex
                         
                         // Clean up non-visible images to free memory
-                        cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
+                        cleanupNonVisibleImagesClosure(newIndex)
 
                         loadSelectedVideoIfNeeded(reason: "indexChanged")
                     }
@@ -440,7 +452,7 @@ struct MediaBrowserView: View {
                 // This allows videos that were already playing to continue, and only the exiting video to resume if needed
                 
                 // Clean up all image states to free memory
-                cleanupImageStates(attachments: attachments, imageStates: $imageStates, baseUrl: baseUrl)
+                cleanupImageStatesClosure()
             }
         }
         
@@ -472,8 +484,11 @@ struct MediaBrowserView: View {
             guard attachments.indices.contains(currentIndex) else { return }
 
             let attachment = attachments[currentIndex]
-            guard isVideoAttachment(attachment),
-                  let url = attachment.getUrl(baseUrl) else {
+            guard isVideoAttachment(attachment) else {
+                FullScreenVideoManager.shared.pause()
+                return
+            }
+            guard let url = attachment.getUrl(baseUrl) else {
                 return
             }
 
@@ -527,39 +542,6 @@ struct MediaBrowserView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .onChange(of: currentIndex) { oldIndex, newIndex in
-                
-                // Load new video when user swipes TO this video
-                if newIndex == index && isVideoAttachment(attachment) {
-                    FullScreenVideoManager.shared.loadVideo(
-                        url: url,
-                        mid: attachment.mid,
-                        tweetId: currentTweet.mid,
-                        cellTweetId: currentCellTweetId,
-                        videoIndex: originalIndex,
-                        mediaType: attachment.type
-                    )
-                }
-                // Pause video when user swipes AWAY from this video
-                else if oldIndex == index && newIndex != index && 
-                        FullScreenVideoManager.shared.currentVideoMid == attachment.mid &&
-                        isVideoAttachment(attachment) {
-                    FullScreenVideoManager.shared.pause()
-                }
-            }
-            .onAppear {
-                // Load video when it appears
-                if shouldAutoPlay && isVideoAttachment(attachment) {
-                    FullScreenVideoManager.shared.loadVideo(
-                        url: url,
-                        mid: attachment.mid,
-                        tweetId: currentTweet.mid,
-                        cellTweetId: currentCellTweetId,
-                        videoIndex: originalIndex,
-                        mediaType: attachment.type
-                    )
-                }
-            }
         }
         
         private func audioView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
@@ -629,19 +611,7 @@ struct MediaBrowserView: View {
             // ✅ Load original image in background and replace compressed cache
             // This ensures fullscreen views use the highest quality image
             guard let url = attachment.getUrl(baseUrl) else { return }
-            Task {
-                if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
-                    from: url,
-                    for: attachment,
-                    baseUrl: baseUrl,
-                    replaceCompressedCache: true
-                ) {
-                    // Update image state with original image
-                    await MainActor.run {
-                        self.imageStates[index] = .loaded(originalImage)
-                    }
-                }
-            }
+            startOriginalImageLoad(for: attachment, at: index, url: url)
             return
         }
         
@@ -666,21 +636,37 @@ struct MediaBrowserView: View {
                 
                 // ✅ Load original image in background and replace compressed cache
                 // This ensures fullscreen and detail views use the highest quality image
-                Task {
-                    if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
-                        from: url,
-                        for: attachment,
-                        baseUrl: baseUrl,
-                        replaceCompressedCache: true
-                    ) {
-                        // Update image state with original image
-                        await MainActor.run {
-                            self.imageStates[index] = .loaded(originalImage)
-                        }
-                    }
-                }
+                startOriginalImageLoad(for: attachment, at: index, url: url)
             } else {
                 self.imageStates[index] = .error
+            }
+        }
+    }
+
+    private func startOriginalImageLoad(for attachment: MimeiFileType, at index: Int, url: URL) {
+        originalImageTasks[index]?.cancel()
+        originalImageTasks[index] = Task {
+            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                from: url,
+                for: attachment,
+                baseUrl: baseUrl,
+                replaceCompressedCache: true,
+                priority: .critical
+            ) {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.originalImageTasks[index] != nil,
+                          self.attachments.indices.contains(index),
+                          self.attachments[index].mid == attachment.mid else { return }
+                    self.imageStates[index] = .loaded(originalImage)
+                }
+            }
+
+            await MainActor.run {
+                if self.originalImageTasks[index]?.isCancelled != false {
+                    return
+                }
+                self.originalImageTasks.removeValue(forKey: index)
             }
         }
     }
@@ -705,6 +691,20 @@ struct MediaBrowserView: View {
         imageStates.wrappedValue.removeAll()
         
     }
+
+    private func cleanupImageStates(attachments: [MimeiFileType]) {
+        for task in originalImageTasks.values {
+            task.cancel()
+        }
+        originalImageTasks.removeAll()
+
+        for (index, attachment) in attachments.enumerated() {
+            let loadId = "browser_\(index)_\(attachment.mid)"
+            GlobalImageLoadManager.shared.cancelLoad(id: loadId)
+        }
+
+        imageStates.removeAll()
+    }
     
     private static func cleanupNonVisibleImages(attachments: [MimeiFileType], currentIndex: Int, imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
         // Since we're using compressed images (small), we can keep more in memory
@@ -724,6 +724,23 @@ struct MediaBrowserView: View {
                 // Remove from image states
                 imageStates.wrappedValue.removeValue(forKey: index)
             }
+        }
+    }
+
+    private func cleanupNonVisibleImages(attachments: [MimeiFileType], currentIndex: Int) {
+        let keepRange = max(0, currentIndex - 2)...min(attachments.count - 1, currentIndex + 2)
+
+        let indexesToRemove = imageStates.keys.filter { index in
+            !keepRange.contains(index) && index < attachments.count
+        }
+
+        for index in indexesToRemove {
+            let attachment = attachments[index]
+            let loadId = "browser_\(index)_\(attachment.mid)"
+            GlobalImageLoadManager.shared.cancelLoad(id: loadId)
+            originalImageTasks[index]?.cancel()
+            originalImageTasks.removeValue(forKey: index)
+            imageStates.removeValue(forKey: index)
         }
     }
 }
@@ -1006,7 +1023,11 @@ struct SingletonVideoPlayerView: View {
     let onUserInteraction: () -> Void
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
-    @State private var hasAttemptedReload = false
+    @State private var handoffThumbnail: UIImage?
+
+    private var didThisVideoFailToLoad: Bool {
+        manager.loadFailedVideoMid == mid
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -1022,80 +1043,176 @@ struct SingletonVideoPlayerView: View {
                                 onUserInteraction()
                             }
                         )
+
+                    if shouldShowHandoffPoster(for: player) {
+                        posterImage
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    }
+
+                    if shouldShowAttachedItemSpinner(for: player) {
+                        loadingSpinnerOverlay
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    }
                 } else {
                     // No player, no item, or different video — show lastframe as placeholder.
                     // This covers the load-failed case (currentVideoMid set to nil, currentItem nil)
                     // and the initial loading state before the first item is attached.
-                    if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
-                        Image(uiImage: thumbnail)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                    } else {
-                        Color.black
-                    }
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.5)
+                    loadingPoster(showSpinner: !didThisVideoFailToLoad)
                 }
 
-                // Show buffering spinner when waiting for data (non-interactive overlay)
-                if manager.isBuffering && manager.currentVideoMid == mid {
-                    ZStack {
-                        Color.black.opacity(0.15)
-                        ProgressView()
-                            .scaleEffect(3.0)
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .opacity(0.8)
-                    }
-                    .transition(.opacity)
-                    .allowsHitTesting(false) // Don't block touches - allow user to interact with player controls
+                if didThisVideoFailToLoad {
+                    retryButton
                 }
+
             }
             .onAppear {
-                    // Only load video for the view the user actually tapped (shouldAutoPlay).
-                    // SwiftUI's TabView preloads neighboring pages — without this guard, a
-                    // non-autoplay neighbor's onAppear fires loadVideo() with the wrong mid,
-                    // overriding the correct video the user tapped.
-                    guard shouldAutoPlay else { return }
-                    if !hasAttemptedReload {
-                        hasAttemptedReload = true
-                        manager.loadVideo(
-                            url: url,
-                            mid: mid,
-                            tweetId: tweetId,
-                            cellTweetId: cellTweetId,
-                            videoIndex: videoIndex,
-                            mediaType: mediaType
-                        )
-                    }
+                if handoffThumbnail == nil {
+                    handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
                 }
-                .onChange(of: manager.currentVideoMid) { _, newMid in
-                    // Reset reload flag when player is cleared (nil) so a failed load can retry.
-                    if newMid == nil {
-                        hasAttemptedReload = false
-                    }
-                }
-                .onChange(of: manager.singletonPlayer?.currentItem) { _, newItem in
-                    // Reset reload flag when player item is cleared so a failed load can retry.
-                    if newItem == nil && (manager.currentVideoMid == nil || manager.currentVideoMid == mid) {
-                        hasAttemptedReload = false
-                        guard shouldAutoPlay else { return }
-                        guard manager.isFullscreenActive else { return }
-                        DispatchQueue.main.async {
-                            manager.loadVideo(
-                                url: url,
-                                mid: mid,
-                                tweetId: tweetId,
-                                cellTweetId: cellTweetId,
-                                videoIndex: videoIndex,
-                                mediaType: mediaType
-                            )
-                        }
-                    }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .videoThumbnailCached)) { notification in
+                guard notification.userInfo?["mediaID"] as? String == mid else { return }
+                if handoffThumbnail == nil {
+                    handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
                 }
             }
         }
     }
+
+    private func shouldShowAttachedItemSpinner(for player: AVPlayer) -> Bool {
+        guard manager.currentVideoMid == mid,
+              let item = player.currentItem else {
+            return false
+        }
+
+        guard player.timeControlStatus != .playing else {
+            return false
+        }
+
+        if manager.isBuffering {
+            return true
+        }
+
+        if item.status != .readyToPlay || player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            return true
+        }
+
+        if shouldAutoPlay && manager.isPlaying {
+            return true
+        }
+
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        if manager.isPlaying && !item.isPlaybackLikelyToKeepUp && bufferedAhead < 0.5 {
+            return true
+        }
+
+        return !manager.isItemReady
+    }
+
+    private func shouldShowHandoffPoster(for player: AVPlayer) -> Bool {
+        guard manager.currentVideoMid == mid,
+              SharedAssetCache.shared.cachedThumbnail(for: mid) != nil,
+              !isVideoAtEnd(player) else {
+            return false
+        }
+
+        return player.timeControlStatus != .playing
+            || manager.isBuffering
+            || !manager.isItemReady
+    }
+
+    private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
+        guard let item = player.currentItem else { return false }
+        let duration = CMTimeGetSeconds(item.duration)
+        let current = CMTimeGetSeconds(player.currentTime())
+        guard duration.isFinite, current.isFinite, duration > 0 else { return false }
+        return duration - current < 0.5
+    }
+
+    private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+        let currentSeconds = CMTimeGetSeconds(player.currentTime())
+        guard currentSeconds.isFinite else { return 0 }
+
+        var bestBufferAhead: Double = 0
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = CMTimeGetSeconds(range.start)
+            let duration = CMTimeGetSeconds(range.duration)
+            guard start.isFinite, duration.isFinite else { continue }
+
+            let end = start + duration
+            if currentSeconds >= start && currentSeconds <= end {
+                return max(0, end - currentSeconds)
+            } else if end > currentSeconds {
+                bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
+            }
+        }
+
+        return max(0, bestBufferAhead)
+    }
+
+    private var loadingSpinnerOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.15)
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.5)
+        }
+    }
+
+    @ViewBuilder
+    private func loadingPoster(showSpinner: Bool) -> some View {
+        ZStack {
+            posterImage
+
+            if showSpinner {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
+            }
+        }
+    }
+
+    private var retryButton: some View {
+        Button {
+            manager.loadVideo(
+                url: url,
+                mid: mid,
+                tweetId: tweetId,
+                cellTweetId: cellTweetId,
+                videoIndex: videoIndex,
+                mediaType: mediaType
+            )
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 56, height: 56)
+                .background(Color.black.opacity(0.55))
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Retry video"))
+        .help("Retry video")
+    }
+
+    @ViewBuilder
+    private var posterImage: some View {
+        if let thumbnail = handoffThumbnail ?? SharedAssetCache.shared.cachedThumbnail(for: mid) {
+            Image(uiImage: thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Color.black
+        }
+    }
+}
 
 // MARK: - Simple AVPlayerViewController Wrapper
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {

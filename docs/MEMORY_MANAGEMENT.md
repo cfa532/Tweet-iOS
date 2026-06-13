@@ -1,6 +1,6 @@
 # Memory Management System
 
-**Last Updated:** December 29, 2025  
+**Last Updated:** June 3, 2026
 **Status:** Active
 
 ## Overview
@@ -151,6 +151,20 @@ private let emergencyThreshold: Double = 0.95 // 95% = 1.9GB
 - **Cache Keys:** Uses stable `mediaID` (IPFS hash), NOT URLs
 - **Preload Tasks:** Throttled and deduplicated by `mediaID`
 - **Memory Warning:** Only acts if > 1.4GB
+
+**Video Feed Fine Tuning (June 2026):**
+
+All feed surfaces now use the same preload budget so profile navigation has the same next-video smoothness as the main feed:
+
+| Surface | Tweet preload window | Directional AVPlayer pre-creation | Max concurrent video loads |
+|---------|----------------------|------------------------------------|----------------------------|
+| Main/standard feeds | current + next 2 tweets | 2 nearby off-screen players | 4 |
+| Profile feeds | current + next 2 tweets | 2 nearby off-screen players | 4 |
+
+Additional guardrails:
+- Off-screen preloaded players may decode/cache a poster frame, but paused off-screen players do not keep network streaming enabled.
+- Visible media still gets priority over background preload work.
+- Directional preloads are cleared when the active window changes so stale adjacent players do not survive fast scrolling.
 
 **Caching Strategy:**
 ```swift
@@ -971,6 +985,17 @@ print("DEBUG: [ImageCacheManager] ...")
 - **Solution:** Synchronized both with 1GB threshold
 - **Impact:** No double cleanup on warnings
 
+### 7. Video Preload Fine Tuning (June 2026)
+- **Problem:** Off-screen preloaded players could continue network streaming while paused after poster-frame work.
+- **Solution:**
+  - Main, standard, and profile feeds use the same preload budget: current + next 2 tweets, 2 directional off-screen players, and 4 concurrent video loads.
+  - Paused off-screen preloaded players no longer keep network streaming enabled after poster-frame work.
+  - Any positive media-cell intersection counts as visible for loading.
+- **Impact:**
+  - Profile feeds keep the same next-video smoothness as the main feed.
+  - Background players are less likely to continue downloading large media while paused.
+  - Visible or partially visible videos are prioritized for loading.
+
 ---
 
 ## Open Discoveries (November 2025)
@@ -1002,4 +1027,3 @@ print("DEBUG: [ImageCacheManager] ...")
 3. **Cache Warming** - Pre-populate cache on WiFi
 4. **Usage Analytics** - Track cache hit rates
 5. **Memory Pressure API** - Use iOS memory pressure notifications
-

@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import os.log
+import SDWebImage
 
 /// Manages memory usage with a 2GB cap to prevent OS termination
 class MemoryCapManager {
@@ -258,7 +259,7 @@ class MemoryCapManager {
         ChatCacheManager.shared.clearMemoryCache()
         
         // Clear video state cache
-        VideoStateCache.shared.clearAllCache()
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
         
         // Notify user about critical memory situation
         let memoryMB = currentMemoryUsage / (1024 * 1024)
@@ -287,9 +288,10 @@ class MemoryCapManager {
         GlobalImageLoadManager.shared.prepareForBackground()
         SharedAssetCache.shared.releaseForBackground()
         ImageCacheManager.shared.clearMemoryCache()
+        SDImageCache.shared.clearMemory()
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
-        VideoStateCache.shared.clearAllCache()
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
         LocalHTTPServer.shared.resetAllConnectionsImmediately()
         LocalHTTPServer.shared.stopImmediatelyForBackground()
 

@@ -79,6 +79,9 @@ class GlobalImageLoadManager: ObservableObject {
     // MARK: - State Management
     private var activeLoads: [String: Task<Void, Never>] = [:]
     private var activeLoadPriorities: [String: ImageLoadingPriority] = [:]
+    private var activeLoadWaiters: [String: [ImageLoadRequest]] = [:]
+    private var activeLoadKeyById: [String: String] = [:]
+    private var activeLoadIdByKey: [String: String] = [:]
     private var pendingRequests: [ImageLoadRequest] = []
     private var completedRequests: Set<String> = []
     private var retryCounts: [String: Int] = [:] // Track retry attempts per request
@@ -116,6 +119,9 @@ class GlobalImageLoadManager: ObservableObject {
         }
         activeLoads.removeAll()
         activeLoadPriorities.removeAll()
+        activeLoadWaiters.removeAll()
+        activeLoadKeyById.removeAll()
+        activeLoadIdByKey.removeAll()
 
         pendingRequests.removeAll()
 
@@ -194,9 +200,34 @@ class GlobalImageLoadManager: ObservableObject {
             if cachedImage != nil {
                 // Found in memory cache, return it immediately
                 request.completion(cachedImage)
+            } else {
+                activeLoadWaiters[request.id, default: []].append(request)
+                if let activePriority = activeLoadPriorities[request.id],
+                   request.priority.rawValue > activePriority.rawValue {
+                    activeLoadPriorities[request.id] = request.priority
+                }
             }
-            // If not in memory cache, the existing request will call completion when done
-            // Don't call completion(nil) here as that would reset loading state prematurely
+            return
+        }
+
+        // Requests from feed/detail/fullscreen use different UI ids, but the
+        // underlying image is the same attachment. Join the active media load
+        // instead of creating a second GlobalImageLoadManager task.
+        if let key = imageCoalescingKey(for: request),
+           let activeId = activeLoadIdByKey[key],
+           activeId != request.id,
+           activeLoads[activeId] != nil {
+            let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: request.attachment)
+            if let cachedImage = cachedImage {
+                request.completion(cachedImage)
+            } else {
+                activeLoadWaiters[activeId, default: []].append(request)
+                if let activePriority = activeLoadPriorities[activeId],
+                   request.priority.rawValue > activePriority.rawValue {
+                    activeLoadPriorities[activeId] = request.priority
+                }
+                print("♻️ [IMAGE LOAD] Joining active load [\(request.priority)]: \(request.id) -> \(activeId)")
+            }
             return
         }
         
@@ -245,10 +276,21 @@ class GlobalImageLoadManager: ObservableObject {
     
     /// Cancel a specific image load request
     func cancelLoad(id: String) {
-        // Cancel active load
-        activeLoads[id]?.cancel()
-        activeLoads.removeValue(forKey: id)
-        activeLoadPriorities.removeValue(forKey: id)
+        let removedWaiters = removeWaitingRequests(id: id)
+        if removedWaiters > 0 {
+            print("DEBUG: [GlobalImageLoadManager] Removed \(removedWaiters) waiting image request(s) for: \(id)")
+        }
+
+        // Cancel active load only when no other UI request is attached to it.
+        if let activeTask = activeLoads[id] {
+            if let waiters = activeLoadWaiters[id], !waiters.isEmpty {
+                print("DEBUG: [GlobalImageLoadManager] Keeping active image load \(id) for \(waiters.count) joined request(s)")
+            } else {
+                activeTask.cancel()
+                activeLoadWaiters.removeValue(forKey: id)
+                clearActiveLoadState(for: id)
+            }
+        }
 
         // Cancel any scheduled retry
         if scheduledRetries[id] != nil {
@@ -367,6 +409,9 @@ class GlobalImageLoadManager: ObservableObject {
         activeLoads.values.forEach { $0.cancel() }
         activeLoads.removeAll()
         activeLoadPriorities.removeAll()
+        activeLoadWaiters.removeAll()
+        activeLoadKeyById.removeAll()
+        activeLoadIdByKey.removeAll()
         print("DEBUG: [GlobalImageLoadManager] Cancelled \(activeLoads.count) active loads")
 
         // Clear all pending requests
@@ -426,6 +471,47 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     // MARK: - Private Methods
+
+    private func imageCoalescingKey(for request: ImageLoadRequest) -> String? {
+        request.attachment.mid.isEmpty ? nil : request.attachment.mid
+    }
+
+    private func clearActiveLoadState(for id: String) {
+        activeLoads.removeValue(forKey: id)
+        activeLoadPriorities.removeValue(forKey: id)
+        if let key = activeLoadKeyById.removeValue(forKey: id),
+           activeLoadIdByKey[key] == id {
+            activeLoadIdByKey.removeValue(forKey: key)
+        }
+    }
+
+    @discardableResult
+    private func removeWaitingRequests(id: String) -> Int {
+        var removed = 0
+        for activeId in Array(activeLoadWaiters.keys) {
+            let original = activeLoadWaiters[activeId] ?? []
+            let filtered = original.filter { $0.id != id }
+            removed += original.count - filtered.count
+            if filtered.isEmpty {
+                activeLoadWaiters.removeValue(forKey: activeId)
+            } else {
+                activeLoadWaiters[activeId] = filtered
+            }
+        }
+        return removed
+    }
+
+    private func completeRequest(_ request: ImageLoadRequest, with image: UIImage?) {
+        let waiters = activeLoadWaiters.removeValue(forKey: request.id) ?? []
+        request.completion(image)
+        for waiter in waiters {
+            waiter.completion(image)
+            if image != nil {
+                completedRequests.insert(waiter.id)
+                retryCounts.removeValue(forKey: waiter.id)
+            }
+        }
+    }
     
     private func handleLoadFailure(_ request: ImageLoadRequest) {
         let currentRetryCount = retryCounts[request.id] ?? 0
@@ -495,10 +581,16 @@ class GlobalImageLoadManager: ObservableObject {
             // Check if image is already cached
             if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                 await MainActor.run {
-                    request.completion(cachedImage)
+                    guard !Task.isCancelled else {
+                        self.activeLoadWaiters.removeValue(forKey: request.id)
+                        self.clearActiveLoadState(for: request.id)
+                        self.updateStatistics()
+                        self.processNextPendingRequest()
+                        return
+                    }
+                    self.completeRequest(request, with: cachedImage)
                     self.completedRequests.insert(request.id)
-                    self.activeLoads.removeValue(forKey: request.id)
-                    self.activeLoadPriorities.removeValue(forKey: request.id)
+                    self.clearActiveLoadState(for: request.id)
                     self.updateStatistics()
                     self.processNextPendingRequest()
                 }
@@ -511,11 +603,20 @@ class GlobalImageLoadManager: ObservableObject {
             await MainActor.run {
                 let mediaID = MimeiId(request.attachment.mid)
 
+                guard !Task.isCancelled else {
+                    print("DEBUG: [GlobalImageLoadManager] Task cancelled for \(request.id) - skipping completion/retry")
+                    self.activeLoadWaiters.removeValue(forKey: request.id)
+                    self.clearActiveLoadState(for: request.id)
+                    self.updateStatistics()
+                    self.processNextPendingRequest()
+                    return
+                }
+
                 if let image = image {
                     // ✅ RECORD SUCCESS TO BLACKLIST
                     BlackList.shared.recordSuccess(mediaID)
 
-                    request.completion(image)
+                    self.completeRequest(request, with: image)
                     self.completedRequests.insert(request.id)
                     self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
                 } else {
@@ -530,11 +631,10 @@ class GlobalImageLoadManager: ObservableObject {
                         self.handleLoadFailure(request)
                     }
 
-                    // Always call completion, even on failure/cancellation, so UI can update isLoading state
-                    request.completion(nil)
+                    // Always call completion on real failures so UI can update isLoading state.
+                    self.completeRequest(request, with: nil)
                 }
-                self.activeLoads.removeValue(forKey: request.id)
-                self.activeLoadPriorities.removeValue(forKey: request.id)
+                self.clearActiveLoadState(for: request.id)
                 self.updateStatistics()
                 self.processNextPendingRequest()
             }
@@ -542,81 +642,51 @@ class GlobalImageLoadManager: ObservableObject {
         
         activeLoads[request.id] = task
         activeLoadPriorities[request.id] = request.priority
+        if let key = imageCoalescingKey(for: request) {
+            activeLoadKeyById[request.id] = key
+            activeLoadIdByKey[key] = request.id
+        }
         updateStatistics()
     }
     
     private func loadImageFromNetwork(_ request: ImageLoadRequest) async -> UIImage? {
         let startTime = Date()
-        print("📥 [IMAGE LOAD] Starting [\(request.priority)]: \(request.url.lastPathComponent)")
+        print("📥 [IMAGE LOAD] Starting [\(request.priority)] \(request.id): \(request.url.lastPathComponent)")
 
-        do {
-            // Create URLRequest with timeout
-            var urlRequest = URLRequest(url: request.url)
-            urlRequest.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
-            urlRequest.cachePolicy = .returnCacheDataElseLoad
+        let image = await ImageCacheManager.shared.loadAndCacheImage(
+            from: request.url,
+            for: request.attachment,
+            priority: request.priority
+        )
 
-            let (data, response) = try await URLSession.shared.data(for: urlRequest)
-            
-            // Check if we got a valid response
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                print("❌ [IMAGE LOAD] HTTP \(statusCode) for \(request.url.lastPathComponent)")
-                return nil
-            }
-
-            // Update progress
+        if let image {
+            consecutiveNetworkFailures = 0
+            let elapsed = Date().timeIntervalSince(startTime)
             await MainActor.run {
                 request.onProgress(1.0)
             }
+            print("✅ [IMAGE LOAD] Completed [\(request.priority)] \(request.id) in \(String(format: "%.1f", elapsed))s: \(request.url.lastPathComponent)")
+            return image
+        }
 
-            // Check if data is empty
-            guard !data.isEmpty else {
-                print("❌ [IMAGE LOAD] Empty response body for \(request.url.lastPathComponent)")
-                return nil
-            }
-
-            if let image = ImageCacheManager.shared.cacheImageData(data, for: request.attachment) {
-                // Reset network failure counter on successful load
-                consecutiveNetworkFailures = 0
-                let elapsed = Date().timeIntervalSince(startTime)
-                let sizeKB = Double(data.count) / 1024.0
-                print("✅ [IMAGE LOAD] Completed [\(request.priority)] in \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", sizeKB))KB): \(request.url.lastPathComponent)")
-                return image
-            }
-
-            print("❌ [IMAGE LOAD] Failed to decode image data (\(data.count) bytes) for \(request.url.lastPathComponent)")
-            return nil
-            
-        } catch {
-            // Check if this is a cancellation error (user scrolled away)
-            let nsError = error as NSError
-            let isCancelled = nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
-
-            if isCancelled {
-                print("DEBUG: [GlobalImageLoadManager] Image load cancelled (user scrolled): \(request.url.lastPathComponent)")
-                // Don't count cancellations as network failures
-                return nil
-            }
-
-            // Real network error - log and track
-            print("❌ [IMAGE LOAD] Network error for \(request.url.lastPathComponent): \(error.localizedDescription)")
-
-            // Track consecutive network failures
-            consecutiveNetworkFailures += 1
-            print("DEBUG: [GlobalImageLoadManager] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
-
-            // Trigger emergency cleanup if too many consecutive failures
-            if consecutiveNetworkFailures >= maxConsecutiveFailures {
-                print("DEBUG: [GlobalImageLoadManager] Too many consecutive network failures, triggering cleanup")
-                Task { @MainActor in
-                    self.handleNetworkFailureCleanup()
-                }
-                consecutiveNetworkFailures = 0 // Reset counter after cleanup
-            }
-
+        if Task.isCancelled {
+            print("DEBUG: [GlobalImageLoadManager] Image load cancelled (user scrolled): \(request.url.lastPathComponent)")
             return nil
         }
+
+        print("❌ [IMAGE LOAD] Failed for \(request.url.lastPathComponent)")
+        consecutiveNetworkFailures += 1
+        print("DEBUG: [GlobalImageLoadManager] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
+
+        if consecutiveNetworkFailures >= maxConsecutiveFailures {
+            print("DEBUG: [GlobalImageLoadManager] Too many consecutive network failures, triggering cleanup")
+            Task { @MainActor in
+                self.handleNetworkFailureCleanup()
+            }
+            consecutiveNetworkFailures = 0
+        }
+
+        return nil
     }
     
     private func loadImageOptimized(request: ImageLoadRequest, maxSize: CGSize) {
@@ -757,7 +827,10 @@ class GlobalImageLoadManager: ObservableObject {
             urlRequest.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
             urlRequest.cachePolicy = .returnCacheDataElseLoad
             
-            let (data, response) = try await URLSession.shared.data(for: urlRequest)
+            let (localURL, response) = try await URLSession.shared.download(for: urlRequest)
+            defer {
+                try? FileManager.default.removeItem(at: localURL)
+            }
             
             // Check cancellation after network request
             try Task.checkCancellation()
@@ -779,7 +852,9 @@ class GlobalImageLoadManager: ObservableObject {
             // Check cancellation before image processing
             try Task.checkCancellation()
 
-            // Create UIImage from data
+            let data = try Data(contentsOf: localURL, options: .mappedIfSafe)
+
+            // Create UIImage from downloaded file data
             guard let originalImage = UIImage(data: data) else {
                 print("❌ [IMAGE LOAD] Failed to decode optimized image data (\(data.count) bytes) for \(request.url.lastPathComponent)")
                 return nil
@@ -971,6 +1046,9 @@ class GlobalImageLoadManager: ObservableObject {
         }
         activeLoads.removeAll()
         activeLoadPriorities.removeAll()
+        activeLoadWaiters.removeAll()
+        activeLoadKeyById.removeAll()
+        activeLoadIdByKey.removeAll()
 
         // Cancel all scheduled retries
         for workItem in scheduledRetries.values {

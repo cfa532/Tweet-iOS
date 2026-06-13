@@ -5,6 +5,7 @@
 //  Created by Tomás Hongo on 2025/7/3.
 //
 import Foundation
+import CoreGraphics
 
 enum Constants {
     static let GUEST_ID = "000000000000000000000000000"
@@ -30,6 +31,29 @@ enum Constants {
     
     // Image Loading Timeout
     static let IMAGE_LOAD_TIMEOUT: TimeInterval = 15.0  // 15 seconds for all image loading requests
+}
+
+enum FeedPlaybackTuning {
+    // Directional preloading
+    static let directionalVideoPreloadCount = 1
+    static let directionalImagePreloadRowCount = 2
+    static let oppositeStopImagePreloadRowCount = 1
+    static let maxDirectionalImagePreloadsInFlight = 4
+    static let directionalVideoPreloadRefreshInterval: CFTimeInterval = 0.35
+
+    // Scroll visibility
+    static let videoVisibilityThrottleInterval: TimeInterval = 0.15
+    static let mediaLoadVisibleMinHeight: CGFloat = 48
+    static let mediaLoadVisibleMinRatio: CGFloat = 0.08
+    static let tweetVisibleRatio: CGFloat = 0.50
+
+    // Video playback visibility
+    static let videoStartVisibilityRatio: CGFloat = 0.50
+    static let videoContinueVisibilityRatio: CGFloat = 0.70
+
+    // Overlay/layout settling
+    static let overlayDismissSettleDelay: TimeInterval = 0.35
+    static let barAppearanceCompensationTimeout: TimeInterval = 0.15
 }
 
 enum UserContentType: String {

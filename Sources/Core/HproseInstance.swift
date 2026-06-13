@@ -1532,7 +1532,12 @@ final class HproseInstance: ObservableObject {
         // Check if this user has been blacklisted due to repeated failures
         // Skip this check if we're in internal retry logic to prevent double-checking
         if !skipRetryAndBlacklist && blackList.isBlacklisted(userId) {
-            print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning nil")
+            let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+            if cachedUser.username != nil {
+                print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning cached=true")
+                return cachedUser
+            }
+            print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning cached=false")
             return nil
         }
         
@@ -1963,9 +1968,10 @@ final class HproseInstance: ObservableObject {
             // Validate response data BEFORE updating the singleton to avoid overwriting
             // a valid user object with invalid data from the server
             guard let mid = userDict["mid"] as? String, !mid.isEmpty,
-                  userDict["username"] != nil else {
-                print("ERROR: [processUserDataResponse] INVALID USER DATA in response: mid or username missing for userId: \(user.mid)")
-                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid user data received - missing mid or username")
+                  let username = userDict["username"] as? String,
+                  !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                print("ERROR: [processUserDataResponse] INVALID USER DATA in response: mid missing or username empty for userId: \(user.mid)")
+                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid user data received - missing mid or empty username")
             }
 
             if !skipRetryAndBlacklist {
@@ -2153,14 +2159,12 @@ final class HproseInstance: ObservableObject {
                             
                             print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
-                            let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0)
+                            let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0, logFailures: false)
 
                             if Task.isCancelled { return nil }
 
                             if isHealthy {
                                 print("DEBUG: [_getProviderIP] ✅ IP test PASSED: \(ip)")
-                            } else {
-                                print("DEBUG: [_getProviderIP] ❌ IP test FAILED: \(ip)")
                             }
                             
                             return (ip, isHealthy)
@@ -2210,7 +2214,7 @@ final class HproseInstance: ObservableObject {
     // MARK: - IP Cache Methods
     
     /// Check if an IP health result is in the cache and still valid.
-    private func getCachedIPHealth(_ ip: String) -> Bool? {
+    private func getCachedIPHealth(_ ip: String, logFailures: Bool = true) -> Bool? {
         ipCacheLock.lock()
         defer { ipCacheLock.unlock() }
         let key = normalizeHostPort(ip)
@@ -2218,7 +2222,9 @@ final class HproseInstance: ObservableObject {
         if let entry = ipCache[key] {
             if !entry.isExpired {
                 let state = entry.isHealthy ? "healthy" : "unhealthy"
-                print("DEBUG: [IPCache] Cache HIT for IP: \(key) = \(state) (age: \(Int(Date().timeIntervalSince(entry.timestamp)))s)")
+                if entry.isHealthy || logFailures {
+                    print("DEBUG: [IPCache] Cache HIT for IP: \(key) = \(state) (age: \(Int(Date().timeIntervalSince(entry.timestamp)))s)")
+                }
                 return entry.isHealthy
             } else {
                 print("DEBUG: [IPCache] Cache EXPIRED for IP: \(key)")
@@ -2229,14 +2235,16 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Cache a HEAD health result.
-    private func cacheIP(_ ip: String, isHealthy: Bool) {
+    private func cacheIP(_ ip: String, isHealthy: Bool, logFailures: Bool = true) {
         ipCacheLock.lock()
         defer { ipCacheLock.unlock() }
         let key = normalizeHostPort(ip)
         
         ipCache[key] = IPCacheEntry(ip: key, isHealthy: isHealthy, timestamp: Date())
         let state = isHealthy ? "healthy" : "unhealthy"
-        print("DEBUG: [IPCache] Cached IP: \(key) = \(state)")
+        if isHealthy || logFailures {
+            print("DEBUG: [IPCache] Cached IP: \(key) = \(state)")
+        }
     }
     
     /// Clear expired entries from cache
@@ -2282,13 +2290,13 @@ final class HproseInstance: ObservableObject {
     /// Any HTTP response means the server is reachable; only a network-level error
     /// (refused, timeout, cancelled) means it is not.
     /// The timeout is passed directly to URLRequest so there is no extra Task layer.
-    private func isServerHealthy(_ ip: String, timeout: TimeInterval = 5.0, useCache: Bool = true) async -> Bool {
-        if useCache, let cachedHealth = getCachedIPHealth(ip) {
+    private func isServerHealthy(_ ip: String, timeout: TimeInterval = 5.0, useCache: Bool = true, logFailures: Bool = true) async -> Bool {
+        if useCache, let cachedHealth = getCachedIPHealth(ip, logFailures: logFailures) {
             return cachedHealth
         }
 
         guard let url = URL(string: "http://\(ip)/") else {
-            cacheIP(ip, isHealthy: false)
+            cacheIP(ip, isHealthy: false, logFailures: logFailures)
             return false
         }
 
@@ -2305,16 +2313,18 @@ final class HproseInstance: ObservableObject {
         } catch {
             let nsError = error as NSError
             if nsError.code != NSURLErrorCancelled {
-                print("DEBUG: [isServerHealthy] ❌ \(ip): \(nsError.domain) \(nsError.code)")
-                cacheIP(ip, isHealthy: false)
+                if logFailures {
+                    print("DEBUG: [isServerHealthy] ❌ \(ip): \(nsError.domain) \(nsError.code)")
+                }
+                cacheIP(ip, isHealthy: false, logFailures: logFailures)
             }
             return false
         }
     }
 
-    private func isServerHealthyWithTimeout(_ ip: String, timeout: TimeInterval = 5.0, useCache: Bool = true) async -> Bool {
+    private func isServerHealthyWithTimeout(_ ip: String, timeout: TimeInterval = 5.0, useCache: Bool = true, logFailures: Bool = true) async -> Bool {
         cleanupExpiredCache()
-        return await isServerHealthy(ip, timeout: timeout, useCache: useCache)
+        return await isServerHealthy(ip, timeout: timeout, useCache: useCache, logFailures: logFailures)
     }
     
 
@@ -7575,14 +7585,12 @@ final class HproseInstance: ObservableObject {
                             
                             print("DEBUG: [_getHostIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
-                            let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0)
+                            let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0, logFailures: false)
 
                             if Task.isCancelled { return nil }
 
                             if isHealthy {
                                 print("DEBUG: [_getHostIP] ✅ IP test PASSED: \(ip)")
-                            } else {
-                                print("DEBUG: [_getHostIP] ❌ IP test FAILED: \(ip)")
                             }
                             
                             return (ip, isHealthy)

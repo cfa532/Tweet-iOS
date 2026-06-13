@@ -57,6 +57,7 @@ struct CommentItemView: View {
                     tweet: comment,
                     enableTap: true, // Always enable tap for proper gesture recognition
                     isVisible: isVisible,
+                    cellTweetId: parentTweet.mid,
                     onTweetBodyTap: {
                         if linkToComment {
                             // Navigate to comment detail by posting notification

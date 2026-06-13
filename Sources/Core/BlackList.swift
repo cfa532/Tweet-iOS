@@ -32,13 +32,21 @@ class BlackList {
     
     /// Resources that are permanently blacklisted
     private var blacklist: Set<MimeiId> = []
+
+    private let sessionBlockFailureCount = 2
+
+    /// Process-local failure guard. This resets when the app process restarts.
+    private var sessionFailureCounts: [MimeiId: Int] = [:]
+    private var sessionBlockedResources: Set<MimeiId> = []
+    private var lastFailureRecordedAt: [MimeiId: TimeInterval] = [:]
+    private let failureDedupWindow: TimeInterval = 20
     
     // MARK: - Public Methods
     
     /// Check if a resource is blacklisted
     func isBlacklisted(_ mimeiId: MimeiId) -> Bool {
         queue.sync {
-            blacklist.contains(mimeiId)
+            sessionBlockedResources.contains(mimeiId) || blacklist.contains(mimeiId)
         }
     }
     
@@ -46,6 +54,9 @@ class BlackList {
     func recordSuccess(_ mimeiId: MimeiId) {
         queue.sync(flags: .barrier) {
             let wasInCandidates = candidates.removeValue(forKey: mimeiId) != nil
+            sessionFailureCounts.removeValue(forKey: mimeiId)
+            sessionBlockedResources.remove(mimeiId)
+            lastFailureRecordedAt.removeValue(forKey: mimeiId)
             
             if wasInCandidates {
                 print("[BlackList] Removed \(mimeiId) from candidates after successful access")
@@ -62,6 +73,19 @@ class BlackList {
     func recordFailure(_ mimeiId: MimeiId) {
         queue.sync(flags: .barrier) {
             let now = Date().timeIntervalSince1970
+            if let lastFailure = lastFailureRecordedAt[mimeiId],
+               now - lastFailure < failureDedupWindow {
+                return
+            }
+            lastFailureRecordedAt[mimeiId] = now
+
+            let sessionFailureCount = (sessionFailureCounts[mimeiId] ?? 0) + 1
+            sessionFailureCounts[mimeiId] = sessionFailureCount
+            if sessionFailureCount >= sessionBlockFailureCount,
+               !sessionBlockedResources.contains(mimeiId) {
+                sessionBlockedResources.insert(mimeiId)
+                print("[BlackList] Temporarily blocked \(mimeiId) for this session after \(sessionFailureCount) failures")
+            }
             
             if let existingEntry = candidates[mimeiId] {
                 // Update existing candidate entry
@@ -134,6 +158,8 @@ class BlackList {
     /// Move a resource from candidates to blacklist (permanent - never tried again)
     private func moveToBlacklist(_ mimeiId: MimeiId) {
         candidates.removeValue(forKey: mimeiId)
+        sessionFailureCounts.removeValue(forKey: mimeiId)
+        sessionBlockedResources.remove(mimeiId)
         blacklist.insert(mimeiId)
         print("[BlackList] Permanently blacklisted \(mimeiId) - will never be tried again")
     }
@@ -227,4 +253,4 @@ extension BlackList.CandidateEntry: Codable {
         try container.encode(failureCount, forKey: .failureCount)
         try container.encode(firstFailureTimestamp, forKey: .firstFailureTimestamp)
     }
-} 
+}

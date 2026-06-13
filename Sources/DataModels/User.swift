@@ -285,6 +285,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var topTweets: [MimeiId]? // List of MimeiId
     @Published var userBlackList: [MimeiId]? // List of MimeiId
     @Published var cacheStatus: UserCacheStatus = .unknown
+
+    var hasValidUsername: Bool {
+        guard let username else { return false }
+        return !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     
     var id: String { mid }  // Computed property that returns mid
     
@@ -388,6 +393,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
             let decodedUser = try decoder.decode(User.self, from: jsonData)
+            guard decodedUser.hasValidUsername else {
+                throw NSError(domain: "User", code: -2, userInfo: [NSLocalizedDescriptionKey: "Invalid user data: username is empty"])
+            }
             
             // CRITICAL: Always preserve the existing baseUrl from the singleton instance
             // The backend may send a baseUrl from hostId[0], but we need the user's provider IP
@@ -442,7 +450,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     static func from(cdUser: CDUser) -> User {
         // Try to decode the full user object from cache.
         if let userData = cdUser.userData,
-           let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
+           let decodedUser = try? JSONDecoder().decode(User.self, from: userData),
+           decodedUser.hasValidUsername {
             // baseUrl is persisted in cache and should be loaded
             // Pass true to apply cached baseUrl so avatar can load immediately on app start
             updateUserInstance(with: decodedUser, true)
@@ -484,7 +493,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         nilFieldsToClear: Set<String>
     ) {
         instance.name = user.name ?? instance.name
-        instance.username = user.username ?? instance.username
+        if user.hasValidUsername {
+            instance.username = user.username
+        }
         instance.password = user.password ?? instance.password
         if let avatar = sanitizedAvatarId(user.avatar) {
             instance.avatar = avatar
