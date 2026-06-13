@@ -1025,6 +1025,10 @@ struct SingletonVideoPlayerView: View {
     @ObservedObject private var manager = FullScreenVideoManager.shared
     @State private var handoffThumbnail: UIImage?
 
+    private var didThisVideoFailToLoad: Bool {
+        manager.loadFailedVideoMid == mid
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -1055,7 +1059,11 @@ struct SingletonVideoPlayerView: View {
                     // No player, no item, or different video — show lastframe as placeholder.
                     // This covers the load-failed case (currentVideoMid set to nil, currentItem nil)
                     // and the initial loading state before the first item is attached.
-                    loadingPoster
+                    loadingPoster(showSpinner: !didThisVideoFailToLoad)
+                }
+
+                if didThisVideoFailToLoad {
+                    retryButton
                 }
 
             }
@@ -1155,14 +1163,43 @@ struct SingletonVideoPlayerView: View {
     }
 
     @ViewBuilder
-    private var loadingPoster: some View {
+    private func loadingPoster(showSpinner: Bool) -> some View {
         ZStack {
             posterImage
 
-            ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                .scaleEffect(1.5)
+            if showSpinner {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
+            }
         }
+    }
+
+    private var retryButton: some View {
+        Button {
+            manager.loadVideo(
+                url: url,
+                mid: mid,
+                tweetId: tweetId,
+                cellTweetId: cellTweetId,
+                videoIndex: videoIndex,
+                mediaType: mediaType
+            )
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 56, height: 56)
+                .background(Color.black.opacity(0.55))
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Retry video"))
+        .help("Retry video")
     }
 
     @ViewBuilder

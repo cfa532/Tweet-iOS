@@ -736,7 +736,8 @@ private struct DetailSingletonVideoPlayerView: View {
     }
 
     private var shouldShowPlaceholder: Bool {
-        !isThisVideoLoaded
+        didThisVideoFailToLoad
+            || !isThisVideoLoaded
             || isThisVideoPreparing
             || (manager.currentVideoMid == mid
                 && !manager.isPlaybackRendering
@@ -765,6 +766,10 @@ private struct DetailSingletonVideoPlayerView: View {
                     .scaleEffect(1.5)
                     .allowsHitTesting(false)
             }
+
+            if didThisVideoFailToLoad {
+                retryButton
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .videoThumbnailCached)) { notification in
             guard notification.userInfo?["mediaID"] as? String == mid else { return }
@@ -790,6 +795,26 @@ private struct DetailSingletonVideoPlayerView: View {
                 Color.black
             }
         }
+    }
+
+    private var retryButton: some View {
+        Button {
+            manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 52, height: 52)
+                .background(Color.black.opacity(0.55))
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Retry video"))
+        .help("Retry video")
     }
 
 }
