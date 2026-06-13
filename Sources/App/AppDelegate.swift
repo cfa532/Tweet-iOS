@@ -27,6 +27,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// When false on foreground return, players and server are still intact → fast path.
     private(set) static var didPerformAggressiveCleanup = false
     
+    private enum BackgroundMessageCheck {
+        static let identifier = "com.example.ZZ.messageCheck"
+        static let interval: TimeInterval = 15 * 60
+    }
+    
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Configure FFmpegKit to suppress verbose logs (only show errors)
         // AV_LOG_ERROR = 16 - only show fatal errors, suppress INFO/WARNING/DEBUG
@@ -113,7 +118,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     private func registerBackgroundTasks() {
         // Register background task for checking new messages every 15 minutes
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.example.ZZ.messageCheck", using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMessageCheck.identifier, using: nil) { task in
             print("[AppDelegate] 🎯 Background task triggered: \(task.identifier)")
             self.handleMessageCheckBackgroundTask(task: task as! BGAppRefreshTask)
         }
@@ -146,14 +151,52 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     private func scheduleNextMessageCheck() {
-        let request = BGAppRefreshTaskRequest(identifier: "com.example.ZZ.messageCheck")
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60) // 15 minutes from now
+        guard UIApplication.shared.backgroundRefreshStatus == .available else {
+            print("[AppDelegate] ℹ️ Background message check not scheduled; Background App Refresh is \(backgroundRefreshStatusDescription())")
+            return
+        }
+
+        let request = BGAppRefreshTaskRequest(identifier: BackgroundMessageCheck.identifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: BackgroundMessageCheck.interval)
 
         do {
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundMessageCheck.identifier)
             try BGTaskScheduler.shared.submit(request)
             print("[AppDelegate] 📅 Next background message check scheduled for \(request.earliestBeginDate ?? Date())")
         } catch {
+            logMessageCheckSchedulingFailure(error)
+        }
+    }
+    
+    private func logMessageCheckSchedulingFailure(_ error: Error) {
+        let nsError = error as NSError
+        guard nsError.domain == "BGTaskSchedulerErrorDomain" else {
             print("[AppDelegate] ❌ Failed to schedule background message check: \(error)")
+            return
+        }
+
+        switch nsError.code {
+        case 1:
+            print("[AppDelegate] ℹ️ Background message check not scheduled because BGTaskScheduler is unavailable in this environment")
+        case 2:
+            print("[AppDelegate] ⚠️ Background message check not scheduled because too many background task requests are pending")
+        case 3:
+            print("[AppDelegate] ❌ Background message check is not permitted; verify BGTaskSchedulerPermittedIdentifiers and UIBackgroundModes in Info.plist")
+        default:
+            print("[AppDelegate] ❌ Failed to schedule background message check: \(error)")
+        }
+    }
+    
+    private func backgroundRefreshStatusDescription() -> String {
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available:
+            return "available"
+        case .denied:
+            return "denied"
+        case .restricted:
+            return "restricted"
+        @unknown default:
+            return "unknown"
         }
     }
     
