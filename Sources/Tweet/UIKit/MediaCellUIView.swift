@@ -130,6 +130,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private static var feedPlayerRebuildHistory: [String: [Date]] = [:]
     private static let maxFeedPlayerRebuildsPerWindow = 2
     private static let feedPlayerRebuildWindow: TimeInterval = 90
+    private static let slowLoadingNudgeInterval: TimeInterval = 10
+    private static let slowLoadingNudgeIntervalNanos: UInt64 = 10_000_000_000
 
 #if DEBUG && VERBOSE_VIDEO_LOGS
     private static let verboseLogsEnabled = true
@@ -336,6 +338,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var liveHandoffLastLayerRefreshAt: Date = .distantPast
     private var feedPlayerRebuildCount = 0
     private var firstFeedPlayerRebuildDate: Date = .distantPast
+    private var slowLoadingRecoveryTask: Task<Void, Never>?
+    private var lastSlowLoadingNudgeDate: Date = .distantPast
     private var lastLoggedTimeControlStatus: AVPlayer.TimeControlStatus?
     private var lastLoggedTimeControlBucket: Int = -1
     private var lastLoggedTimeControlDate: Date = .distantPast
@@ -1882,8 +1886,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             requestSeconds >= 0.25 &&
             player.currentItem?.status == .readyToPlay &&
             player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        let isSlowLoadingNudgeFollowUp = reason.hasPrefix("slowLoadingNudge")
         let recoveryDelay: UInt64
-        if isResumeWaitAttempt {
+        if isSlowLoadingNudgeFollowUp {
+            recoveryDelay = Self.slowLoadingNudgeIntervalNanos
+        } else if isResumeWaitAttempt {
             recoveryDelay = 4_000_000_000
         } else {
             recoveryDelay = isStartupAttempt ? 12_000_000_000 : 15_000_000_000
@@ -1942,7 +1949,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 return
             }
 
-            if self.rebuildPlayedStalledPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
+            if self.nudgeSlowLoadingPrimaryIfUseful(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
+                return
+            }
+
+            if self.failUnbufferedUnknownPrimaryIfTimedOut(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
                 return
             }
 
@@ -1951,18 +1962,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
 
             if self.rebuildStarvedReadyPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
-            if self.rebuildWaitingPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
-            if self.rebuildFrozenPlayingPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
-            if self.failUnbufferedUnknownPrimaryIfTimedOut(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
                 return
             }
 
@@ -2052,6 +2051,63 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             requireLoadableVisibleVideo: true,
             wantsPlayback: true
         )
+    }
+
+    @discardableResult
+    private func nudgeSlowLoadingPrimaryIfUseful(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
+        guard coordinatorWantsToPlay,
+              canDriveForegroundPlayback,
+              isVisible,
+              shouldLoadVideo,
+              videoCellState == .playing,
+              let item = player.currentItem,
+              item.status != .failed,
+              !isVideoAtEnd(player),
+              let mid = attachment?.mid else { return false }
+        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastSlowLoadingNudgeDate) >= Self.slowLoadingNudgeInterval else { return true }
+        guard !isVisibleVideoFrameReady(player) else { return false }
+
+        let hasSomethingWorthKeeping = playerHasLoadedData(player)
+            || bufferedAhead > 0
+            || hasPlaybackCoverForCurrentVideo
+            || hasEstablishedDecodedPlayback(for: player)
+        guard hasSomethingWorthKeeping else { return false }
+
+        preserveFrameToCache(skipImageView: imageView.image != nil)
+        restoreCachedPosterForFailureIfNeeded()
+        applyAVPlayerBufferDefaults(to: player)
+        cancelDelayedPrimarySpinner()
+        loadingSpinner.startAnimating()
+        lastSlowLoadingNudgeDate = now
+        lastPlaybackRequestDate = now
+
+        let currentSeconds = seconds(from: player.currentTime())
+        print("\(logPrefix) ⏳ \(reason): slow-loading nudge, keeping player, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, itemStatus=\(item.status.rawValue), timeControl=\(player.timeControlStatus.rawValue)")
+
+        player.pause()
+        slowLoadingRecoveryTask?.cancel()
+        slowLoadingRecoveryTask = Task { @MainActor [weak self, weak player] in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard let self else { return }
+            defer { self.slowLoadingRecoveryTask = nil }
+            guard !Task.isCancelled,
+                  let player,
+                  self.player === player,
+                  self.coordinatorWantsToPlay,
+                  self.canDriveForegroundPlayback,
+                  !self.isVideoAtEnd(player) else { return }
+
+            self.applyAVPlayerBufferDefaults(to: player)
+            self.resetPlaybackProgressTracking(to: player.currentTime())
+            player.play()
+            self.updateLoadingSpinnerForPlayback(player)
+            self.scheduleStartupRecovery(for: player, reason: "slowLoadingNudge-\(reason)")
+        }
+
+        return true
     }
 
     @discardableResult
@@ -2234,7 +2290,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               bufferedAhead < 0.25,
               lastActualPlaybackDate == .distantPast,
               lastPlaybackRequestDate != .distantPast,
-              Date().timeIntervalSince(lastPlaybackRequestDate) >= 12.0,
+              Date().timeIntervalSince(lastPlaybackRequestDate) >= 30.0,
               !isVisibleVideoFrameReady(player),
               !isVideoAtEnd(player) else { return false }
 
@@ -3765,6 +3821,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         statusUnknownFallbackTask = nil
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
+        slowLoadingRecoveryTask?.cancel()
+        slowLoadingRecoveryTask = nil
         loadingSpinner.stopAnimating()
         removePlayerObservers()
         removePlayerTimeObserver()
@@ -4132,13 +4190,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if coordinatorWantsToPlay,
            videoCellState == .playing,
            item.status == .readyToPlay,
-           playbackStartupRecoveryTask != nil {
-            return Date().timeIntervalSince(lastPlaybackRequestDate) < 12.0
-        }
-
-        if coordinatorWantsToPlay,
-           videoCellState == .playing,
-           item.status == .readyToPlay,
            player.timeControlStatus == .paused,
            !isVideoAtEnd(player) {
             let bufferedAhead = bufferedTimeAhead(for: player)
@@ -4216,11 +4267,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
         guard let item = player?.currentItem else { return false }
         if item.status == .unknown {
-            guard let player else { return true }
-            let hasWaitedLongEnough = Date().timeIntervalSince(lastPlaybackRequestDate) > 12.0
-            if hasWaitedLongEnough && bufferedTimeAhead(for: player) >= 1.0 {
-                return false
-            }
             return true
         }
         return false
@@ -4287,7 +4333,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private var hasPlaybackCoverForCurrentVideo: Bool {
-        lastActualPlaybackDate != .distantPast
+        imageView.image != nil
+            || hasRenderedFrameForCurrentPlayer
+            || videoPlayerView.isLayerReadyForDisplay
+            || lastActualPlaybackDate != .distantPast
+            || lastPlaybackProgressDate != .distantPast
+            || lastDecodedPlaybackProgressDate != .distantPast
     }
 
     private var canShowCachedCoverForCurrentVideo: Bool {
@@ -4486,6 +4537,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         let hasWork =
             setupPlayerTask != nil ||
+            slowLoadingRecoveryTask != nil ||
             playbackStartupRecoveryTask != nil ||
             videoOutput != nil ||
             videoOutputAttachedItem != nil ||
@@ -4516,6 +4568,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func teardownPlayerAndObservers() {
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
+        slowLoadingRecoveryTask?.cancel()
+        slowLoadingRecoveryTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
         cancelDelayedPrimarySpinner()
@@ -4581,6 +4635,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastBufferingWaitLogKey = nil
         lastBufferingWaitLogDate = .distantPast
         lastSlowLoadWaitLogDate = .distantPast
+        slowLoadingRecoveryTask?.cancel()
+        slowLoadingRecoveryTask = nil
+        lastSlowLoadingNudgeDate = .distantPast
         lastStartupBufferReleaseDate = .distantPast
         startupBufferReleaseUntil = .distantPast
         requestedFallbackThumbnailMid = nil
@@ -4700,6 +4757,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         timerHideTask?.cancel()
         playerAcquireDebounceTask?.cancel()
         setupPlayerTask?.cancel()
+        slowLoadingRecoveryTask?.cancel()
         imageLoadTask?.cancel()
     }
 }
