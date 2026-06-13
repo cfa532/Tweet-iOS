@@ -2111,45 +2111,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     @discardableResult
-    private func rebuildPlayedStalledPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              canDriveForegroundPlayback,
-              videoCellState == .playing,
-              player.currentItem?.status == .readyToPlay,
-              hasEstablishedDecodedPlayback(for: player),
-              !hasRecentDecodedPlayback(for: player, maxAge: 5.0),
-              !isVideoAtEnd(player),
-              let mid = attachment?.mid else { return false }
-        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
-
-        let now = Date()
-        guard lastPlaybackRequestDate != .distantPast,
-              now.timeIntervalSince(lastPlaybackRequestDate) >= 5.0 else { return false }
-
-        let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-        let isFrozenPlaying = player.timeControlStatus == .playing
-        let isPausedWithBuffer = player.timeControlStatus == .paused && bufferedAhead > 0.25
-        guard isWaiting || isFrozenPlaying || isPausedWithBuffer else { return false }
-
-        if let resumeTime = trustedRecoverySeekTime(for: player),
-           resumeTime.isValid,
-           resumeTime.seconds.isFinite {
-            pendingRecoverySeekTime = resumeTime
-        }
-
-        preserveFrameToCache(skipImageView: imageView.image != nil)
-        guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-
-        let decodedSeconds = decodedPlaybackSnapshot(for: player).map { seconds(from: $0.time) } ?? lastDecodedPlaybackSeconds
-        print("\(logPrefix) 🔄 \(reason): played feed video stopped rendering near \(String(format: "%.1f", decodedSeconds))s (buffered=\(String(format: "%.1f", bufferedAhead))s, timeControl=\(player.timeControlStatus.rawValue)) - rebuilding feed player")
-        return rebuildCurrentFeedPlayerFromProxyCache(
-            mid: mid,
-            reacquireReason: "playedStalledFeedRecovery",
-            transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-        )
-    }
-
-    @discardableResult
     private func rebuildUnknownPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
         guard coordinatorWantsToPlay,
               videoCellState == .playing,
@@ -2219,64 +2180,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return rebuildCurrentFeedPlayerFromProxyCache(
             mid: mid,
             reacquireReason: "readyItemStarvedRecovery",
-            transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-        )
-    }
-
-    @discardableResult
-    private func rebuildWaitingPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              videoCellState == .playing,
-              player.currentItem?.status == .readyToPlay,
-              player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-              !hasVisiblePlaybackProgress(for: player),
-              !isVideoAtEnd(player),
-              let mid = attachment?.mid else { return false }
-        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
-
-        let now = Date()
-        guard lastPlaybackRequestDate != .distantPast,
-              now.timeIntervalSince(lastPlaybackRequestDate) >= 4.0 else { return false }
-
-        let currentSeconds = seconds(from: player.currentTime())
-        guard currentSeconds.isFinite, currentSeconds > 0.25 else { return false }
-
-        pendingRecoverySeekTime = trustedRecoverySeekTime(for: player)
-        guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-
-        print("\(logPrefix) 🔄 \(reason): resumed player stayed waiting at \(String(format: "%.1f", currentSeconds))s (buffered=\(String(format: "%.1f", bufferedAhead))s) — rebuilding feed player")
-        return rebuildCurrentFeedPlayerFromProxyCache(
-            mid: mid,
-            reacquireReason: "waitingResumeRecovery",
-            transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-        )
-    }
-
-    @discardableResult
-    private func rebuildFrozenPlayingPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              videoCellState == .playing,
-              player.currentItem?.status == .readyToPlay,
-              player.timeControlStatus == .playing,
-              !hasVisiblePlaybackProgress(for: player),
-              !isVideoAtEnd(player),
-              let mid = attachment?.mid else { return false }
-
-        let now = Date()
-        guard lastPlaybackRequestDate != .distantPast,
-              now.timeIntervalSince(lastPlaybackRequestDate) >= 6.0 else { return false }
-
-        let currentSeconds = seconds(from: player.currentTime())
-        guard currentSeconds.isFinite else { return false }
-
-        pendingRecoverySeekTime = trustedRecoverySeekTime(for: player)
-
-        guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-
-        print("\(logPrefix) 🔄 \(reason): player reported playing but clock/frame stayed frozen at \(String(format: "%.1f", currentSeconds))s (buffered=\(String(format: "%.1f", bufferedAhead))s) — rebuilding feed player")
-        return rebuildCurrentFeedPlayerFromProxyCache(
-            mid: mid,
-            reacquireReason: "playingNoProgressRecovery",
             transitionState: imageView.image != nil ? .thumbnail : .playerLoading
         )
     }
@@ -4352,12 +4255,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         case .noContent, .thumbnail, .playerLoading, .playerReady, .playing, .paused, .failed:
             return true
         }
-    }
-
-    private func cachedPlaybackCoverForCurrentVideo() -> UIImage? {
-        guard canShowCachedCoverForCurrentVideo else { return nil }
-        guard let mid = attachment?.mid else { return nil }
-        return SharedAssetCache.shared.cachedThumbnail(for: mid)
     }
 
     /// Save playback state and quiet foreground-only recovery before backgrounding.
