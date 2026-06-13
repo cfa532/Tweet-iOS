@@ -382,6 +382,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private var imageLoadTask: Task<Void, Never>?
     private var foregroundObserver: NSObjectProtocol?
+    private var foregroundRecoveryObserver: NSObjectProtocol?
     private var imageCacheObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
     private var timerHideTask: DispatchWorkItem?
@@ -404,6 +405,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private var canDriveForegroundPlayback: Bool {
         UIApplication.shared.applicationState == .active
+            && AppDelegate.isVideoInfrastructureReady
     }
 
     private func logVerbose(_ message: String) {
@@ -2279,6 +2281,26 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         let mid = context.attachment.mid
         if clearCachedPlayer {
+            setupPlayerTask?.cancel()
+            setupPlayerTask = nil
+            playerAcquireDebounceTask?.cancel()
+            playerAcquireDebounceTask = nil
+            statusUnknownFallbackTask?.cancel()
+            statusUnknownFallbackTask = nil
+            slowLoadingRecoveryTask?.cancel()
+            slowLoadingRecoveryTask = nil
+            playbackStartupRecoveryTask?.cancel()
+            playbackStartupRecoveryTask = nil
+            removePlayerObservers()
+            removePlayerTimeObserver()
+            videoPlayerView.setPlayer(nil)
+            if let player {
+                player.pause()
+                player.currentItem?.asset.cancelLoading()
+                player.replaceCurrentItem(with: nil)
+                self.player = nil
+            }
+            VideoStateCache.shared.clearCachedState(for: mid)
             SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
             LocalHTTPServer.shared.clearCancelledState(for: mid)
             LocalHTTPServer.shared.setPrimaryMediaID(mid)
@@ -3718,6 +3740,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         restoreCachedPosterForFailureIfNeeded()
         retryButton.isHidden = true
         replayButton.isHidden = true
+        guard AppDelegate.isVideoInfrastructureReady else {
+            transitionTo(imageView.image != nil ? .thumbnail : .playerLoading)
+            return
+        }
         _ = reacquirePlayerForCurrentVideo(
             reason: "manualRetry",
             clearCachedPlayer: true,
@@ -4063,6 +4089,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
             }
+            if let observer = foregroundRecoveryObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundRecoveryObserver = nil
+            }
             if let observer = imageCacheObserver {
                 NotificationCenter.default.removeObserver(observer)
                 imageCacheObserver = nil
@@ -4245,28 +4275,53 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     self.loadImage(attachment: att, url: url)
                 }
             } else if self.isVideoAttachment {
-                // During backgrounding, clearVideoPlayersForBackgroundRecovery() calls
-                // replaceCurrentItem(with: nil) on all players and clears the cache.
-                // Our self.player still references the now-dead player (no currentItem).
-                // We must discard it and let the coordinator re-acquire a fresh player.
-                if let player = self.player,
-                   player.currentItem == nil || player.currentTime().seconds.isNaN {
-                    // Re-acquire a fresh player — coordinator will send play
-                    // command via updateVisibleTweets if this is the primary video.
-                    // Not calling handleCoordinatorPlayCommand() here prevents
-                    // non-primary videos from briefly playing then getting stopped
-                    // before they can render a frame (which causes black screen).
-                    _ = self.reacquirePlayerForCurrentVideo(
-                        reason: "willEnterForeground.invalidPlayer",
-                        runFullSetup: true,
-                        wantsPlayback: false
-                    )
-                } else {
-                    // Player is still valid (short background). AVPlayerLayer's render
-                    // pipeline is suspended — handled by TVC's didBecomeActive observer
-                    // which calls refreshVideoLayerAfterForeground() when GPU is ready.
-                }
+                self.recoverVisibleVideoAfterForeground(reason: "willEnterForeground")
             }
+        }
+
+        foregroundRecoveryObserver = NotificationCenter.default.addObserver(
+            forName: .reloadVisibleVideosOnly,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isVisible, self.isVideoAttachment else { return }
+            self.recoverVisibleVideoAfterForeground(reason: "reloadVisibleVideosOnly")
+        }
+    }
+
+    private func recoverVisibleVideoAfterForeground(reason: String) {
+        guard isVideoAttachment,
+              AppDelegate.isVideoInfrastructureReady else { return }
+
+        if videoCellState == .failed {
+            retryButton.isHidden = true
+            _ = reacquirePlayerForCurrentVideo(
+                reason: "\(reason).failedState",
+                clearCachedPlayer: true,
+                transitionState: imageView.image != nil ? .thumbnail : .noContent,
+                wantsPlayback: coordinatorWantsToPlay
+            )
+            return
+        }
+
+        if let player,
+           player.currentItem == nil ||
+           player.currentItem?.status == .failed ||
+           player.error != nil ||
+           !player.currentTime().seconds.isFinite {
+            _ = reacquirePlayerForCurrentVideo(
+                reason: "\(reason).invalidPlayer",
+                clearCachedPlayer: true,
+                transitionState: imageView.image != nil ? .thumbnail : .noContent,
+                wantsPlayback: coordinatorWantsToPlay
+            )
+        } else if player == nil, shouldLoadVideo {
+            _ = reacquirePlayerForCurrentVideo(
+                reason: "\(reason).missingPlayer",
+                clearCachedPlayer: true,
+                transitionState: imageView.image != nil ? .thumbnail : .noContent,
+                wantsPlayback: coordinatorWantsToPlay
+            )
         }
     }
 
@@ -4328,6 +4383,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// Called from didBecomeActive when GPU is guaranteed ready.
     func refreshVideoLayerAfterForeground() {
         guard isVideoAttachment else { return }
+        guard AppDelegate.isVideoInfrastructureReady else { return }
         guard let player else {
             if coordinatorWantsToPlay {
                 _ = reacquirePlayerForCurrentVideo(reason: "foreground-layer.missingPlayer")
@@ -4619,6 +4675,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             NotificationCenter.default.removeObserver(observer)
             foregroundObserver = nil
         }
+        if let observer = foregroundRecoveryObserver {
+            NotificationCenter.default.removeObserver(observer)
+            foregroundRecoveryObserver = nil
+        }
         if let observer = imageCacheObserver {
             NotificationCenter.default.removeObserver(observer)
             imageCacheObserver = nil
@@ -4662,6 +4722,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     deinit {
         if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = foregroundRecoveryObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         if let o = stopAllObserver {

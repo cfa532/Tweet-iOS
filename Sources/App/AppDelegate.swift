@@ -88,7 +88,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         // Schedule initial background message check
         print("[AppDelegate] 🚀 Scheduling initial background message check on app launch")
-        scheduleNextMessageCheck()
+        Task { @MainActor in
+            self.scheduleNextMessageCheck()
+        }
         
         // CRITICAL: Clear any stale background timestamp from previous session
         // This ensures we can distinguish app startup from returning from background
@@ -130,7 +132,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] 🔄 Background message check task STARTED")
 
         // Schedule the next background task
-        scheduleNextMessageCheck()
+        Task { @MainActor in
+            self.scheduleNextMessageCheck()
+        }
 
         // Set up task expiration handler
         task.expirationHandler = {
@@ -150,6 +154,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
     
+    @MainActor
     private func scheduleNextMessageCheck() {
         guard UIApplication.shared.backgroundRefreshStatus == .available else {
             print("[AppDelegate] ℹ️ Background message check not scheduled; Background App Refresh is \(backgroundRefreshStatusDescription())")
@@ -187,6 +192,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
     
+    @MainActor
     private func backgroundRefreshStatusDescription() -> String {
         switch UIApplication.shared.backgroundRefreshStatus {
         case .available:
@@ -327,6 +333,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         // Server still alive - just refresh, don't clear players
                         SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                         LocalHTTPServer.shared.resetConnectionPool()
+                        AppDelegate.isVideoInfrastructureReady = true
                         print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
                         // Post notification for visible videos to check health (they skip if seeking)
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
@@ -591,6 +598,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         await MainActor.run {
                             SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                             LocalHTTPServer.shared.resetConnectionPool()
+                            AppDelegate.isVideoInfrastructureReady = true
 
                             print("✅ [AppDelegate] Short background recovery complete - players preserved")
 
@@ -780,7 +788,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("[AppDelegate] ✅ Immediate background message check completed")
 
             // Also schedule the regular background task for future checks
-            scheduleNextMessageCheck()
+            await MainActor.run {
+                self.scheduleNextMessageCheck()
+            }
         }
     }
 

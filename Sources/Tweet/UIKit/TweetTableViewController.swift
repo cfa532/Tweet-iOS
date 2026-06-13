@@ -117,7 +117,9 @@ class TweetTableViewController: UITableViewController {
     private var foregroundObserver: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
     private var didBecomeActiveObserver: NSObjectProtocol?
+    private var videoRecoveryObserver: NSObjectProtocol?
     private var needsVideoLayerRefresh = false
+    private var isAwaitingVideoInfrastructureRecovery = false
     private var scrollPositionBeforeBackground: CGFloat?
 
     // Observer for feed view appearance (to restart video playback after navigation)
@@ -255,6 +257,10 @@ class TweetTableViewController: UITableViewController {
         }
 
         if let observer = didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = videoRecoveryObserver {
             NotificationCenter.default.removeObserver(observer)
         }
 
@@ -408,6 +414,16 @@ class TweetTableViewController: UITableViewController {
                 self?.handleAppDidBecomeActive()
             }
         }
+
+        videoRecoveryObserver = NotificationCenter.default.addObserver(
+            forName: .reloadVisibleVideosOnly,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleVideoInfrastructureReadyForForeground()
+            }
+        }
     }
 
     @MainActor
@@ -462,6 +478,7 @@ class TweetTableViewController: UITableViewController {
         // Cancel background task if still active
         endBackgroundTask()
         needsVideoLayerRefresh = true
+        isAwaitingVideoInfrastructureRecovery = !AppDelegate.isVideoInfrastructureReady
 
         guard let savedPosition = scrollPositionBeforeBackground else { return }
 
@@ -484,10 +501,31 @@ class TweetTableViewController: UITableViewController {
     private func handleAppDidBecomeActive() {
         guard needsVideoLayerRefresh, !isTableViewUpdating else { return }
         guard videoCoordinator.isFeedVisible else { return }
+        guard AppDelegate.isVideoInfrastructureReady else { return }
         needsVideoLayerRefresh = false
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
             tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
+        }
+    }
+
+    @MainActor
+    private func handleVideoInfrastructureReadyForForeground() {
+        guard videoCoordinator.isFeedVisible else { return }
+        guard AppDelegate.isVideoInfrastructureReady else { return }
+        guard isAwaitingVideoInfrastructureRecovery else { return }
+
+        restoreVideoPlayersAfterForeground()
+        handleAppDidBecomeActive()
+
+        // Let all reloadVisibleVideosOnly observers finish first. VideoPlaybackCoordinator
+        // also observes this notification and may reset/preserve phase; this final pass
+        // reconciles with the freshly recomputed viewport without changing scroll behavior.
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.videoCoordinator.isFeedVisible,
+                  AppDelegate.isVideoInfrastructureReady else { return }
+            self.videoCoordinator.resumePlaybackAfterForegroundRecovery()
         }
     }
 
@@ -519,7 +557,15 @@ class TweetTableViewController: UITableViewController {
     /// With health checks in place, we simply validate cached players and update visibility
     /// Broken players will be auto-detected and recreated on-demand
     private func restoreVideoPlayersAfterForeground() {
+        guard AppDelegate.isVideoInfrastructureReady else {
+            print("⏳ [VIDEO RESTORE] Waiting for video infrastructure before restoring playback")
+            needsVideoLayerRefresh = true
+            isAwaitingVideoInfrastructureRecovery = true
+            return
+        }
+
         print("☀️ [VIDEO RESTORE] Restoring video playback")
+        isAwaitingVideoInfrastructureRecovery = false
 
         // Step 1: Validate all cached players and remove any that are broken
         // This proactively cleans up players that were invalidated during backgrounding

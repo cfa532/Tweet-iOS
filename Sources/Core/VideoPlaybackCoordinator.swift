@@ -1277,6 +1277,35 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
+    /// Foreground recovery tears down AVPlayers while preserving coordinator state.
+    /// If the same primary cell is still visible, resend play so the cell rebuilds
+    /// its player and resumes from saved position.
+    @MainActor func resumePlaybackAfterForegroundRecovery() {
+        guard !isPlaybackSuppressedByOverlay else { return }
+        guard isFeedVisible else { return }
+
+        if phase == .primaryPlaying,
+           let primaryId = primaryVideoId,
+           onScreenMediaCells.contains(primaryId),
+           let primary = allVideos.first(where: { $0.identifier == primaryId }),
+           let delegate = mediaCellDelegates[primary.identifier] {
+            currentlyPlayingVideoIds = [primary.identifier]
+            LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
+            delegate.shouldPlayVideo(withMid: primary.videoMid)
+            return
+        }
+
+        if phase != .idle {
+            phase = .idle
+            primaryVideoId = nil
+            currentlyPlayingVideoIds.removeAll()
+        }
+
+        if !onScreenMediaCells.isEmpty {
+            startPrimaryVideoPlayback()
+        }
+    }
+
     /// Get videos to preload based on visible tweets and scroll direction
     private func getVideosToPreload(visibleTweetIds: Set<String>, preloadCount: Int) -> [VideoPlaybackInfo] {
         // Find visible videos first
