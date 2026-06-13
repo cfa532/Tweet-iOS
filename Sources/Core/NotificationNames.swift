@@ -127,6 +127,9 @@ extension Notification.Name {
     /// Posted when a directional preload has created a reusable AVPlayer.
     /// userInfo: ["mediaID": String]
     static let videoPlayerPreloaded = Notification.Name("VideoPlayerPreloaded")
+    /// Posted when a shared AVPlayer keeps its identity but receives a new AVPlayerItem.
+    /// userInfo: ["mediaID": String]
+    static let videoPlayerItemReplaced = Notification.Name("VideoPlayerItemReplaced")
     
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast

@@ -415,6 +415,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
         guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
+        let source = notification.userInfo?["source"] as? String
                 
         isPlaybackSuppressedByOverlay = isCovered
         
@@ -423,8 +424,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         overlayUncoverPlaybackTimer = nil
         
         if isCovered {
-            // Hard stop so no audio bleeds under the overlay, and so we don't preserve stale primary state.
-            stopAllVideos()
+            // Fullscreen media browser borrows the same shared AVPlayer as the feed.
+            // Do not pause it during coverage; ownership is transferring, not stopping.
+            if source != "MediaCellUIView.handleVideoTap" && source != "MediaBrowserView" {
+                // Hard stop so no audio bleeds under non-media overlays, and so we
+                // don't preserve stale primary state.
+                stopAllVideos()
+            }
             return
         }
         
@@ -433,7 +439,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         // The settling delay lets view transitions and cell layout complete. While this timer
         // is pending (overlayUncoverPlaybackTimer != nil), other resume paths
         // (viewWillAppear, updateOnScreenMediaCells) defer to avoid double-evaluation.
-        let timer = Timer(timeInterval: FeedPlaybackTuning.overlayDismissSettleDelay, repeats: false) { [weak self] _ in
+        let settleDelay: TimeInterval = source == "MediaBrowserView"
+            ? 0.05
+            : FeedPlaybackTuning.overlayDismissSettleDelay
+        let timer = Timer(timeInterval: settleDelay, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.overlayUncoverPlaybackTimer = nil  // Settling period is over
@@ -1212,6 +1221,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Used when returning to the feed (e.g. from user profile) so the video resumes instead of stopping.
     /// Does nothing if there is no primary, primary is no longer visible, or delegate is missing.
     func requestResumePrimaryPlaybackIfVisible() {
+        guard !isPlaybackSuppressedByOverlay,
+              isFeedVisible else {
+            return
+        }
+
         guard let primaryId = primaryVideoId,
               let primary = visibleVideos.first(where: { $0.identifier == primaryId }),
               isVideoOnScreen(primary),

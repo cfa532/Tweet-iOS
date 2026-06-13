@@ -313,11 +313,23 @@ class TweetCellContentView: UIView {
            let originalTweetId = tweet.originalTweetId,
            let originalTweet = Tweet.getInstance(for: originalTweetId) {
             // Pure retweet: navigate to original tweet
-            onTweetTap?(originalTweet)
+            navigateToTweetDetail(originalTweet, source: "retweetBodyTap")
         } else {
             // Regular tweet or quoted tweet: navigate to current tweet
-            onTweetTap?(tweet)
+            navigateToTweetDetail(tweet, source: "tweetBodyTap")
         }
+    }
+
+    private func navigateToTweetDetail(_ tweet: Tweet, source: String) {
+        NavigationStateManager.shared.markDetailNavigationPending(
+            source: source,
+            preserveFeedPlayback: Self.hasVideoAttachment(tweet)
+        )
+        onTweetTap?(tweet)
+    }
+
+    private static func hasVideoAttachment(_ tweet: Tweet) -> Bool {
+        tweet.attachments?.contains { $0.type == .video || $0.type == .hls_video } == true
     }
 
     // MARK: - Configure
@@ -420,7 +432,7 @@ class TweetCellContentView: UIView {
         // Body
         bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
                            parentViewController: parentViewController)
-        bodyView.onTweetBodyTap = { [weak self] in self?.onTweetTap?(tweet) }
+        bodyView.onTweetBodyTap = { [weak self] in self?.navigateToTweetDetail(tweet, source: "bodyMoreTap") }
         updateBodyToActionSpacing()
 
         // Action bar
@@ -533,7 +545,7 @@ class TweetCellContentView: UIView {
         // Body from original tweet
         bodyView.configure(tweet: originalTweet, isEmbedded: false, cellTweetId: tweet.mid,
                            parentViewController: parentViewController)
-        bodyView.onTweetBodyTap = { [weak self] in self?.onTweetTap?(originalTweet) }
+        bodyView.onTweetBodyTap = { [weak self] in self?.navigateToTweetDetail(originalTweet, source: "retweetBodyMoreTap") }
         updateBodyToActionSpacing()
 
         // Action bar on original tweet
@@ -580,7 +592,7 @@ class TweetCellContentView: UIView {
         // Body from quoting tweet
         bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
                            parentViewController: parentViewController)
-        bodyView.onTweetBodyTap = { [weak self] in self?.onTweetTap?(tweet) }
+        bodyView.onTweetBodyTap = { [weak self] in self?.navigateToTweetDetail(tweet, source: "quotedBodyMoreTap") }
         updateBodyToActionSpacing()
 
         // Embedded tweet
@@ -596,7 +608,7 @@ class TweetCellContentView: UIView {
                 parentViewController: parentViewController
             )
         }
-        embeddedTweetView.onTap = { [weak self] t in self?.onTweetTap?(t) }
+        embeddedTweetView.onTap = { [weak self] t in self?.navigateToTweetDetail(t, source: "embeddedTweetTap") }
 
         // Action bar on quoting tweet
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)

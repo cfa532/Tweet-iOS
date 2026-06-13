@@ -76,6 +76,102 @@ final class VideoPlaybackSessionStore {
     }
 }
 
+@MainActor
+final class VideoSurfaceHandoffRegistry {
+    static let shared = VideoSurfaceHandoffRegistry()
+
+    private final class Entry {
+        let mediaID: String
+        weak var player: AVPlayer?
+        let source: String
+        let destination: String
+        let startedAt: Date
+        var expiresAt: Date
+        let startTime: CMTime
+
+        init(mediaID: String, player: AVPlayer, source: String, destination: String, duration: TimeInterval) {
+            self.mediaID = mediaID
+            self.player = player
+            self.source = source
+            self.destination = destination
+            self.startedAt = Date()
+            self.expiresAt = self.startedAt.addingTimeInterval(duration)
+            self.startTime = player.currentTime()
+        }
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    private init() {}
+
+    func beginTransfer(
+        mediaID: String,
+        player: AVPlayer,
+        source: String,
+        destination: String = "feed",
+        duration: TimeInterval = 4.0
+    ) {
+        player.currentItem?.cancelPendingSeeks()
+        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        entries[mediaID] = Entry(
+            mediaID: mediaID,
+            player: player,
+            source: source,
+            destination: destination,
+            duration: duration
+        )
+    }
+
+    func extendTransfer(mediaID: String, player: AVPlayer, duration: TimeInterval = 4.0) {
+        pruneExpired()
+        if let entry = entries[mediaID], entry.player === player {
+            entry.expiresAt = max(entry.expiresAt, Date().addingTimeInterval(duration))
+        } else {
+            beginTransfer(mediaID: mediaID, player: player, source: "feed", duration: duration)
+        }
+    }
+
+    func isActiveTransfer(mediaID: String, player: AVPlayer, destination: String = "feed") -> Bool {
+        pruneExpired()
+        guard let entry = entries[mediaID],
+              entry.destination == destination,
+              entry.player === player else {
+            return false
+        }
+        return true
+    }
+
+    func hasActiveTransfer(destination: String = "feed") -> Bool {
+        pruneExpired()
+        return entries.values.contains { $0.destination == destination }
+    }
+
+    func transferredTime(mediaID: String, player: AVPlayer) -> CMTime? {
+        guard isActiveTransfer(mediaID: mediaID, player: player),
+              let entry = entries[mediaID] else {
+            return nil
+        }
+        return entry.startTime
+    }
+
+    func endTransfer(mediaID: String, player: AVPlayer? = nil) {
+        guard let player else {
+            entries.removeValue(forKey: mediaID)
+            return
+        }
+        if entries[mediaID]?.player === player {
+            entries.removeValue(forKey: mediaID)
+        }
+    }
+
+    private func pruneExpired() {
+        let now = Date()
+        entries = entries.filter { _, entry in
+            entry.player != nil && entry.expiresAt >= now
+        }
+    }
+}
+
 /// Shared asset cache for video players with background loading and priority management
 @MainActor
 class SharedAssetCache: ObservableObject {
@@ -1182,7 +1278,14 @@ class SharedAssetCache: ObservableObject {
                 // Player shell — reload item
                 do {
                     let playerItem = try await getOrCreatePlayerItem(for: url, mediaID: mediaID, mediaType: mediaType)
-                    await MainActor.run { cachedPlayer.replaceCurrentItem(with: playerItem) }
+                    await MainActor.run {
+                        cachedPlayer.replaceCurrentItem(with: playerItem)
+                        NotificationCenter.default.post(
+                            name: .videoPlayerItemReplaced,
+                            object: nil,
+                            userInfo: ["mediaID": mediaID]
+                        )
+                    }
                     return cachedPlayer
                 } catch {
                     await MainActor.run { _ = playerCache.removeValue(forKey: cacheKey) }

@@ -258,10 +258,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// KVO observers
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
-    /// Buffer-recovery observer. AVPlayer normally resumes from short buffer drains,
-    /// but HLS/proxy delivery can still leave it waiting; keep this as a backup so
-    /// the selected video gets another play command when data catches up.
-    private var playbackLikelyToKeepUpObserver: NSKeyValueObservation?
 
     /// Notification observers
     private var videoCompletionObserver: NSObjectProtocol?
@@ -269,6 +265,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var playerClaimedObserver: NSObjectProtocol?
     private var videoThumbnailObserver: NSObjectProtocol?
     private var videoPlayerPreloadedObserver: NSObjectProtocol?
+    private var videoPlayerItemReplacedObserver: NSObjectProtocol?
     private var shouldPlayObserver: NSObjectProtocol?
     private var shouldPauseObserver: NSObjectProtocol?
     private var shouldStopObserver: NSObjectProtocol?
@@ -286,9 +283,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// Defers the primary spinner for cached/covered videos so instant starts do
     /// not flash loading chrome over an already-present frame.
     private var delayedPrimarySpinnerTask: Task<Void, Never>?
-    /// Short grace window after DetailView gives a player back to the feed.
-    /// The player and frame are already present, so this avoids treating the
-    /// resume as a cold load while AVPlayer's clock starts moving again.
+    /// Short grace window that avoids flashing primary loading chrome over an
+    /// already-present frame.
     private var suppressPrimarySpinnerUntil: Date = .distantPast
     /// Recovery for ready players that were promoted from preload but remain
     /// stuck at the first buffer gap after play() was requested.
@@ -334,6 +330,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastStartupBufferReleaseDate: Date = .distantPast
     private var startupBufferReleaseUntil: Date = .distantPast
     private var pendingRecoverySeekTime: CMTime?
+    private weak var liveHandoffPlayer: AVPlayer?
+    private var liveHandoffMid: String?
+    private var liveHandoffSeekSuppressionUntil: Date = .distantPast
+    private var liveHandoffLastLayerRefreshAt: Date = .distantPast
     private var feedPlayerRebuildCount = 0
     private var firstFeedPlayerRebuildDate: Date = .distantPast
     private var lastLoggedTimeControlStatus: AVPlayer.TimeControlStatus?
@@ -451,6 +451,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         super.didMoveToWindow()
         if window == nil && isVisible {
             setVisible(false)
+        } else if window != nil && isVisible {
+            resumeSurfaceReturnHandoffIfNeeded(reason: "didMoveToWindow")
         }
     }
 
@@ -909,6 +911,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
         }
 
+        videoPlayerItemReplacedObserver = NotificationCenter.default.addObserver(
+            forName: .videoPlayerItemReplaced, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let replacedMid = notification.userInfo?["mediaID"] as? String,
+                  replacedMid == self.attachment?.mid,
+                  let player = self.player else { return }
+            self.refreshAfterSharedPlayerItemReplacement(player, reason: "sharedItemReplaced")
+        }
+
         // Observe MuteState changes → forward to player
         MuteState.shared.$isMuted
             .receive(on: DispatchQueue.main)
@@ -1074,6 +1086,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 cachedPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
             }
 
+            if isSurfaceReturnHandoffPlayer(cachedPlayer, mid: mid) {
+                attachSharedPlayerForHandoff(cachedPlayer, reason: "VideoStateCache-surfaceReturn")
+                return
+            }
+
             // Pause if playing (prevent audio bleed in feed)
             if cachedPlayer.rate > 0 { cachedPlayer.pause() }
             configurePlayer(cachedPlayer)
@@ -1092,6 +1109,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if isVideoAtEnd(cachedPlayer) {
                 clearFeedResumeState(for: mid)
                 cachedPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
+            }
+            if isSurfaceReturnHandoffPlayer(cachedPlayer, mid: mid) {
+                attachSharedPlayerForHandoff(cachedPlayer, reason: "SharedAssetCache-surfaceReturn")
+                return
             }
             if cachedPlayer.rate > 0 { cachedPlayer.pause() }
             configurePlayer(cachedPlayer)
@@ -1190,6 +1211,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             print("\(logPrefix) ⏳ \(reason): cached player has loaded data - keeping it")
             return false
         }
+        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
         guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return false }
 
         let resumeTime = player.currentTime()
@@ -1301,6 +1323,99 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         deferVideoOutputAttachment(newPlayer)
     }
 
+    private func isSurfaceReturnHandoffPlayer(_ player: AVPlayer, mid: String) -> Bool {
+        FullScreenVideoManager.shared.currentVideoMid == mid && FullScreenVideoManager.shared.singletonPlayer === player
+            || FullScreenVideoManager.shared.isTransferringPlayerToFeed(player, mid: mid)
+            || DetailVideoManager.shared.currentVideoMid == mid && DetailVideoManager.shared.currentPlayer === player
+            || DetailVideoManager.shared.isTransferringPlayerToFeed(player, mid: mid)
+    }
+
+    private func beginLiveHandoffProtection(for player: AVPlayer, mid: String, reason: String) {
+        player.currentItem?.cancelPendingSeeks()
+        pendingRecoverySeekTime = nil
+        liveHandoffPlayer = player
+        liveHandoffMid = mid
+        liveHandoffSeekSuppressionUntil = Date().addingTimeInterval(4.0)
+        suppressPrimarySpinnerUntil = Date().addingTimeInterval(3.0)
+        VideoSurfaceHandoffRegistry.shared.extendTransfer(mediaID: mid, player: player)
+        cancelDelayedPrimarySpinner()
+        loadingSpinner.stopAnimating()
+        if player.timeControlStatus == .playing || player.rate > 0 || videoPlayerView.isLayerReadyForDisplay {
+            hasRenderedFrameForCurrentPlayer = true
+        }
+        keepLiveHandoffFrameVisibleIfReady(player)
+        resetPlaybackProgressTracking(to: player.currentTime())
+        logVerbose("🔒 live handoff protection (\(reason)) at \(String(format: "%.2f", player.currentTime().seconds))s")
+    }
+
+    private func keepLiveHandoffFrameVisibleIfReady(_ player: AVPlayer) {
+        guard videoPlayerView.isShowingPlayer(player),
+              videoPlayerView.isLayerReadyForDisplay,
+              player.timeControlStatus == .playing || player.rate > 0 else {
+            return
+        }
+
+        videoPlayerView.isHidden = false
+        hideImageViewImmediately()
+        hasRenderedFrameForCurrentPlayer = true
+        cancelDelayedPrimarySpinner()
+        loadingSpinner.stopAnimating()
+    }
+
+    private func isLiveSurfaceHandoff(_ player: AVPlayer, mid: String) -> Bool {
+        if VideoSurfaceHandoffRegistry.shared.isActiveTransfer(mediaID: mid, player: player) {
+            return true
+        }
+
+        if isSurfaceReturnHandoffPlayer(player, mid: mid) {
+            return true
+        }
+
+        return liveHandoffPlayer === player
+            && liveHandoffMid == mid
+            && Date() <= liveHandoffSeekSuppressionUntil
+    }
+
+    private func shouldSuppressPositionRestore(for player: AVPlayer, mid: String) -> Bool {
+        isLiveSurfaceHandoff(player, mid: mid)
+    }
+
+    @discardableResult
+    private func resumeSurfaceReturnHandoffIfNeeded(reason: String) -> Bool {
+        guard let mid = attachment?.mid,
+              let player,
+              isSurfaceReturnHandoffPlayer(player, mid: mid) else {
+            return false
+        }
+
+        let alreadyProtected = liveHandoffPlayer === player
+            && liveHandoffMid == mid
+            && Date() <= liveHandoffSeekSuppressionUntil
+        if !alreadyProtected {
+            beginLiveHandoffProtection(for: player, mid: mid, reason: reason)
+        } else {
+            pendingRecoverySeekTime = nil
+            player.currentItem?.cancelPendingSeeks()
+        }
+
+        let layerAlreadyHasPlayer = videoPlayerView.isShowingPlayer(player)
+        if window != nil,
+           (!alreadyProtected || !layerAlreadyHasPlayer || videoPlayerView.isHidden) {
+            liveHandoffLastLayerRefreshAt = Date()
+            attachPlayerToLayer(player)
+            refreshAfterSharedPlayerItemReplacement(player, reason: reason)
+        } else if coordinatorWantsToPlay {
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            applyAVPlayerBufferDefaults(to: player)
+            videoPlayerView.isHidden = false
+            keepLiveHandoffFrameVisibleIfReady(player)
+            if videoCellState != .playing {
+                videoCellState = .playing
+            }
+        }
+        return true
+    }
+
     /// Pause, mute, assign player, transition to .playerLoading.
     private func preparePlayerForConfiguration(_ newPlayer: AVPlayer) {
         if newPlayer.rate > 0 { newPlayer.pause() }
@@ -1381,6 +1496,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     /// Attach player to the AVPlayerLayer, suppressing implicit CALayer animations.
     private func attachPlayerToLayer(_ newPlayer: AVPlayer) {
+        guard !videoPlayerView.isShowingPlayer(newPlayer) else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         videoPlayerView.setPlayer(newPlayer)
@@ -1421,9 +1537,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // at the right position (avoids the race where a pending 0.01s seek overrides play).
             videoPlayerView.observeReadyForDisplay()
             let mid = attachment?.mid ?? ""
-            let seekTarget = savedFeedResumeTime(for: mid, player: newPlayer)
-                ?? CMTime(seconds: 0.01, preferredTimescale: 600)
-            newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
+            if !shouldSuppressPositionRestore(for: newPlayer, mid: mid) {
+                let seekTarget = savedFeedResumeTime(for: mid, player: newPlayer)
+                    ?? CMTime(seconds: 0.01, preferredTimescale: 600)
+                newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
         }
     }
 
@@ -1450,6 +1568,63 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.player === newPlayer else { return }
             self.ensureVideoOutputAttached(for: newPlayer)
+        }
+    }
+
+    private func attachSharedPlayerForHandoff(_ newPlayer: AVPlayer, reason: String) {
+        if let mid = attachment?.mid, isSurfaceReturnHandoffPlayer(newPlayer, mid: mid) {
+            beginLiveHandoffProtection(for: newPlayer, mid: mid, reason: reason)
+        }
+
+        if player !== newPlayer {
+            removePlayerTimeObserver()
+            removePlayerObservers()
+            player = newPlayer
+            newPlayer.isMuted = MuteState.shared.isMuted
+            if imageView.image == nil, let mid = attachment?.mid,
+               let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+                imageView.image = cached
+                showImageView()
+            }
+
+            if let mid = attachment?.mid {
+                NotificationCenter.default.post(
+                    name: .videoPlayerClaimedByCell,
+                    object: nil,
+                    userInfo: ["videoMid": mid, "claimerIdentity": ObjectIdentifier(self).hashValue]
+                )
+            }
+            registerFirstFrameCallback(newPlayer)
+            attachPlayerToLayer(newPlayer)
+        }
+
+        refreshAfterSharedPlayerItemReplacement(newPlayer, reason: reason)
+    }
+
+    private func refreshAfterSharedPlayerItemReplacement(_ player: AVPlayer, reason: String) {
+        guard self.player === player,
+              let item = player.currentItem else { return }
+
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = isVisible || coordinatorWantsToPlay
+        setupPlayerObservers(player)
+        ensureVideoOutputAttached(for: player)
+        resetPlaybackProgressTracking(to: player.currentTime())
+        if let mid = attachment?.mid,
+           !shouldSuppressPositionRestore(for: player, mid: mid) {
+            restoreCachedPosterForFailureIfNeeded()
+        }
+        logVerbose("🔁 refreshed shared item after \(reason): status=\(item.status.rawValue), coordWants=\(coordinatorWantsToPlay), state=\(videoCellState)")
+
+        if coordinatorWantsToPlay {
+            requestPlaybackStartIfNeeded(player, reason: "sharedItemRefresh-\(reason)")
+        } else if item.status == .readyToPlay {
+            if videoCellState == .playerLoading {
+                transitionTo(.playerReady)
+            } else {
+                updateLoadingSpinnerForPlayback(player)
+            }
+        } else if isVisible && videoCellState == .noContent {
+            transitionTo(imageView.image == nil ? .noContent : .thumbnail)
         }
     }
 
@@ -1493,8 +1668,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func shouldShowPrimarySpinner(for player: AVPlayer? = nil) -> Bool {
         guard coordinatorWantsToPlay else { return false }
         if Date() < suppressPrimarySpinnerUntil,
-           imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay,
-           player.map({ isVisibleVideoFrameReady($0) }) ?? true {
+           imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
             return false
         }
         guard let player else { return true }
@@ -1670,6 +1844,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         applyAVPlayerBufferDefaults(to: player)
         updateLoadingSpinnerForPlayback(player)
+        if let mid = attachment?.mid,
+           isLiveSurfaceHandoff(player, mid: mid) {
+            return
+        }
         if releaseStartupBufferIfReady(player, bufferedAhead: bufferedTimeAhead(for: player), reason: reason) {
             return
         }
@@ -1677,6 +1855,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func scheduleStartupRecovery(for player: AVPlayer, reason: String) {
+        if let mid = attachment?.mid,
+           isLiveSurfaceHandoff(player, mid: mid) {
+            return
+        }
+
         let requestDate = lastPlaybackRequestDate
         let requestPosition = player.currentTime()
         let requestSeconds = seconds(from: requestPosition)
@@ -1863,6 +2046,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               !hasRecentDecodedPlayback(for: player, maxAge: 5.0),
               !isVideoAtEnd(player),
               let mid = attachment?.mid else { return false }
+        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
 
         let now = Date()
         guard lastPlaybackRequestDate != .distantPast,
@@ -1899,6 +2083,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               bufferedAhead >= 1.0,
               !isVideoAtEnd(player),
               let mid = attachment?.mid else { return false }
+        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
 
         // If playback has already shown real progress, do not tear down the
         // visible layer. Rebuilding at that point causes frames -> black -> reload.
@@ -1940,6 +2125,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               bufferedAhead < 0.5,
               !isVideoAtEnd(player),
               let mid = attachment?.mid else { return false }
+        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
 
         let now = Date()
         let waitedForVisibleStart = lastPlaybackRequestDate != .distantPast
@@ -1972,6 +2158,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               !hasVisiblePlaybackProgress(for: player),
               !isVideoAtEnd(player),
               let mid = attachment?.mid else { return false }
+        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
 
         let now = Date()
         guard lastPlaybackRequestDate != .distantPast,
@@ -2101,6 +2288,33 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
         replayButton.isHidden = true
+
+        let returningPlayer: AVPlayer? = {
+            if let player, isLiveSurfaceHandoff(player, mid: mid) {
+                return player
+            }
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
+               cachedPlayer.currentItem != nil,
+               isLiveSurfaceHandoff(cachedPlayer, mid: mid) {
+                return cachedPlayer
+            }
+            return nil
+        }()
+
+        if let returningPlayer {
+            beginLiveHandoffProtection(for: returningPlayer, mid: mid, reason: "coordinatorPlay")
+            if player !== returningPlayer {
+                attachSharedPlayerForHandoff(returningPlayer, reason: "coordinatorPlay-liveHandoff")
+            } else {
+                videoPlayerView.isHidden = false
+                if videoCellState != .playing {
+                    videoCellState = .playing
+                }
+            }
+            requestPlaybackStartIfNeeded(returningPlayer, reason: "coordinatorPlay-liveHandoff")
+            return
+        }
+
         restoreVisibleLoadingStateIfNeeded(reason: "coordinatorPlay")
 
         // A foreground-visible primary should autoplay even if it finished before
@@ -2362,6 +2576,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func playWithVolumeFadeIn(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
 
+        if shouldSuppressPositionRestore(for: player, mid: mid) {
+            pendingRecoverySeekTime = nil
+            startPlaybackWithFade(player)
+            return
+        }
+
         if let recoveryTime = pendingRecoverySeekTime,
            recoveryTime.seconds.isFinite,
            recoveryTime.seconds > 0.25 {
@@ -2451,6 +2671,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         logVerbose("▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
+        let isLiveHandoff: Bool
+        if let mid = attachment?.mid {
+            isLiveHandoff = isLiveSurfaceHandoff(player, mid: mid)
+        } else {
+            isLiveHandoff = false
+        }
 
         if player.rate > 0 {
             lastPlaybackRequestDate = Date()
@@ -2473,7 +2699,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 setupVideoTimer(videoMid: mid)
             }
             startPlayerTimeObserver()
-            if player.timeControlStatus != .playing {
+            if isLiveHandoff {
+                applyAVPlayerBufferDefaults(to: player)
+            } else if player.timeControlStatus != .playing {
                 monitorPlaybackIfWaiting(player, reason: "\(reason)-rateAlreadyPositive")
             } else {
                 scheduleStillFrameRecovery(for: player, reason: "\(reason)-rateAlreadyPositive")
@@ -2523,8 +2751,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastPlaybackRequestDate = Date()
         resetPlaybackProgressTracking(to: player.currentTime())
         startPlayerTimeObserver()
+        let isLiveHandoff = isLiveSurfaceHandoff(player, mid: mid)
         playPlayerWithResumeIfNeeded(player, reason: "actuallyStartPlayback") { [weak self] player in
             guard let self else { return }
+            guard !isLiveHandoff else { return }
             self.scheduleStartupRecovery(for: player, reason: "actuallyStartPlayback")
             self.scheduleStillFrameRecovery(for: player, reason: "actuallyStartPlayback")
         }
@@ -2710,7 +2940,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard now.timeIntervalSince(lastFrameCaptureAt) >= 0.75 else { return }
         lastFrameCaptureAt = now
 
-        preserveFrameToCache(async: async, skipImageView: true)
+        if !preserveFrameToCache(async: async, skipImageView: true), !async {
+            _ = preserveFrameToCache(useVideoOutput: false, async: false, skipImageView: false)
+        }
     }
 
     // MARK: - Player Observers
@@ -2803,8 +3035,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                                 }
                             }
                             self.videoPlayerView.observeReadyForDisplay()
-                            let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
-                            player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
+                            if !self.shouldSuppressPositionRestore(for: player, mid: mid) {
+                                let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
+                                player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
+                            }
                         }
                     }
 
@@ -2918,25 +3152,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 }
             }
         }
-
-        // KVO: isPlaybackLikelyToKeepUp — backup resume after a buffer-drain stall.
-        // AVPlayer should auto-resume, but if it remains paused or waiting while the
-        // coordinator still wants this primary, nudge it once data is available.
-        playbackLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
-            DispatchQueue.main.async {
-                guard let self,
-                      item.isPlaybackLikelyToKeepUp,
-                      let player = self.player,
-                      self.coordinatorWantsToPlay,
-                      self.canDriveForegroundPlayback,
-                      self.videoCellState == .playing,
-                      player.timeControlStatus != .playing,
-                      !self.isVideoAtEnd(player) else { return }
-                self.applyAVPlayerBufferDefaults(to: player)
-                self.updateLoadingSpinnerForPlayback(player)
-                self.scheduleStartupRecovery(for: player, reason: "bufferKeepUp")
-            }
-        }
     }
 
     private func removePlayerObservers() {
@@ -2946,8 +3161,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         playerItemStatusObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
-        playbackLikelyToKeepUpObserver?.invalidate()
-        playbackLikelyToKeepUpObserver = nil
     }
 
 
@@ -3032,6 +3245,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func feedResumeSeekTargetIfNeeded(for mid: String, player: AVPlayer) -> CMTime? {
         guard player.currentItem?.status == .readyToPlay else { return nil }
+
+        if shouldSuppressPositionRestore(for: player, mid: mid) {
+            pendingRecoverySeekTime = nil
+            return nil
+        }
 
         let currentTime = player.currentTime()
         let currentSeconds = currentTime.seconds
@@ -3626,9 +3844,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         fullscreenOverlay.isHidden = false
         fullscreenSpinner.startAnimating()
 
-        // Post stop all to pause feed videos
-        NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-
         // CRITICAL: Mark overlay BEFORE presenting the modal. The .fullScreen presentation
         // triggers didMoveToWindow(nil) → setVisible(false) on feed cells, which checks
         // isCovered to skip aggressive cleanup (delegate unregister, network cancel).
@@ -3703,6 +3918,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         if visible, wasVisible, isVideoAttachment {
             shouldLoadVideo = shouldAcquirePlayer
+            if resumeSurfaceReturnHandoffIfNeeded(reason: "setVisible(true)") {
+                return
+            }
         }
 
         guard isVisible != visible || shouldStartAcquiring else { return }
@@ -3770,14 +3988,23 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // Setup foreground observer for images and videos
             setupForegroundObserver()
         } else {
-            // When a .fullScreen modal (MediaBrowserView) is presented, iOS removes the
-            // presenting VC from the window, triggering didMoveToWindow(nil) → setVisible(false).
-            // But these cells are still "logically visible" — the overlay handler will resume
-            // playback on dismiss. Skip aggressive cleanup (network cancel, delegate unregister)
-            // to keep the cell ready for instant resume. stopAllVideos() already paused players.
-            if OverlayVisibilityCoordinator.shared.isCovered {
+            // Fullscreen and detail both borrow the feed's shared AVPlayer. During
+            // those transitions UIKit may report the feed cell as windowless/invisible,
+            // but tearing down the feed surface forces a pause/reattach cycle on return.
+            if OverlayVisibilityCoordinator.shared.isCovered ||
+                NavigationStateManager.shared.shouldPreserveFeedForDetailTransition {
                 // Revert the isVisible flag — the cell is logically still visible
                 isVisible = true
+                return
+            }
+            if isVideoAttachment,
+               let mid = self.attachment?.mid,
+               let player,
+               isSurfaceReturnHandoffPlayer(player, mid: mid) {
+                // Revert before rebinding so the handoff path sees the feed cell as
+                // the active surface again.
+                isVisible = true
+                resumeSurfaceReturnHandoffIfNeeded(reason: "setVisible(false)")
                 return
             }
             replayButton.isHidden = true
@@ -3894,7 +4121,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             activePlayer = player
         } else if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
                   cachedPlayer.currentItem != nil {
-            configurePlayer(cachedPlayer)
+            attachSharedPlayerForHandoff(cachedPlayer, reason: "restoreVisibleLoadingState-\(reason)")
             activePlayer = cachedPlayer
         } else {
             return
@@ -3903,6 +4130,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard let item = activePlayer.currentItem,
               !isVideoAtEnd(activePlayer),
               !isVisibleVideoFrameReady(activePlayer) else { return }
+
+        if shouldSuppressPositionRestore(for: activePlayer, mid: mid) {
+            requestPlaybackStartIfNeeded(activePlayer, reason: "restoreVisibleLoadingState-\(reason)-handoff")
+            return
+        }
 
         let isStillLoading = item.status == .unknown
             || activePlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
@@ -4087,7 +4319,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         let expectedMid = attachment?.mid
         let currentTime = player.currentTime()
-        let savedResumeTime = expectedMid.flatMap { savedFeedResumeTime(for: $0, player: player) }
+        let isLiveHandoff: Bool
+        if let expectedMid {
+            isLiveHandoff = shouldSuppressPositionRestore(for: player, mid: expectedMid)
+        } else {
+            isLiveHandoff = false
+        }
+        let savedResumeTime = isLiveHandoff ? nil : expectedMid.flatMap { savedFeedResumeTime(for: $0, player: player) }
         let needsResumeSeek = !(currentTime.isValid && currentTime.seconds.isFinite && currentTime.seconds > 0.25)
         if needsResumeSeek, let savedResumeTime {
             pendingRecoverySeekTime = savedResumeTime
@@ -4211,12 +4449,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             player != nil ||
             playerItemStatusObserver != nil ||
             timeControlStatusObserver != nil ||
-            playbackLikelyToKeepUpObserver != nil ||
             videoCompletionObserver != nil ||
             stopAllObserver != nil ||
             playerClaimedObserver != nil ||
             videoThumbnailObserver != nil ||
             videoPlayerPreloadedObserver != nil ||
+            videoPlayerItemReplacedObserver != nil ||
             shouldPlayObserver != nil ||
             shouldPauseObserver != nil ||
             shouldStopObserver != nil ||
@@ -4254,6 +4492,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         videoThumbnailObserver = nil
         if let o = videoPlayerPreloadedObserver { NotificationCenter.default.removeObserver(o) }
         videoPlayerPreloadedObserver = nil
+        if let o = videoPlayerItemReplacedObserver { NotificationCenter.default.removeObserver(o) }
+        videoPlayerItemReplacedObserver = nil
         if let o = shouldPlayObserver { NotificationCenter.default.removeObserver(o) }
         shouldPlayObserver = nil
         if let o = shouldPauseObserver { NotificationCenter.default.removeObserver(o) }
@@ -4412,7 +4652,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
         playerItemStatusObserver?.invalidate()
         timeControlStatusObserver?.invalidate()
-        playbackLikelyToKeepUpObserver?.invalidate()
         removePlayerTimeObserver()
         timerHideTask?.cancel()
         playerAcquireDebounceTask?.cancel()

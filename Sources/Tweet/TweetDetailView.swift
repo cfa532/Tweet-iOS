@@ -695,6 +695,7 @@ private struct DetailSingletonVideoPlayerView: View {
     let shouldLoad: Bool
 
     @ObservedObject private var manager = DetailVideoManager.shared
+    @State private var handoffThumbnail: UIImage?
 
     private var isThisVideoLoaded: Bool {
         manager.currentVideoMid == mid && manager.currentPlayer?.currentItem != nil
@@ -721,7 +722,11 @@ private struct DetailSingletonVideoPlayerView: View {
     }
 
     private var shouldShowLoadingSpinner: Bool {
-        (shouldLoad && !isThisVideoLoaded && !didThisVideoFailToLoad)
+        if isReadyWithCachedBuffer {
+            return false
+        }
+
+        return (shouldLoad && !isThisVideoLoaded && !didThisVideoFailToLoad)
             || isThisVideoPreparing
             || (manager.currentVideoMid == mid
                 && (manager.isBuffering || !manager.isPlaybackRendering)
@@ -736,6 +741,16 @@ private struct DetailSingletonVideoPlayerView: View {
                 && !didThisVideoFailToLoad)
     }
 
+    private var isReadyWithCachedBuffer: Bool {
+        guard manager.currentVideoMid == mid,
+              let player = manager.currentPlayer,
+              let item = player.currentItem,
+              item.status == .readyToPlay else { return false }
+        if player.timeControlStatus == .playing { return true }
+        if item.isPlaybackLikelyToKeepUp { return true }
+        return bufferedTimeAhead(for: item, player: player) >= 2.0
+    }
+
     var body: some View {
         ZStack {
             Color.black
@@ -744,7 +759,6 @@ private struct DetailSingletonVideoPlayerView: View {
                 DetailAVPlayerView(
                     player: player
                 )
-                    .id(ObjectIdentifier(player))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -760,17 +774,52 @@ private struct DetailSingletonVideoPlayerView: View {
                     .allowsHitTesting(false)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .videoThumbnailCached)) { notification in
+            guard notification.userInfo?["mediaID"] as? String == mid else { return }
+            if handoffThumbnail == nil {
+                handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
+            }
+        }
+        .onAppear {
+            if handoffThumbnail == nil {
+                handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
+            }
+        }
     }
 
     @ViewBuilder
     private var thumbnailOrBlack: some View {
-        if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
-            Image(uiImage: thumbnail)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-        } else {
-            Color.black
+        Group {
+            if let thumbnail = handoffThumbnail ?? SharedAssetCache.shared.cachedThumbnail(for: mid) {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.black
+            }
         }
+    }
+
+    private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+        let currentSeconds = CMTimeGetSeconds(player.currentTime())
+        guard currentSeconds.isFinite else { return 0 }
+
+        var bestBufferAhead: Double = 0
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = CMTimeGetSeconds(range.start)
+            let duration = CMTimeGetSeconds(range.duration)
+            guard start.isFinite, duration.isFinite else { continue }
+
+            let end = start + duration
+            if currentSeconds >= start && currentSeconds <= end {
+                return max(0, end - currentSeconds)
+            } else if end > currentSeconds {
+                bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
+            }
+        }
+
+        return max(0, bestBufferAhead)
     }
 }
 
@@ -795,6 +844,10 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         if !vc.showsPlaybackControls {
             vc.showsPlaybackControls = true
         }
+    }
+
+    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: ()) {
+        vc.player = nil
     }
 }
 
@@ -1105,11 +1158,12 @@ struct TweetDetailView: View {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
 
-            // Mark detail view as inactive
-            NavigationStateManager.shared.setDetailViewActive(false)
-
-            // Deactivate manager - this handles session end and lifecycle teardown
+            // Deactivate manager first so feed resume cannot race detail's observer
+            // teardown/state save while both surfaces point at the shared AVPlayer.
             DetailVideoManager.shared.deactivate()
+
+            // Mark detail view as inactive only after handoff state is established.
+            NavigationStateManager.shared.setDetailViewActive(false)
 
             // Deactivate comments video playback coordinator
             commentsVideoCoordinator.deactivate()
