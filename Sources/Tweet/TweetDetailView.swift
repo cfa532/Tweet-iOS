@@ -722,7 +722,7 @@ private struct DetailSingletonVideoPlayerView: View {
     }
 
     private var shouldShowLoadingSpinner: Bool {
-        if isReadyWithCachedBuffer {
+        if manager.currentVideoMid == mid && manager.isPlaybackRendering {
             return false
         }
 
@@ -739,16 +739,6 @@ private struct DetailSingletonVideoPlayerView: View {
             || (manager.currentVideoMid == mid
                 && !manager.isPlaybackRendering
                 && !didThisVideoFailToLoad)
-    }
-
-    private var isReadyWithCachedBuffer: Bool {
-        guard manager.currentVideoMid == mid,
-              let player = manager.currentPlayer,
-              let item = player.currentItem,
-              item.status == .readyToPlay else { return false }
-        if player.timeControlStatus == .playing { return true }
-        if item.isPlaybackLikelyToKeepUp { return true }
-        return bufferedTimeAhead(for: item, player: player) >= 2.0
     }
 
     var body: some View {
@@ -800,27 +790,6 @@ private struct DetailSingletonVideoPlayerView: View {
         }
     }
 
-    private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
-        let currentSeconds = CMTimeGetSeconds(player.currentTime())
-        guard currentSeconds.isFinite else { return 0 }
-
-        var bestBufferAhead: Double = 0
-        for value in item.loadedTimeRanges {
-            let range = value.timeRangeValue
-            let start = CMTimeGetSeconds(range.start)
-            let duration = CMTimeGetSeconds(range.duration)
-            guard start.isFinite, duration.isFinite else { continue }
-
-            let end = start + duration
-            if currentSeconds >= start && currentSeconds <= end {
-                return max(0, end - currentSeconds)
-            } else if end > currentSeconds {
-                bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
-            }
-        }
-
-        return max(0, bestBufferAhead)
-    }
 }
 
 // MARK: - Detail AVPlayerViewController Wrapper

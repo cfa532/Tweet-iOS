@@ -1083,15 +1083,15 @@ struct SingletonVideoPlayerView: View {
             return false
         }
 
-        if isReadyWithCachedBuffer(player, item: item) {
-            return false
-        }
-
         if manager.isBuffering {
             return true
         }
 
         if item.status != .readyToPlay || player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            return true
+        }
+
+        if shouldAutoPlay && manager.isPlaying {
             return true
         }
 
@@ -1113,12 +1113,6 @@ struct SingletonVideoPlayerView: View {
         return player.timeControlStatus != .playing
             || manager.isBuffering
             || !manager.isItemReady
-    }
-
-    private func isReadyWithCachedBuffer(_ player: AVPlayer, item: AVPlayerItem) -> Bool {
-        guard item.status == .readyToPlay else { return false }
-        if item.isPlaybackLikelyToKeepUp { return true }
-        return bufferedTimeAhead(for: item, player: player) >= 2.0
     }
 
     private func isVideoAtEnd(_ player: AVPlayer) -> Bool {

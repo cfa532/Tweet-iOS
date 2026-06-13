@@ -1341,12 +1341,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         liveHandoffPlayer = player
         liveHandoffMid = mid
         liveHandoffSeekSuppressionUntil = Date().addingTimeInterval(4.0)
-        suppressPrimarySpinnerUntil = Date().addingTimeInterval(3.0)
         VideoSurfaceHandoffRegistry.shared.extendTransfer(mediaID: mid, player: player)
-        cancelDelayedPrimarySpinner()
-        loadingSpinner.stopAnimating()
-        if player.timeControlStatus == .playing || player.rate > 0 || videoPlayerView.isLayerReadyForDisplay {
+
+        let hasRenderableHandoffFrame = isVisibleVideoFrameReady(player)
+        if hasRenderableHandoffFrame {
+            suppressPrimarySpinnerUntil = Date().addingTimeInterval(3.0)
+            cancelDelayedPrimarySpinner()
+            loadingSpinner.stopAnimating()
             hasRenderedFrameForCurrentPlayer = true
+        } else {
+            suppressPrimarySpinnerUntil = .distantPast
         }
         keepLiveHandoffFrameVisibleIfReady(player)
         resetPlaybackProgressTracking(to: player.currentTime())
@@ -1672,9 +1676,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func shouldShowPrimarySpinner(for player: AVPlayer? = nil) -> Bool {
         guard coordinatorWantsToPlay else { return false }
-        if Date() < suppressPrimarySpinnerUntil,
-           imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
-            return false
+        if Date() < suppressPrimarySpinnerUntil {
+            if let player {
+                if isVisibleVideoFrameReady(player) {
+                    return false
+                }
+            } else if hasRenderedFrameForCurrentPlayer && videoPlayerView.isLayerReadyForDisplay {
+                return false
+            }
         }
         guard let player else { return true }
         return !isVideoAtEnd(player) && !isVisibleVideoFrameReady(player)
@@ -4162,6 +4171,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         if shouldSuppressPositionRestore(for: activePlayer, mid: mid) {
             requestPlaybackStartIfNeeded(activePlayer, reason: "restoreVisibleLoadingState-\(reason)-handoff")
+            if coordinatorWantsToPlay,
+               !isVisibleVideoFrameReady(activePlayer),
+               !isVideoAtEnd(activePlayer) {
+                cancelDelayedPrimarySpinner()
+                loadingSpinner.startAnimating()
+            }
             return
         }
 
