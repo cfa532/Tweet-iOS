@@ -601,6 +601,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
         case .failed:
             replayButton.isHidden = true
+            restoreCachedPosterForFailureIfNeeded()
             // Prefer thumbnail (captured from last rendered frame) over black backdrop.
             // cleanupFailedPlayerState nils the player before we get here, so rely on
             // imageView which was set by preserveFrameToCache() earlier in the failure path.
@@ -969,6 +970,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // Re-evaluate visibility now that the poster exists. For non-primary
             // preload cells this hides the black layer and stops the spinner.
             transitionTo(videoCellState)
+        case .failed:
+            // Keep the retry affordance, but replace the black backdrop if a cover
+            // frame arrives after the failure transition.
+            transitionTo(.failed)
         default:
             break
         }
@@ -1948,6 +1953,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 return
             }
 
+            if self.failUnbufferedUnknownPrimaryIfTimedOut(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
+                return
+            }
+
             self.applyAVPlayerBufferDefaults(to: player)
             self.updateLoadingSpinnerForPlayback(player)
         }
@@ -2205,6 +2214,24 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             reacquireReason: "playingNoProgressRecovery",
             transitionState: imageView.image != nil ? .thumbnail : .playerLoading
         )
+    }
+
+    @discardableResult
+    private func failUnbufferedUnknownPrimaryIfTimedOut(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
+        guard coordinatorWantsToPlay,
+              canDriveForegroundPlayback,
+              videoCellState == .playing,
+              player.currentItem?.status == .unknown,
+              bufferedAhead < 0.25,
+              lastActualPlaybackDate == .distantPast,
+              lastPlaybackRequestDate != .distantPast,
+              Date().timeIntervalSince(lastPlaybackRequestDate) >= 12.0,
+              !isVisibleVideoFrameReady(player),
+              !isVideoAtEnd(player) else { return false }
+
+        print("\(logPrefix) ❌ \(reason): item stayed .unknown with no buffered data - moving to next video")
+        handleVideoLoadFailure(reason: "\(reason) unknown item timed out")
+        return true
     }
 
     private func scheduleStillFrameRecovery(for player: AVPlayer, reason: String) {
@@ -3772,6 +3799,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // a black square with no recovery affordance.
         let shouldShowRetry = isVisible && (coordinatorWantsToPlay || shouldLoadVideo)
         let wasPrimary = coordinatorWantsToPlay
+        let failedIdentifier = videoIdentifier
+
+        if wasPrimary, let failedIdentifier {
+            (videoCoordinator ?? .shared).notifyPrimaryVideoFailed(identifier: failedIdentifier)
+        }
 
         guard shouldShowRetry else {
             print("\(logPrefix) ❌ \(reason) - going idle")
@@ -3784,9 +3816,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         coordinatorWantsToPlay = false
         restoreCachedPosterForFailureIfNeeded()
         transitionTo(.failed)
-        if wasPrimary, let id = videoIdentifier {
-            (videoCoordinator ?? .shared).notifyPrimaryVideoFailed(identifier: id)
-        }
     }
 
     @objc private func mediaTapped() {
