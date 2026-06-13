@@ -255,6 +255,7 @@ class SharedAssetCache: ObservableObject {
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var preloadedThumbnailMids: Set<String> = []
+    private var backgroundPosterMids: Set<String> = []
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
 
     private enum VideoLoadKind: Hashable {
@@ -2366,6 +2367,10 @@ class SharedAssetCache: ObservableObject {
         storeCachedThumbnail(image, for: mediaID, source: "runtime")
     }
 
+    func protectBackgroundPoster(for mediaID: String) {
+        backgroundPosterMids.insert(mediaID)
+    }
+
     /// Generate a thumbnail from a cached asset if no thumbnail exists yet.
     /// Calls completion on main thread with the generated image, or does nothing if asset isn't cached.
     func generateThumbnailIfNeeded(for mediaID: String, completion: @escaping @MainActor (UIImage) -> Void) {
@@ -2975,7 +2980,14 @@ class SharedAssetCache: ObservableObject {
     @MainActor func releaseForBackground() {
         let playerCount = playerCache.count
         let assetCount = assetCache.count
-        let protectedVisibleMids = visibleVideoMids
+        var visibleMidsForPosters = visibleVideoMids
+        visibleMidsForPosters.formUnion(backgroundPosterMids)
+        if let detailMid = DetailVideoManager.shared.currentVideoMid {
+            visibleMidsForPosters.insert(detailMid)
+        }
+        if let fullscreenMid = FullScreenVideoManager.shared.currentVideoMid {
+            visibleMidsForPosters.insert(fullscreenMid)
+        }
 
         var mediaIDsToCancel = Set<String>()
         mediaIDsToCancel.formUnion(playerCache.keys)
@@ -2991,7 +3003,6 @@ class SharedAssetCache: ObservableObject {
         for ids in tweetUrlMapping.values {
             mediaIDsToCancel.formUnion(ids)
         }
-        mediaIDsToCancel.subtract(protectedVisibleMids)
 
         cancelAllLoadingTasks()
 
@@ -3006,31 +3017,26 @@ class SharedAssetCache: ObservableObject {
 
         for (mediaID, player) in playerCache {
             savePlaybackPositionForBackground(mediaID: mediaID, player: player)
-            if protectedVisibleMids.contains(mediaID) {
-                player.pause()
-                player.isMuted = MuteState.shared.isMuted
-            } else {
-                releasePlayer(player)
-            }
+            releasePlayer(player)
         }
 
-        playerCache = playerCache.filter { protectedVisibleMids.contains($0.key) }
-        assetCache = assetCache.filter { protectedVisibleMids.contains($0.key) }
-        cacheTimestamps = cacheTimestamps.filter { protectedVisibleMids.contains($0.key) }
-        cachingPlayerDelegates = cachingPlayerDelegates.filter { protectedVisibleMids.contains($0.key) }
-        cachingPlayerItems = cachingPlayerItems.filter { protectedVisibleMids.contains($0.key) }
-        resourceLoaderDelegates = resourceLoaderDelegates.filter { protectedVisibleMids.contains($0.key) }
-        tweetUrlMapping = tweetUrlMapping
-            .mapValues { $0.intersection(protectedVisibleMids) }
-            .filter { !$0.value.isEmpty }
-        diskCacheStatus = diskCacheStatus.filter { protectedVisibleMids.contains($0.key) }
+        playerCache.removeAll()
+        assetCache.removeAll()
+        cacheTimestamps.removeAll()
+        cachingPlayerDelegates.removeAll()
+        cachingPlayerItems.removeAll()
+        resourceLoaderDelegates.removeAll()
+        tweetUrlMapping.removeAll()
+        diskCacheStatus.removeAll()
 
+        VideoLastFrameCache.shared.keepOnly(visibleMidsForPosters)
         preloadedPlayerMids.removeAll()
         protectedPreloadMids.removeAll()
         preloadedPlayerGraceExpirations.removeAll()
+        preloadedThumbnailMids.formIntersection(visibleMidsForPosters)
+        backgroundPosterMids.removeAll()
 
-        let preservedCount = playerCache.count
-        print("🌙 [SharedAssetCache] Background release: \(playerCount) players (\(preservedCount) visible preserved), \(assetCount) assets, \(mediaIDsToCancel.count) media downloads")
+        print("🌙 [SharedAssetCache] Background release: \(playerCount) players released, \(assetCount) assets cleared, \(mediaIDsToCancel.count) media downloads cancelled, \(visibleMidsForPosters.count) visible poster(s) kept")
     }
 
     func clearVideoPlayersForBackgroundRecovery() {

@@ -722,7 +722,9 @@ private struct DetailSingletonVideoPlayerView: View {
     }
 
     private var shouldShowLoadingSpinner: Bool {
-        if manager.currentVideoMid == mid && manager.isPlaybackRendering {
+        if manager.currentVideoMid == mid,
+           manager.isPlaybackRendering,
+           !manager.isBuffering {
             return false
         }
 

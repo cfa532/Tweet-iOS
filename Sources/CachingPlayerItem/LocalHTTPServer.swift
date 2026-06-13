@@ -358,6 +358,8 @@ public class LocalHTTPServer: @unchecked Sendable {
     private var streamingSessions: [String: URLSession] = [:]
     private var streamingSessionLastProgress: [String: Date] = [:]
     private let streamingSessionsLock = NSLock()
+    private var hlsDataTasks: [String: [UUID: URLSessionDataTask]] = [:]
+    private let hlsDataTasksLock = NSLock()
 
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
     private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
@@ -822,6 +824,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     public func cancelDownloads(for mediaID: String) {
         // 1. Cancel tracked HLS segment download tasks
         Task { await activeDownloadsActor.cancelTasks(for: mediaID) }
+        hlsDataTasksLock.lock()
+        let tasksToCancel = hlsDataTasks.removeValue(forKey: mediaID).map { Array($0.values) } ?? []
+        hlsDataTasksLock.unlock()
+        tasksToCancel.forEach { $0.cancel() }
 
         // 2. Cancel progressive streaming sessions for this mediaID
         streamingSessionsLock.lock()
@@ -837,6 +843,25 @@ public class LocalHTTPServer: @unchecked Sendable {
         progressiveCacheWritersLock.lock()
         progressiveCacheWriters = progressiveCacheWriters.filter { !$0.hasPrefix(mediaID) }
         progressiveCacheWritersLock.unlock()
+    }
+
+    private func trackHLSDataTask(_ task: URLSessionDataTask, mediaID: String, taskKey: UUID) {
+        guard !mediaID.isEmpty else { return }
+        hlsDataTasksLock.lock()
+        var tasks = hlsDataTasks[mediaID, default: [:]]
+        tasks[taskKey] = task
+        hlsDataTasks[mediaID] = tasks
+        hlsDataTasksLock.unlock()
+    }
+
+    private func untrackHLSDataTask(mediaID: String, taskKey: UUID) {
+        guard !mediaID.isEmpty else { return }
+        hlsDataTasksLock.lock()
+        hlsDataTasks[mediaID]?.removeValue(forKey: taskKey)
+        if hlsDataTasks[mediaID]?.isEmpty == true {
+            hlsDataTasks.removeValue(forKey: mediaID)
+        }
+        hlsDataTasksLock.unlock()
     }
 
     /// Returns true if any HLS segment download is currently in-flight for the given mediaID.
@@ -2230,11 +2255,13 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     /// Download and cache without serving (used when connection is closing)
     private func downloadWithRetry(url: URL, cachePath: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
+        let taskKey = UUID()
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else {
                 completion?()
                 return
             }
+            self.untrackHLSDataTask(mediaID: mediaID, taskKey: taskKey)
 
             // MEMORY FIX: Use autoreleasepool for large segment downloads (4-5MB each)
             autoreleasepool {
@@ -2335,13 +2362,16 @@ public class LocalHTTPServer: @unchecked Sendable {
                 completion?()
             }
         }
+        trackHLSDataTask(task, mediaID: mediaID, taskKey: taskKey)
         task.resume()
     }
 
     private func fetchWithRetry(url: URL, cachePath: String, connection: NWConnection, method: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
 
+        let taskKey = UUID()
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else { return }
+            self.untrackHLSDataTask(mediaID: mediaID, taskKey: taskKey)
 
             // MEMORY FIX: Use autoreleasepool for large segment downloads (4-5MB each)
             autoreleasepool {
@@ -2472,6 +2502,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 completion?()
             }
         }
+        trackHLSDataTask(task, mediaID: mediaID, taskKey: taskKey)
         task.resume()
     }
     

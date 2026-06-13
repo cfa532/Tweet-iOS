@@ -232,6 +232,7 @@ extension VideoPlayerLifecycleManager {
         // CRITICAL: Also save to persistent storage so it survives player recreation
         if let detailManager = self as? DetailVideoManager,
            let videoMid = detailManager.currentVideoMid {
+            SharedAssetCache.shared.protectBackgroundPoster(for: videoMid)
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
                 currentTime: currentTime,
@@ -241,6 +242,7 @@ extension VideoPlayerLifecycleManager {
             )
         } else if let fullscreenManager = self as? FullScreenVideoManager,
                   let videoMid = fullscreenManager.currentVideoMid {
+            SharedAssetCache.shared.protectBackgroundPoster(for: videoMid)
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
                 currentTime: currentTime,
@@ -281,6 +283,10 @@ extension VideoPlayerLifecycleManager {
         } else {
             print("DEBUG: [\(managerName)] State already saved by willResignActive")
         }
+
+        // Background policy: keep resume metadata/posters, but drop the actual
+        // AVPlayer/AVPlayerItem memory. Foreground recovery recreates on demand.
+        clearBrokenPlayer()
     }
     
     func handleAppWillEnterForeground() {
@@ -585,6 +591,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         cleanupObservers()
         singletonPlayer?.pause()
         singletonPlayer?.replaceCurrentItem(with: nil)
+        singletonPlayer = nil
         isItemReady = false
         isBuffering = false
         isPlaying = false
@@ -2296,6 +2303,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             videoCompletionObserver = nil
         }
         currentPlayer?.pause()
+        currentPlayer?.replaceCurrentItem(with: nil)
         removeDetailRenderingObservers()
         currentPlayer = nil
         currentVideoMid = nil
@@ -2544,6 +2552,10 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             AudioSessionManager.shared.activateForVideoPlayback()
             currentPlayer = cachedPlayer
             isUsingBorrowedFeedPlayer = true
+            isItemReady = cachedItem.status == .readyToPlay
+            isPlaybackRendering = false
+            isPlaying = true
+            isBuffering = true
             pendingFeedResumeTime = nil
             activeFeedHandoffTime = nil
             resetDetailRenderingProgress(to: currentPlayer?.currentTime() ?? .zero)
@@ -2919,7 +2931,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             _ = markDetailRenderingIfDecoded(player: player, item: item)
         }
         isBuffering = shouldKeepDetailBuffering(player: player, item: player.currentItem)
-        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 guard self.currentPlayer === player,
@@ -3298,10 +3310,12 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         if let mediaID = currentVideoMid {
             VideoPlaybackSessionStore.shared.noteDecodedFrame(mediaID: mediaID, time: visibleTime)
         }
+        let visibleSeconds = seconds(from: visibleTime)
+        let hasAdvancedPastCover = visibleSeconds >= detailPlaybackStartSeconds + 0.25
         isPlaybackRendering = true
         isItemReady = true
         detailStartupRecoveryAttemptCount = 0
-        isBuffering = shouldKeepDetailBuffering(player: player, item: item)
+        isBuffering = shouldKeepDetailBuffering(player: player, item: item) || !hasAdvancedPastCover
         if !isBuffering {
             activeFeedHandoffTime = nil
         }

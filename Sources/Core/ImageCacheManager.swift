@@ -419,7 +419,7 @@ class ImageCacheManager: @unchecked Sendable {
     /// Use this for background cleanup - images will reload from disk when needed
     func clearMemoryCache() {
         cache.removeAllObjects()
-        cacheKeysQueue.async(flags: .barrier) {
+        cacheKeysQueue.sync(flags: .barrier) {
             self.memoryCachedKeys.removeAll()
             self.memoryCacheAccessTimes.removeAll()
             self.recentImageCache.removeAll()

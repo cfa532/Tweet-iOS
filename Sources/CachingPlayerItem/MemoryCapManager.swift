@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import os.log
+import SDWebImage
 
 /// Manages memory usage with a 2GB cap to prevent OS termination
 class MemoryCapManager {
@@ -287,6 +288,7 @@ class MemoryCapManager {
         GlobalImageLoadManager.shared.prepareForBackground()
         SharedAssetCache.shared.releaseForBackground()
         ImageCacheManager.shared.clearMemoryCache()
+        SDImageCache.shared.clearMemory()
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
         VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()

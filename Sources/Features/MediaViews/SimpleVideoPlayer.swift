@@ -292,6 +292,12 @@ final class VideoLastFrameCache {
         cache.removeAllObjects()
         timestamps.removeAll()
     }
+
+    func keepOnly(_ midsToKeep: Set<String>) {
+        for mid in Array(timestamps.keys) where !midsToKeep.contains(mid) {
+            clear(for: mid)
+        }
+    }
 }
 
 // MARK: - Frame Extraction Utilities (AVPlayerItemVideoOutput)
