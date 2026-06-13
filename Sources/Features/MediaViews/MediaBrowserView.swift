@@ -1186,16 +1186,11 @@ struct SingletonVideoPlayerView: View {
                 mediaType: mediaType
             )
         } label: {
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(width: 56, height: 56)
-                .background(Color.black.opacity(0.55))
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
-                )
+            Image(systemName: "arrow.clockwise.circle")
+                .font(.system(size: 28, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("Retry video"))
