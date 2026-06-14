@@ -4,7 +4,7 @@ target 'Tweet' do
   use_frameworks!  # Use dynamic frameworks
   pod 'hprose', '2.0.3'
   pod 'SDWebImageSwiftUI', '~> 3.1.3'
-  pod 'ffmpeg-kit-ios', '~> 6.0'
+  pod 'ffmpeg-kit-ios', :path => 'Vendor/ffmpeg-kit-ios-min'
   
   # CachingPlayerItem is now integrated directly into the app
 end
@@ -29,6 +29,7 @@ post_install do |installer|
       
       # Disable bitcode (can cause dSYM issues)
       config.build_settings['ENABLE_BITCODE'] = 'NO'
+      config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
       
       # Ensure proper architecture settings - support both arm64 and x86_64 for simulator
       config.build_settings['ARCHS'] = '$(ARCHS_STANDARD)'
@@ -50,4 +51,67 @@ post_install do |installer|
       end
     end
   end
-end 
+
+  ffmpeg_copy_script = File.join(
+    installer.sandbox.root,
+    'Target Support Files',
+    'ffmpeg-kit-ios',
+    'ffmpeg-kit-ios-xcframeworks.sh'
+  )
+
+  if File.exist?(ffmpeg_copy_script)
+    ffmpeg_copy_script_body = <<~'SH'
+      set -e
+
+      if [ -z "${PODS_ROOT:-}" ] || [ -z "${PODS_XCFRAMEWORKS_BUILD_DIR:-}" ]; then
+        echo "error: PODS_ROOT or PODS_XCFRAMEWORKS_BUILD_DIR is not set"
+        exit 1
+      fi
+
+      case "${EFFECTIVE_PLATFORM_NAME:-${PLATFORM_NAME:-}}" in
+        *simulator*) SLICE="ios-arm64_x86_64-simulator" ;;
+        *) SLICE="ios-arm64" ;;
+      esac
+
+      SOURCE_ROOT="${PODS_ROOT}/../Vendor/ffmpeg-kit-ios-min/Frameworks"
+      DESTINATION="${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios"
+      mkdir -p "${DESTINATION}"
+
+      copy_framework() {
+        NAME="$1"
+        SOURCE="${SOURCE_ROOT}/${NAME}.xcframework/${SLICE}/${NAME}.framework"
+        TARGET="${DESTINATION}/${NAME}.framework"
+
+        if [ ! -d "${SOURCE}" ]; then
+          echo "error: Missing ${SOURCE}"
+          exit 1
+        fi
+
+        rm -rf "${TARGET}"
+        /bin/cp -R "${SOURCE}" "${DESTINATION}/"
+        echo "Copied ${SOURCE} to ${TARGET}"
+      }
+
+      copy_framework ffmpegkit
+      copy_framework libavcodec
+      copy_framework libavdevice
+      copy_framework libavfilter
+      copy_framework libavformat
+      copy_framework libavutil
+      copy_framework libswresample
+      copy_framework libswscale
+    SH
+
+    File.write(ffmpeg_copy_script, "#!/bin/sh\n#{ffmpeg_copy_script_body}")
+    File.chmod(0o755, ffmpeg_copy_script)
+
+    ffmpeg_target = installer.pods_project.targets.find { |target| target.name == 'ffmpeg-kit-ios' }
+    if ffmpeg_target
+      ffmpeg_target.build_phases.each do |phase|
+        next unless phase.respond_to?(:name) && phase.name == '[CP] Copy XCFrameworks'
+
+        phase.shell_script = ffmpeg_copy_script_body
+      end
+    end
+  end
+end

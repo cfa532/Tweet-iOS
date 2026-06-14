@@ -3594,6 +3594,10 @@ final class HproseInstance: ObservableObject {
     // MARK: - Media Processing
     /// Consolidated media processing class that handles all media-related operations (images, videos, audio, documents)
     class MediaProcessor {
+        // Temporary FFmpegKit validation switch: route normalized videos through local HLS
+        // conversion even when they are small enough for progressive MP4 upload.
+        private static let forceLocalHLSForAllVideos = true
+
         
         /// Robust file type detection utility using multiple methods
         private class FileTypeDetector {
@@ -3989,7 +3993,7 @@ final class HproseInstance: ObservableObject {
             let videoSizeMB = Double(videoSize) / (1024 * 1024)
             print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", videoSizeMB))MB (\(videoSize) bytes)")
             
-            if videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
+            if videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES && !forceLocalHLSForAllVideos {
                 // ≤ 32MB: progressive video route
                 print("📹 [VIDEO UPLOAD] Size ≤ 32MB: using progressive video route (direct MP4 upload)")
                 progressCallback?("Uploading video...", 50)
@@ -4006,7 +4010,11 @@ final class HproseInstance: ObservableObject {
                 return (result, nil)
             } else {
                 // > 32MB: Need HLS conversion - check if cloud drive is available
-                print("📹 [VIDEO UPLOAD] Size > 32MB: will use HLS conversion route")
+                if forceLocalHLSForAllVideos && videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
+                    print("📹 [VIDEO UPLOAD] Temporary test mode: forcing HLS conversion route for video ≤ 32MB")
+                } else {
+                    print("📹 [VIDEO UPLOAD] Size > 32MB: will use HLS conversion route")
+                }
                 let cloudPort = appUser.cloudDrivePort
                 guard cloudPort > 0 else {
                     print("⚠️ [VIDEO UPLOAD] No cloud drive configured, falling back to progressive video")
@@ -4522,10 +4530,10 @@ final class HproseInstance: ObservableObject {
                 
                 let command = """
                     -i "\(inputURL.path)" \
-                    -c:v libx264 \
+                    -c:v h264_videotoolbox \
+                    -allow_sw 1 \
                     -c:a aac \
                     -vf "\(scaleFilter)" \
-                    -preset veryfast \
                     -b:v \(bitrateKbps)k \
                     -b:a 128k \
                     -movflags +faststart \
@@ -4693,12 +4701,12 @@ final class HproseInstance: ObservableObject {
                     if needsScaling && !scaleFilter.isEmpty {
                         command = """
                             -i "\(inputURL.path)" \
-                            -c:v libx264 \
+                            -c:v h264_videotoolbox \
+                            -allow_sw 1 \
                             -profile:v main \
                             -level 4.0 \
                             -pix_fmt yuv420p \
                             -vf "\(scaleFilter)" \
-                            -preset veryfast \
                             -b:v \(targetBitrateKbps)k \
                             -maxrate \(targetBitrateKbps)k \
                             -bufsize \(targetBitrateKbps)k \
@@ -4713,11 +4721,11 @@ final class HproseInstance: ObservableObject {
                         // Keep original resolution but encode with target bitrate
                         command = """
                             -i "\(inputURL.path)" \
-                            -c:v libx264 \
+                            -c:v h264_videotoolbox \
+                            -allow_sw 1 \
                             -profile:v main \
                             -level 4.0 \
                             -pix_fmt yuv420p \
-                            -preset veryfast \
                             -b:v \(targetBitrateKbps)k \
                             -maxrate \(targetBitrateKbps)k \
                             -bufsize \(targetBitrateKbps)k \

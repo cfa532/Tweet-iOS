@@ -654,7 +654,7 @@ class VideoConversionService {
         }
 
         // Fallback: if we can't get video info, don't use copy
-        print("DEBUG: [VIDEO CONVERSION] Could not get video info, using libx264")
+        print("DEBUG: [VIDEO CONVERSION] Could not get video info, using VideoToolbox H.264")
         return false
     }
     
@@ -738,13 +738,13 @@ class VideoConversionService {
                     self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, completion: completion)
                 }
             } else {
-                print("========== \(targetResolution)p VARIANT: RE-ENCODING (libx264) ==========")
-                print("  Method: libx264 re-encoding")
+                print("========== \(targetResolution)p VARIANT: RE-ENCODING (VideoToolbox H.264) ==========")
+                print("  Method: h264_videotoolbox re-encoding")
                 print("  Reason: Scaling or format conversion needed")
                 print("==========================================================")
                 
-                // Use libx264 for all other cases (compatibility and proper normalization)
-                print("DEBUG: [VIDEO CONVERSION] Using libx264 codec for resolution: \(resolution) (compatibility and normalization)")
+                // Use Apple's hardware H.264 encoder for all other cases.
+                print("DEBUG: [VIDEO CONVERSION] Using h264_videotoolbox codec for resolution: \(resolution) (compatibility and normalization)")
 
                 // Determine scaling based on orientation and source resolution
                 // Never upscale - if source resolution is lower than target, keep original
@@ -800,7 +800,7 @@ class VideoConversionService {
                     }
                 }
 
-                let libx264Command = buildLibx264Command(
+                let h264Command = buildVideoToolboxH264Command(
                     inputURL: inputURL,
                     outputURL: outputURL,
                     resolution: resolution,
@@ -809,14 +809,14 @@ class VideoConversionService {
                 )
 
                 await MainActor.run {
-                    self.executeFFmpegCommand(command: libx264Command, outputURL: outputURL, resolution: resolution, completion: completion)
+                    self.executeFFmpegCommand(command: h264Command, outputURL: outputURL, resolution: resolution, completion: completion)
                 }
             }
         }
     }
     
-    /// Builds FFmpeg command for libx264 codec - standard HLS configuration
-    private func buildLibx264Command(
+    /// Builds FFmpeg command for Apple's VideoToolbox H.264 encoder - standard HLS configuration
+    private func buildVideoToolboxH264Command(
         inputURL: URL,
         outputURL: URL,
         resolution: String,
@@ -829,18 +829,15 @@ class VideoConversionService {
             videoFilter = "-vf \"\(scaleFilter)\""
         }
         
-        // OPTIMIZATION: Reduce memory usage during encoding
-        // - Use "veryfast" preset (already set) for speed and lower memory
-        // - Limit threads to 4 instead of auto (0) to reduce memory footprint
-        // - Use smaller bufsize to reduce memory buffer requirements
-        let threadCount = min(4, ProcessInfo.processInfo.activeProcessorCount)
+        // OPTIMIZATION: Keep encoder buffers small to reduce memory footprint.
         let bufferSize = Int(bitrate.replacingOccurrences(of: "k", with: "")) ?? 2000
         let optimizedBufferSize = "\(bufferSize / 2)k" // Half the bitrate for buffer
         
         // Build command as a single line to avoid multiline string issues
         var commandParts: [String] = [
             "-i \"\(inputURL.path)\"",
-            "-c:v libx264",
+            "-c:v h264_videotoolbox",
+            "-allow_sw 1",
             "-profile:v main",
             "-level 4.0",
             "-pix_fmt yuv420p",
@@ -850,11 +847,7 @@ class VideoConversionService {
             "-maxrate \(bitrate)",
             "-bufsize \(optimizedBufferSize)", // OPTIMIZED: Smaller buffer
             "-b:a 128k",
-            "-preset veryfast",
-            "-g 48",
-            "-keyint_min 48",
-            "-sc_threshold 0",
-            "-threads \(threadCount)" // OPTIMIZED: Limited threads
+            "-g 48"
         ]
         
         if !videoFilter.isEmpty {
