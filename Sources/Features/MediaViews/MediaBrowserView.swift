@@ -32,6 +32,7 @@ struct MediaBrowserView: View {
     @State private var isTransitioning = false // Track transition animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var pushTransition: VerticalPushTransition?
+    @State private var settledTransitionCover: VerticalPushTransition?
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
     @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
@@ -112,6 +113,7 @@ struct MediaBrowserView: View {
                 isTransitioning: $isTransitioning,
                 transitionOffset: $transitionOffset,
                 pushTransition: $pushTransition,
+                settledTransitionCover: $settledTransitionCover,
                 suppressTabPagingAnimation: $suppressTabPagingAnimation,
                 currentTweet: currentTweet,
                 currentCellTweetId: currentCellTweetId,
@@ -214,6 +216,7 @@ struct MediaBrowserView: View {
                 self.currentCellTweetId = nextSourceTweetId
                 self.imageStates = [:]
 
+                settledTransitionCover = pushTransition
                 transitionOffset = 0
                 pushTransition = nil
                 isTransitioning = false
@@ -229,6 +232,7 @@ struct MediaBrowserView: View {
                         mediaType: attachment.type
                     )
                 }
+                await settleTransitionCover(afterPlayerReadyFor: attachment.mid)
             }
         }
         
@@ -240,6 +244,37 @@ struct MediaBrowserView: View {
 
     private struct VerticalPushTransition {
         let attachment: MimeiFileType
+    }
+
+    @MainActor
+    private func settleTransitionCover(afterPlayerReadyFor mediaID: String) async {
+        for _ in 0..<24 {
+            if isFullscreenPlayerVisiblyReady(for: mediaID) {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        guard settledTransitionCover?.attachment.mid == mediaID else { return }
+        withAnimation(.easeOut(duration: 0.12)) {
+            settledTransitionCover = nil
+        }
+    }
+
+    @MainActor
+    private func isFullscreenPlayerVisiblyReady(for mediaID: String) -> Bool {
+        let manager = FullScreenVideoManager.shared
+        guard manager.currentVideoMid == mediaID,
+              manager.isItemReady,
+              let player = manager.singletonPlayer,
+              player.currentItem != nil,
+              player.timeControlStatus == .playing else {
+            return false
+        }
+
+        let current = CMTimeGetSeconds(player.currentTime())
+        return current.isFinite && current > 0.12
     }
     
     // MARK: - MediaBrowserContentView
@@ -257,6 +292,7 @@ struct MediaBrowserView: View {
         @Binding var isTransitioning: Bool
         @Binding var transitionOffset: CGFloat
         @Binding var pushTransition: VerticalPushTransition?
+        @Binding var settledTransitionCover: VerticalPushTransition?
         @Binding var suppressTabPagingAnimation: Bool
         let currentTweet: Tweet
         let currentCellTweetId: String
@@ -295,6 +331,11 @@ struct MediaBrowserView: View {
                         transitionPreview(for: pushTransition)
                             .offset(y: transitionOffset + UIScreen.main.bounds.height)
                             .zIndex(2)
+                    }
+
+                    if let settledTransitionCover {
+                        transitionPreview(for: settledTransitionCover)
+                            .zIndex(3)
                     }
                 }
                 .scaleEffect(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 1000.0))
@@ -459,11 +500,44 @@ struct MediaBrowserView: View {
                     currentIndex = nextVideoIndex
                     previousIndex = nextVideoIndex
                 }
+                settledTransitionCover = pushTransition
                 transitionOffset = 0
                 pushTransition = nil
                 isTransitioning = false
                 suppressTabPagingAnimation = false
+                await settleTransitionCover(afterPlayerReadyFor: nextAttachment.mid)
             }
+        }
+
+        @MainActor
+        private func settleTransitionCover(afterPlayerReadyFor mediaID: String) async {
+            for _ in 0..<24 {
+                if isFullscreenPlayerVisiblyReady(for: mediaID) {
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            guard settledTransitionCover?.attachment.mid == mediaID else { return }
+            withAnimation(.easeOut(duration: 0.12)) {
+                settledTransitionCover = nil
+            }
+        }
+
+        @MainActor
+        private func isFullscreenPlayerVisiblyReady(for mediaID: String) -> Bool {
+            let manager = FullScreenVideoManager.shared
+            guard manager.currentVideoMid == mediaID,
+                  manager.isItemReady,
+                  let player = manager.singletonPlayer,
+                  player.currentItem != nil,
+                  player.timeControlStatus == .playing else {
+                return false
+            }
+
+            let current = CMTimeGetSeconds(player.currentTime())
+            return current.isFinite && current > 0.12
         }
 
         private func transitionPreview(for transition: VerticalPushTransition) -> some View {
@@ -1142,7 +1216,7 @@ struct SingletonVideoPlayerView: View {
 
     private func shouldShowHandoffPoster(for player: AVPlayer) -> Bool {
         guard manager.currentVideoMid == mid,
-              SharedAssetCache.shared.cachedThumbnail(for: mid) != nil,
+              currentPosterImage != nil,
               !isVideoAtEnd(player) else {
             return false
         }
@@ -1150,6 +1224,14 @@ struct SingletonVideoPlayerView: View {
         return player.timeControlStatus != .playing
             || manager.isBuffering
             || !manager.isItemReady
+            || isBeforeFirstVisibleFrame(player)
+    }
+
+    private func isBeforeFirstVisibleFrame(_ player: AVPlayer) -> Bool {
+        guard player.timeControlStatus == .playing else { return false }
+        let current = CMTimeGetSeconds(player.currentTime())
+        guard current.isFinite else { return true }
+        return current < 0.18
     }
 
     private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
@@ -1228,14 +1310,20 @@ struct SingletonVideoPlayerView: View {
 
     @ViewBuilder
     private var posterImage: some View {
-        let thumbnailForCurrentMid = handoffThumbnailMid == mid ? handoffThumbnail : nil
-        if let thumbnail = thumbnailForCurrentMid ?? SharedAssetCache.shared.cachedThumbnail(for: mid) ?? manager.transitionPoster(for: mid) {
+        if let thumbnail = currentPosterImage {
             Image(uiImage: thumbnail)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
         } else {
             Color.black
         }
+    }
+
+    private var currentPosterImage: UIImage? {
+        let thumbnailForCurrentMid = handoffThumbnailMid == mid ? handoffThumbnail : nil
+        return thumbnailForCurrentMid
+            ?? SharedAssetCache.shared.cachedThumbnail(for: mid)
+            ?? manager.transitionPoster(for: mid)
     }
 }
 

@@ -1103,7 +1103,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         // Helper to update buffering state
         let updateBufferingState = { [weak self, weak player, weak playerItem] () in
-            guard let self = self, let player = player, let item = playerItem else { return }
+            guard let self = self,
+                  let player = player,
+                  let item = playerItem,
+                  self.singletonPlayer === player,
+                  player.currentItem === item else {
+                return
+            }
             
             let isBufferEmpty = item.isPlaybackBufferEmpty
             let isLikelyToKeepUp = item.isPlaybackLikelyToKeepUp
