@@ -706,18 +706,20 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     /// Internal stop that runs on the caller's context (must be called from `queue` or restart)
-    private func stopInternal() {
+    private func stopInternal(clearMediaRegistration: Bool = true) {
         self.isStopping = true
         self.listener?.cancel()
         self.listener = nil
         self.isRunning = false
         self.isStarting = false
 
-        // Clear media registration so we don't retain metadata when server is stopped.
-        mediaLock.lock()
-        mediaCache.removeAll()
-        mediaRealURLs.removeAll()
-        mediaLock.unlock()
+        if clearMediaRegistration {
+            // Clear media registration so we don't retain metadata when server is stopped.
+            mediaLock.lock()
+            mediaCache.removeAll()
+            mediaRealURLs.removeAll()
+            mediaLock.unlock()
+        }
     }
 
     public func stop() {
@@ -749,7 +751,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     return
                 }
 
-                self.stopInternal()
+                self.stopInternal(clearMediaRegistration: false)
                 self.isStopping = false
 
                 Task {
