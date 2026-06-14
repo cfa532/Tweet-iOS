@@ -518,6 +518,8 @@ struct MediaBrowserView: View {
                 isImageZoomed: $isImageZoomed,
                 isCurrentIndex: index == currentIndex
             )
+            .contentShape(Rectangle())
+            .simultaneousGesture(verticalVideoNavigationGesture)
             .onAppear {
                 loadImageIfNeededClosure(attachment, index)
             }
@@ -916,39 +918,37 @@ struct ImageViewWithPlaceholder: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 15)
                         .onChanged { value in
-                            // Only handle drag when zoomed in
-                            if scale > 1.0 {
-                                let delta = CGSize(
-                                    width: value.translation.width - lastOffset.width,
-                                    height: value.translation.height - lastOffset.height
+                            let delta = CGSize(
+                                width: value.translation.width - lastOffset.width,
+                                height: value.translation.height - lastOffset.height
+                            )
+                            lastOffset = value.translation
+
+                            let actualAspectRatio = getActualAspectRatio()
+                            let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
+                            let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
+
+                            // For tall images (AR < 0.6), align to top and only allow upward scrolling
+                            if actualAspectRatio < 0.6 {
+                                // Align to top: offset.y should be positive (image top aligned to screen top)
+                                let topAlignedOffsetY = maxOffsetY
+
+                                offset = CGSize(
+                                    width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
+                                    height: max(0, min(topAlignedOffsetY, offset.height + delta.height))
                                 )
-                                lastOffset = value.translation
-                                
-                                let actualAspectRatio = getActualAspectRatio()
-                                let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
-                                let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
-                                
-                                // For tall images (AR < 0.6), align to top and only allow upward scrolling
-                                if actualAspectRatio < 0.6 {
-                                    // Align to top: offset.y should be positive (image top aligned to screen top)
-                                    let topAlignedOffsetY = maxOffsetY
-                                    
-                                    offset = CGSize(
-                                        width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
-                                        height: max(0, min(topAlignedOffsetY, offset.height + delta.height))
-                                    )
-                                } else {
-                                    // Normal behavior for wide/normal images
-                                    offset = CGSize(
-                                        width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
-                                        height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
-                                    )
-                                }
+                            } else {
+                                // Normal behavior for wide/normal images
+                                offset = CGSize(
+                                    width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
+                                    height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
+                                )
                             }
                         }
                         .onEnded { _ in
                             lastOffset = .zero
-                        }
+                        },
+                    including: scale > 1.0 ? .gesture : .subviews
                 )
                 .onTapGesture(count: 2) {
                     withAnimation(.easeInOut(duration: 0.3)) {
