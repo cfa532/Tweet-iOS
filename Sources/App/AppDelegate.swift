@@ -332,7 +332,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     if LocalHTTPServer.shared.isRunning {
                         // Server still alive - just refresh, don't clear players
                         SharedAssetCache.shared.refreshVideoLayersForShortBackground()
-                        LocalHTTPServer.shared.resetConnectionPool()
                         print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
                         // Post notification for visible videos to check health (they skip if seeking)
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
@@ -488,10 +487,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             if timeInBackground < 300 {
                 print("⚡ [AppDelegate] Fast recovery (\(timeInBackground)s) — server & players preserved")
 
-                // CRITICAL: Synchronously kill ALL stale upstream connections before
-                // any video cell tries to load.  The async resetConnectionPool() can be
-                // delayed if the server queue is blocked by in-flight timeout requests.
-                LocalHTTPServer.shared.resetAllConnectionsImmediately()
                 AppDelegate.isVideoInfrastructureReady = true
 
                 // Notify coordinator to resume playback on visible videos
@@ -596,7 +591,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
                         await MainActor.run {
                             SharedAssetCache.shared.refreshVideoLayersForShortBackground()
-                            LocalHTTPServer.shared.resetConnectionPool()
 
                             print("✅ [AppDelegate] Short background recovery complete - players preserved")
 
@@ -687,9 +681,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // DON'T clear VideoStateCache - it stores playback position/state
         // Preserving it allows videos to resume from where they left off after reload
         
-        // Reset LocalHTTPServer connection pool
-        LocalHTTPServer.shared.resetConnectionPool()
-        
         // Stop the server completely and wait for cleanup
         LocalHTTPServer.shared.stop()
         Thread.sleep(forTimeInterval: 0.5) // BLOCKING sleep - ensure port is released
@@ -724,30 +715,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // DON'T clear VideoStateCache - it stores playback position/state
         // Preserving it allows videos to resume from where they left off after reload
         
-        // Reset LocalHTTPServer connection pool (fast operation)
-        LocalHTTPServer.shared.resetConnectionPool()
-        
         // Check if cancelled
         guard !Task.isCancelled else {
-            print("[AppDelegate] Infrastructure restart cancelled during reset")
+            print("[AppDelegate] Infrastructure restart cancelled before proxy restart")
             await clearTask.value
             isRestartingInfrastructure = false
             return
         }
-        
-        // OPTIMIZATION: Only stop if server is running, skip stop if already stopped
-        // This avoids unnecessary wait if server was already stopped
-        let needsStop = LocalHTTPServer.shared.isRunning
-        if needsStop {
-            LocalHTTPServer.shared.stop()
-            // Reduced wait time - stop() is async and usually completes quickly
-            // Server stop just cancels the listener, which is fast
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s instead of 0.5s
-        }
+
+        await LocalHTTPServer.shared.forceRestartAndWaitAsync()
         
         // Check if cancelled
         guard !Task.isCancelled else {
-            print("[AppDelegate] Infrastructure restart cancelled during stop")
+            print("[AppDelegate] Infrastructure restart cancelled after proxy restart")
             await clearTask.value
             isRestartingInfrastructure = false
             return
@@ -761,14 +741,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("[AppDelegate] Infrastructure restart cancelled before restart")
             isRestartingInfrastructure = false
             return
-        }
-        
-        // Restart the server - use faster method if possible
-        // OPTIMIZATION: If server is already running (rare), skip restart
-        if !LocalHTTPServer.shared.isRunning {
-            await LocalHTTPServer.shared.startAndWaitAsync()  // ✅ Async - doesn't block!
-        } else {
-            print("[AppDelegate] Server already running - skipping restart")
         }
         
         let elapsed = Date().timeIntervalSince(startTime)

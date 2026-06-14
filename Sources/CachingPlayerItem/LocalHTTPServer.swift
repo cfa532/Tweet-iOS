@@ -734,6 +734,39 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
 
+    /// Deterministically rebuild the localhost proxy after long background suspension.
+    /// `isRunning` can be stale when iOS suspends the NWListener overnight, so this
+    /// intentionally ignores the current flag and always tears down before rebinding.
+    /// Upstream connection pools are preserved; stale connections are handled by the
+    /// normal request retry/refresh path when traffic resumes.
+    public func forceRestartAndWaitAsync() async {
+        print("[LocalHTTPServer] forceRestartAndWaitAsync() called")
+
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume()
+                    return
+                }
+
+                self.stopInternal()
+                self.isStopping = false
+
+                Task {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    await self.startServer()
+                    continuation.resume()
+                }
+            }
+        }
+
+        if isRunning {
+            print("[LocalHTTPServer] ✅ forceRestartAndWaitAsync() SUCCESS - Server ready on port \(port)")
+        } else {
+            print("[LocalHTTPServer] ❌ forceRestartAndWaitAsync() FAILED - Server not running")
+        }
+    }
+
     /// Stop the server during app backgrounding without leaving cleanup queued behind
     /// suspended media work. Use this only from lifecycle cleanup, not normal playback paths.
     public func stopImmediatelyForBackground() {
