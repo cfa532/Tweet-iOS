@@ -3078,8 +3078,27 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.isPlaying = false
-                print("🏁 [DetailVideoManager] Video finished for \(self?.currentVideoMid ?? "?")")
+                guard let self,
+                      let player = self.currentPlayer,
+                      player.currentItem === playerItem else { return }
+                let finishedMid = self.currentVideoMid
+                self.isPlaying = false
+                self.isBuffering = false
+                self.isPlaybackRendering = false
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player, weak playerItem] finished in
+                    Task { @MainActor [weak self, weak player, weak playerItem] in
+                        guard let self,
+                              let player,
+                              let playerItem,
+                              self.currentPlayer === player,
+                              player.currentItem === playerItem else { return }
+                        if finished {
+                            self.resetDetailRenderingProgress(to: .zero)
+                            self.isBuffering = false
+                        }
+                    }
+                }
+                print("🏁 [DetailVideoManager] Video finished for \(finishedMid ?? "?") - rewinding")
             }
         }
     }
