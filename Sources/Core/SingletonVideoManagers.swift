@@ -474,7 +474,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
         LocalHTTPServer.shared.clearPrimaryRestriction()
 
-        let cleanupResult = releasedBrokenBorrowedPlayer ? "broken shared player released" : "shared player preserved"
+        let cleanupResult = releasedBrokenBorrowedPlayer ? "broken borrowed player released" : "fullscreen player preserved"
         print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, \(cleanupResult)")
     }
 
@@ -729,6 +729,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// Used by SingletonVideoPlayerView to show a thumbnail cover while the item loads.
     @Published var isItemReady = false
     @Published private(set) var loadFailedVideoMid: String?
+    @Published private(set) var transitionPoster: UIImage?
     
     // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)?
@@ -809,38 +810,38 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         return "pos=\(String(format: "%.2f", pos)), dur=\(String(format: "%.2f", dur)), buffered=\(String(format: "%.2f", buffered)), itemStatus=\(status), timeControl=\(timeControl), reason=\(reason), keepUp=\(keepUp), empty=\(empty), ranges=[\(ranges)]"
     }
 
-    // MARK: - Prewarm (startup UX)
-    // Preload a first AVPlayerItem to reduce first-open latency.
-    private var didPrewarmFirstItem: Bool = false
-    private var prewarmTask: Task<Void, Never>?
-    
-    /// Initialize singleton player early (called during app startup)
+    private func captureTransitionPoster(from player: AVPlayer?, mediaID: String?) {
+        guard let mediaID else { return }
+        if let cached = SharedAssetCache.shared.cachedThumbnail(for: mediaID) {
+            transitionPoster = cached
+            return
+        }
+        guard let asset = player?.currentItem?.asset else { return }
+        let captureTime = player?.currentTime() ?? .zero
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 720, height: 720)
+        generator.generateCGImageAsynchronously(for: captureTime) { cgImage, _, error in
+            guard let cgImage, error == nil else { return }
+            let image = UIImage(cgImage: cgImage)
+            Task { @MainActor in
+                self.transitionPoster = image
+                SharedAssetCache.shared.updateCachedThumbnail(image, for: mediaID)
+            }
+        }
+    }
+
+    /// Lazily create the fullscreen-owned player shell when fullscreen opens.
     func initializePlayerEarly() {
         guard singletonPlayer == nil else {
             return
         }
         
-        // Create empty player instance to warm up AVFoundation infrastructure
         singletonPlayer = AVPlayer()
         singletonPlayer?.isMuted = false
         
     }
 
-    /// Prewarm the singleton by creating (and optionally attaching) a first AVPlayerItem.
-    /// This should NOT start playback.
-    func prewarmFirstItemIfNeeded(url: URL, mediaID: String, mediaType: MediaType) {
-        guard !didPrewarmFirstItem else { return }
-        didPrewarmFirstItem = true
-
-        // Ensure the singleton player exists.
-        initializePlayerEarly()
-
-        prewarmTask?.cancel()
-        prewarmTask = Task { @MainActor in
-            SharedAssetCache.shared.preloadAsset(for: url, mediaID: mediaID, tweetId: nil, mediaType: mediaType)
-        }
-    }
-    
     /// Load and play a video in the singleton player
     func loadVideo(url: URL, mid: String, tweetId: String, cellTweetId: String, videoIndex: Int, mediaType: MediaType) {
         print("🎬 [FullScreenVideoManager] loadVideo start \(shortMID(mid)): mediaType=\(mediaType), current=\(shortMID(currentVideoMid)), loading=\(shortMID(loadingMid)), hasItem=\(singletonPlayer?.currentItem != nil)")
@@ -848,7 +849,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // TabView/container/page onAppear can all fire for the selected page. The first
         // load owns the handoff; repeating the suspend step can interrupt unrelated feed work
         // while adding no new progress for this video.
-        if loadingMid == mid && currentVideoMid == mid {
+        if loadingMid == mid {
             let age = loadingStartedAt.map { Date().timeIntervalSince($0) } ?? 0
             print("♻️ [FullScreenVideoManager] Duplicate load ignored for \(String(mid.prefix(8))) (age: \(String(format: "%.1f", age))s, itemAttached: \(singletonPlayer?.currentItem != nil))")
             return
@@ -910,12 +911,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             return
         }
         
-        // Clear any previously preserved item before loading a new video.
+        // Preserve the old frame while preparing a new fullscreen-owned item.
         // Also save position for the old video so it can be restored later.
         if let player = singletonPlayer, player.currentItem != nil, currentVideoMid != mid {
             if let oldMid = currentVideoMid, player.currentItem != nil {
                 let t = player.currentTime()
                 let d = player.currentItem?.duration ?? .invalid
+                captureTransitionPoster(from: player, mediaID: oldMid)
                 saveFullscreenPlaybackState(
                     videoMid: oldMid,
                     currentTime: t,
@@ -924,7 +926,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 )
             }
             player.pause()
-            singletonPlayer = nil
         }
 
         // Bump generation so any prior async completions are ignored.
@@ -958,57 +959,23 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         cleanupObservers()
         isBuffering = true
         
-        // Store current video info
-        self.currentVideoMid = mid
-        self.currentTweetId = tweetId
-        self.currentCellTweetId = cellTweetId
-        self.currentVideoIndex = videoIndex
-        
-        // Borrow the canonical feed player when available. This is intentionally
-        // shared across feed/detail/fullscreen so buffered data and recovered
-        // playback position survive surface switches.
-        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
-           let cachedPlayerItem = cachedPlayer.currentItem {
-            if releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(cachedPlayer, item: cachedPlayerItem, mid: mid, owner: "fullscreen borrow") {
-                self.loadingMid = mid
-                self.loadingStartedAt = Date()
-            } else {
-                print("🎬 [FullScreenVideoManager] Borrowing shared feed player for \(shortMID(mid)): cached=\(playerDiagnostic(cachedPlayer, item: cachedPlayerItem))")
-                self.loadingMid = nil
-                self.loadingStartedAt = nil
-
-                // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
-                AudioSessionManager.shared.activateForVideoPlayback()
-
-                self.singletonPlayer = cachedPlayer
-                self.isUsingBorrowedFeedPlayer = true
-
-                applyStartupAudioMuteIfNeeded()
-
-                // CRITICAL: Setup fullscreen's unique functionality
-                self.setupVideoCompletionObserver(cachedPlayerItem)
-                self.setupTimeControlStatusObserver()
-
-                // Start playback — compute seek target once, seek once, then play
-                self.startPlaybackWithSeekIfNeeded(playerItem: cachedPlayerItem, mid: mid)
-                return
-            }
-        }
-
         SharedAssetCache.shared.prepareUncachedFullscreenLoad(for: mid)
         print("🎬 [FullScreenVideoManager] Async asset load start for \(shortMID(mid)): url=\(url.absoluteString)")
         
-        // No cached player - load video asynchronously
+        initializePlayerEarly()
+
+        // Fullscreen owns its AVPlayer. It reuses cache/local HTTP plumbing, but not feed/detail AVPlayer instances.
         Task.detached(priority: .userInitiated) {
             do {
-                let sharedPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: mid, tweetId: tweetId, mediaType: mediaType)
+                let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(for: url, mediaID: mid, mediaType: mediaType)
                 
                 await MainActor.run {
                     // Ignore stale completions
-                    guard self.loadGeneration == generation, self.currentVideoMid == mid else {
+                    guard self.loadGeneration == generation, self.loadingMid == mid else {
                         return
                     }
-                    guard let playerItem = sharedPlayer.currentItem else {
+                    self.initializePlayerEarly()
+                    guard let player = self.singletonPlayer else {
                         self.loadingMid = nil
                         self.loadingStartedAt = nil
                         self.isBuffering = false
@@ -1017,12 +984,18 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     }
                     self.loadingMid = nil
                     self.loadingStartedAt = nil
-                    print("🎬 [FullScreenVideoManager] Shared player load ready for \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
+                    print("🎬 [FullScreenVideoManager] Fullscreen item load ready for \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
                     // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
                     AudioSessionManager.shared.activateForVideoPlayback()
-                    
-                    self.singletonPlayer = sharedPlayer
-                    
+
+                    player.pause()
+                    player.replaceCurrentItem(with: playerItem)
+                    self.currentVideoMid = mid
+                    self.currentTweetId = tweetId
+                    self.currentCellTweetId = cellTweetId
+                    self.currentVideoIndex = videoIndex
+                    self.isUsingBorrowedFeedPlayer = false
+
                     self.applyStartupAudioMuteIfNeeded()
                     
                     // Setup video completion observer
@@ -1040,14 +1013,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 }
             } catch {
                 await MainActor.run {
-                    guard self.loadGeneration == generation, self.currentVideoMid == mid else {
+                    guard self.loadGeneration == generation, self.loadingMid == mid else {
                         return
                     }
                     self.loadingMid = nil
                     self.loadingStartedAt = nil
 
                     print("ERROR: [FullScreenVideoManager] Failed to load video: \(error)")
-                    self.failFullscreenVideoLoad(reason: "async player creation failed: \(error.localizedDescription)", deleteDiskCache: true)
+                    self.failFullscreenVideoLoad(failedMid: mid, reason: "async player creation failed: \(error.localizedDescription)", deleteDiskCache: true)
                 }
             }
         }
@@ -1166,6 +1139,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             } else {
                 if isActivelyRendering && !player.automaticallyWaitsToMinimizeStalling {
                     player.automaticallyWaitsToMinimizeStalling = true
+                }
+                if isActivelyRendering {
+                    self.transitionPoster = nil
                 }
                 // Player has enough data - hide spinner immediately (no debounce for hiding)
                 // Cancel any pending show task
@@ -1320,8 +1296,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
     }
 
-    private func failFullscreenVideoLoad(reason: String, deleteDiskCache: Bool, advanceToNext: Bool = true) {
-        guard let failedMid = currentVideoMid else { return }
+    private func failFullscreenVideoLoad(failedMid explicitFailedMid: String? = nil, reason: String, deleteDiskCache: Bool, advanceToNext: Bool = true) {
+        guard let failedMid = explicitFailedMid ?? currentVideoMid else { return }
         let nextVideo = advanceToNext ? resolveNextVideo(after: videoListIndex) : nil
 
         print("❌ [FullScreenVideoManager] \(reason) - releasing fullscreen player \(shortMID(failedMid)), deleteDiskCache=\(deleteDiskCache)")
@@ -1875,8 +1851,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             )
         }
 
-        // Keep the shared player item alive so feed can resume with the same
-        // buffer and position when fullscreen closes.
+        // Keep the fullscreen-owned player item alive so reopening fullscreen can
+        // reuse the warm player shell and recent buffer.
         singletonPlayer?.pause()
         LocalHTTPServer.shared.clearPrimaryRestriction()
         fullscreenStallItemRebuildCount = 0
@@ -2413,6 +2389,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isPlaying = false
         isBuffering = false
         isPlaybackRendering = false
+        didFinishPlayback = false
         isItemReady = false
         loadFailedVideoMid = nil
         detailStallItemRebuildCount = 0
@@ -2425,6 +2402,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     @Published var isPlaying = false
     @Published var isBuffering = false
     @Published private(set) var isPlaybackRendering = false
+    @Published private(set) var didFinishPlayback = false
 
     // MARK: - Attachment Video Tracking (coordinator-driven autoplay)
     /// Mids of the main tweet's video attachments — coordinator play/pause notifications are
@@ -2558,6 +2536,13 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                let item = player.currentItem,
                item.status == .readyToPlay {
                 isItemReady = true
+                if didFinishPlayback {
+                    isPlaying = false
+                    isBuffering = false
+                    isPlaybackRendering = false
+                    return
+                }
+                didFinishPlayback = false
                 isBuffering = !isPlaybackRendering
                 isPlaying = true
 
@@ -2619,6 +2604,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isItemReady = false
         isBuffering = true
         isPlaybackRendering = false
+        didFinishPlayback = false
         isSeekingToStartupPosition = false
         isUsingBorrowedFeedPlayer = false
         loadFailedVideoMid = nil
@@ -2987,6 +2973,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isPlaying = false
         isBuffering = false
         isPlaybackRendering = false
+        didFinishPlayback = false
         isSeekingToStartupPosition = false
         isUsingBorrowedFeedPlayer = false
         isItemReady = false
@@ -3085,6 +3072,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 self.isPlaying = false
                 self.isBuffering = false
                 self.isPlaybackRendering = false
+                self.didFinishPlayback = true
                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player, weak playerItem] finished in
                     Task { @MainActor [weak self, weak player, weak playerItem] in
                         guard let self,
@@ -3171,6 +3159,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         print("📱 [DetailVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(detailDiagnostic(player, item: item))")
         player.play()
         isPlaying = true
+        didFinishPlayback = false
         isBuffering = shouldKeepDetailBuffering(player: player, item: item)
         if item.status == .readyToPlay {
             isItemReady = true
@@ -3719,6 +3708,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isBuffering = false
         isPlaybackRendering = false
         isSeekingToStartupPosition = false
+        didFinishPlayback = false
         loadFailedVideoMid = nil
         pendingFeedResumeTime = nil
         activeFeedHandoffTime = nil
@@ -3758,6 +3748,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         currentVideoMid = nil
         isPlaying = false
         isPlaybackRendering = false
+        didFinishPlayback = false
         isUsingBorrowedFeedPlayer = false
         loadFailedVideoMid = nil
     }

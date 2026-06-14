@@ -1004,12 +1004,7 @@ struct TweetListView: View {
 
                 didPrewarmSingletonFirstItem = true
 
-                // Prewarm both singleton pipelines (no playback).
-                FullScreenVideoManager.shared.prewarmFirstItemIfNeeded(
-                    url: url,
-                    mediaID: attachment.mid,
-                    mediaType: attachment.type
-                )
+                // Prewarm the detail singleton pipeline (no playback).
                 DetailVideoManager.shared.prewarmFirstItemIfNeeded(
                     url: url,
                     mediaID: attachment.mid,

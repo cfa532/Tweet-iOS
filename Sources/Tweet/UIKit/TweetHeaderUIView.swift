@@ -10,6 +10,18 @@ import Combine
 
 class TweetHeaderUIView: UIView {
 
+    private final class MenuButton: UIButton {
+        override var isHighlighted: Bool {
+            get { false }
+            set { super.isHighlighted = false }
+        }
+
+        override var isSelected: Bool {
+            get { false }
+            set { super.isSelected = false }
+        }
+    }
+
     private let headerLabel: UILabel = {
         let label = UILabel()
         label.numberOfLines = 2
@@ -20,11 +32,13 @@ class TweetHeaderUIView: UIView {
     }()
 
     private let menuButton: UIButton = {
-        let button = UIButton(type: .system)
+        let button = MenuButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         button.setImage(UIImage(systemName: "ellipsis", withConfiguration: config), for: .normal)
         button.tintColor = .secondaryLabel
         button.showsMenuAsPrimaryAction = true
+        button.changesSelectionAsPrimaryAction = false
+        button.adjustsImageWhenHighlighted = false
         return button
     }()
 

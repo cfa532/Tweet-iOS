@@ -332,6 +332,7 @@ struct TweetMenu: View {
                     .accessibilityLabel("Tweet options")
                     .accessibilityHint("Double tap to open tweet menu")
             }
+            .buttonStyle(.plain)
         }
         .sheet(isPresented: $showFilterSheet) {
             ContentFilterView(tweet: tweet)

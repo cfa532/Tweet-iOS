@@ -3594,11 +3594,6 @@ final class HproseInstance: ObservableObject {
     // MARK: - Media Processing
     /// Consolidated media processing class that handles all media-related operations (images, videos, audio, documents)
     class MediaProcessor {
-        // Temporary FFmpegKit validation switch: route normalized videos through local HLS
-        // conversion even when they are small enough for progressive MP4 upload.
-        private static let forceLocalHLSForAllVideos = true
-
-        
         /// Robust file type detection utility using multiple methods
         private class FileTypeDetector {
             
@@ -3993,7 +3988,7 @@ final class HproseInstance: ObservableObject {
             let videoSizeMB = Double(videoSize) / (1024 * 1024)
             print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", videoSizeMB))MB (\(videoSize) bytes)")
             
-            if videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES && !forceLocalHLSForAllVideos {
+            if videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
                 // ≤ 32MB: progressive video route
                 print("📹 [VIDEO UPLOAD] Size ≤ 32MB: using progressive video route (direct MP4 upload)")
                 progressCallback?("Uploading video...", 50)
@@ -4010,11 +4005,7 @@ final class HproseInstance: ObservableObject {
                 return (result, nil)
             } else {
                 // > 32MB: Need HLS conversion - check if cloud drive is available
-                if forceLocalHLSForAllVideos && videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
-                    print("📹 [VIDEO UPLOAD] Temporary test mode: forcing HLS conversion route for video ≤ 32MB")
-                } else {
-                    print("📹 [VIDEO UPLOAD] Size > 32MB: will use HLS conversion route")
-                }
+                print("📹 [VIDEO UPLOAD] Size > 32MB: will use HLS conversion route")
                 let cloudPort = appUser.cloudDrivePort
                 guard cloudPort > 0 else {
                     print("⚠️ [VIDEO UPLOAD] No cloud drive configured, falling back to progressive video")

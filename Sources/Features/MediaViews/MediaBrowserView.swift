@@ -150,10 +150,9 @@ struct MediaBrowserView: View {
                 // without a pause/resume cycle.
             }
             .onDisappear {
-                // Dismissal returns ownership of the shared player to feed/detail. Do not
-                // pause here, because feed reattaches the same AVPlayer during the modal
-                // transition and a pause/resume cycle causes a visible freeze.
-                FullScreenVideoManager.shared.deactivate(transferPlaybackToUnderlyingSurface: true)
+                // Fullscreen owns its own AVPlayer, so dismissal must pause that player.
+                // Feed/detail can reuse cached data and their saved position independently.
+                FullScreenVideoManager.shared.deactivate(transferPlaybackToUnderlyingSurface: false)
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
                 
                 // CRITICAL: Clean up controls timer to prevent CPU cycles accumulation
@@ -1199,7 +1198,7 @@ struct SingletonVideoPlayerView: View {
 
     @ViewBuilder
     private var posterImage: some View {
-        if let thumbnail = handoffThumbnail ?? SharedAssetCache.shared.cachedThumbnail(for: mid) {
+        if let thumbnail = handoffThumbnail ?? SharedAssetCache.shared.cachedThumbnail(for: mid) ?? manager.transitionPoster {
             Image(uiImage: thumbnail)
                 .resizable()
                 .aspectRatio(contentMode: .fit)

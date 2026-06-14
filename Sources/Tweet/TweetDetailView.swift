@@ -710,6 +710,10 @@ private struct DetailSingletonVideoPlayerView: View {
         manager.loadFailedVideoMid == mid
     }
 
+    private var didThisVideoFinishPlayback: Bool {
+        manager.currentVideoMid == mid && manager.didFinishPlayback
+    }
+
     /// True after loadVideo has been called for this mid and before readyToPlay/failure.
     /// AVPlayer can already have a currentItem while that item is still .unknown; that
     /// state still needs visible loading feedback instead of a blank black frame.
@@ -732,6 +736,7 @@ private struct DetailSingletonVideoPlayerView: View {
             || isThisVideoPreparing
             || (manager.currentVideoMid == mid
                 && (manager.isBuffering || !manager.isPlaybackRendering)
+                && !didThisVideoFinishPlayback
                 && !didThisVideoFailToLoad)
     }
 
@@ -741,6 +746,7 @@ private struct DetailSingletonVideoPlayerView: View {
             || isThisVideoPreparing
             || (manager.currentVideoMid == mid
                 && !manager.isPlaybackRendering
+                && !didThisVideoFinishPlayback
                 && !didThisVideoFailToLoad)
     }
 
