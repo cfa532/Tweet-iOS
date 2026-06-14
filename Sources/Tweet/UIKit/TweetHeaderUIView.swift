@@ -38,7 +38,6 @@ class TweetHeaderUIView: UIView {
         button.tintColor = .secondaryLabel
         button.showsMenuAsPrimaryAction = true
         button.changesSelectionAsPrimaryAction = false
-        button.adjustsImageWhenHighlighted = false
         return button
     }()
 

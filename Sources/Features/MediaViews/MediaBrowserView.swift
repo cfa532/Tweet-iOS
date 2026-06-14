@@ -434,7 +434,6 @@ struct MediaBrowserView: View {
 
         private func pushToNextVideoInCurrentTweet(_ nextVideoIndex: Int) {
             guard attachments.indices.contains(nextVideoIndex) else { return }
-            let nextAttachment = attachments[nextVideoIndex]
 
             Task { @MainActor in
                 suppressTabPagingAnimation = true

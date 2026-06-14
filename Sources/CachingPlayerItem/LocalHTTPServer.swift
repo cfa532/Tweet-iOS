@@ -411,6 +411,17 @@ public class LocalHTTPServer: @unchecked Sendable {
         _connectionPool = pool
         return pool
     }
+
+    private func refreshConnectionPoolForRetry(mediaID: String, reason: String) {
+        connectionPoolLock.lock()
+        _connectionPool?.finishTasksAndInvalidate()
+        _connectionPool = nil
+        connectionPoolLock.unlock()
+
+        if LocalHTTPServer.verboseLogsEnabled {
+            print("🔄 [LocalHTTPServer] Refreshed upstream connection pool for retry (\(reason)) mediaID=\(mediaID)")
+        }
+    }
     
     private func canBypassInitialization(for mediaID: String? = nil, url: URL? = nil) -> Bool {
         if HproseInstance.shared.isAppInitialized {
@@ -708,6 +719,8 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// Internal stop that runs on the caller's context (must be called from `queue` or restart)
     private func stopInternal(clearMediaRegistration: Bool = true) {
         self.isStopping = true
+        self.listener?.stateUpdateHandler = nil
+        self.listener?.newConnectionHandler = nil
         self.listener?.cancel()
         self.listener = nil
         self.isRunning = false
@@ -741,13 +754,13 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// intentionally ignores the current flag and always tears down before rebinding.
     /// Upstream connection pools are preserved; stale connections are handled by the
     /// normal request retry/refresh path when traffic resumes.
-    public func forceRestartAndWaitAsync() async {
+    public func forceRestartAndWaitAsync() async -> Bool {
         print("[LocalHTTPServer] forceRestartAndWaitAsync() called")
 
-        await withCheckedContinuation { continuation in
+        let didRestart = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             queue.async { [weak self] in
                 guard let self = self else {
-                    continuation.resume()
+                    continuation.resume(returning: false)
                     return
                 }
 
@@ -757,22 +770,28 @@ public class LocalHTTPServer: @unchecked Sendable {
                 Task {
                     try? await Task.sleep(nanoseconds: 150_000_000)
                     await self.startServer()
-                    continuation.resume()
+                    continuation.resume(returning: self.isRunning)
                 }
             }
         }
 
-        if isRunning {
+        if didRestart {
             print("[LocalHTTPServer] ✅ forceRestartAndWaitAsync() SUCCESS - Server ready on port \(port)")
         } else {
             print("[LocalHTTPServer] ❌ forceRestartAndWaitAsync() FAILED - Server not running")
         }
+
+        return didRestart
     }
 
     /// Stop the server during app backgrounding without leaving cleanup queued behind
     /// suspended media work. Use this only from lifecycle cleanup, not normal playback paths.
     public func stopImmediatelyForBackground() {
-        stopInternal()
+        // Preserve mediaID -> real URL registrations across background suspension.
+        // Existing AVPlayerItems may still hold localhost URLs when the app resumes;
+        // if this map is cleared, those requests return 404 before the player has a
+        // chance to recreate/register itself.
+        stopInternal(clearMediaRegistration: false)
         NodePoolRegistry.shared.resetAllPools()
         isStopping = false
     }
@@ -1015,6 +1034,8 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Extra check: if listener exists but not ready, cancel it first
         if listener != nil {
+            listener?.stateUpdateHandler = nil
+            listener?.newConnectionHandler = nil
             listener?.cancel()
             listener = nil
             isRunning = false
@@ -1141,7 +1162,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // Set timeout using Task
                 let timeoutTask = Task {
                     do {
-                        try await Task.sleep(nanoseconds: 200_000_000) // 200ms timeout
+                        try await Task.sleep(nanoseconds: 1_000_000_000) // 1s timeout
                         // If we get here, timeout occurred - cancel listener
                         listener.cancel()
                         resumeOnce(false)
@@ -1591,6 +1612,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if nsError.code != NSURLErrorCancelled && attempt < maxAttempts && isRetryable {
                     let delay = Double(attempt)
                     print("🔄 [PROGRESSIVE HEAD] Retry \(attempt)/\(maxAttempts - 1) for \(mediaID) after \(delay)s")
+                    self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "\(nsError.domain) \(nsError.code)")
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.fetchHEADWithRetry(url: url, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                     }
@@ -2312,6 +2334,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         if LocalHTTPServer.verboseLogsEnabled {
                             print("🔄 [LocalHTTPServer] Download retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
                         }
+                        self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "\(nsError.domain) \(nsError.code)")
                         DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                             self.downloadWithRetry(url: url, cachePath: cachePath, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                         }
@@ -2341,6 +2364,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     if LocalHTTPServer.verboseLogsEnabled {
                         print("🔄 [LocalHTTPServer] Download retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
                     }
+                    self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "HTTP \(httpResponse.statusCode)")
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.downloadWithRetry(url: url, cachePath: cachePath, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                     }
@@ -2422,6 +2446,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         if LocalHTTPServer.verboseLogsEnabled {
                             print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
                         }
+                        self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "\(nsError.domain) \(nsError.code)")
                         DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                             self.fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                         }
@@ -2453,6 +2478,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     if LocalHTTPServer.verboseLogsEnabled {
                         print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
                     }
+                    self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "HTTP \(httpResponse.statusCode)")
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
                     }

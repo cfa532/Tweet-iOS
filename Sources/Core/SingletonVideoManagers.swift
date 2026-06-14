@@ -1280,19 +1280,21 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
         ) { [weak self, weak player, weak item] _ in
-            guard let self,
-                  self.isActive,
-                  let player,
-                  let item,
-                  self.singletonPlayer === player,
-                  player.currentItem === item,
-                  player.rate > 0 || self.isPlaying,
-                  let remaining = self.timeRemaining(for: item, player: player),
-                  remaining <= 3.0,
-                  remaining > 0 else {
-                return
+            Task { @MainActor [weak self, weak player, weak item] in
+                guard let self,
+                      self.isActive,
+                      let player,
+                      let item,
+                      self.singletonPlayer === player,
+                      player.currentItem === item,
+                      player.rate > 0 || self.isPlaying,
+                      let remaining = self.timeRemaining(for: item, player: player),
+                      remaining <= 3.0,
+                      remaining > 0 else {
+                    return
+                }
+                self.prewarmNextFullscreenVideoIfNeeded()
             }
-            self.prewarmNextFullscreenVideoIfNeeded()
         }
     }
 

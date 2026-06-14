@@ -314,15 +314,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         print("[AppDelegate] ✅ AppUser IP refresh complete")
                         
                         // Restart server in background
-                        await self.restartVideoInfrastructureAsync()
+                        let didRestart = await self.restartVideoInfrastructureAsync()
                         
                         // Hide loading indicator and notify visible videos to reload
                         await MainActor.run {
                             self.hideLoadingOverlay()
-                            AppDelegate.isVideoInfrastructureReady = true
-                            // Post notification for visible videos to reload
-                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                            print("[AppDelegate] Server restarted after long screen lock - posted reloadVisibleVideosOnly notification")
+                            AppDelegate.isVideoInfrastructureReady = didRestart
+                            if didRestart {
+                                // Post notification for visible videos to reload
+                                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                                print("[AppDelegate] Server restarted after long screen lock - posted reloadVisibleVideosOnly notification")
+                            } else {
+                                print("[AppDelegate] Server restart failed after long screen lock - visible videos will wait for next retry")
+                            }
                         }
                     }
                 } else {
@@ -362,14 +366,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             
                             // Restart server in background (async - doesn't block!)
                             await LocalHTTPServer.shared.startAndWaitAsync()
+                            let didStart = LocalHTTPServer.shared.isRunning
 
                             // Hide loading indicator and notify visible videos to reload
                             await MainActor.run {
                                 self.hideLoadingOverlay()
-                                AppDelegate.isVideoInfrastructureReady = true
-                                // Post notification for visible videos to reload
-                                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                                print("[AppDelegate] Server restarted after screen lock - posted reloadVisibleVideosOnly notification")
+                                AppDelegate.isVideoInfrastructureReady = didStart
+                                if didStart {
+                                    // Post notification for visible videos to reload
+                                    NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                                    print("[AppDelegate] Server restarted after screen lock - posted reloadVisibleVideosOnly notification")
+                                } else {
+                                    print("[AppDelegate] Server restart failed after screen lock - visible videos will wait for next retry")
+                                }
                             }
                         }
                     }
@@ -542,17 +551,21 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     print("[AppDelegate] ✅ AppUser IP refresh complete")
 
                     // Restart server in background
-                    await self.restartVideoInfrastructureAsync()
+                    let didRestart = await self.restartVideoInfrastructureAsync()
 
                     // Hide loading indicator and notify visible videos to reload
                     await MainActor.run {
                         self.hideLoadingOverlay()
-                        AppDelegate.isVideoInfrastructureReady = true
+                        AppDelegate.isVideoInfrastructureReady = didRestart
 
-                        // Post notification for visible videos to reload
-                        // Coordinator will intelligently decide whether to preserve or reset state
-                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                        print("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
+                        if didRestart {
+                            // Post notification for visible videos to reload
+                            // Coordinator will intelligently decide whether to preserve or reset state
+                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                            print("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
+                        } else {
+                            print("❌ [AppDelegate] Server restart failed - visible videos will wait for next retry")
+                        }
                     }
                 }
             } else {
@@ -577,14 +590,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         }
 
                         await LocalHTTPServer.shared.startAndWaitAsync()
+                        let didStart = LocalHTTPServer.shared.isRunning
 
                         let newPort = LocalHTTPServer.shared.currentPort
-                        print("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
+                        if didStart {
+                            print("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
+                        } else {
+                            print("❌ [AppDelegate] Server restart failed - old port \(oldPort ?? 0), current port \(newPort ?? 0)")
+                        }
 
                         await MainActor.run {
-                            AppDelegate.isVideoInfrastructureReady = true
-                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                            print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
+                            AppDelegate.isVideoInfrastructureReady = didStart
+                            if didStart {
+                                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                                print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
+                            } else {
+                                print("[AppDelegate] Skipped reloadVisibleVideosOnly because server is not ready")
+                            }
                         }
                     } else {
                         print("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
@@ -692,12 +714,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     /// Async restart (non-blocking - allows UI to remain interactive)
-    private func restartVideoInfrastructureAsync() async {
+    private func restartVideoInfrastructureAsync() async -> Bool {
         // Check if already cancelled
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled before starting")
             isRestartingInfrastructure = false
-            return
+            return false
         }
         
         // Mark as restarting
@@ -720,17 +742,24 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("[AppDelegate] Infrastructure restart cancelled before proxy restart")
             await clearTask.value
             isRestartingInfrastructure = false
-            return
+            return false
         }
 
-        await LocalHTTPServer.shared.forceRestartAndWaitAsync()
+        var didRestartProxy = await LocalHTTPServer.shared.forceRestartAndWaitAsync()
+        if !didRestartProxy {
+            print("[AppDelegate] Proxy restart did not become ready; retrying once")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if !Task.isCancelled {
+                didRestartProxy = await LocalHTTPServer.shared.forceRestartAndWaitAsync()
+            }
+        }
         
         // Check if cancelled
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled after proxy restart")
             await clearTask.value
             isRestartingInfrastructure = false
-            return
+            return false
         }
         
         // Wait for player clearing to complete (runs in parallel)
@@ -740,7 +769,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled before restart")
             isRestartingInfrastructure = false
-            return
+            return false
         }
         
         let elapsed = Date().timeIntervalSince(startTime)
@@ -749,6 +778,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Mark as complete
         isRestartingInfrastructure = false
         infrastructureRestartTask = nil
+        return didRestartProxy
     }
     
     private func performImmediateBackgroundCheck() {
