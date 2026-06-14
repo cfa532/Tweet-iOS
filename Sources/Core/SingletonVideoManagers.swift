@@ -943,7 +943,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Bump generation so any prior async completions are ignored.
         loadGeneration += 1
         let generation = loadGeneration
-        let wasPrewarmedForThisLoad = prewarmedNextVideoMid == mid
         loadingMid = mid
         loadingStartedAt = Date()
         feedHandoffMid = nil
@@ -972,11 +971,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         cleanupObservers()
         isBuffering = true
         
-        if wasPrewarmedForThisLoad {
-            print("🔮 [FullScreenVideoManager] Preserving warmed next video for fullscreen load \(shortMID(mid))")
-        } else {
-            SharedAssetCache.shared.prepareUncachedFullscreenLoad(for: mid)
-        }
+        SharedAssetCache.shared.prepareUncachedFullscreenLoad(for: mid)
         prewarmedNextVideoMid = nil
         print("🎬 [FullScreenVideoManager] Async asset load start for \(shortMID(mid)): url=\(url.absoluteString)")
         
@@ -1093,6 +1088,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         bufferingDebounceTask = nil
         nearEndAdvanceTask?.cancel()
         nearEndAdvanceTask = nil
+        prewarmedNextVideoMid = nil
 
     }
     
@@ -1314,8 +1310,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard let url = attachment.getUrl(baseUrl) else { return }
 
         prewarmedNextVideoMid = attachment.mid
-        print("🔮 [FullScreenVideoManager] Prewarming next fullscreen video \(shortMID(attachment.mid))")
-        SharedAssetCache.shared.preloadPlayer(
+        print("🔮 [FullScreenVideoManager] Prewarming next fullscreen asset \(shortMID(attachment.mid))")
+        SharedAssetCache.shared.preloadAsset(
             for: url,
             mediaID: attachment.mid,
             tweetId: next.tweet.mid,
