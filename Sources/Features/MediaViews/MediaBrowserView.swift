@@ -31,8 +31,6 @@ struct MediaBrowserView: View {
     @State private var isImageZoomed = false // Track if current image is zoomed
     @State private var isTransitioning = false // Track transition animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
-    @State private var pushTransition: VerticalPushTransition?
-    @State private var settledTransitionCover: VerticalPushTransition?
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
     @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
@@ -112,8 +110,6 @@ struct MediaBrowserView: View {
                 isImageZoomed: $isImageZoomed,
                 isTransitioning: $isTransitioning,
                 transitionOffset: $transitionOffset,
-                pushTransition: $pushTransition,
-                settledTransitionCover: $settledTransitionCover,
                 suppressTabPagingAnimation: $suppressTabPagingAnimation,
                 currentTweet: currentTweet,
                 currentCellTweetId: currentCellTweetId,
@@ -196,17 +192,8 @@ struct MediaBrowserView: View {
                 suppressTabPagingAnimation = true
                 isTransitioning = true
                 showControls = false
-                transitionOffset = 0
-                pushTransition = VerticalPushTransition(
-                    attachment: attachment
-                )
-
                 let slideDistance = UIScreen.main.bounds.height
-                withAnimation(.easeInOut(duration: 0.32)) {
-                    transitionOffset = -slideDistance
-                }
-
-                try? await Task.sleep(nanoseconds: 320_000_000)
+                transitionOffset = slideDistance
 
                 withAnimation(.none) {
                     self.currentTweet = nextTweet
@@ -215,12 +202,6 @@ struct MediaBrowserView: View {
                 }
                 self.currentCellTweetId = nextSourceTweetId
                 self.imageStates = [:]
-
-                settledTransitionCover = pushTransition
-                transitionOffset = 0
-                pushTransition = nil
-                isTransitioning = false
-                suppressTabPagingAnimation = false
 
                 if let url = attachment.getUrl(nextBaseUrl) {
                     FullScreenVideoManager.shared.loadVideo(
@@ -232,7 +213,14 @@ struct MediaBrowserView: View {
                         mediaType: attachment.type
                     )
                 }
-                await settleTransitionCover(afterPlayerReadyFor: attachment.mid)
+
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    transitionOffset = 0
+                }
+
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                isTransitioning = false
+                suppressTabPagingAnimation = false
             }
         }
         
@@ -240,41 +228,6 @@ struct MediaBrowserView: View {
         FullScreenVideoManager.shared.onExitFullScreen = { [self] in
             dismiss()
         }
-    }
-
-    private struct VerticalPushTransition {
-        let attachment: MimeiFileType
-    }
-
-    @MainActor
-    private func settleTransitionCover(afterPlayerReadyFor mediaID: String) async {
-        for _ in 0..<24 {
-            if isFullscreenPlayerVisiblyReady(for: mediaID) {
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                break
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-
-        guard settledTransitionCover?.attachment.mid == mediaID else { return }
-        withAnimation(.easeOut(duration: 0.12)) {
-            settledTransitionCover = nil
-        }
-    }
-
-    @MainActor
-    private func isFullscreenPlayerVisiblyReady(for mediaID: String) -> Bool {
-        let manager = FullScreenVideoManager.shared
-        guard manager.currentVideoMid == mediaID,
-              manager.isItemReady,
-              let player = manager.singletonPlayer,
-              player.currentItem != nil,
-              player.timeControlStatus == .playing else {
-            return false
-        }
-
-        let current = CMTimeGetSeconds(player.currentTime())
-        return current.isFinite && current > 0.12
     }
     
     // MARK: - MediaBrowserContentView
@@ -291,8 +244,6 @@ struct MediaBrowserView: View {
         @Binding var isImageZoomed: Bool
         @Binding var isTransitioning: Bool
         @Binding var transitionOffset: CGFloat
-        @Binding var pushTransition: VerticalPushTransition?
-        @Binding var settledTransitionCover: VerticalPushTransition?
         @Binding var suppressTabPagingAnimation: Bool
         let currentTweet: Tweet
         let currentCellTweetId: String
@@ -326,17 +277,6 @@ struct MediaBrowserView: View {
                 ZStack {
                     currentContentLayer
                         .offset(y: isTransitioning ? transitionOffset : dragOffset.height)
-
-                    if let pushTransition {
-                        transitionPreview(for: pushTransition)
-                            .offset(y: transitionOffset + UIScreen.main.bounds.height)
-                            .zIndex(2)
-                    }
-
-                    if let settledTransitionCover {
-                        transitionPreview(for: settledTransitionCover)
-                            .zIndex(3)
-                    }
                 }
                 .scaleEffect(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 1000.0))
                 .opacity(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 500.0))
@@ -484,74 +424,24 @@ struct MediaBrowserView: View {
                 suppressTabPagingAnimation = true
                 isTransitioning = true
                 showControls = false
-                transitionOffset = 0
-                pushTransition = VerticalPushTransition(
-                    attachment: nextAttachment
-                )
-
                 let slideDistance = UIScreen.main.bounds.height
-                withAnimation(.easeInOut(duration: 0.32)) {
-                    transitionOffset = -slideDistance
-                }
-
-                try? await Task.sleep(nanoseconds: 320_000_000)
+                transitionOffset = slideDistance
 
                 withAnimation(.none) {
                     currentIndex = nextVideoIndex
                     previousIndex = nextVideoIndex
                 }
-                settledTransitionCover = pushTransition
-                transitionOffset = 0
-                pushTransition = nil
+
+                loadSelectedVideoIfNeeded(reason: "verticalSwipe")
+
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    transitionOffset = 0
+                }
+
+                try? await Task.sleep(nanoseconds: 220_000_000)
                 isTransitioning = false
                 suppressTabPagingAnimation = false
-                await settleTransitionCover(afterPlayerReadyFor: nextAttachment.mid)
             }
-        }
-
-        @MainActor
-        private func settleTransitionCover(afterPlayerReadyFor mediaID: String) async {
-            for _ in 0..<24 {
-                if isFullscreenPlayerVisiblyReady(for: mediaID) {
-                    try? await Task.sleep(nanoseconds: 120_000_000)
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
-
-            guard settledTransitionCover?.attachment.mid == mediaID else { return }
-            withAnimation(.easeOut(duration: 0.12)) {
-                settledTransitionCover = nil
-            }
-        }
-
-        @MainActor
-        private func isFullscreenPlayerVisiblyReady(for mediaID: String) -> Bool {
-            let manager = FullScreenVideoManager.shared
-            guard manager.currentVideoMid == mediaID,
-                  manager.isItemReady,
-                  let player = manager.singletonPlayer,
-                  player.currentItem != nil,
-                  player.timeControlStatus == .playing else {
-                return false
-            }
-
-            let current = CMTimeGetSeconds(player.currentTime())
-            return current.isFinite && current > 0.12
-        }
-
-        private func transitionPreview(for transition: VerticalPushTransition) -> some View {
-            ZStack {
-                Color.black
-                if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: transition.attachment.mid) {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-            .clipped()
         }
         
         // Helper functions
