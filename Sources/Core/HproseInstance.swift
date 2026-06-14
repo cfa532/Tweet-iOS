@@ -3867,7 +3867,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Process and upload video files with new routing logic:
-        /// 1. Normalize to 720p/1000k (preserving original if lower resolution)
+        /// 1. Normalize to 720p reference bitrate (preserving original resolution if lower)
         /// 2. Route based on normalized size and resolution:
         ///    - ≤ 32MB: Progressive video route
         ///    - > 32MB: HLS conversion based on resolution
@@ -3928,7 +3928,7 @@ final class HproseInstance: ObservableObject {
                 if origRes <= 720 {
                     print("📹 [VIDEO UPLOAD] Resolution \(origRes)p ≤ 720p: will normalize with original resolution and proportional bitrate")
                 } else {
-                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p with 1500k bitrate")
+                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p with \(Int(VideoConversionService.reference720pBitrate))k bitrate")
                 }
             } else {
                 print("📹 [VIDEO UPLOAD] Could not detect resolution: will normalize (defaulting to 720p if needed)")
@@ -3943,7 +3943,7 @@ final class HproseInstance: ObservableObject {
             let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
             
             
-            let normalizationSuccess = await MediaProcessor.normalizeTo720p1000k(
+            let normalizationSuccess = await MediaProcessor.normalizeToReferenceBitrate(
                 inputURL: originalVideoURL,
                 outputURL: normalizedVideoURL,
                 progressCallback: progressCallback
@@ -4511,7 +4511,7 @@ final class HproseInstance: ObservableObject {
                     scaleFilter = "scale=-2:\(targetResolution)"
                 }
 
-                // Calculate proportional bitrate based on pixel count (720p = 921,600 pixels = 1000k base)
+                // Calculate proportional bitrate based on pixel count (720p = 921,600 pixels = reference720pBitrate base)
                 // Always use calculated bitrate (bitrate detection is unreliable)
                 let bitrateKbps: Int
                 let REFERENCE_720P_PIXELS = 921600
@@ -4569,8 +4569,8 @@ final class HproseInstance: ObservableObject {
         }
         
         
-        /// Normalize video to 720p/1000k bitrate, preserving original resolution/bitrate if lower
-        private static func normalizeTo720p1000k(
+        /// Normalize video to 720p reference bitrate, preserving original resolution if lower
+        private static func normalizeToReferenceBitrate(
             inputURL: URL,
             outputURL: URL,
             progressCallback: ((String, Int) -> Void)? = nil
@@ -4663,7 +4663,7 @@ final class HproseInstance: ObservableObject {
                         needsScaling = videoResolution > 720
                         
                         if needsScaling {
-                            // Resolution > 720p: scale to 720p with 1500k bitrate
+                            // Resolution > 720p: scale to 720p with the shared reference bitrate
                             if aspectRatio < 1.0 {
                                 // Portrait: scale to target width
                                 scaleFilter = "scale=720:-2"
@@ -4671,9 +4671,9 @@ final class HproseInstance: ObservableObject {
                                 // Landscape: scale to target height
                                 scaleFilter = "scale=-2:720"
                             }
-                            // Always use 1500k bitrate for 720p normalization (bitrate detection is unreliable)
-                            targetBitrateKbps = 1500
-                            print("📊 Scaling to 720p with 1500k bitrate")
+                            // Always use the reference bitrate for 720p normalization (bitrate detection is unreliable)
+                            targetBitrateKbps = Int(VideoConversionService.reference720pBitrate)
+                            print("📊 Scaling to 720p with \(targetBitrateKbps)k bitrate")
                         } else {
                             // Resolution ≤ 720p: keep original resolution with proportional bitrate (min minBitrate to avoid inflating low-bitrate videos)
                             scaleFilter = ""

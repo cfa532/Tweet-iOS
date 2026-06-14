@@ -24,8 +24,8 @@ class VideoConversionService {
     static let shared = VideoConversionService()
     
     // Bitrate constants
-    static let reference720pBitrate = 1000.0  // Base bitrate for 720p video (in kbps)
-    static let minBitrate = 300  // Minimum bitrate in kbps (reduced from 500k to avoid inflating low-bitrate videos)
+    static let reference720pBitrate = 2500.0  // Base bitrate for 720p video (in kbps)
+    static let minBitrate = 600  // Minimum bitrate in kbps for lower-resolution variants
     
     private var currentConversion: Task<Void, Never>?
     private var progressCallback: ((ConversionProgress) -> Void)?
@@ -112,19 +112,19 @@ class VideoConversionService {
             // Get source video info for resolution detection and pixel-based bitrate calculation
             let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
             
-            // Reference: 720p (1280×720) = 921,600 pixels = 1000k bitrate
+            // Reference: 720p (1280×720) = 921,600 pixels = reference720pBitrate
             let REFERENCE_720P_PIXELS = 921600
             
             // Calculate target bitrates based on actual pixel count
             // High-quality variant: 
-            //   - >720p (downscaled to 720p): 1500k
-            //   - =720p: 1000k
+            //   - >720p (downscaled to 720p): reference720pBitrate
+            //   - =720p: reference720pBitrate
             //   - <720p: pixel-based proportional bitrate (min minBitrate)
             // Lower variant: pixel-based proportional bitrate (min minBitrate)
             let targetHighQualityKbps: Int
             if sourceVideoResolution > 720 {
-                // Resolution >720p: normalize to 720p @ 1500k
-                targetHighQualityKbps = 1500
+                // Resolution >720p: normalize to 720p at the shared reference bitrate
+                targetHighQualityKbps = Int(Self.reference720pBitrate)
             } else if sourceVideoResolution == 720 {
                 // Resolution =720p: use reference bitrate
                 targetHighQualityKbps = Int(Self.reference720pBitrate)
