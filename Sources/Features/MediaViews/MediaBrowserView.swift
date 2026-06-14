@@ -391,7 +391,23 @@ struct MediaBrowserView: View {
 
         private var verticalVideoNavigationGesture: some Gesture {
             DragGesture(minimumDistance: 25)
+                .onChanged { value in
+                    guard !isTransitioning, !isImageZoomed else { return }
+
+                    let vertical = abs(value.translation.height)
+                    let horizontal = abs(value.translation.width)
+
+                    if vertical > horizontal * 1.25, value.translation.height < 0 {
+                        isDragging = true
+                        dragOffset.height = value.translation.height
+                    } else if isDragging {
+                        isDragging = false
+                        dragOffset = .zero
+                    }
+                }
                 .onEnded { value in
+                    isDragging = false
+                    dragOffset = .zero
                     guard !isTransitioning, !isImageZoomed else { return }
 
                     let vertical = abs(value.translation.height)
