@@ -5071,6 +5071,10 @@ final class HproseInstance: ObservableObject {
 
             // Create multipart form data with a simple boundary
             let boundary = "----WebKitFormBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+            let safeMultipartFileName = fileName
+                .replacingOccurrences(of: "\"", with: "_")
+                .replacingOccurrences(of: "\r", with: "_")
+                .replacingOccurrences(of: "\n", with: "_")
             
             // For large files, create multipart form data as a file on disk to avoid loading into memory
             let tempMultipartFile: URL
@@ -5093,7 +5097,7 @@ final class HproseInstance: ObservableObject {
                 // Write multipart form data to file by streaming
                 // Add the compressed HLS file FIRST (some servers expect the file field first)
                 multipartFileHandle.write("--\(boundary)\r\n".data(using: .utf8)!)
-                multipartFileHandle.write("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(safeMultipartFileName)\"\r\n".data(using: .utf8)!)
                 multipartFileHandle.write("Content-Type: application/zip\r\n".data(using: .utf8)!)
                 multipartFileHandle.write("\r\n".data(using: .utf8)!)
                 
@@ -5213,7 +5217,7 @@ final class HproseInstance: ObservableObject {
                 
                 var body = Data()
                 body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(safeMultipartFileName)\"\r\n".data(using: .utf8)!)
                 body.append("Content-Type: application/zip\r\n".data(using: .utf8)!)
                 body.append("\r\n".data(using: .utf8)!)
                 body.append(compressedData)
@@ -5251,8 +5255,8 @@ final class HproseInstance: ObservableObject {
             let multipartFileSize = (try? FileManager.default.attributesOfItem(atPath: tempMultipartFile.path))?[.size] as? Int64 ?? 0
             request.setValue("\(multipartFileSize)", forHTTPHeaderField: "Content-Length")
             
-            // Set timeout for large video uploads (10 minutes)
-            request.timeoutInterval = 600
+            // Match the server upload window; /process-zip now responds after the ZIP upload finishes.
+            request.timeoutInterval = 6 * 60 * 60
             
             print("DEBUG: [UPLOAD] Sending request to: \(url)")
             print("DEBUG: [UPLOAD] Content-Type: \(request.value(forHTTPHeaderField: "Content-Type") ?? "nil")")
@@ -5264,7 +5268,11 @@ final class HproseInstance: ObservableObject {
                 VideoConversionService.shared.logMemoryUsage("before file-based upload")
             }
             
-            let (responseData, response) = try await URLSession.shared.upload(for: request, fromFile: tempMultipartFile)
+            let uploadConfig = URLSessionConfiguration.default
+            uploadConfig.timeoutIntervalForRequest = 6 * 60 * 60
+            uploadConfig.timeoutIntervalForResource = 6 * 60 * 60
+            let uploadSession = URLSession(configuration: uploadConfig)
+            let (responseData, response) = try await uploadSession.upload(for: request, fromFile: tempMultipartFile)
 
             if fileSize > maxMemoryEfficientSize {
                 VideoConversionService.shared.logMemoryUsage("after file-based upload")
