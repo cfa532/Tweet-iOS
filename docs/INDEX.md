@@ -11,6 +11,7 @@
 | [QUICKSTART.md](./QUICKSTART.md) | Local setup and first-run verification |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Human-friendly system design, module responsibilities, interaction model |
 | [VIDEO_PLAYBACK_PIPELINE.md](./VIDEO_PLAYBACK_PIPELINE.md) | Video playback flow from feed visibility to IPFS delivery |
+| [MINIMAL_FFMPEG_BUILD.md](./MINIMAL_FFMPEG_BUILD.md) | Local minimal FFmpegKit rebuild memo for video conversion |
 | [DEBUG_BUILD_INSTRUCTIONS.md](./DEBUG_BUILD_INSTRUCTIONS.md) | Build, debug, and log-capture workflows |
 
 ---
