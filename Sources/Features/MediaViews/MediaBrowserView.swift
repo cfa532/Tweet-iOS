@@ -31,6 +31,7 @@ struct MediaBrowserView: View {
     @State private var isImageZoomed = false // Track if current image is zoomed
     @State private var isTransitioning = false // Track transition animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
+    @State private var pushTransition: VerticalPushTransition?
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
     @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
@@ -110,6 +111,7 @@ struct MediaBrowserView: View {
                 isImageZoomed: $isImageZoomed,
                 isTransitioning: $isTransitioning,
                 transitionOffset: $transitionOffset,
+                pushTransition: $pushTransition,
                 suppressTabPagingAnimation: $suppressTabPagingAnimation,
                 currentTweet: currentTweet,
                 currentCellTweetId: currentCellTweetId,
@@ -171,69 +173,62 @@ struct MediaBrowserView: View {
             
             // Animate transition: slide current video up and next video in from bottom
             Task { @MainActor in
-                // Prevent TabView from doing a horizontal paging animation when we change currentIndex programmatically.
-                // We want the vertical slide animation to be the only visible transition.
-                suppressTabPagingAnimation = true
-                defer { suppressTabPagingAnimation = false }
+                guard !isTransitioning else { return }
+                guard let allNextAttachments = nextTweet.attachments,
+                      videoIndex < allNextAttachments.count else {
+                    return
+                }
+                let attachment = allNextAttachments[videoIndex]
+                let nextBaseUrl = nextTweet.author?.baseUrl
+                    ?? HproseInstance.shared.appUser.baseUrl
+                    ?? HproseInstance.baseUrl
+                var nextBrowserIndex = 0
+                nextBrowserIndex = Self.visualAttachmentIndex(
+                    in: nextTweet,
+                    originalIndex: videoIndex,
+                    mid: attachment.mid
+                )
 
-                // Start transition - slide current content up (only 30% of screen for tight transition)
-                let slideDistance = UIScreen.main.bounds.height * 0.3
+                // Prevent TabView from doing a horizontal paging animation when we change currentIndex programmatically.
+                // The vertical push should be the only visible transition.
+                suppressTabPagingAnimation = true
                 isTransitioning = true
-                withAnimation(.easeOut(duration: 0.25)) {
+                showControls = false
+                transitionOffset = 0
+                pushTransition = VerticalPushTransition(
+                    attachment: attachment
+                )
+
+                let slideDistance = UIScreen.main.bounds.height
+                withAnimation(.easeInOut(duration: 0.32)) {
                     transitionOffset = -slideDistance
                 }
-                
-                // Wait for slide-out to complete
-                try? await Task.sleep(nanoseconds: 125_000_000) // 0.125 seconds (halfway)
-                
-                var nextBrowserIndex = 0
 
-                // Load the next video
-                if let attachments = nextTweet.attachments,
-                   videoIndex < attachments.count {
-                    let attachment = attachments[videoIndex]
-                    nextBrowserIndex = Self.visualAttachmentIndex(
-                        in: nextTweet,
-                        originalIndex: videoIndex,
-                        mid: attachment.mid
-                    )
-                    let baseUrl = nextTweet.author?.baseUrl 
-                        ?? HproseInstance.shared.appUser.baseUrl 
-                        ?? HproseInstance.baseUrl
-                    
-                    if let url = attachment.getUrl(baseUrl) {
-                        FullScreenVideoManager.shared.loadVideo(
-                            url: url,
-                            mid: attachment.mid,
-                            tweetId: nextTweet.mid,
-                            cellTweetId: nextSourceTweetId,
-                            videoIndex: videoIndex,
-                            mediaType: attachment.type
-                        )
-                    }
-                }
-                
-                // Update UI state
-                self.currentTweet = nextTweet
-                // Don't animate this index change; TabView will otherwise page horizontally.
+                try? await Task.sleep(nanoseconds: 320_000_000)
+
                 withAnimation(.none) {
+                    self.currentTweet = nextTweet
                     self.currentIndex = nextBrowserIndex
                     self.previousIndex = nextBrowserIndex
                 }
                 self.currentCellTweetId = nextSourceTweetId
                 self.imageStates = [:]
-                
-                // Reset to bottom position for slide-in (30% for tight transition)
-                transitionOffset = slideDistance
-                
-                // Slide in from bottom
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    transitionOffset = 0
-                }
-                
-                // Wait for slide-in to complete
-                try? await Task.sleep(nanoseconds: 250_000_000) // 0.25 seconds
+
+                transitionOffset = 0
+                pushTransition = nil
                 isTransitioning = false
+                suppressTabPagingAnimation = false
+
+                if let url = attachment.getUrl(nextBaseUrl) {
+                    FullScreenVideoManager.shared.loadVideo(
+                        url: url,
+                        mid: attachment.mid,
+                        tweetId: nextTweet.mid,
+                        cellTweetId: nextSourceTweetId,
+                        videoIndex: videoIndex,
+                        mediaType: attachment.type
+                    )
+                }
             }
         }
         
@@ -241,6 +236,10 @@ struct MediaBrowserView: View {
         FullScreenVideoManager.shared.onExitFullScreen = { [self] in
             dismiss()
         }
+    }
+
+    private struct VerticalPushTransition {
+        let attachment: MimeiFileType
     }
     
     // MARK: - MediaBrowserContentView
@@ -257,6 +256,7 @@ struct MediaBrowserView: View {
         @Binding var isImageZoomed: Bool
         @Binding var isTransitioning: Bool
         @Binding var transitionOffset: CGFloat
+        @Binding var pushTransition: VerticalPushTransition?
         @Binding var suppressTabPagingAnimation: Bool
         let currentTweet: Tweet
         let currentCellTweetId: String
@@ -287,139 +287,16 @@ struct MediaBrowserView: View {
                 Color.black
                     .ignoresSafeArea(.all, edges: .all)
                 
-                // Content layer - slides during transition
                 ZStack {
-                    TabView(selection: $currentIndex) {
-                        ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
-                            Group {
-                                if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                    videoView(for: attachment, url: url, index: index)
-                                } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                    audioView(for: attachment, url: url, index: index)
-                                } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                    imageView(for: attachment, url: url, index: index)
-                                } else if isPDFAttachment(attachment) {
-                                    pdfView(for: attachment, index: index)
-                                }
-                            }
-                            .background(Color.black)
-                            .tag(index)
-                        }
-                    }
-                    .background(Color.black)
-                    .tabViewStyle(.page)
-                    .indexViewStyle(.page(backgroundDisplayMode: .always))
-                    .transaction { txn in
-                        if suppressTabPagingAnimation {
-                            txn.animation = nil
-                        }
-                    }
-                    // Keep horizontal paging for attachments.
-                    // Add vertical swipe that jumps to the next VIDEO (skipping non-video attachments).
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 25)
-                            .onEnded { value in
-                                guard !isTransitioning, !isImageZoomed else { return }
-                                
-                                // Require a clearly-vertical swipe so we don't interfere with horizontal paging.
-                                let vertical = abs(value.translation.height)
-                                let horizontal = abs(value.translation.width)
-                                guard vertical > horizontal * 1.25 else { return }
-                                
-                                let swipeThreshold: CGFloat = 90
-                                let velocityThreshold: CGFloat = 450
-                                
-                                // Swipe down: dismiss
-                                if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
-                                    dismiss()
-                                    return
-                                }
-                                
-                                // Swipe up: next video (in this tweet if available, otherwise next tweet's video)
-                                if value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold {
-                                    if let nextVideoIndex = nextVideoIndexInThisTweet(after: currentIndex) {
-                                        // Vertical transition: suppress TabView paging animation.
-                                        suppressTabPagingAnimation = true
-                                        defer { suppressTabPagingAnimation = false }
-                                        
-                                        // Quick slide-up cue.
-                                        let slideDistance = UIScreen.main.bounds.height * 0.25
-                                        isTransitioning = true
-                                        withAnimation(.easeOut(duration: 0.2)) {
-                                            transitionOffset = -slideDistance
-                                        }
-                                        
-                                        // Switch to the next video index without paging animation.
-                                        withAnimation(.none) {
-                                            currentIndex = nextVideoIndex
-                                            previousIndex = nextVideoIndex
-                                        }
-                                        
-                                        // Slide back in.
-                                        transitionOffset = slideDistance
-                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                            transitionOffset = 0
-                                        }
-                                        
-                                        // End transition after animation window.
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                                            isTransitioning = false
-                                        }
-                                    } else {
-                                        // No more videos in this tweet, move to next tweet's video.
-                                        FullScreenVideoManager.shared.navigateToNext()
-                                    }
-                                }
-                            }
-                    )
-                    .onChange(of: currentIndex) { _, newIndex in
-                        previousIndex = newIndex
-                        
-                        // Clean up non-visible images to free memory
-                        cleanupNonVisibleImagesClosure(newIndex)
+                    currentContentLayer
+                        .offset(y: isTransitioning ? transitionOffset : dragOffset.height)
 
-                        loadSelectedVideoIfNeeded(reason: "indexChanged")
-                    }
-                    
-                    // Close button + tweet actions overlay
-                    if showControls {
-                        VStack {
-                            HStack {
-                                Button(action: { dismiss() }) {
-                                    Image(systemName: "xmark")
-                                        .font(.title2)
-                                        .foregroundColor(.white)
-                                        .padding()
-                                        .background(Color.black.opacity(0.5))
-                                        .clipShape(Circle())
-                                }
-                                Spacer()
-                            }
-                            Spacer()
-                            // Hide action buttons for chat messages
-                            if !currentTweet.mid.hasPrefix("chat_") {
-                                HStack {
-                                    TweetActionButtonsView(
-                                        tweet: currentTweet,
-                                        isInDetailView: true,
-                                        isFullScreen: true,
-                                        currentMediaIndex: originalAttachmentIndex(forVisualIndex: currentIndex),
-                                        onShareVisibilityChange: { isVisible in
-                                            // Forward share visibility changes to outer view
-                                            onShareVisibilityChange(isVisible)
-                                        }
-                                    )
-                                    .environment(\.colorScheme, .dark)
-                                    .tint(.white)
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 60)
-                            }
-                        }
-                        .transition(.opacity)
+                    if let pushTransition {
+                        transitionPreview(for: pushTransition)
+                            .offset(y: transitionOffset + UIScreen.main.bounds.height)
+                            .zIndex(2)
                     }
                 }
-                .offset(y: isTransitioning ? transitionOffset : dragOffset.height)
                 .scaleEffect(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 1000.0))
                 .opacity(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 500.0))
             }
@@ -453,6 +330,154 @@ struct MediaBrowserView: View {
                 // Clean up all image states to free memory
                 cleanupImageStatesClosure()
             }
+        }
+
+        private var currentContentLayer: some View {
+            ZStack {
+                TabView(selection: $currentIndex) {
+                    ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
+                        Group {
+                            if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                videoView(for: attachment, url: url, index: index)
+                            } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                audioView(for: attachment, url: url, index: index)
+                            } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                imageView(for: attachment, url: url, index: index)
+                            } else if isPDFAttachment(attachment) {
+                                pdfView(for: attachment, index: index)
+                            }
+                        }
+                        .background(Color.black)
+                        .tag(index)
+                    }
+                }
+                .background(Color.black)
+                .tabViewStyle(.page)
+                .indexViewStyle(.page(backgroundDisplayMode: .always))
+                .transaction { txn in
+                    if suppressTabPagingAnimation {
+                        txn.animation = nil
+                    }
+                }
+                .simultaneousGesture(verticalVideoNavigationGesture)
+                .onChange(of: currentIndex) { _, newIndex in
+                    previousIndex = newIndex
+                    cleanupNonVisibleImagesClosure(newIndex)
+                    loadSelectedVideoIfNeeded(reason: "indexChanged")
+                }
+
+                if showControls {
+                    controlsOverlay
+                        .transition(.opacity)
+                }
+            }
+        }
+
+        private var controlsOverlay: some View {
+            VStack {
+                HStack {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    Spacer()
+                }
+                Spacer()
+                // Hide action buttons for chat messages
+                if !currentTweet.mid.hasPrefix("chat_") {
+                    HStack {
+                        TweetActionButtonsView(
+                            tweet: currentTweet,
+                            isInDetailView: true,
+                            isFullScreen: true,
+                            currentMediaIndex: originalAttachmentIndex(forVisualIndex: currentIndex),
+                            onShareVisibilityChange: { isVisible in
+                                onShareVisibilityChange(isVisible)
+                            }
+                        )
+                        .environment(\.colorScheme, .dark)
+                        .tint(.white)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 60)
+                }
+            }
+        }
+
+        private var verticalVideoNavigationGesture: some Gesture {
+            DragGesture(minimumDistance: 25)
+                .onEnded { value in
+                    guard !isTransitioning, !isImageZoomed else { return }
+
+                    let vertical = abs(value.translation.height)
+                    let horizontal = abs(value.translation.width)
+                    guard vertical > horizontal * 1.25 else { return }
+
+                    let swipeThreshold: CGFloat = 90
+                    let velocityThreshold: CGFloat = 450
+
+                    if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
+                        dismiss()
+                        return
+                    }
+
+                    if value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold {
+                        if let nextVideoIndex = nextVideoIndexInThisTweet(after: currentIndex) {
+                            pushToNextVideoInCurrentTweet(nextVideoIndex)
+                        } else {
+                            FullScreenVideoManager.shared.navigateToNext()
+                        }
+                    }
+                }
+        }
+
+        private func pushToNextVideoInCurrentTweet(_ nextVideoIndex: Int) {
+            guard attachments.indices.contains(nextVideoIndex) else { return }
+            let nextAttachment = attachments[nextVideoIndex]
+
+            Task { @MainActor in
+                suppressTabPagingAnimation = true
+                isTransitioning = true
+                showControls = false
+                transitionOffset = 0
+                pushTransition = VerticalPushTransition(
+                    attachment: nextAttachment
+                )
+
+                let slideDistance = UIScreen.main.bounds.height
+                withAnimation(.easeInOut(duration: 0.32)) {
+                    transitionOffset = -slideDistance
+                }
+
+                try? await Task.sleep(nanoseconds: 320_000_000)
+
+                withAnimation(.none) {
+                    currentIndex = nextVideoIndex
+                    previousIndex = nextVideoIndex
+                }
+                transitionOffset = 0
+                pushTransition = nil
+                isTransitioning = false
+                suppressTabPagingAnimation = false
+            }
+        }
+
+        private func transitionPreview(for transition: VerticalPushTransition) -> some View {
+            ZStack {
+                Color.black
+                if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: transition.attachment.mid) {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black)
+            .clipped()
         }
         
         // Helper functions
@@ -1023,6 +1048,7 @@ struct SingletonVideoPlayerView: View {
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
     @State private var handoffThumbnail: UIImage?
+    @State private var handoffThumbnailMid: String?
 
     private var didThisVideoFailToLoad: Bool {
         manager.loadFailedVideoMid == mid
@@ -1067,17 +1093,21 @@ struct SingletonVideoPlayerView: View {
 
             }
             .onAppear {
-                if handoffThumbnail == nil {
-                    handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
-                }
+                refreshHandoffThumbnail(for: mid)
+            }
+            .onChange(of: mid) { _, newMid in
+                refreshHandoffThumbnail(for: newMid)
             }
             .onReceive(NotificationCenter.default.publisher(for: .videoThumbnailCached)) { notification in
                 guard notification.userInfo?["mediaID"] as? String == mid else { return }
-                if handoffThumbnail == nil {
-                    handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
-                }
+                refreshHandoffThumbnail(for: mid)
             }
         }
+    }
+
+    private func refreshHandoffThumbnail(for mediaID: String) {
+        handoffThumbnailMid = mediaID
+        handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mediaID)
     }
 
     private func shouldShowAttachedItemSpinner(for player: AVPlayer) -> Bool {
@@ -1198,7 +1228,8 @@ struct SingletonVideoPlayerView: View {
 
     @ViewBuilder
     private var posterImage: some View {
-        if let thumbnail = handoffThumbnail ?? SharedAssetCache.shared.cachedThumbnail(for: mid) ?? manager.transitionPoster {
+        let thumbnailForCurrentMid = handoffThumbnailMid == mid ? handoffThumbnail : nil
+        if let thumbnail = thumbnailForCurrentMid ?? SharedAssetCache.shared.cachedThumbnail(for: mid) ?? manager.transitionPoster(for: mid) {
             Image(uiImage: thumbnail)
                 .resizable()
                 .aspectRatio(contentMode: .fit)

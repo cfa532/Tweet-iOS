@@ -729,7 +729,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// Used by SingletonVideoPlayerView to show a thumbnail cover while the item loads.
     @Published var isItemReady = false
     @Published private(set) var loadFailedVideoMid: String?
-    @Published private(set) var transitionPoster: UIImage?
+    @Published private var transitionPoster: UIImage?
+    private var transitionPosterMediaID: String?
     
     // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)?
@@ -754,10 +755,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var playbackLikelyToKeepUpObserver: NSKeyValueObservation?
     private var loadedTimeRangesObserver: NSKeyValueObservation?
     private var itemStatusObserver: NSKeyValueObservation?
+    private var fullscreenProgressObserver: Any?
+    private var fullscreenProgressObserverPlayer: AVPlayer?
     private var wasPlayingBeforeWaiting = false
     private var hasRestoredPosition = false // Track if we've restored position from saved state
     private var isSeekingToRestoredPosition = false // Track if we're currently seeking to restored position
     private var isUsingBorrowedFeedPlayer = false
+    private var prewarmedNextVideoMid: String?
     
     // Debouncing for buffering state to prevent rapid spinner blinking during seeks
     private var bufferingDebounceTask: DispatchWorkItem?
@@ -813,9 +817,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private func captureTransitionPoster(from player: AVPlayer?, mediaID: String?) {
         guard let mediaID else { return }
         if let cached = SharedAssetCache.shared.cachedThumbnail(for: mediaID) {
+            transitionPosterMediaID = mediaID
             transitionPoster = cached
             return
         }
+        transitionPosterMediaID = mediaID
         guard let asset = player?.currentItem?.asset else { return }
         let captureTime = player?.currentTime() ?? .zero
         let generator = AVAssetImageGenerator(asset: asset)
@@ -825,10 +831,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             guard let cgImage, error == nil else { return }
             let image = UIImage(cgImage: cgImage)
             Task { @MainActor in
+                guard self.transitionPosterMediaID == mediaID else { return }
                 self.transitionPoster = image
                 SharedAssetCache.shared.updateCachedThumbnail(image, for: mediaID)
             }
         }
+    }
+
+    func transitionPoster(for mediaID: String) -> UIImage? {
+        guard transitionPosterMediaID == mediaID else { return nil }
+        return transitionPoster
     }
 
     /// Lazily create the fullscreen-owned player shell when fullscreen opens.
@@ -931,6 +943,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Bump generation so any prior async completions are ignored.
         loadGeneration += 1
         let generation = loadGeneration
+        let wasPrewarmedForThisLoad = prewarmedNextVideoMid == mid
         loadingMid = mid
         loadingStartedAt = Date()
         feedHandoffMid = nil
@@ -959,7 +972,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         cleanupObservers()
         isBuffering = true
         
-        SharedAssetCache.shared.prepareUncachedFullscreenLoad(for: mid)
+        if wasPrewarmedForThisLoad {
+            print("🔮 [FullScreenVideoManager] Preserving warmed next video for fullscreen load \(shortMID(mid))")
+        } else {
+            SharedAssetCache.shared.prepareUncachedFullscreenLoad(for: mid)
+        }
+        prewarmedNextVideoMid = nil
         print("🎬 [FullScreenVideoManager] Async asset load start for \(shortMID(mid)): url=\(url.absoluteString)")
         
         initializePlayerEarly()
@@ -1062,6 +1080,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         loadedTimeRangesObserver = nil
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
+        if let observer = fullscreenProgressObserver,
+           let player = fullscreenProgressObserverPlayer {
+            player.removeTimeObserver(observer)
+        }
+        fullscreenProgressObserver = nil
+        fullscreenProgressObserverPlayer = nil
         wasPlayingBeforeWaiting = false
         
         // Cancel any pending buffering debounce task
@@ -1141,6 +1165,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     player.automaticallyWaitsToMinimizeStalling = true
                 }
                 if isActivelyRendering {
+                    self.transitionPosterMediaID = nil
                     self.transitionPoster = nil
                 }
                 // Player has enough data - hide spinner immediately (no debounce for hiding)
@@ -1238,6 +1263,64 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 updateBufferingState()
             }
         }
+
+        setupFullscreenProgressObserver(player: player, item: playerItem)
+    }
+
+    private func setupFullscreenProgressObserver(player: AVPlayer, item: AVPlayerItem) {
+        if let observer = fullscreenProgressObserver,
+           let observedPlayer = fullscreenProgressObserverPlayer {
+            observedPlayer.removeTimeObserver(observer)
+        }
+
+        fullscreenProgressObserverPlayer = player
+        fullscreenProgressObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self, weak player, weak item] _ in
+            guard let self,
+                  self.isActive,
+                  let player,
+                  let item,
+                  self.singletonPlayer === player,
+                  player.currentItem === item,
+                  player.rate > 0 || self.isPlaying,
+                  let remaining = self.timeRemaining(for: item, player: player),
+                  remaining <= 3.0,
+                  remaining > 0 else {
+                return
+            }
+            self.prewarmNextFullscreenVideoIfNeeded()
+        }
+    }
+
+    private func prewarmNextFullscreenVideoIfNeeded() {
+        guard !videoList.isEmpty,
+              let next = resolveNextVideo(after: videoListIndex),
+              let attachments = next.tweet.attachments,
+              next.videoIndex < attachments.count else {
+            return
+        }
+
+        let attachment = attachments[next.videoIndex]
+        guard attachment.type == .video || attachment.type == .hls_video,
+              prewarmedNextVideoMid != attachment.mid else {
+            return
+        }
+
+        let baseUrl = next.tweet.author?.baseUrl
+            ?? HproseInstance.shared.appUser.baseUrl
+            ?? HproseInstance.baseUrl
+        guard let url = attachment.getUrl(baseUrl) else { return }
+
+        prewarmedNextVideoMid = attachment.mid
+        print("🔮 [FullScreenVideoManager] Prewarming next fullscreen video \(shortMID(attachment.mid))")
+        SharedAssetCache.shared.preloadPlayer(
+            for: url,
+            mediaID: attachment.mid,
+            tweetId: next.tweet.mid,
+            mediaType: attachment.type
+        )
     }
     
     /// Setup video completion observer
