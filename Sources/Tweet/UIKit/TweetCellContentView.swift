@@ -122,7 +122,7 @@ class TweetCellContentView: UIView {
     // MARK: - Setup
 
     private func setupViews() {
-        backgroundColor = XTheme.background
+        applyTheme()
 
         // Add tap gesture to entire view for tweet detail navigation
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -210,6 +210,19 @@ class TweetCellContentView: UIView {
         embeddedTweetWrapper.isHidden = true
         embeddedWrapperHeightConstraint = embeddedTweetWrapper.heightAnchor.constraint(equalToConstant: 0)
         // Don't activate - only activate when hidden
+    }
+
+    func applyTheme() {
+        backgroundColor = XTheme.background
+        separatorView.backgroundColor = XTheme.border.withAlphaComponent(0.7)
+        retweetIcon.tintColor = XTheme.secondaryText
+        retweetLabel.textColor = XTheme.secondaryText
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
+        applyTheme()
     }
 
     /// Show or hide retweet banner and switch mainStack top constraint accordingly

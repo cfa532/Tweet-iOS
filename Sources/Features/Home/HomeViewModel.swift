@@ -88,15 +88,19 @@ struct HomeView: View {
                     onShowLogin: onShowLogin,
                     onShowToast: onShowToast
                 )
+                .background(XTheme.backgroundColor)
                 .tag(0)
 
                 RecommendedTweetView(onScroll: { offset, delta in
                     handleScroll(offset: offset, delta: delta)
                 })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(XTheme.backgroundColor)
                 .tag(1)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .padding(.leading, -4)
+            .background(XTheme.backgroundColor)
         }
         .padding(.top, 8) // Small top padding
         .background(XTheme.backgroundColor)

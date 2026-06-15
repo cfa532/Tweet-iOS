@@ -132,6 +132,7 @@ class TweetTableViewController: UITableViewController {
 
     // Feed identifier for persistent scroll position storage
     var feedIdentifier: String = "mainFeed"  // Default to main feed
+    var isDarkModeEnabled: Bool = false
     
     // Track scroll direction for height caching strategy
     private var isScrollingBackward: Bool = false
@@ -564,6 +565,7 @@ class TweetTableViewController: UITableViewController {
     
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        applyTheme()
 
         if needsHeaderUpdate {
             updateHeader()
@@ -710,7 +712,7 @@ class TweetTableViewController: UITableViewController {
     private func setupTableView() {
         tableView.register(TweetTableViewCell.self, forCellReuseIdentifier: TweetTableViewCell.reuseIdentifier)
         tableView.separatorStyle = .none
-        tableView.backgroundColor = XTheme.background
+        applyTheme()
         
         // Use smarter estimated height based on cached values
         tableView.estimatedRowHeight = 250 // Base estimate, will be refined per cell
@@ -754,6 +756,30 @@ class TweetTableViewController: UITableViewController {
         let bottomInset: CGFloat = 70 // Extra padding to account for tab bar + safe area + footer message
         tableView.contentInset.bottom = bottomInset
         tableView.verticalScrollIndicatorInsets.bottom = bottomInset
+    }
+
+    func applyTheme() {
+        let interfaceStyle: UIUserInterfaceStyle = isDarkModeEnabled ? .dark : .light
+        overrideUserInterfaceStyle = interfaceStyle
+        view.overrideUserInterfaceStyle = interfaceStyle
+        tableView.overrideUserInterfaceStyle = interfaceStyle
+        tableView.backgroundColor = XTheme.background
+        view.backgroundColor = XTheme.background
+        customRefreshControl?.tintColor = XTheme.accent
+        tableView.visibleCells.forEach { cell in
+            if let tweetCell = cell as? TweetTableViewCell {
+                tweetCell.applyTheme()
+            } else {
+                cell.backgroundColor = XTheme.background
+                cell.contentView.backgroundColor = XTheme.background
+            }
+        }
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
+        applyTheme()
     }
     
     private func setupRefreshControl() {

@@ -69,6 +69,7 @@ struct FollowingsTweetView: View {
             onShowLogin: onShowLogin,
             onShowToast: onShowToast
         )
+        .background(XTheme.backgroundColor)
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
             // Handle blocked user tweets removal
             if let blockedUserId = notification.userInfo?["blockedUserId"] as? String {

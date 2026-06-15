@@ -9,6 +9,8 @@ import SwiftUI
 
 struct TweetTableView: UIViewControllerRepresentable {
     @Binding var tweets: [Tweet]
+    let colorScheme: ColorScheme
+    let isDarkMode: Bool
     let header: (() -> AnyView)?
     let headerRefreshToken: Int
     let hproseInstance: HproseInstance
@@ -59,6 +61,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.leadingPadding = leadingPadding
         controller.trailingPadding = trailingPadding
         controller.feedIdentifier = feedIdentifier
+        controller.isDarkModeEnabled = isDarkMode
         controller.headerViewBuilder = header
 
         // UIKit cell configuration
@@ -78,6 +81,8 @@ struct TweetTableView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: TweetTableViewController, context: Context) {
         let coordinator = context.coordinator
+        uiViewController.isDarkModeEnabled = isDarkMode
+        uiViewController.applyTheme()
 
         // Only update tweets if they actually changed
         let currentTweetIds = tweets.map { $0.mid }

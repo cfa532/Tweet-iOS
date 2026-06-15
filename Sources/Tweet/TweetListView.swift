@@ -49,6 +49,8 @@ struct TweetListView: View {
     let onShowToast: ((String, Bool) -> Void)?
 
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @EnvironmentObject private var themeManager: ThemeManager
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var tweets: [Tweet]
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false
@@ -229,6 +231,8 @@ struct TweetListView: View {
                 // UIKit TABLE VIEW — pure UIKit cells, no UIHostingController per cell
                 TweetTableView(
                     tweets: $tweets,
+                    colorScheme: colorScheme,
+                    isDarkMode: themeManager.isDarkMode,
                     header: header,
                     headerRefreshToken: headerRefreshToken,
                     hproseInstance: hproseInstance,
@@ -254,6 +258,7 @@ struct TweetListView: View {
                 .onAppear {
                     screenHeight = geometry.size.height
                 }
+                .background(XTheme.backgroundColor)
             
             if isLoading && tweets.isEmpty {
                 ProgressView()

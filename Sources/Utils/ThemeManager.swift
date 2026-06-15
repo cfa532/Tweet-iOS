@@ -1,25 +1,66 @@
 import SwiftUI
 
 enum XTheme {
-    static let accent = UIColor(named: "ThemeAccent") ?? UIColor(red: 0.114, green: 0.608, blue: 0.941, alpha: 1.0)
-    static let background = UIColor(named: "ThemeBackground") ?? .systemBackground
-    static let secondaryBackground = UIColor(named: "ThemeSecondaryBackground") ?? .secondarySystemBackground
-    static let text = UIColor(named: "ThemeText") ?? .label
-    static let secondaryText = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
-    static let border = UIColor(named: "ThemeBorder") ?? .separator
-    static let cardBackground = UIColor(named: "ThemeCardBackground") ?? .systemBackground
-    static let quotedTweetSurface = UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0x1B / 255.0, green: 0x1C / 255.0, blue: 0x1C / 255.0, alpha: 1.0)
-            : UIColor(red: 0xE3 / 255.0, green: 0xE3 / 255.0, blue: 0xE4 / 255.0, alpha: 1.0)
+    static var accent: UIColor {
+        UIColor(red: 0x1D / 255.0, green: 0x9B / 255.0, blue: 0xF0 / 255.0, alpha: 1.0)
     }
 
-    static let accentColor = Color("ThemeAccent")
-    static let backgroundColor = Color("ThemeBackground")
-    static let secondaryBackgroundColor = Color("ThemeSecondaryBackground")
-    static let textColor = Color("ThemeText")
-    static let secondaryTextColor = Color("ThemeSecondaryText")
-    static let borderColor = Color("ThemeBorder")
+    static var background: UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark ? .black : .white
+        }
+    }
+
+    static var secondaryBackground: UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0x16 / 255.0, green: 0x18 / 255.0, blue: 0x1C / 255.0, alpha: 1.0)
+                : UIColor(red: 0xF7 / 255.0, green: 0xF9 / 255.0, blue: 0xF9 / 255.0, alpha: 1.0)
+        }
+    }
+
+    static var text: UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0xE7 / 255.0, green: 0xE9 / 255.0, blue: 0xEA / 255.0, alpha: 1.0)
+                : UIColor(red: 0x0F / 255.0, green: 0x14 / 255.0, blue: 0x19 / 255.0, alpha: 1.0)
+        }
+    }
+
+    static var secondaryText: UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0x71 / 255.0, green: 0x76 / 255.0, blue: 0x7B / 255.0, alpha: 1.0)
+                : UIColor(red: 0x53 / 255.0, green: 0x64 / 255.0, blue: 0x71 / 255.0, alpha: 1.0)
+        }
+    }
+
+    static var border: UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0x2F / 255.0, green: 0x33 / 255.0, blue: 0x36 / 255.0, alpha: 1.0)
+                : UIColor(red: 0xCF / 255.0, green: 0xD9 / 255.0, blue: 0xDE / 255.0, alpha: 1.0)
+        }
+    }
+
+    static var cardBackground: UIColor {
+        background
+    }
+
+    static var quotedTweetSurface: UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0x1B / 255.0, green: 0x1C / 255.0, blue: 0x1C / 255.0, alpha: 1.0)
+                : UIColor(red: 0xE3 / 255.0, green: 0xE3 / 255.0, blue: 0xE4 / 255.0, alpha: 1.0)
+        }
+    }
+
+    static var accentColor: Color { Color(uiColor: accent) }
+    static var backgroundColor: Color { Color(uiColor: background) }
+    static var secondaryBackgroundColor: Color { Color(uiColor: secondaryBackground) }
+    static var textColor: Color { Color(uiColor: text) }
+    static var secondaryTextColor: Color { Color(uiColor: secondaryText) }
+    static var borderColor: Color { Color(uiColor: border) }
 }
 
 @MainActor

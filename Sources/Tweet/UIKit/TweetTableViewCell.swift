@@ -127,8 +127,7 @@ class TweetTableViewCell: UITableViewCell {
 
     private func setupCell() {
         selectionStyle = .none
-        backgroundColor = XTheme.background
-        contentView.backgroundColor = XTheme.background
+        applyTheme()
 
         tweetContentView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(tweetContentView)
@@ -150,6 +149,19 @@ class TweetTableViewCell: UITableViewCell {
         ])
     }
 
+    func applyTheme() {
+        backgroundColor = XTheme.background
+        contentView.backgroundColor = XTheme.background
+        selectedBackgroundView?.backgroundColor = XTheme.background
+        tweetContentView.applyTheme()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
+        applyTheme()
+    }
+
     func configure(
         with tweet: Tweet,
         hproseInstance: HproseInstance,
@@ -166,6 +178,7 @@ class TweetTableViewCell: UITableViewCell {
         allowDeleteAll: Bool = false
     ) {
         currentTweetId = tweet.mid
+        applyTheme()
 
         // Apply list-level padding to the cell content
         leadingConstraint.constant = leadingPadding
