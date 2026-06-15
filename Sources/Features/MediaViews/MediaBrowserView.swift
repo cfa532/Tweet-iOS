@@ -391,9 +391,9 @@ struct MediaBrowserView: View {
         }
 
         private func contentScale(for index: Int) -> CGFloat {
-            guard index == currentIndex, !isTransitioning else { return 1.0 }
-            let progress = min(abs(dragOffset.height), 420.0)
-            return max(0.9, 1.0 - progress / 1800.0)
+            guard index == currentIndex else { return 1.0 }
+            let progress = min(abs(verticalOffset(for: index)), 520.0)
+            return max(0.78, 1.0 - progress / 1300.0)
         }
 
         private var controlsOverlay: some View {
