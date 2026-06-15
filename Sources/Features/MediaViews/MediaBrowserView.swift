@@ -1049,7 +1049,7 @@ struct SingletonVideoPlayerView: View {
                 // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
                 if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
                     // Show player
-                    SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
+                    SimplerAVPlayerViewController(player: player, mid: mid, aspectRatio: aspectRatio)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                         .simultaneousGesture(
@@ -1245,6 +1245,7 @@ struct SingletonVideoPlayerView: View {
 // MARK: - Simple AVPlayerViewController Wrapper
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     let player: AVPlayer
+    let mid: String
     let aspectRatio: Float?
     
     func makeCoordinator() -> Coordinator {
@@ -1260,13 +1261,34 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             currentItemObserver?.invalidate()
         }
     }
+
+    private final class SurfaceAwarePlayerViewController: AVPlayerViewController {
+        var onSurfaceReady: (() -> Void)?
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            onSurfaceReady?()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            if view.window != nil {
+                onSurfaceReady?()
+            }
+        }
+    }
     
     func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
+        let controller = SurfaceAwarePlayerViewController()
         controller.player = player
         controller.showsPlaybackControls = true
         controller.videoGravity = .resizeAspect
         controller.view.backgroundColor = .black
+        controller.onSurfaceReady = {
+            Task { @MainActor in
+                FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
+            }
+        }
         
         // Rotate landscape videos (aspectRatio > 1) by -90 degrees
         if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
@@ -1307,6 +1329,17 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        if let controller = uiViewController as? SurfaceAwarePlayerViewController {
+            controller.onSurfaceReady = {
+                Task { @MainActor in
+                    FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
+                }
+            }
+            if controller.view.window != nil {
+                controller.onSurfaceReady?()
+            }
+        }
+
         // Update rotation based on aspect ratio
         if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
             if uiViewController.view.transform == .identity {

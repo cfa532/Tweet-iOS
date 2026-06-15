@@ -88,6 +88,7 @@ class TweetCellContentView: UIView {
     // Mutually exclusive: mainStack top when banner is hidden vs visible
     private var mainStackTopDefault: NSLayoutConstraint!
     private var mainStackTopAfterBanner: NSLayoutConstraint!
+    private var interfaceStyleTraitRegistration: UITraitChangeRegistration?
 
     // MARK: - State
     private var cancellables = Set<AnyCancellable>()
@@ -123,6 +124,9 @@ class TweetCellContentView: UIView {
 
     private func setupViews() {
         applyTheme()
+        interfaceStyleTraitRegistration = registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: TweetCellContentView, _) in
+            view.applyTheme()
+        }
 
         // Add tap gesture to entire view for tweet detail navigation
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -217,12 +221,6 @@ class TweetCellContentView: UIView {
         separatorView.backgroundColor = XTheme.border.withAlphaComponent(0.7)
         retweetIcon.tintColor = XTheme.secondaryText
         retweetLabel.textColor = XTheme.secondaryText
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
-        applyTheme()
     }
 
     /// Show or hide retweet banner and switch mainStack top constraint accordingly

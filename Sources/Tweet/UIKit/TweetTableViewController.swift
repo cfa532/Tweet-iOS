@@ -79,6 +79,7 @@ class TweetTableViewController: UITableViewController {
     
     // Refresh control
     private var customRefreshControl: UIRefreshControl?
+    private var interfaceStyleTraitRegistration: UITraitChangeRegistration?
     
     // Video playback coordinator (per-feed instance, injected from TweetTableView)
     let videoCoordinator: VideoPlaybackCoordinator
@@ -222,6 +223,10 @@ class TweetTableViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+
+        interfaceStyleTraitRegistration = registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: TweetTableViewController, _) in
+            controller.applyTheme()
+        }
 
         setupTableView()
         setupRefreshControl()
@@ -776,12 +781,6 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
-        applyTheme()
-    }
-    
     private func setupRefreshControl() {
         customRefreshControl = UIRefreshControl()
         customRefreshControl?.tintColor = XTheme.accent

@@ -400,6 +400,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if !transferPlaybackToUnderlyingSurface {
             singletonPlayer?.pause()
         }
+        resetPlaybackSurfaceState()
 
         // Cancel all timers and observers that could wake the player back up.
         // Without this, retryWorkItem can fire after dismissal and mutate a
@@ -612,6 +613,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         isItemReady = false
         isBuffering = false
         isPlaying = false
+        resetPlaybackSurfaceState()
         loadFailedVideoMid = nil
     }
 
@@ -762,6 +764,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var isSeekingToRestoredPosition = false // Track if we're currently seeking to restored position
     private var isUsingBorrowedFeedPlayer = false
     private var prewarmedNextVideoMid: String?
+    private var playbackSurfaceReadyMid: String?
+    private var pendingSurfacePlayback: (player: AVPlayer, item: AVPlayerItem, log: String)?
     
     // Debouncing for buffering state to prevent rapid spinner blinking during seeks
     private var bufferingDebounceTask: DispatchWorkItem?
@@ -786,6 +790,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if now < nextNavigationAllowedAt { return false }
         nextNavigationAllowedAt = now.addingTimeInterval(navigationDebounceInterval)
         return true
+    }
+
+    private func resetPlaybackSurfaceState() {
+        playbackSurfaceReadyMid = nil
+        pendingSurfacePlayback = nil
     }
 
     private func shortMID(_ mid: String?) -> String {
@@ -903,7 +912,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 if itemStatusObserver == nil {
                     startPlaybackWithSeekIfNeeded(playerItem: currentItem, mid: mid)
                 } else {
-                    singletonPlayer?.play()
+                    startFullscreenPlayback(player: singletonPlayer, item: currentItem, log: "duplicate ready wait")
                 }
                 return
             }
@@ -950,6 +959,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         isUsingBorrowedFeedPlayer = false
         hasRestoredPosition = false // Reset restoration flag when loading new video
         isSeekingToRestoredPosition = false // Reset seeking flag
+        resetPlaybackSurfaceState()
         fullscreenStallItemRebuildCount = 0
         isItemReady = false // Will be set true when playerItem.status becomes .readyToPlay
 
@@ -1424,6 +1434,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         isUsingBorrowedFeedPlayer = false
         isSeekingToRestoredPosition = false
         hasRestoredPosition = false
+        resetPlaybackSurfaceState()
         fullscreenStallItemRebuildCount = 0
         loadFailedVideoMid = failedMid
 
@@ -1508,8 +1519,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             player.automaticallyWaitsToMinimizeStalling = false
             print("🎬 [FullScreenVideoManager] retry buffer nudge \(shortMID(currentVideoMid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(playerDiagnostic(player, item: playerItem))")
-            player.play()
-            isPlaying = true
+            startFullscreenPlayback(player: player, item: playerItem, log: "retry buffer nudge")
             isBuffering = false
             wasPlayingBeforeWaiting = false
             startRetryMonitoring()
@@ -1567,8 +1577,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                 self.bufferObserver = nil
 
                                 print("🎬 [FullScreenVideoManager] retry buffer ready \(self.shortMID(self.currentVideoMid)): bufferedAhead=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), \(self.playerDiagnostic(player, item: observedItem))")
-                                player.play()
-                                self.isPlaying = true
+                                self.startFullscreenPlayback(player: player, item: observedItem, log: "retry buffer ready")
                                 self.isBuffering = false
                                 self.wasPlayingBeforeWaiting = false
 
@@ -1640,6 +1649,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         hasRestoredPosition = false
         isSeekingToRestoredPosition = false
+        resetPlaybackSurfaceState()
         isItemReady = false
         isBuffering = true
         isPlaying = true
@@ -1696,7 +1706,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // Item not ready — observe status and retry when ready
             self.isPlaying = true // Mark as "should be playing"
             playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            self.singletonPlayer?.play()
             self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
                 guard let self = self else { return }
                 DispatchQueue.main.async {
@@ -1795,6 +1804,22 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
     private func startFullscreenPlayback(player: AVPlayer?, item: AVPlayerItem, log: String) {
         guard let player else { return }
+        guard isActive,
+              singletonPlayer === player,
+              player.currentItem === item else {
+            return
+        }
+
+        guard playbackSurfaceReadyMid == currentVideoMid else {
+            player.pause()
+            pendingSurfacePlayback = (player: player, item: item, log: log)
+            isPlaying = true
+            isBuffering = true
+            print("🎬 [FullScreenVideoManager] deferring play(\(log)) until fullscreen surface is ready \(shortMID(currentVideoMid)): \(playerDiagnostic(player, item: item))")
+            return
+        }
+
+        pendingSurfacePlayback = nil
         let bufferPolicy = applyFullscreenPrePlayBuffering(to: player, item: item)
         print("🎬 [FullScreenVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(playerDiagnostic(player, item: item))")
         player.play()
@@ -1951,6 +1976,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         currentVideoIndex = 0
         isUsingBorrowedFeedPlayer = false
         isPlaying = false
+        resetPlaybackSurfaceState()
         videoList = []
         videoListIndex = 0
 
@@ -1990,9 +2016,28 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Check if video is at end and rewind if needed
         checkAndRewindIfAtEnd { [weak self] in
             guard let self = self, let player = self.singletonPlayer else { return }
-            player.play()
-            self.isPlaying = true
+            guard let item = player.currentItem else { return }
+            self.startFullscreenPlayback(player: player, item: item, log: "manual play")
         }
+    }
+
+    func markPlaybackSurfaceReady(player: AVPlayer, mid: String) {
+        guard isActive,
+              currentVideoMid == mid,
+              singletonPlayer === player else {
+            return
+        }
+
+        playbackSurfaceReadyMid = mid
+
+        guard let pending = pendingSurfacePlayback,
+              pending.player === player,
+              player.currentItem === pending.item else {
+            return
+        }
+
+        pendingSurfacePlayback = nil
+        startFullscreenPlayback(player: pending.player, item: pending.item, log: "\(pending.log), surface ready")
     }
     
     // MARK: - App Lifecycle (via VideoPlayerLifecycleManager protocol)
@@ -2112,7 +2157,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 // Otherwise just play
                 if !self.hasRestoredPosition && shouldRestore {
                 } else {
-                    player.play()
+                    self.startFullscreenPlayback(player: player, item: playerItem, log: "post-recovery")
                 }
             } else if !hasSignificantBuffer {
                 print("⏳ [FullScreenVideoManager] Post-recovery: Waiting for buffer (buffered: \(String(format: "%.1f", bufferedDuration))s)")

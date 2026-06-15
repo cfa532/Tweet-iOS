@@ -35,6 +35,7 @@ class TweetTableViewCell: UITableViewCell {
     // Padding constraints (updated per-configure to match list-level padding)
     private var leadingConstraint: NSLayoutConstraint!
     private var trailingConstraint: NSLayoutConstraint!
+    private var interfaceStyleTraitRegistration: UITraitChangeRegistration?
 
     /// Publicly accessible tweet ID for video orchestration
     var tweetId: String? {
@@ -128,6 +129,9 @@ class TweetTableViewCell: UITableViewCell {
     private func setupCell() {
         selectionStyle = .none
         applyTheme()
+        interfaceStyleTraitRegistration = registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (cell: TweetTableViewCell, _) in
+            cell.applyTheme()
+        }
 
         tweetContentView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(tweetContentView)
@@ -154,12 +158,6 @@ class TweetTableViewCell: UITableViewCell {
         contentView.backgroundColor = XTheme.background
         selectedBackgroundView?.backgroundColor = XTheme.background
         tweetContentView.applyTheme()
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
-        applyTheme()
     }
 
     func configure(
