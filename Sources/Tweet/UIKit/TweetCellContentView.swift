@@ -32,7 +32,7 @@ class TweetCellContentView: UIView {
     private let embeddedTweetView = EmbeddedTweetUIView()
     private let separatorView: UIView = {
         let v = UIView()
-        v.backgroundColor = .systemGray.withAlphaComponent(0.2)
+        v.backgroundColor = XTheme.border.withAlphaComponent(0.7)
         return v
     }()
 
@@ -46,13 +46,13 @@ class TweetCellContentView: UIView {
         let iv = UIImageView()
         let config = UIImage.SymbolConfiguration(textStyle: .caption1)
         iv.image = UIImage(systemName: "arrow.2.squarepath", withConfiguration: config)
-        iv.tintColor = .secondaryLabel
+        iv.tintColor = XTheme.secondaryText
         return iv
     }()
     private let retweetLabel: UILabel = {
         let label = UILabel()
         label.font = .preferredFont(forTextStyle: .caption1)
-        label.textColor = .secondaryLabel
+        label.textColor = XTheme.secondaryText
         return label
     }()
 
@@ -122,7 +122,7 @@ class TweetCellContentView: UIView {
     // MARK: - Setup
 
     private func setupViews() {
-        backgroundColor = .systemBackground
+        backgroundColor = XTheme.background
 
         // Add tap gesture to entire view for tweet detail navigation
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))

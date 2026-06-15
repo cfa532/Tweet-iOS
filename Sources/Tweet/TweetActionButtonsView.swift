@@ -462,7 +462,7 @@ struct TweetActionButtonsView: View {
                 }
                 } label: {
                     let isBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] == true
-                    let bookmarkColor: Color = isBookmarked ? .blue : .themeSecondaryText
+                    let bookmarkColor: Color = isBookmarked ? XTheme.accentColor : .themeSecondaryText
                     HStack(spacing: 2) {
                         Image(systemName: isBookmarked ? "bookmark.fill" : "bookmark")
                             .foregroundColor(bookmarkColor)

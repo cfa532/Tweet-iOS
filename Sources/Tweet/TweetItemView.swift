@@ -12,7 +12,7 @@ struct TweetItemView: View, Equatable {
     var onAvatarTapInProfile: ((User) -> Void)? = nil
     var currentProfileUser: User? = nil
     var hideActions: Bool = false
-    var backgroundColor: Color = Color(.systemBackground)
+    var backgroundColor: Color = XTheme.backgroundColor
     var quotingTweetId: String? = nil // For embedded tweets: ID of the tweet that quotes this tweet
     @State private var originalTweet: Tweet?
     @State private var isVisible = false
@@ -576,7 +576,7 @@ struct TweetItemView: View, Equatable {
         .padding(.top)
         .padding(.bottom)
         .background(backgroundColor)
-        .if(backgroundColor != Color(.systemBackground)) { view in
+        .if(backgroundColor != XTheme.backgroundColor) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
         }
         // STABILITY: Stable ID prevents view recreation during recomposition
@@ -600,18 +600,10 @@ struct TweetItemView: View, Equatable {
 // MARK: - Optimized Embedded Tweet View
 @available(iOS 16.0, *)
 struct EmbeddedTweetView: View, Equatable {
-    private static let androidQuotedTweetSurfaceUIColor = UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0x1B / 255.0, green: 0x1C / 255.0, blue: 0x1C / 255.0, alpha: 1.0)
-            : UIColor(red: 0xE3 / 255.0, green: 0xE3 / 255.0, blue: 0xE4 / 255.0, alpha: 1.0)
-    }
-
-    static let androidQuotedTweetSurfaceColor = Color(androidQuotedTweetSurfaceUIColor)
-
     @ObservedObject var tweet: Tweet
     var isPinned: Bool = false
     var onTap: ((Tweet) -> Void)? = nil
-    var backgroundColor: Color = EmbeddedTweetView.androidQuotedTweetSurfaceColor
+    var backgroundColor: Color = Color(uiColor: XTheme.quotedTweetSurface)
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
     var isInProfile: Bool = false
     var currentProfileUser: User? = nil

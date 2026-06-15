@@ -385,7 +385,7 @@ struct ProfileView: View {
                         }
                     } label: {
                         Image(systemName: "message")
-                            .foregroundColor(.blue)
+                            .foregroundColor(XTheme.accentColor)
                     }
 
                     if !hproseInstance.appUser.isGuest {
@@ -400,7 +400,7 @@ struct ProfileView: View {
                         } label: {
                             Image(systemName: "ellipsis")
                                 .rotationEffect(.degrees(90))
-                                .foregroundColor(.primary)
+                                .foregroundColor(XTheme.textColor)
                                 .font(.system(size: 16, weight: .medium))
                                 .frame(width: 44, height: 44)
                                 .contentShape(Rectangle())

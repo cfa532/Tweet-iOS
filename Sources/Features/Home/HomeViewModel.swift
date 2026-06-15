@@ -62,6 +62,12 @@ struct HomeView: View {
                 .padding(.top, 8)
                 .padding(.leading, -4)
             }
+            .background(XTheme.backgroundColor)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(XTheme.borderColor)
+                    .frame(height: 0.5)
+            }
             .frame(height: isNavigationVisible ? nil : 0)
             .opacity(isNavigationVisible ? 1 : 0)
             .clipped()
@@ -93,6 +99,7 @@ struct HomeView: View {
             .padding(.leading, -4)
         }
         .padding(.top, 8) // Small top padding
+        .background(XTheme.backgroundColor)
         .toolbar(.hidden, for: .navigationBar) // Hide the navigation bar (iOS 17+)
         .toolbarBackground(.hidden, for: .navigationBar) // Hide navigation bar background
         .navigationBarTitleDisplayMode(.inline) // Inline mode to minimize height

@@ -32,7 +32,7 @@ class TweetBodyUIView: UIView {
         label.font = .systemFont(ofSize: 16)
         label.numberOfLines = 7
         label.lineBreakMode = .byTruncatingTail
-        label.textColor = .label
+        label.textColor = XTheme.text
         label.setContentHuggingPriority(.required, for: .vertical)
         label.setContentCompressionResistancePriority(.required, for: .vertical)
         return label
@@ -42,7 +42,7 @@ class TweetBodyUIView: UIView {
     private let captionLabel: UILabel = {
         let label = UILabel()
         label.font = .systemFont(ofSize: 14)
-        label.textColor = .label.withAlphaComponent(0.6)
+        label.textColor = XTheme.secondaryText
         label.numberOfLines = 1
         label.lineBreakMode = .byTruncatingTail
         return label
@@ -593,7 +593,7 @@ class TweetBodyUIView: UIView {
 
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: UIColor.label,
+            .foregroundColor: XTheme.text,
             .paragraphStyle: paragraphStyle
         ]
 
@@ -680,12 +680,12 @@ class TweetBodyUIView: UIView {
 
         let result = NSMutableAttributedString(string: bodyText, attributes: [
             .font: font,
-            .foregroundColor: UIColor.label,
+            .foregroundColor: XTheme.text,
             .paragraphStyle: bodyPs
         ])
         result.append(NSAttributedString(string: moreString, attributes: [
             .font: font,
-            .foregroundColor: UIColor.systemBlue,
+            .foregroundColor: XTheme.accent,
             .moreLinkTap: true,
         ]))
         applyDetectedLinks(to: result, in: NSRange(location: 0, length: bodyText.utf16.count))
@@ -700,7 +700,7 @@ class TweetBodyUIView: UIView {
 
         let result = NSMutableAttributedString(string: content, attributes: [
             .font: contentFont,
-            .foregroundColor: UIColor.label,
+            .foregroundColor: XTheme.text,
             .paragraphStyle: paragraphStyle,
         ])
         applyDetectedLinks(to: result, in: NSRange(location: 0, length: result.length))
@@ -759,7 +759,7 @@ class TweetBodyUIView: UIView {
 
             attributedString.addAttributes([
                 .tweetDetectedURL: url,
-                .foregroundColor: UIColor.systemBlue,
+                .foregroundColor: XTheme.accent,
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
             ], range: linkRange)
         }

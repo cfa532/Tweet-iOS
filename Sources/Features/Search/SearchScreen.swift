@@ -25,7 +25,7 @@ struct SearchScreen: View {
                 HStack {
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundColor(.gray)
+                            .foregroundColor(XTheme.secondaryTextColor)
                         
                         TextField(LocalizedStringKey("Search by @username or tweet content..."), text: $searchViewModel.searchText)
                             .textFieldStyle(PlainTextFieldStyle())
@@ -47,13 +47,13 @@ struct SearchScreen: View {
                                 // Don't clear results when clearing search text - keep them for better UX
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.gray)
+                                    .foregroundColor(XTheme.secondaryTextColor)
                             }
                         }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
+                    .background(XTheme.secondaryBackgroundColor)
                     .cornerRadius(20)
                     
                     DebounceButton(
@@ -67,7 +67,7 @@ struct SearchScreen: View {
                         }
                     } label: {
                         Text(LocalizedStringKey("Search"))
-                            .foregroundColor(.blue)
+                            .foregroundColor(XTheme.accentColor)
                     }
                     .disabled(searchViewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -81,7 +81,7 @@ struct SearchScreen: View {
                             .scaleEffect(2.0)
                         Text("\(searchViewModel.countdownSeconds)s")
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(XTheme.secondaryTextColor)
                             .monospacedDigit()
                     }
                     Spacer()
@@ -89,13 +89,13 @@ struct SearchScreen: View {
                     VStack {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 48))
-                            .foregroundColor(.gray)
+                            .foregroundColor(XTheme.secondaryTextColor)
                         Text(LocalizedStringKey("No results found"))
                             .font(.headline)
-                            .foregroundColor(.gray)
+                            .foregroundColor(XTheme.secondaryTextColor)
                         Text(LocalizedStringKey("Try a different search term"))
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(XTheme.secondaryTextColor)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
                     }
@@ -109,13 +109,13 @@ struct SearchScreen: View {
                     VStack {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 48))
-                            .foregroundColor(.gray)
+                            .foregroundColor(XTheme.secondaryTextColor)
                         Text(LocalizedStringKey("Search"))
                             .font(.headline)
-                            .foregroundColor(.gray)
+                            .foregroundColor(XTheme.secondaryTextColor)
                         Text(LocalizedStringKey("Search by @username or tweet content"))
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(XTheme.secondaryTextColor)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
                     }
@@ -146,8 +146,11 @@ struct SearchScreen: View {
                         }
                     }
                     .scrollDismissesKeyboard(.interactively)
+                    .scrollContentBackground(.hidden)
+                    .background(XTheme.backgroundColor)
                 }
             }
+            .background(XTheme.backgroundColor)
             .navigationTitle(LocalizedStringKey("Search"))
             .navigationBarTitleDisplayMode(.inline)
             .appNavigationDestinations(
@@ -180,18 +183,18 @@ struct UserSearchResultRow: View {
                         if let name = user.name, !name.isEmpty {
                             Text(name)
                                 .font(.headline)
-                                .foregroundColor(.primary)
+                                .foregroundColor(XTheme.textColor)
                         }
                         // Username is always present (validation ensures this)
                         Text("@\(user.username ?? "")")
                             .font(.headline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(XTheme.secondaryTextColor)
                     }
                     
                     if let profile = user.profile, !profile.isEmpty {
                         Text(profile)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(XTheme.secondaryTextColor)
                             .lineLimit(2)
                     }
                 }
@@ -218,12 +221,12 @@ struct TweetSearchResultRow: View {
                         if let name = tweet.author?.name, !name.isEmpty {
                             Text(name)
                                 .font(.headline)
-                                .foregroundColor(.primary)
+                                .foregroundColor(XTheme.textColor)
                         }
                         if let username = tweet.author?.username, !username.isEmpty {
                             Text("@\(username)")
                                 .font(.subheadline)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(XTheme.secondaryTextColor)
                         }
                     }
                     Spacer()
@@ -233,12 +236,12 @@ struct TweetSearchResultRow: View {
                 if let content = tweet.content, !content.isEmpty {
                     Text(content)
                         .font(.body)
-                        .foregroundColor(.primary)
+                        .foregroundColor(XTheme.textColor)
                         .lineLimit(3)
                 } else if let title = tweet.title, !title.isEmpty {
                     Text(title)
                         .font(.body)
-                        .foregroundColor(.primary)
+                        .foregroundColor(XTheme.textColor)
                         .lineLimit(3)
                 }
             }

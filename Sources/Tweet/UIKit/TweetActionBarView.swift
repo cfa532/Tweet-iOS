@@ -23,7 +23,7 @@ class TweetActionBarView: UIView {
         let btn = UIButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 14)
         btn.setImage(UIImage(systemName: "square.and.arrow.up", withConfiguration: config), for: .normal)
-        btn.tintColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
+        btn.tintColor = XTheme.secondaryText
         btn.contentHorizontalAlignment = .trailing
         return btn
     }()
@@ -84,7 +84,7 @@ class TweetActionBarView: UIView {
     }
 
     private func setupViews() {
-        let tintColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
+        let tintColor = XTheme.secondaryText
         commentButton.tintColor = tintColor
         retweetButton.tintColor = tintColor
         likeButton.tintColor = tintColor
@@ -211,17 +211,17 @@ class TweetActionBarView: UIView {
         let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
         likeButton.setIcon(isFavorite ? "heart.fill" : "heart")
         if isFavorite {
-            likeButton.tintColor = .systemRed
+            likeButton.tintColor = UIColor.systemRed
         } else {
-            likeButton.tintColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
+            likeButton.tintColor = XTheme.secondaryText
         }
 
         let isBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
         bookmarkButton.setIcon(isBookmarked ? "bookmark.fill" : "bookmark")
         if isBookmarked {
-            bookmarkButton.tintColor = .systemBlue
+            bookmarkButton.tintColor = XTheme.accent
         } else {
-            bookmarkButton.tintColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
+            bookmarkButton.tintColor = XTheme.secondaryText
         }
     }
 
@@ -1138,7 +1138,7 @@ private class ActionButtonView: UIView {
     private let countLabel: UILabel = {
         let label = UILabel()
         label.font = .monospacedDigitSystemFont(ofSize: 14, weight: .regular)
-        label.textColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
+        label.textColor = XTheme.secondaryText
         return label
     }()
 

@@ -259,7 +259,7 @@ struct TweetListView: View {
                 ProgressView()
                     .scaleEffect(2.0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(header == nil ? Color(UIColor.systemBackground) : Color.clear)
+                    .background(header == nil ? XTheme.backgroundColor : Color.clear)
             }
 
             if let emptyStateText,
@@ -272,7 +272,7 @@ struct TweetListView: View {
                     Spacer()
                     Text(emptyStateText)
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(XTheme.secondaryTextColor)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

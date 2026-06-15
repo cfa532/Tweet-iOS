@@ -35,7 +35,7 @@ class TweetHeaderUIView: UIView {
         let button = MenuButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         button.setImage(UIImage(systemName: "ellipsis", withConfiguration: config), for: .normal)
-        button.tintColor = .secondaryLabel
+        button.tintColor = XTheme.secondaryText
         button.showsMenuAsPrimaryAction = true
         button.changesSelectionAsPrimaryAction = false
         return button
@@ -160,7 +160,7 @@ class TweetHeaderUIView: UIView {
             string: name,
             attributes: [
                 .font: UIFont.preferredFont(forTextStyle: .headline),
-                .foregroundColor: UIColor(named: "ThemeText") ?? UIColor.label
+                .foregroundColor: XTheme.text
             ]
         )
 
@@ -169,7 +169,7 @@ class TweetHeaderUIView: UIView {
                 string: " @\(username) · \(timestamp)",
                 attributes: [
                     .font: UIFont.preferredFont(forTextStyle: .subheadline),
-                    .foregroundColor: UIColor(named: "ThemeSecondaryText") ?? UIColor.secondaryLabel
+                    .foregroundColor: XTheme.secondaryText
                 ]
             )
         )

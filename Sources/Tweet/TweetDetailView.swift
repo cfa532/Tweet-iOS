@@ -84,12 +84,12 @@ private class NavBarUIView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func setupViews() {
-        backgroundColor = .systemBackground
+        backgroundColor = XTheme.background
 
         // Back button
         let config = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
         backButton.setImage(UIImage(systemName: "chevron.left", withConfiguration: config), for: .normal)
-        backButton.tintColor = UIColor(named: "ThemeText") ?? .label
+        backButton.tintColor = XTheme.text
         backButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
         backButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(backButton)
@@ -97,7 +97,7 @@ private class NavBarUIView: UIView {
         // Title
         titleLabel.text = NSLocalizedString("Tweet", comment: "Tweet detail screen title")
         titleLabel.font = .preferredFont(forTextStyle: .headline)
-        titleLabel.textColor = UIColor(named: "ThemeText") ?? .label
+        titleLabel.textColor = XTheme.text
         titleLabel.textAlignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
@@ -279,7 +279,7 @@ struct SelectableTextView: UIViewRepresentable {
         ps.lineSpacing = 3
         let attributedString = NSMutableAttributedString(string: text, attributes: [
             .font: UIFont.preferredFont(forTextStyle: .body),
-            .foregroundColor: UIColor.label,
+            .foregroundColor: XTheme.text,
             .paragraphStyle: ps,
         ])
         applyDetectedLinks(to: attributedString)
@@ -306,7 +306,7 @@ struct SelectableTextView: UIViewRepresentable {
 
             attributedString.addAttributes([
                 .link: url,
-                .foregroundColor: UIColor.systemBlue,
+                .foregroundColor: XTheme.accent,
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
             ], range: linkRange)
         }
@@ -323,7 +323,7 @@ struct SelectableTextView: UIViewRepresentable {
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
         textView.linkTextAttributes = [
-            .foregroundColor: UIColor.systemBlue,
+            .foregroundColor: XTheme.accent,
             .underlineStyle: NSUnderlineStyle.single.rawValue,
         ]
         textView.delegate = context.coordinator
@@ -976,10 +976,10 @@ struct TweetDetailView: View {
                     Spacer()
                     Text("Original tweet not found")
                         .font(.headline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(XTheme.secondaryTextColor)
                     Text("The original tweet may have been deleted or is no longer accessible.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(XTheme.secondaryTextColor)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
                     Spacer()
@@ -988,7 +988,6 @@ struct TweetDetailView: View {
                 VStack(spacing: 0) {
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            // Main tweet section with deeper background
                             VStack(spacing: 0) {
                                 mediaSection
                                 tweetHeader
@@ -997,7 +996,7 @@ struct TweetDetailView: View {
                                 actionButtons
                             }
                             .padding(.bottom, 8)
-                            .background(Color(UIColor.secondarySystemBackground))
+                            .background(XTheme.backgroundColor)
 
                             commentsListView
                                 .padding(.leading, -4)
@@ -1045,7 +1044,7 @@ struct TweetDetailView: View {
                 }
             }
         }
-        .background(Color(.systemBackground))
+        .background(XTheme.backgroundColor)
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
@@ -1384,7 +1383,7 @@ struct TweetDetailView: View {
                     .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
                 } else {
                     Text("Loading quoted tweet...")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(XTheme.secondaryTextColor)
                         .padding(.horizontal)
                         .padding(.vertical, 8)
                 }

@@ -10,14 +10,15 @@ struct TabButton: View {
             VStack(spacing: 4) {
                 Text(title)
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isSelected ? .primary : .secondary)
+                    .foregroundColor(isSelected ? XTheme.textColor : XTheme.secondaryTextColor)
                 Rectangle()
-                    .fill(isSelected ? Color.blue : Color.clear)
-                    .frame(height: 2)
+                    .fill(isSelected ? XTheme.accentColor : Color.clear)
+                    .frame(width: 56, height: 4)
+                    .clipShape(Capsule())
             }
         }
         .frame(maxWidth: .infinity)
-        .shadow(color: isSelected ? Color.blue.opacity(0.3) : Color.clear, radius: 1, x: 0, y: 1)
+        .shadow(color: isSelected ? XTheme.accentColor.opacity(0.25) : Color.clear, radius: 1, x: 0, y: 1)
     }
 }
 

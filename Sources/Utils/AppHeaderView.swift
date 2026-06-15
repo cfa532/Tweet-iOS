@@ -45,10 +45,11 @@ struct AppHeaderView: View {
                 Image(systemName: "gearshape.fill")
                     .resizable()
                     .frame(width: 24, height: 24)
-                    .foregroundColor(.primary)
+                    .foregroundColor(XTheme.textColor)
             }
         }
         .padding(.horizontal)
+        .background(XTheme.backgroundColor)
         .sheet(isPresented: $isLoginSheetPresented) {
             LoginView()
         }

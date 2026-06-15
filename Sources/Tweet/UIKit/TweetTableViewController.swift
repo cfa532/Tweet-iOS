@@ -710,7 +710,7 @@ class TweetTableViewController: UITableViewController {
     private func setupTableView() {
         tableView.register(TweetTableViewCell.self, forCellReuseIdentifier: TweetTableViewCell.reuseIdentifier)
         tableView.separatorStyle = .none
-        tableView.backgroundColor = .systemBackground
+        tableView.backgroundColor = XTheme.background
         
         // Use smarter estimated height based on cached values
         tableView.estimatedRowHeight = 250 // Base estimate, will be refined per cell
@@ -758,6 +758,7 @@ class TweetTableViewController: UITableViewController {
     
     private func setupRefreshControl() {
         customRefreshControl = UIRefreshControl()
+        customRefreshControl?.tintColor = XTheme.accent
         customRefreshControl?.addTarget(self, action: #selector(handleRefresh), for: .valueChanged)
         tableView.refreshControl = customRefreshControl
     }
@@ -2407,7 +2408,7 @@ class TweetTableViewController: UITableViewController {
         messageLabel.text = NSLocalizedString("No more tweets", comment: "Message shown when there are no more tweets to load")
         messageLabel.textAlignment = .center
         messageLabel.font = .systemFont(ofSize: 15, weight: .medium)
-        messageLabel.textColor = .secondaryLabel
+        messageLabel.textColor = XTheme.secondaryText
         messageLabel.translatesAutoresizingMaskIntoConstraints = false
 
         footerView.addSubview(messageLabel)

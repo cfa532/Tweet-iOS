@@ -204,9 +204,9 @@ struct UserRowView: View {
                                     .padding(.vertical, 8)
                                     .background(
                                         RoundedRectangle(cornerRadius: 20)
-                                            .stroke(isFollowing ? Color.red : Color.blue, lineWidth: 1)
+                                            .stroke(isFollowing ? Color.red : XTheme.accentColor, lineWidth: 1)
                                     )
-                                    .foregroundColor(isFollowing ? .red : .blue)
+                                    .foregroundColor(isFollowing ? .red : XTheme.accentColor)
                             }
                             .disabled(isToggling)
                             .opacity(isToggling ? 0.6 : 1.0)

@@ -107,6 +107,7 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(XTheme.backgroundColor)
             
             // Custom Tab Bar - Hide when in chat screen, but show when in profile from chat
             if !isInChatScreen || isInProfileFromChat {
@@ -126,7 +127,7 @@ struct ContentView: View {
                     let isHomeActive = navigationPath.isEmpty && selectedTab == 0
                     Image(systemName: isHomeActive ? "house.fill" : "house")
                         .font(.system(size: 24))
-                        .foregroundColor(isHomeActive ? .blue : .gray)
+                        .foregroundColor(isHomeActive ? XTheme.accentColor : XTheme.secondaryTextColor)
                 }
                 .frame(maxWidth: .infinity)
                 
@@ -146,7 +147,7 @@ struct ContentView: View {
                     ZStack {
                         Image(systemName: "message")
                             .font(.system(size: 24))
-                            .foregroundColor(selectedTab == 1 ? .blue : .gray)
+                            .foregroundColor(selectedTab == 1 ? XTheme.accentColor : XTheme.secondaryTextColor)
                         
                         // Badge for unread messages
                         BadgeView(count: chatSessionManager.unreadMessageCount)
@@ -177,7 +178,7 @@ struct ContentView: View {
                 }) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 24))
-                        .foregroundColor(.gray)
+                        .foregroundColor(XTheme.accentColor)
                 }
                 .frame(maxWidth: .infinity)
                 
@@ -187,7 +188,7 @@ struct ContentView: View {
                 }) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 24))
-                        .foregroundColor(selectedTab == 3 ? .blue : .gray)
+                        .foregroundColor(selectedTab == 3 ? XTheme.accentColor : XTheme.secondaryTextColor)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -196,16 +197,21 @@ struct ContentView: View {
             .frame(height: (shouldHideHeight && !isNavigationVisible) ? 0 : nil)
             .clipped()
             .background(
-                Color(.systemBackground)
+                XTheme.backgroundColor
                     .opacity(isNavigationVisible ? 1.0 : 0.0)
             )
-            .shadow(color: Color(.systemBlue).opacity(isNavigationVisible ? 0.3 : 0.0), radius: 1, x: 0, y: -1)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(XTheme.borderColor.opacity(isNavigationVisible ? 1.0 : 0.0))
+                    .frame(height: 0.5)
+            }
             .opacity(isNavigationVisible ? 1.0 : 0.3)
             .allowsHitTesting(true)
             .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: isNavigationVisible)
             .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: shouldHideHeight)
         }
         }
+        .background(XTheme.backgroundColor)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()

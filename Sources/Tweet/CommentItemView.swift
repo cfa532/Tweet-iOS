@@ -16,7 +16,7 @@ struct CommentItemView: View {
     var onTap: ((Tweet) -> Void)? = nil
     var linkToComment: Bool = false // Enable NavigationLink for the comment
     var commentsVM: CommentsViewModel? = nil
-    var backgroundColor: Color = Color(.systemBackground)
+    var backgroundColor: Color = XTheme.backgroundColor
     @State private var isVisible = false
 
     var body: some View {
@@ -85,7 +85,7 @@ struct CommentItemView: View {
         .padding(.vertical)
         .padding(.horizontal, 16)
         .background(backgroundColor)
-        .if(backgroundColor != Color(.systemBackground)) { view in
+        .if(backgroundColor != XTheme.backgroundColor) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
         }
         .if(linkToComment) { view in

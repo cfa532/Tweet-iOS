@@ -127,8 +127,8 @@ class TweetTableViewCell: UITableViewCell {
 
     private func setupCell() {
         selectionStyle = .none
-        backgroundColor = .clear
-        contentView.backgroundColor = .clear
+        backgroundColor = XTheme.background
+        contentView.backgroundColor = XTheme.background
 
         tweetContentView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(tweetContentView)
