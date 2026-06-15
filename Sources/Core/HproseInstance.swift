@@ -1012,6 +1012,20 @@ final class HproseInstance: ObservableObject {
             print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
             await syncFollowingTweetsToAccessHostIfNeeded(homeResponse: response, requestParams: params)
         }
+
+        var scheduledBackgroundAuthorFetches = Set<String>()
+        func scheduleBackgroundAuthorFetch(authorId: String, context: String) {
+            guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
+
+            Task.detached(priority: .userInitiated) {
+                do {
+                    _ = try await self.fetchUser(authorId)
+                    // Author singleton is already set, it will update automatically.
+                } catch {
+                    print("⚠️ [fetchTweetFeed] Background fetch failed for \(context) \(authorId): \(error)")
+                }
+            }
+        }
         
         // Cache original tweets first - cache under their authorId, not appUser.mid
         for originalTweetDict in originalTweetsData {
@@ -1025,14 +1039,7 @@ final class HproseInstance: ObservableObject {
                     }
                     
                     // Fetch author in background - will update singleton when complete
-                    Task.detached(priority: .userInitiated) {
-                        do {
-                            _ = try await self.fetchUser(originalTweet.authorId)
-                            // Author singleton is already set, it will update automatically
-                        } catch {
-                            print("⚠️ [fetchTweetFeed] Background fetch failed for original author \(originalTweet.authorId): \(error)")
-                        }
-                    }
+                    scheduleBackgroundAuthorFetch(authorId: originalTweet.authorId, context: "original author")
                     
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
@@ -1057,14 +1064,7 @@ final class HproseInstance: ObservableObject {
                     }
                     
                     // Fetch author in background - will update singleton when complete
-                    Task.detached(priority: .userInitiated) {
-                        do {
-                            _ = try await self.fetchUser(tweet.authorId)
-                            // Author singleton is already set, it will update automatically
-                        } catch {
-                            print("⚠️ [fetchTweetFeed] Background fetch failed for author \(tweet.authorId): \(error)")
-                        }
-                    }
+                    scheduleBackgroundAuthorFetch(authorId: tweet.authorId, context: "author")
                     
                     // Skip private tweets in feed
                     if tweet.isPrivate == true {

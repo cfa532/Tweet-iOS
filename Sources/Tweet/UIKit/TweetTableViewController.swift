@@ -123,6 +123,7 @@ class TweetTableViewController: UITableViewController {
 
     // Observer for feed view appearance (to restart video playback after navigation)
     private var feedViewDidAppearObserver: NSObjectProtocol?
+    private var overlayCoverageObserver: NSObjectProtocol?
     private var feedPlaybackResumeGeneration: Int = 0
     private var pendingFeedPlaybackResumeReason: String?
     private var videoVisibilityRefreshGeneration: Int = 0
@@ -158,6 +159,31 @@ class TweetTableViewController: UITableViewController {
 
     private var isReadyForFeedVideoResume: Bool {
         isViewLoaded && view.window != nil && tableView.window != nil
+    }
+
+    private var currentRowLayoutWidth: CGFloat {
+        tableView.bounds.width > 0 ? tableView.bounds.width : UIScreen.main.bounds.width
+    }
+
+    private func cachedHeight(for tweet: Tweet, width: CGFloat) -> CGFloat? {
+        guard let cachedHeight = tweet.cachedHeight,
+              abs(tweet.cachedHeightWidth - width) <= 1 else {
+            return nil
+        }
+        return cachedHeight
+    }
+
+    private func setCachedHeight(_ height: CGFloat, for tweet: Tweet, width: CGFloat) {
+        let cacheWidth = width > 0 ? width : currentRowLayoutWidth
+        tweet.cachedHeight = height
+        tweet.cachedHeightWidth = cacheWidth
+        TweetHeightCache.shared.setHeight(height, for: tweet.mid, width: cacheWidth)
+    }
+
+    private func clearCachedHeight(for tweet: Tweet) {
+        tweet.cachedHeight = nil
+        tweet.cachedHeightWidth = 0
+        TweetHeightCache.shared.removeHeight(for: tweet.mid)
     }
 
     private func scheduleFeedPlaybackResume(after delay: TimeInterval, reason: String) {
@@ -234,6 +260,7 @@ class TweetTableViewController: UITableViewController {
         setupMemoryWarningObserver()
         setupForegroundBackgroundObservers()
         setupFeedViewDidAppearObserver()
+        setupOverlayCoverageObserver()
 
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
@@ -265,6 +292,10 @@ class TweetTableViewController: UITableViewController {
         }
 
         if let observer = feedViewDidAppearObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = overlayCoverageObserver {
             NotificationCenter.default.removeObserver(observer)
         }
 
@@ -300,6 +331,43 @@ class TweetTableViewController: UITableViewController {
                     self.scrollToTop()
                 }
             }
+        }
+    }
+
+    private func setupOverlayCoverageObserver() {
+        overlayCoverageObserver = NotificationCenter.default.addObserver(
+            forName: .overlayCoverageChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let isCovered = notification.userInfo?["isCovered"] as? Bool,
+                  !isCovered,
+                  let source = notification.userInfo?["source"] as? String,
+                  source.contains("MediaBrowser") else { return }
+
+            self.remeasureVisibleRowsAfterOverlayDismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.remeasureVisibleRowsAfterOverlayDismiss()
+            }
+        }
+    }
+
+    private func remeasureVisibleRowsAfterOverlayDismiss() {
+        guard tableView.window != nil,
+              let visibleIndexPaths = tableView.indexPathsForVisibleRows,
+              !visibleIndexPaths.isEmpty else { return }
+
+        for indexPath in visibleIndexPaths {
+            guard let tweet = tweetForRow(indexPath.row) else { continue }
+            clearCachedHeight(for: tweet)
+        }
+
+        UIView.performWithoutAnimation {
+            isTableViewUpdating = true
+            tableView.beginUpdates()
+            tableView.endUpdates()
+            isTableViewUpdating = false
         }
     }
 
@@ -1362,7 +1430,7 @@ class TweetTableViewController: UITableViewController {
             }
 
             self.expandedTweetIds.insert(tweet.mid)
-            tweet.cachedHeight = nil
+            self.clearCachedHeight(for: tweet)
 
             let expectedCount = self.pinnedTweets.count + self.tweets.count
             let currentCount = self.tableView.numberOfRows(inSection: 0)
@@ -1392,8 +1460,7 @@ class TweetTableViewController: UITableViewController {
                 guard idx < self.tweets.count else { return }
                 tweet = self.tweets[idx]
             }
-            tweet.cachedHeight = desiredHeight
-            TweetHeightCache.shared.setHeight(desiredHeight, for: tweet.mid)
+            self.setCachedHeight(desiredHeight, for: tweet, width: cell.bounds.width)
 
             if self.isUserDragging || self.isDecelerating {
                 self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
@@ -1420,8 +1487,10 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
+        let layoutWidth = currentRowLayoutWidth
+
         // Use in-memory cached height if available — set by willDisplay from actual Auto Layout
-        if let cachedHeight = tweet.cachedHeight {
+        if let cachedHeight = cachedHeight(for: tweet, width: layoutWidth) {
             return cachedHeight
         }
 
@@ -1430,7 +1499,7 @@ class TweetTableViewController: UITableViewController {
         // NOTE: Do NOT set tweet.cachedHeight here — persisted heights may be stale
         // (e.g., from a session where the cell didn't fully render). Only willDisplay
         // should set cachedHeight after Auto Layout verifies the actual height.
-        if let persistedHeight = TweetHeightCache.shared.getHeight(for: tweet.mid) {
+        if let persistedHeight = TweetHeightCache.shared.getHeight(for: tweet.mid, width: layoutWidth) {
             return persistedHeight
         }
 
@@ -1691,8 +1760,10 @@ class TweetTableViewController: UITableViewController {
             return UITableView.automaticDimension
         }
 
+        let layoutWidth = currentRowLayoutWidth
+
         // Use cached height if available (set by willDisplay from actual Auto Layout).
-        if let cachedHeight = tweet.cachedHeight {
+        if let cachedHeight = cachedHeight(for: tweet, width: layoutWidth) {
             return cachedHeight
         }
 
@@ -1737,11 +1808,9 @@ class TweetTableViewController: UITableViewController {
                 let isReasonable = cell.frame.height >= expectedHeight - 20
 
                 if isReasonable {
-                    tweet.cachedHeight = cell.frame.height
-                    TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
+                    setCachedHeight(cell.frame.height, for: tweet, width: cell.bounds.width)
                 } else {
-                    tweet.cachedHeight = nil
-                    TweetHeightCache.shared.removeHeight(for: tweet.mid)
+                    clearCachedHeight(for: tweet)
                 }
             }
         }
@@ -1768,7 +1837,7 @@ class TweetTableViewController: UITableViewController {
                 guard idx < tweets.count else { return }
                 tweet = tweets[idx]
             }
-            tweet.cachedHeight = nil
+            clearCachedHeight(for: tweet)
         }
     }
 

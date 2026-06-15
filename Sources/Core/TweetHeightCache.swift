@@ -21,12 +21,12 @@ class TweetHeightCache {
         // )
     }
 
-    func getHeight(for mid: String) -> CGFloat? {
-        heights[mid]
+    func getHeight(for mid: String, width: CGFloat) -> CGFloat? {
+        heights[cacheKey(for: mid, width: width)]
     }
 
-    func setHeight(_ height: CGFloat, for mid: String) {
-        heights[mid] = height
+    func setHeight(_ height: CGFloat, for mid: String, width: CGFloat) {
+        heights[cacheKey(for: mid, width: width)] = height
         // Trim in-memory cache when exceeding limit to prevent unbounded growth
         if heights.count > maxEntries {
             let excess = heights.count - maxEntries
@@ -38,7 +38,13 @@ class TweetHeightCache {
     }
 
     func removeHeight(for mid: String) {
-        heights.removeValue(forKey: mid)
+        heights.keys
+            .filter { $0 == mid || $0.hasPrefix("\(mid)|") }
+            .forEach { heights.removeValue(forKey: $0) }
+    }
+
+    private func cacheKey(for mid: String, width: CGFloat) -> String {
+        "\(mid)|\(Int(width.rounded()))"
     }
 
     @objc func saveToDisk() {

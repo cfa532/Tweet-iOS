@@ -113,7 +113,7 @@ struct MediaBrowserView: View {
                 suppressTabPagingAnimation: $suppressTabPagingAnimation,
                 currentTweet: currentTweet,
                 currentCellTweetId: currentCellTweetId,
-                dismiss: { dismiss() },
+                dismiss: dismissFullScreen,
                 startControlsTimer: startControlsTimer,
                 resetControlsTimer: resetControlsTimer,
                 onShareVisibilityChange: { isVisible in
@@ -167,6 +167,11 @@ struct MediaBrowserView: View {
                 // MediaCell videos manage themselves via VideoPlaybackCoordinator
                 // Fullscreen manager is now inactive and won't interfere
             }
+    }
+
+    private func dismissFullScreen() {
+        OrientationManager.shared.lockToPortrait()
+        dismiss()
     }
     
     private func setupFullScreenManager() {
@@ -230,7 +235,7 @@ struct MediaBrowserView: View {
         
         // Set up exit fullscreen callback (when no more videos)
         FullScreenVideoManager.shared.onExitFullScreen = { [self] in
-            dismiss()
+            dismissFullScreen()
         }
     }
     
