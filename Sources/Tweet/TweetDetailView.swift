@@ -1347,12 +1347,9 @@ struct TweetDetailView: View {
                             tweet: orig,
                             isPinned: false,
                             onTap: nil, // NavigationLink to quoted tweet detail
-                            backgroundColor: Color(.systemGray6).opacity(0.35),
                             isEmbedded: true
                         )
                     }
-                    .cornerRadius(8)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.systemGray4), lineWidth: 1))
                     .padding(.horizontal)
                     .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
                 } else {

@@ -10,6 +10,11 @@ import SwiftUI
 import Combine
 
 class EmbeddedTweetUIView: UIView {
+    private static let androidQuotedTweetSurfaceColor = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x1B / 255.0, green: 0x1C / 255.0, blue: 0x1C / 255.0, alpha: 1.0)
+            : UIColor(red: 0xE3 / 255.0, green: 0xE3 / 255.0, blue: 0xE4 / 255.0, alpha: 1.0)
+    }
 
     private let avatarView = AvatarUIView()
     private let headerView = TweetHeaderUIView()
@@ -102,8 +107,9 @@ class EmbeddedTweetUIView: UIView {
     }
 
     private func setupViews() {
-        backgroundColor = .systemGray5.withAlphaComponent(0.45)
+        backgroundColor = Self.androidQuotedTweetSurfaceColor
         layer.cornerRadius = 8
+        layer.cornerCurve = .continuous
         clipsToBounds = true
 
         // Prevent parent stack from stretching this view

@@ -419,19 +419,17 @@ struct TweetItemView: View, Equatable {
                         // STABILITY: Layout priority for tweet body prevents shifting
                         .layoutPriority(1)
                         
-                        // Embedded original tweet with darker background, no left border, and aligned avatar
+                        // Embedded original tweet styled to match Android's quoted tweet card.
                         EmbeddedTweetView(
                             tweet: originalTweet,
                             isPinned: isPinned,
                             onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
-                            backgroundColor: Color(.systemGray4).opacity(0.6),
                             isEmbedded: true,
                             isInProfile: isInProfile,
                             currentProfileUser: currentProfileUser,
                             onAvatarTapInProfile: onAvatarTapInProfile,
                             quotingTweetId: tweet.mid  // The current tweet is quoting the originalTweet
                         )
-                        .cornerRadius(8)
                         .padding(.leading, -4)
                         .padding(.top, 8)
                         .padding(.bottom, 8)
@@ -602,10 +600,18 @@ struct TweetItemView: View, Equatable {
 // MARK: - Optimized Embedded Tweet View
 @available(iOS 16.0, *)
 struct EmbeddedTweetView: View, Equatable {
+    private static let androidQuotedTweetSurfaceUIColor = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x1B / 255.0, green: 0x1C / 255.0, blue: 0x1C / 255.0, alpha: 1.0)
+            : UIColor(red: 0xE3 / 255.0, green: 0xE3 / 255.0, blue: 0xE4 / 255.0, alpha: 1.0)
+    }
+
+    static let androidQuotedTweetSurfaceColor = Color(androidQuotedTweetSurfaceUIColor)
+
     @ObservedObject var tweet: Tweet
     var isPinned: Bool = false
     var onTap: ((Tweet) -> Void)? = nil
-    var backgroundColor: Color = Color(.systemBackground)
+    var backgroundColor: Color = EmbeddedTweetView.androidQuotedTweetSurfaceColor
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
     var isInProfile: Bool = false
     var currentProfileUser: User? = nil
@@ -683,6 +689,7 @@ struct EmbeddedTweetView: View, Equatable {
         }
         .padding(8)
         .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
     
     // MARK: - Equatable Implementation
