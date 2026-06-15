@@ -30,6 +30,7 @@ struct MediaBrowserView: View {
     @State private var previousIndex: Int = -1 // Track previous index for video management
     @State private var isImageZoomed = false // Track if current image is zoomed
     @State private var isTransitioning = false // Track transition animation
+    @State private var isCompletingVerticalAdvance = false // Track outgoing swipe-up animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
@@ -109,6 +110,7 @@ struct MediaBrowserView: View {
                 imageStates: $imageStates,
                 isImageZoomed: $isImageZoomed,
                 isTransitioning: $isTransitioning,
+                isCompletingVerticalAdvance: $isCompletingVerticalAdvance,
                 transitionOffset: $transitionOffset,
                 suppressTabPagingAnimation: $suppressTabPagingAnimation,
                 currentTweet: currentTweet,
@@ -180,7 +182,7 @@ struct MediaBrowserView: View {
             
             // Animate transition: slide current video up and next video in from bottom
             Task { @MainActor in
-                guard !isTransitioning else { return }
+                guard !isTransitioning, !isCompletingVerticalAdvance else { return }
                 guard let allNextAttachments = nextTweet.attachments,
                       videoIndex < allNextAttachments.count else {
                     return
@@ -199,12 +201,21 @@ struct MediaBrowserView: View {
                 // Prevent TabView from doing a horizontal paging animation when we change currentIndex programmatically.
                 // The vertical push should be the only visible transition.
                 suppressTabPagingAnimation = true
-                isTransitioning = true
+                isCompletingVerticalAdvance = true
                 showControls = false
                 let slideDistance = UIScreen.main.bounds.height
+
+                withAnimation(.easeOut(duration: 0.14)) {
+                    dragOffset = CGSize(width: 0, height: -slideDistance)
+                }
+
+                try? await Task.sleep(nanoseconds: 140_000_000)
+                isTransitioning = true
                 transitionOffset = slideDistance
 
                 withAnimation(.none) {
+                    isDragging = false
+                    dragOffset = .zero
                     self.currentTweet = nextTweet
                     self.currentIndex = nextBrowserIndex
                     self.previousIndex = nextBrowserIndex
@@ -229,6 +240,7 @@ struct MediaBrowserView: View {
 
                 try? await Task.sleep(nanoseconds: 220_000_000)
                 isTransitioning = false
+                isCompletingVerticalAdvance = false
                 suppressTabPagingAnimation = false
             }
         }
@@ -252,6 +264,7 @@ struct MediaBrowserView: View {
         @Binding var imageStates: [Int: ImageState]
         @Binding var isImageZoomed: Bool
         @Binding var isTransitioning: Bool
+        @Binding var isCompletingVerticalAdvance: Bool
         @Binding var transitionOffset: CGFloat
         @Binding var suppressTabPagingAnimation: Bool
         let currentTweet: Tweet
@@ -263,6 +276,7 @@ struct MediaBrowserView: View {
         let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
         let cleanupNonVisibleImagesClosure: (Int) -> Void
         let cleanupImageStatesClosure: () -> Void
+        @State private var isCompletingDismiss = false
 
         /// Find the next video attachment index after the current index (skips images/audio).
         /// Returns nil if there is no next video in this tweet.
@@ -283,12 +297,7 @@ struct MediaBrowserView: View {
                 Color.black
                     .ignoresSafeArea(.all, edges: .all)
                 
-                ZStack {
-                    currentContentLayer
-                        .offset(y: isTransitioning ? transitionOffset : dragOffset.height)
-                }
-                .scaleEffect(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 1000.0))
-                .opacity(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 500.0))
+                currentContentLayer
             }
             .statusBar(hidden: true)
             .onTapGesture {
@@ -348,6 +357,9 @@ struct MediaBrowserView: View {
                             }
                         }
                         .background(Color.black)
+                        .offset(y: verticalOffset(for: index))
+                        .scaleEffect(contentScale(for: index))
+                        .animation(nil, value: dragOffset)
                         .tag(index)
                     }
                 }
@@ -371,6 +383,17 @@ struct MediaBrowserView: View {
                         .transition(.opacity)
                 }
             }
+        }
+
+        private func verticalOffset(for index: Int) -> CGFloat {
+            guard index == currentIndex else { return 0 }
+            return isTransitioning ? transitionOffset : dragOffset.height
+        }
+
+        private func contentScale(for index: Int) -> CGFloat {
+            guard index == currentIndex, !isTransitioning else { return 1.0 }
+            let progress = min(abs(dragOffset.height), 420.0)
+            return max(0.9, 1.0 - progress / 1800.0)
         }
 
         private var controlsOverlay: some View {
@@ -411,33 +434,34 @@ struct MediaBrowserView: View {
         private var verticalVideoNavigationGesture: some Gesture {
             DragGesture(minimumDistance: 25)
                 .onChanged { value in
-                    guard !isTransitioning, !isImageZoomed else { return }
+                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else { return }
 
                     let vertical = abs(value.translation.height)
                     let horizontal = abs(value.translation.width)
 
-                    if vertical > horizontal * 1.25, value.translation.height < 0 {
+                    if isDragging || vertical > horizontal * 1.25 {
                         isDragging = true
-                        dragOffset.height = value.translation.height
-                    } else if isDragging {
-                        isDragging = false
-                        dragOffset = .zero
+                        dragOffset = CGSize(width: 0, height: value.translation.height)
                     }
                 }
                 .onEnded { value in
-                    isDragging = false
-                    dragOffset = .zero
-                    guard !isTransitioning, !isImageZoomed else { return }
+                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else {
+                        resetDragOffset(animated: true)
+                        return
+                    }
 
                     let vertical = abs(value.translation.height)
                     let horizontal = abs(value.translation.width)
-                    guard vertical > horizontal * 1.25 else { return }
+                    guard isDragging || vertical > horizontal * 1.25 else {
+                        resetDragOffset(animated: true)
+                        return
+                    }
 
                     let swipeThreshold: CGFloat = 90
                     let velocityThreshold: CGFloat = 450
 
                     if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
-                        dismiss()
+                        finishDismissAfterDrag()
                         return
                     }
 
@@ -446,9 +470,43 @@ struct MediaBrowserView: View {
                             pushToNextVideoInCurrentTweet(nextVideoIndex)
                         } else {
                             FullScreenVideoManager.shared.navigateToNext()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                                if !isTransitioning, !isCompletingVerticalAdvance {
+                                    resetDragOffset(animated: true)
+                                }
+                            }
                         }
+                    } else {
+                        resetDragOffset(animated: true)
                     }
                 }
+        }
+
+        private func resetDragOffset(animated: Bool) {
+            isDragging = false
+            if animated {
+                withAnimation(.interactiveSpring(response: 0.22, dampingFraction: 0.9)) {
+                    dragOffset = .zero
+                }
+            } else {
+                dragOffset = .zero
+            }
+        }
+
+        private func finishDismissAfterDrag() {
+            guard !isCompletingDismiss else { return }
+            isCompletingDismiss = true
+            isDragging = false
+
+            Task { @MainActor in
+                let slideDistance = UIScreen.main.bounds.height
+                withAnimation(.easeOut(duration: 0.16)) {
+                    dragOffset = CGSize(width: 0, height: slideDistance)
+                }
+
+                try? await Task.sleep(nanoseconds: 160_000_000)
+                dismiss()
+            }
         }
 
         private func pushToNextVideoInCurrentTweet(_ nextVideoIndex: Int) {
@@ -456,12 +514,20 @@ struct MediaBrowserView: View {
 
             Task { @MainActor in
                 suppressTabPagingAnimation = true
-                isTransitioning = true
+                isCompletingVerticalAdvance = true
                 showControls = false
                 let slideDistance = UIScreen.main.bounds.height
+
+                withAnimation(.easeOut(duration: 0.14)) {
+                    dragOffset = CGSize(width: 0, height: -slideDistance)
+                }
+
+                try? await Task.sleep(nanoseconds: 140_000_000)
+                isTransitioning = true
                 transitionOffset = slideDistance
 
                 withAnimation(.none) {
+                    resetDragOffset(animated: false)
                     currentIndex = nextVideoIndex
                     previousIndex = nextVideoIndex
                 }
@@ -474,6 +540,7 @@ struct MediaBrowserView: View {
 
                 try? await Task.sleep(nanoseconds: 220_000_000)
                 isTransitioning = false
+                isCompletingVerticalAdvance = false
                 suppressTabPagingAnimation = false
             }
         }
@@ -1058,7 +1125,7 @@ struct SingletonVideoPlayerView: View {
                 // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
                 if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
                     // Show player
-                    SimplerAVPlayerViewController(player: player, mid: mid)
+                    FullscreenPlayerLayerView(player: player, mid: mid)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                         .simultaneousGesture(
@@ -1361,6 +1428,32 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
                     }
                 }
             }
+        }
+    }
+}
+
+private struct FullscreenPlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer
+    let mid: String
+
+    func makeUIView(context: Context) -> LightweightVideoPlayerView {
+        let view = LightweightVideoPlayerView()
+        view.backgroundColor = .black
+        view.setVideoGravity(.resizeAspect)
+        view.setPlayer(player)
+        markSurfaceReady(for: player, mid: mid)
+        return view
+    }
+
+    func updateUIView(_ uiView: LightweightVideoPlayerView, context: Context) {
+        uiView.setVideoGravity(.resizeAspect)
+        uiView.setPlayer(player)
+        markSurfaceReady(for: player, mid: mid)
+    }
+
+    private func markSurfaceReady(for player: AVPlayer, mid: String) {
+        DispatchQueue.main.async {
+            FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
         }
     }
 }
