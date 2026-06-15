@@ -351,6 +351,30 @@ public class LocalHTTPServer: @unchecked Sendable {
         return isRunning ? port : nil
     }
 
+    public func isHealthyAsync(timeout: TimeInterval = 0.75) async -> Bool {
+        guard let port = currentPort,
+              let url = URL(string: "\(Constants.LOCAL_HOST):\(port)/health") else {
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = timeout
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        do {
+            let (_, response) = try await session.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
     // DEDUPLICATION: Track active downloads to prevent duplicates
     private let activeDownloadsActor = ActiveDownloadsActor()
 

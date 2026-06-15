@@ -403,7 +403,35 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private var canDriveForegroundPlayback: Bool {
-        UIApplication.shared.applicationState == .active
+        UIApplication.shared.applicationState == .active && AppDelegate.isVideoInfrastructureReady
+    }
+
+    @discardableResult
+    private func deferVideoWorkUntilInfrastructureReady(reason: String, wantsPlayback: Bool? = nil) -> Bool {
+        guard !AppDelegate.isVideoInfrastructureReady else { return false }
+
+        if let wantsPlayback {
+            coordinatorWantsToPlay = wantsPlayback
+        }
+
+        setupPlayerTask?.cancel()
+        setupPlayerTask = nil
+        playerAcquireDebounceTask?.cancel()
+        playerAcquireDebounceTask = nil
+        retryButton.isHidden = true
+        replayButton.isHidden = true
+
+        if isVisible, isVideoAttachment {
+            restoreCachedPosterForFailureIfNeeded()
+            if videoCellState == .failed || videoCellState == .noContent {
+                transitionTo(imageView.image != nil ? .thumbnail : .playerLoading)
+            } else if coordinatorWantsToPlay && imageView.image == nil {
+                loadingSpinner.startAnimating()
+            }
+        }
+
+        logVerbose("⏳ \(reason): waiting for video infrastructure")
+        return true
     }
 
     private func logVerbose(_ message: String) {
@@ -1028,6 +1056,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               player == nil,
               setupPlayerTask == nil,
               playerAcquireDebounceTask == nil else { return }
+        guard !deferVideoWorkUntilInfrastructureReady(reason: "schedulePlayerAcquire") else { return }
 
         if let att = attachment,
            (VideoStateCache.shared.getCachedState(for: att.mid) != nil
@@ -1060,6 +1089,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func acquirePlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
         guard isVisible else { return }
+        guard !deferVideoWorkUntilInfrastructureReady(reason: "acquirePlayer") else { return }
 
         let mid = attachment.mid
 
@@ -2273,6 +2303,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         runFullSetup: Bool = false,
         wantsPlayback: Bool = true
     ) -> Bool {
+        guard !deferVideoWorkUntilInfrastructureReady(reason: reason, wantsPlayback: wantsPlayback) else {
+            return true
+        }
         guard let context = currentVideoContext(requireLoadableVisibleVideo: requireLoadableVisibleVideo) else {
             return false
         }
@@ -2646,7 +2679,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// Start playback if coordinator wants to play and player isn't already playing.
     private func requestPlaybackStartIfNeeded(_ player: AVPlayer, reason: String) {
         guard canDriveForegroundPlayback else {
-            logVerbose("⏸️ requestPlayback(\(reason)): skipped, app not active")
+            _ = deferVideoWorkUntilInfrastructureReady(reason: "requestPlayback.\(reason)", wantsPlayback: true)
+            logVerbose("⏸️ requestPlayback(\(reason)): skipped, app/infrastructure not ready")
             return
         }
         guard coordinatorWantsToPlay else {
@@ -2748,7 +2782,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func actuallyStartPlayback(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
         guard canDriveForegroundPlayback else {
-            logVerbose("⏸️ actuallyStartPlayback skipped, app not active")
+            _ = deferVideoWorkUntilInfrastructureReady(reason: "actuallyStartPlayback", wantsPlayback: true)
+            logVerbose("⏸️ actuallyStartPlayback skipped, app/infrastructure not ready")
             return
         }
 
@@ -3784,6 +3819,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// shows retry button if visible and coordinator wants play, otherwise goes idle.
     private func handleVideoLoadFailure(reason: String) {
         guard isVideoAttachment else { return }
+        guard !deferVideoWorkUntilInfrastructureReady(reason: "loadFailure.\(reason)", wantsPlayback: coordinatorWantsToPlay) else {
+            return
+        }
 
         // Capture frame BEFORE cleanup — for partially-played videos,
         // this preserves the last rendered frame as thumbnail behind the retry button.
@@ -4200,6 +4238,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// buffering timeout in isActuallyPlaying.
     var isLoadingForCoordinator: Bool {
         guard coordinatorWantsToPlay else { return false }
+        if !AppDelegate.isVideoInfrastructureReady {
+            return true
+        }
         if setupPlayerTask != nil || playerAcquireDebounceTask != nil {
             return true
         }

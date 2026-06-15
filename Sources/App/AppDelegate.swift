@@ -288,100 +288,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 let timeInactive = Date().timeIntervalSince(resignActiveDate)
                 print("[AppDelegate] Screen lock recovery detected - inactive for \(Int(timeInactive))s")
                 
-                // Use same time-based threshold as background recovery (5 minutes)
-                if timeInactive > 300 {
-                    // LONG screen lock (>5min) - full restart needed
-                    print("[AppDelegate] Long screen lock (\(Int(timeInactive))s) - forcing full restart")
-                    
-                    // Check if already restarting
-                    if isRestartingInfrastructure {
-                        print("[AppDelegate] Infrastructure restart already in progress, skipping")
-                        return
-                    }
-                    
-                    AppDelegate.isVideoInfrastructureReady = false
-                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                    
-                    // Show loading indicator (non-blocking - allows user to scroll)
-                    showLoadingOverlay()
-                    
-                    // Restart infrastructure asynchronously (non-blocking)
-                    infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                        // CRITICAL: Refresh appUser IP FIRST for long screen locks
-                        // Network connections may have changed during extended lock
-                        print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
-                        await self.refreshAppUserIP()
-                        print("[AppDelegate] ✅ AppUser IP refresh complete")
-                        
-                        // Restart server in background
-                        let didRestart = await self.restartVideoInfrastructureAsync()
-                        
-                        // Hide loading indicator and notify visible videos to reload
-                        await MainActor.run {
-                            self.hideLoadingOverlay()
-                            AppDelegate.isVideoInfrastructureReady = didRestart
-                            if didRestart {
-                                // Post notification for visible videos to reload
-                                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                                print("[AppDelegate] Server restarted after long screen lock - posted reloadVisibleVideosOnly notification")
-                            } else {
-                                print("[AppDelegate] Server restart failed after long screen lock - visible videos will wait for next retry")
-                            }
-                        }
-                    }
-                } else {
-                    // SHORT screen lock (<5min) - gentle refresh, keep players intact
-                    print("[AppDelegate] Short screen lock (\(Int(timeInactive))s) - gentle refresh (keeping players)")
-                    
-                    if LocalHTTPServer.shared.isRunning {
-                        // Server still alive - just refresh, don't clear players
-                        SharedAssetCache.shared.refreshVideoLayersForShortBackground()
-                        print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
-                        // Post notification for visible videos to check health (they skip if seeking)
-                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                        print("[AppDelegate] Short screen lock recovery - posted reloadVisibleVideosOnly notification")
-                    } else {
-                        // Server killed during screen lock - restart it
-                        print("[AppDelegate] Server killed during screen lock, restarting...")
-                        
-                        // Check if already restarting
-                        if isRestartingInfrastructure {
-                            print("[AppDelegate] Infrastructure restart already in progress, skipping")
-                            return
-                        }
-                        
-                        AppDelegate.isVideoInfrastructureReady = false
-                        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                        
-                        // Show loading indicator (non-blocking)
-                        showLoadingOverlay()
-                        
-                        // Restart server asynchronously (non-blocking)
-                        infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                            // CRITICAL: Refresh appUser IP FIRST before restarting server
-                            // This ensures videos load with fresh IPs after server restart
-                            print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
-                            await self.refreshAppUserIP()
-                            print("[AppDelegate] ✅ AppUser IP refresh complete")
-                            
-                            // Restart server in background (async - doesn't block!)
-                            await LocalHTTPServer.shared.startAndWaitAsync()
-                            let didStart = LocalHTTPServer.shared.isRunning
-
-                            // Hide loading indicator and notify visible videos to reload
-                            await MainActor.run {
-                                self.hideLoadingOverlay()
-                                AppDelegate.isVideoInfrastructureReady = didStart
-                                if didStart {
-                                    // Post notification for visible videos to reload
-                                    NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                                    print("[AppDelegate] Server restarted after screen lock - posted reloadVisibleVideosOnly notification")
-                                } else {
-                                    print("[AppDelegate] Server restart failed after screen lock - visible videos will wait for next retry")
-                                }
-                            }
-                        }
-                    }
+                AppDelegate.isVideoInfrastructureReady = false
+                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                    let kind = timeInactive > 300 ? "long" : "short"
+                    await self.recoverVideoInfrastructureAfterForeground(reason: "\(kind) screen lock \(Int(timeInactive))s")
                 }
             }
         }
@@ -494,12 +404,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             }
 
             if timeInBackground < 300 {
-                print("⚡ [AppDelegate] Fast recovery (\(timeInBackground)s) — server & players preserved")
-
-                AppDelegate.isVideoInfrastructureReady = true
-
-                // Notify coordinator to resume playback on visible videos
-                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                print("⚡ [AppDelegate] Fast recovery (\(timeInBackground)s) — checking proxy health")
+                AppDelegate.isVideoInfrastructureReady = false
+                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                    await self.recoverVideoInfrastructureAfterForeground(reason: "fast foreground \(timeInBackground)s")
+                }
 
                 // Refresh IP and check messages in background (non-blocking)
                 Task {
@@ -527,99 +436,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             // CRITICAL: Use DURATION-based recovery, not isRunning check
             // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
             if timeInBackground > 300 {  // 5 minutes
-                // LONG background - ALWAYS do full restart
-                // Even if isRunning=true, the listener may be suspended and unresponsive
-                print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
-
-                // Check if already restarting
-                if isRestartingInfrastructure {
-                    print("[AppDelegate] Infrastructure restart already in progress, skipping")
-                    return
-                }
-
-                // Show loading indicator (non-blocking - allows user to scroll)
-                showLoadingOverlay()
+                print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - checking proxy health")
                 AppDelegate.isVideoInfrastructureReady = false
-
-                // Restart infrastructure asynchronously (non-blocking)
-                // Videos will show loading state until server is ready, but UI remains interactive
                 infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                    // CRITICAL: Refresh appUser IP FIRST before restarting server
-                    // This ensures videos load with fresh IPs, not stale ones that would timeout
-                    print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
-                    await self.refreshAppUserIP()
-                    print("[AppDelegate] ✅ AppUser IP refresh complete")
-
-                    // Restart server in background
-                    let didRestart = await self.restartVideoInfrastructureAsync()
-
-                    // Hide loading indicator and notify visible videos to reload
-                    await MainActor.run {
-                        self.hideLoadingOverlay()
-                        AppDelegate.isVideoInfrastructureReady = didRestart
-
-                        if didRestart {
-                            // Post notification for visible videos to reload
-                            // Coordinator will intelligently decide whether to preserve or reset state
-                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                            print("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
-                        } else {
-                            print("❌ [AppDelegate] Server restart failed - visible videos will wait for next retry")
-                        }
-                    }
+                    await self.recoverVideoInfrastructureAfterForeground(reason: "long foreground \(Int(timeInBackground))s")
                 }
             } else {
                 // SHORT background (<5min) but aggressive cleanup happened
                 print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - recovery after aggressive cleanup")
 
-                Task.detached(priority: .userInitiated) {
-                    print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
-                    await self.refreshAppUserIP()
-                    print("[AppDelegate] ✅ AppUser IP refresh complete")
-
-                    // Server was stopped by background memory release - restart it
-                    let wasServerRunning = LocalHTTPServer.shared.isRunning
-                    let oldPort = LocalHTTPServer.shared.currentPort
-
-                    if !wasServerRunning {
-                        print("⚠️ [AppDelegate] Server not running, restarting...")
-
-                        await MainActor.run {
-                            AppDelegate.isVideoInfrastructureReady = false
-                            SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                        }
-
-                        await LocalHTTPServer.shared.startAndWaitAsync()
-                        let didStart = LocalHTTPServer.shared.isRunning
-
-                        let newPort = LocalHTTPServer.shared.currentPort
-                        if didStart {
-                            print("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
-                        } else {
-                            print("❌ [AppDelegate] Server restart failed - old port \(oldPort ?? 0), current port \(newPort ?? 0)")
-                        }
-
-                        await MainActor.run {
-                            AppDelegate.isVideoInfrastructureReady = didStart
-                            if didStart {
-                                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                                print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
-                            } else {
-                                print("[AppDelegate] Skipped reloadVisibleVideosOnly because server is not ready")
-                            }
-                        }
-                    } else {
-                        print("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
-
-                        await MainActor.run {
-                            SharedAssetCache.shared.refreshVideoLayersForShortBackground()
-
-                            print("✅ [AppDelegate] Short background recovery complete - players preserved")
-
-                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                            print("[AppDelegate] Posted reloadVisibleVideosOnly for stale player check")
-                        }
-                    }
+                AppDelegate.isVideoInfrastructureReady = false
+                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                    await self.recoverVideoInfrastructureAfterForeground(reason: "short foreground after cleanup \(Int(timeInBackground))s")
                 }
             }
         } else {
@@ -689,6 +517,49 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         } catch {
             print("[AppDelegate] ⚠️ Failed to refresh appUser: \(error)")
             // Non-fatal - we'll continue with cached data and retry on next API call
+        }
+    }
+
+    private func recoverVideoInfrastructureAfterForeground(reason: String) async {
+        guard !Task.isCancelled else { return }
+
+        let isProxyHealthy = await LocalHTTPServer.shared.isHealthyAsync()
+        if isProxyHealthy {
+            await MainActor.run {
+                AppDelegate.isVideoInfrastructureReady = true
+                SharedAssetCache.shared.refreshVideoLayersForShortBackground()
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                print("✅ [AppDelegate] Proxy health OK after \(reason) - posted reloadVisibleVideosOnly")
+            }
+            return
+        }
+
+        guard !isRestartingInfrastructure else {
+            print("[AppDelegate] Proxy health failed after \(reason), but infrastructure restart is already in progress")
+            return
+        }
+
+        print("⚠️ [AppDelegate] Proxy health failed after \(reason) - restarting video infrastructure")
+        await MainActor.run {
+            AppDelegate.isVideoInfrastructureReady = false
+            showLoadingOverlay()
+        }
+
+        print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+        await refreshAppUserIP()
+        print("[AppDelegate] ✅ AppUser IP refresh complete")
+
+        let didRestart = await restartVideoInfrastructureAsync()
+
+        await MainActor.run {
+            hideLoadingOverlay()
+            AppDelegate.isVideoInfrastructureReady = didRestart
+            if didRestart {
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                print("✅ [AppDelegate] Proxy restarted after \(reason) - posted reloadVisibleVideosOnly")
+            } else {
+                print("❌ [AppDelegate] Proxy restart failed after \(reason) - visible videos will wait for next retry")
+            }
         }
     }
     
