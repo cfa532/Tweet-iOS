@@ -4009,6 +4009,18 @@ final class HproseInstance: ObservableObject {
                 let cloudPort = appUser.cloudDrivePort
                 guard cloudPort > 0 else {
                     print("⚠️ [VIDEO UPLOAD] No cloud drive configured, falling back to progressive video")
+                    await MainActor.run {
+                        NotificationCenter.default.post(
+                            name: .videoUploadFormatWarning,
+                            object: nil,
+                            userInfo: [
+                                "message": NSLocalizedString(
+                                    "Cloud drive is not configured. This video will be uploaded as a regular progressive video.",
+                                    comment: "Warning shown when HLS upload falls back to progressive video"
+                                )
+                            ]
+                        )
+                    }
                     progressCallback?("Uploading video...", 50)
                     let result = try await uploadRegularFile(
                         data: videoData,

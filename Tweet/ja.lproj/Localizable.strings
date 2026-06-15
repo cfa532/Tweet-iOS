@@ -582,3 +582,4 @@
 "Tweet Limit Reached" = "ツイート制限に達しました";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "これはWeb3ツイートアプリです。善意でホストされているツイートの最大数に達しました。独自のノードを設定するか、友人に今後のツイートをホストしてもらってください。";
 "Learn More" = "詳細を見る";
+"Cloud drive is not configured. This video will be uploaded as a regular progressive video." = "クラウドドライブが設定されていません。この動画は通常のプログレッシブ動画としてアップロードされます。";

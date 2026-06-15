@@ -137,6 +137,9 @@ extension Notification.Name {
     /// Posted when audio playback cannot start because the resource is unavailable.
     /// userInfo: ["message": String]
     static let audioPlaybackWarning = Notification.Name("AudioPlaybackWarning")
+    /// Posted when a video upload falls back from HLS to progressive format.
+    /// userInfo: ["message": String]
+    static let videoUploadFormatWarning = Notification.Name("VideoUploadFormatWarning")
 }
 
 /// Centralized overlay coverage state for the app.

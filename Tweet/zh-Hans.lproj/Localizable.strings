@@ -662,3 +662,4 @@
 "Tweet Limit Reached" = "已达推文限制";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "这是一个Web3推文应用。您已达到免费托管推文的最大数量。请设置您自己的节点或请朋友托管您未来的推文。";
 "Learn More" = "了解更多";
+"Cloud drive is not configured. This video will be uploaded as a regular progressive video." = "未配置云盘。本视频将以普通渐进式视频上传。";
