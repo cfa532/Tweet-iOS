@@ -301,6 +301,16 @@ struct MediaBrowserView: View {
                     loadSelectedVideoIfNeeded(reason: "contentAppear")
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    loadSelectedVideoIfNeeded(reason: "reloadVisibleVideosOnly")
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    loadSelectedVideoIfNeeded(reason: "didBecomeActive")
+                }
+            }
             .onDisappear {
                 isVisible = false
                 UIApplication.shared.isIdleTimerDisabled = false

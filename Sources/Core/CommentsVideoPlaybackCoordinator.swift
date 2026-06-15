@@ -127,6 +127,17 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         return allVideos
     }
 
+    /// Re-emit playback intent after foreground recovery. The player manager may
+    /// have dropped a broken AVPlayer while this coordinator still remembers the
+    /// same visible video as "current".
+    func refreshVisiblePlaybackAfterForeground(reason: String) {
+        guard isActive else { return }
+        print("📹 [CommentsVideoCoordinator] Foreground visibility refresh: \(reason)")
+        currentlyPlayingVideoId = nil
+        currentlyPlayingVideoInfo = nil
+        processVisibilityUpdate()
+    }
+
     /// Report that a comment video has become visible
     /// - Parameters:
     ///   - commentId: The comment's ID

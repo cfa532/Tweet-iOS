@@ -788,6 +788,25 @@ private struct DetailSingletonVideoPlayerView: View {
                 handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in
+            recoverVisibleVideoAfterForeground(reason: "videoInfrastructureRestarted")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in
+            recoverVisibleVideoAfterForeground(reason: "reloadVisibleVideosOnly")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            recoverVisibleVideoAfterForeground(reason: "didBecomeActive")
+        }
+    }
+
+    private func recoverVisibleVideoAfterForeground(reason: String) {
+        guard shouldLoad || manager.currentVideoMid == mid else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            guard shouldLoad || manager.currentVideoMid == mid else { return }
+            print("📱 [DetailSingletonVideoPlayerView] Foreground recovery reload \(mid) reason=\(reason)")
+            manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
+        }
     }
 
     @ViewBuilder
@@ -1065,6 +1084,17 @@ struct TweetDetailView: View {
             if let deletedTweetId = notification.userInfo?["tweetId"] as? String ?? notification.object as? String,
                deletedTweetId == displayTweet.mid {
                 dismiss()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in
+            commentsVideoCoordinator.refreshVisiblePlaybackAfterForeground(reason: "videoInfrastructureRestarted")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in
+            commentsVideoCoordinator.refreshVisiblePlaybackAfterForeground(reason: "reloadVisibleVideosOnly")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                commentsVideoCoordinator.refreshVisiblePlaybackAfterForeground(reason: "didBecomeActive")
             }
         }
         // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
