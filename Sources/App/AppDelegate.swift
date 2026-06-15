@@ -108,12 +108,31 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     static func lockOrientation(_ orientation: UIInterfaceOrientationMask) {
         orientationLock = orientation
+        refreshSupportedInterfaceOrientations(preferredOrientation: orientation)
         print("DEBUG: [AppDelegate] Locked orientation to: \(orientation)")
     }
     
     static func unlockOrientation() {
         orientationLock = .all
+        refreshSupportedInterfaceOrientations(preferredOrientation: .all)
         print("DEBUG: [AppDelegate] Unlocked orientation")
+    }
+
+    private static func refreshSupportedInterfaceOrientations(preferredOrientation: UIInterfaceOrientationMask) {
+        DispatchQueue.main.async {
+            UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .forEach { windowScene in
+                    windowScene.windows
+                        .first(where: { $0.isKeyWindow })?
+                        .rootViewController?
+                        .setNeedsUpdateOfSupportedInterfaceOrientations()
+
+                    windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: preferredOrientation)) { error in
+                        print("DEBUG: [AppDelegate] Orientation geometry update failed: \(error.localizedDescription)")
+                    }
+                }
+        }
     }
     
     // MARK: - Background Task Registration

@@ -139,6 +139,8 @@ struct MediaBrowserView: View {
                 }
             )
             .onAppear {
+                OrientationManager.shared.unlockOrientation()
+
                 // Activate manager first to register lifecycle observers
                 FullScreenVideoManager.shared.activateForFullscreen()
                 FullScreenVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
@@ -150,6 +152,8 @@ struct MediaBrowserView: View {
                 // without a pause/resume cycle.
             }
             .onDisappear {
+                OrientationManager.shared.lockToPortrait()
+
                 // Fullscreen owns its own AVPlayer, so dismissal must pause that player.
                 // Feed/detail can reuse cached data and their saved position independently.
                 FullScreenVideoManager.shared.deactivate(transferPlaybackToUnderlyingSurface: false)
@@ -1049,7 +1053,7 @@ struct SingletonVideoPlayerView: View {
                 // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
                 if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
                     // Show player
-                    SimplerAVPlayerViewController(player: player, mid: mid, aspectRatio: aspectRatio)
+                    SimplerAVPlayerViewController(player: player, mid: mid)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                         .simultaneousGesture(
@@ -1246,7 +1250,6 @@ struct SingletonVideoPlayerView: View {
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     let player: AVPlayer
     let mid: String
-    let aspectRatio: Float?
     
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -1288,11 +1291,6 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             Task { @MainActor in
                 FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
             }
-        }
-        
-        // Rotate landscape videos (aspectRatio > 1) by -90 degrees
-        if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
-            controller.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
         }
         
         // Setup observer to auto-play when ready
@@ -1340,17 +1338,6 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             }
         }
 
-        // Update rotation based on aspect ratio
-        if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
-            if uiViewController.view.transform == .identity {
-                uiViewController.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
-            }
-        } else {
-            if uiViewController.view.transform != .identity {
-                uiViewController.view.transform = .identity
-            }
-        }
-        
         if uiViewController.player !== player {
             uiViewController.player = player
             
