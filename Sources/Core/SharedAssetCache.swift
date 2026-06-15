@@ -756,7 +756,7 @@ class SharedAssetCache: ObservableObject {
                 try Task.checkCancellation()
 
                 // For HLS videos, use CachingPlayerItem which handles LocalHTTPServer
-                LocalHTTPServer.shared.start()
+                try await ensureLocalHTTPServerReady(reason: "HLS asset", mediaID: mediaID)
 
                 let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
                 asset = cachingPlayerItem.asset
@@ -779,7 +779,7 @@ class SharedAssetCache: ObservableObject {
                 try Task.checkCancellation()
                 
                 // For progressive videos, use LocalHTTPServer for IP-independent caching
-                LocalHTTPServer.shared.start()
+                try await ensureLocalHTTPServerReady(reason: "progressive asset", mediaID: mediaID)
                 
                 // Remove query parameters for cleaner URL
                 var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -1457,6 +1457,20 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
+    private func ensureLocalHTTPServerReady(reason: String, mediaID: String) async throws {
+        let shortID = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+        let isReady = await LocalHTTPServer.shared.ensureReadyForPlaybackAsync(
+            reason: "\(reason) \(shortID)"
+        )
+        guard isReady else {
+            throw NSError(
+                domain: "SharedAssetCache",
+                code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "Local video proxy is not ready"]
+            )
+        }
+    }
+
     /// Create progressive video player (no retry logic, called by retry wrapper)
     private func createProgressivePlayer(for url: URL, mediaID: String) async throws -> AVPlayer {
         // Remove query parameters
@@ -1464,8 +1478,7 @@ class SharedAssetCache: ObservableObject {
         components?.query = nil
         let cleanURL = components?.url ?? url
         
-        // Start LocalHTTPServer
-        LocalHTTPServer.shared.start()
+        try await ensureLocalHTTPServerReady(reason: "progressive player", mediaID: mediaID)
         
         // Register real URL and get localhost proxy URL
         let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
@@ -1684,8 +1697,7 @@ class SharedAssetCache: ObservableObject {
             }
         }
         
-        // Start LocalHTTPServer for HLS video serving
-        LocalHTTPServer.shared.start()
+        try await ensureLocalHTTPServerReady(reason: "HLS player", mediaID: mediaID)
         
         // Create CachingPlayerItem using HLS initializer (handles LocalHTTPServer internally)
         let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
@@ -1763,7 +1775,7 @@ class SharedAssetCache: ObservableObject {
             // Check cancellation after async operation
             try Task.checkCancellation()
 
-            LocalHTTPServer.shared.start()
+            try await ensureLocalHTTPServerReady(reason: "HLS player item", mediaID: mediaID)
             let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
             applyFeedVideoDecodeLimit(to: cachingPlayerItem)
             
@@ -1777,7 +1789,7 @@ class SharedAssetCache: ObservableObject {
             try Task.checkCancellation()
             
             // Create fresh progressive video player item using LocalHTTPServer for IP-independent caching
-            LocalHTTPServer.shared.start()
+            try await ensureLocalHTTPServerReady(reason: "progressive player item", mediaID: mediaID)
             
             // Register with LocalHTTPServer (handles mediaID-based caching and IP changes)
             let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: url)

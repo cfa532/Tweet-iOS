@@ -2,6 +2,25 @@ import Foundation
 import Network
 import UIKit
 
+private actor LocalHTTPServerReadinessRecovery {
+    private var task: Task<Bool, Never>?
+
+    func run(_ operation: @escaping @Sendable () async -> Bool) async -> Bool {
+        if let task {
+            return await task.value
+        }
+
+        let newTask = Task.detached(priority: .userInitiated) {
+            await operation()
+        }
+        task = newTask
+
+        let result = await newTask.value
+        task = nil
+        return result
+    }
+}
+
 // MARK: - Streaming Download Delegate
 private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     private let connection: NWConnection
@@ -375,8 +394,27 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
 
+    /// Ensure the localhost proxy is accepting requests before creating AVPlayerItems
+    /// that point at it. After iOS background suspension, `isRunning` can briefly be
+    /// stale while the NWListener is dead or rebinding; a real health check closes that
+    /// race so visible videos do not attach to a black, permanently waiting player.
+    public func ensureReadyForPlaybackAsync(reason: String, timeout: TimeInterval = 0.75) async -> Bool {
+        if await isHealthyAsync(timeout: timeout) {
+            return true
+        }
+
+        return await readinessRecovery.run { [weak self] in
+            guard let self else { return false }
+            print("[LocalHTTPServer] ⚠️ Proxy not healthy before \(reason); restarting before player creation")
+            let didRestart = await self.forceRestartAndWaitAsync()
+            guard didRestart else { return false }
+            return await self.isHealthyAsync(timeout: timeout)
+        }
+    }
+
     // DEDUPLICATION: Track active downloads to prevent duplicates
     private let activeDownloadsActor = ActiveDownloadsActor()
+    private let readinessRecovery = LocalHTTPServerReadinessRecovery()
 
     // Streaming download sessions
     private var streamingSessions: [String: URLSession] = [:]
