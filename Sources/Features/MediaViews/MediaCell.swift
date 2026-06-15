@@ -841,8 +841,9 @@ struct TimeRemainingDisplay: View {
 }
 
 // MARK: - VideoTimerOverlay
-struct VideoTimerOverlay: View, SharedDisplayLinkObserver {
+struct VideoTimerOverlay: View {
     let videoMid: String
+    @State private var displayLinkObserverID = UUID()
     @State private var timeRemaining: String = "0:00"
     @State private var isVisible: Bool = true
     @State private var hideTimer: Timer?
@@ -857,14 +858,16 @@ struct VideoTimerOverlay: View, SharedDisplayLinkObserver {
         .onAppear {
             isVisible = true
             // PHASE 2: Use centralized display link instead of individual timer
-            SharedDisplayLinkManager.shared.addObserver(self)
+            SharedDisplayLinkManager.shared.addObserver(id: displayLinkObserverID) { _ in
+                Self.requestUpdate(for: videoMid)
+            }
             startHideTimer()
             // Request immediate update
             requestUpdate()
         }
         .onDisappear {
             // PHASE 2: Remove from centralized display link
-            SharedDisplayLinkManager.shared.removeObserver(self)
+            SharedDisplayLinkManager.shared.removeObserver(id: displayLinkObserverID)
             hideTimer?.invalidate()
             hideTimer = nil
         }
@@ -876,12 +879,6 @@ struct VideoTimerOverlay: View, SharedDisplayLinkObserver {
             }
             timeRemaining = time
         }
-    }
-
-    // PHASE 2: Centralized timer callback - called by SharedDisplayLinkManager
-    func displayLinkDidFire(_ link: CADisplayLink) {
-        // Request update from SimpleVideoPlayer at 30fps (every display link frame)
-        requestUpdate()
     }
 
     private func startHideTimer() {
@@ -900,6 +897,10 @@ struct VideoTimerOverlay: View, SharedDisplayLinkObserver {
     }
 
     private func requestUpdate() {
+        Self.requestUpdate(for: videoMid)
+    }
+
+    private static func requestUpdate(for videoMid: String) {
         NotificationCenter.default.post(
             name: .requestVideoTimerUpdate,
             object: nil,

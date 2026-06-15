@@ -38,8 +38,9 @@ class SharedDisplayLinkManager {
     /// The single shared display link
     private var displayLink: CADisplayLink?
 
-    /// Registered observers for display link updates
-    private var observers: [SharedDisplayLinkObserver] = []
+    /// Registered callbacks for display link updates.
+    /// SwiftUI views are value types, so removing them by object identity is not reliable.
+    private var observers: [UUID: (CADisplayLink) -> Void] = [:]
 
     /// Is the display link currently running
     private(set) var isRunning = false
@@ -79,20 +80,21 @@ class SharedDisplayLinkManager {
         print("⏱️ [DISPLAY LINK] Stopped")
     }
 
-    /// Add an observer to receive display link updates
-    func addObserver(_ observer: SharedDisplayLinkObserver) {
-        observers.append(observer)
+    /// Add an observer callback to receive display link updates.
+    func addObserver(id: UUID, callback: @escaping (CADisplayLink) -> Void) {
+        let shouldStart = observers.isEmpty
+        observers[id] = callback
         print("⏱️ [DISPLAY LINK] Added observer, total: \(observers.count)")
 
         // Start display link if this is the first observer
-        if observers.count == 1 {
+        if shouldStart {
             start()
         }
     }
 
     /// Remove an observer
-    func removeObserver(_ observer: SharedDisplayLinkObserver) {
-        observers.removeAll { $0 as AnyObject === observer as AnyObject }
+    func removeObserver(id: UUID) {
+        observers[id] = nil
         print("⏱️ [DISPLAY LINK] Removed observer, total: \(observers.count)")
 
         // Stop display link if no observers remain
@@ -110,16 +112,10 @@ class SharedDisplayLinkManager {
 
     @objc private func displayLinkFired(_ link: CADisplayLink) {
         // Notify all observers
-        for observer in observers {
-            observer.displayLinkDidFire(link)
+        for callback in observers.values {
+            callback(link)
         }
     }
-}
-
-/// Protocol for objects that want to observe display link updates
-@MainActor
-protocol SharedDisplayLinkObserver {
-    func displayLinkDidFire(_ link: CADisplayLink)
 }
 
 // MARK: - Shared Video Player Manager

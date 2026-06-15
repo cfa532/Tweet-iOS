@@ -202,7 +202,6 @@ class TweetTableViewController: UITableViewController {
 
             guard !NavigationStateManager.shared.isDetailViewActive else {
                 self.pendingFeedPlaybackResumeReason = reason
-                self.scheduleFeedPlaybackResume(after: 0.08, reason: reason)
                 return
             }
 
@@ -218,7 +217,6 @@ class TweetTableViewController: UITableViewController {
     private func performFeedPlaybackResume(reason: String) {
         guard !NavigationStateManager.shared.isDetailViewActive else {
             pendingFeedPlaybackResumeReason = reason
-            scheduleFeedPlaybackResume(after: 0.08, reason: reason)
             return
         }
 
