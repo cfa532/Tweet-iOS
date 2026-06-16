@@ -593,6 +593,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     }
     
     func clearBrokenPlayer() {
+        if let videoMid = currentVideoMid {
+            // Long-background recovery can dismiss fullscreen before the feed has a
+            // chance to capture its own frame. Preserve the fullscreen frame first.
+            captureTransitionPoster(from: singletonPlayer, mediaID: videoMid)
+            SharedAssetCache.shared.protectBackgroundPoster(for: videoMid)
+        }
+
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
@@ -2579,6 +2586,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         if let player = currentPlayer,
            let videoMid = currentVideoMid {
             preserveDetailFrameToCache(player: player, mediaID: videoMid)
+            SharedAssetCache.shared.protectBackgroundPoster(for: videoMid)
         }
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
@@ -4259,6 +4267,17 @@ class ChatVideoManager: ObservableObject {
                 }
             }
         )
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .reloadVisibleVideosOnly,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.recoverVisibleVideosAfterInfrastructureReady(reason: "reloadVisibleVideosOnly")
+                }
+            }
+        )
     }
 
     deinit {
@@ -4416,8 +4435,12 @@ class ChatVideoManager: ObservableObject {
         isChatScreenVisible: Bool,
         receiptId: String
     ) async -> AVPlayer? {
-        if let existingPlayer = chatVideoPlayers[messageId] {
+        if let existingPlayer = chatVideoPlayers[messageId],
+           !isPlayerBroken(existingPlayer) {
             return existingPlayer
+        } else if let existingPlayer = chatVideoPlayers.removeValue(forKey: messageId) {
+            existingPlayer.pause()
+            existingPlayer.replaceCurrentItem(with: nil)
         }
 
         // Get the base URL for the video
@@ -4447,7 +4470,9 @@ class ChatVideoManager: ObservableObject {
 
     /// Remove a video player for a message
     func removeVideoPlayer(messageId: String) {
-        chatVideoPlayers.removeValue(forKey: messageId)
+        if let player = chatVideoPlayers.removeValue(forKey: messageId) {
+            player.pause()
+        }
     }
 
     /// Clean up all video players for a chat session
@@ -4463,6 +4488,47 @@ class ChatVideoManager: ObservableObject {
     }
 
     // MARK: - Private Methods
+
+    private func isPlayerBroken(_ player: AVPlayer) -> Bool {
+        guard let item = player.currentItem else { return true }
+        if item.status == .failed || item.error != nil || player.error != nil {
+            return true
+        }
+        let seconds = player.currentTime().seconds
+        return seconds.isNaN || seconds == .infinity || seconds == -.infinity
+    }
+
+    private func recoverVisibleVideosAfterInfrastructureReady(reason: String) {
+        guard AppDelegate.isVideoInfrastructureReady else { return }
+
+        var recoveredCount = 0
+        for (receiptId, sessionState) in activeChatSessions where sessionState.isChatVisible {
+            let mids = visibleVideos[receiptId] ?? []
+            guard !mids.isEmpty else { continue }
+
+            var updatedState = sessionState
+            updatedState.playingVideos.formUnion(mids)
+            updatedState.pausedVideos.subtract(mids)
+            activeChatSessions[receiptId] = updatedState
+
+            for mid in mids {
+                recoveredCount += 1
+                NotificationCenter.default.post(
+                    name: .chatVideoShouldRecover,
+                    object: nil,
+                    userInfo: [
+                        "videoMid": mid,
+                        "receiptId": receiptId,
+                        "reason": reason
+                    ]
+                )
+            }
+        }
+
+        if recoveredCount > 0 {
+            print("DEBUG: [ChatVideoManager] Requested recovery for \(recoveredCount) visible chat video(s) after \(reason)")
+        }
+    }
 
     private func startVideo(mid: String, receiptId: String) {
         guard var sessionState = activeChatSessions[receiptId] else { return }

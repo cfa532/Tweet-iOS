@@ -90,6 +90,9 @@ extension Notification.Name {
     static let chatMessageSendFailed = Notification.Name("ChatMessageSendFailed")
     /// Posted when a chat notification is tapped to open chat screen
     static let openChatFromNotification = Notification.Name("OpenChatFromNotification")
+    /// Posted when visible chat video views should recreate stale players after video infrastructure recovery.
+    /// userInfo: ["videoMid": String, "receiptId": String, "reason": String]
+    static let chatVideoShouldRecover = Notification.Name("ChatVideoShouldRecover")
     
     // MARK: - App Lifecycle
     /// Posted when the app becomes active (returns from background)

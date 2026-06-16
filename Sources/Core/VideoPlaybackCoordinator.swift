@@ -449,13 +449,12 @@ class VideoPlaybackCoordinator: ObservableObject {
 
                 guard !self.isPlaybackSuppressedByOverlay,
                       self.isFeedVisible,
-                      self.phase == .idle,
                       !self.visibleVideos.isEmpty,
                       let tableView = self.tableView,
                       tableView.window != nil else {
                     return
                 }
-                self.startPrimaryVideoPlayback()
+                self.recoverVisiblePlaybackAfterForeground(reason: "overlayDismiss")
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -1217,29 +1216,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         startPrimaryVideoPlayback()
     }
 
-    /// Re-issue play to the current primary video if it is still visible.
-    /// Used when returning to the feed (e.g. from user profile) so the video resumes instead of stopping.
-    /// Does nothing if there is no primary, primary is no longer visible, or delegate is missing.
+    /// Re-issue or rebuild playback for the visible primary when returning to the feed.
+    /// Used by older feed-appear hooks; delegates to the foreground recovery path so
+    /// stale primaryPlaying state cannot suppress player recreation.
     func requestResumePrimaryPlaybackIfVisible() {
-        guard !isPlaybackSuppressedByOverlay,
-              isFeedVisible else {
-            return
-        }
-
-        guard let primaryId = primaryVideoId,
-              let primary = visibleVideos.first(where: { $0.identifier == primaryId }),
-              isVideoOnScreen(primary),
-              let delegate = mediaCellDelegates[primaryId] else {
-            return
-        }
-        // When granular on-screen tracking is used, only resume if primary is actually on-screen.
-        if !onScreenMediaCells.isEmpty, !onScreenMediaCells.contains(primaryId) {
-            return
-        }
-        phase = .primaryPlaying
-        currentlyPlayingVideoIds = [primaryId]
-        LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
-        delegate.shouldPlayVideo(withMid: primary.videoMid)
+        recoverVisiblePlaybackAfterForeground(reason: "feedResume")
     }
 
     // MARK: - Background/Foreground Video Memory Management
@@ -1809,108 +1790,74 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
-    /// Handle foreground recovery - intelligently decide whether to preserve or reset state
-    /// Decision: Preserve if user didn't explicitly scroll away (flag set on background)
+    /// Handle foreground recovery after the local video infrastructure is ready.
+    /// The feed may return from detail/fullscreen with unchanged visibility but a
+    /// destroyed AVPlayer, so recovery must re-issue play even when phase says the
+    /// old primary is already playing.
     @objc private func handleForegroundRecovery(_ notification: Notification) {
+        shouldPreserveStateOnForeground = false
+        recoverVisiblePlaybackAfterForeground(reason: "reloadVisibleVideosOnly")
+    }
+
+    func recoverVisiblePlaybackAfterForeground(reason: String) {
         clearFinishedAutoplayGateForForeground()
-        
-        // CRITICAL: Use flag to track if user explicitly scrolled away
-        // Flag is set when app enters background (if playback was active)
-        // Flag is cleared only by explicit scroll (updateVisibleTweets)
-        // This distinguishes between background return (preserve) vs user scroll (reset)
-        let hasActiveState = phase != .idle
-        
-        let shouldPreserveState = hasActiveState && shouldPreserveStateOnForeground
-        
-        if shouldPreserveState {
-            // PRESERVE STATE: User didn't scroll away, just resume
-            
-            // Clear flag now that we've used it
-            shouldPreserveStateOnForeground = false
-            
-            if phase == .primaryPlaying, let primaryId = primaryVideoId {
-                // Resume primary video — match by full identifier (tweet id + video id + index) only.
-                if let primary = visibleVideos.first(where: { $0.identifier == primaryId }) {
-                    
-                    // CRITICAL: If primary is not the first visible video, restart from first
-                    // This ensures playback always starts from top when multiple videos are visible
-                    let primaryIndex = visibleVideos.firstIndex(where: { $0.identifier == primary.identifier }) ?? 0
-                    
-                    if primaryIndex > 0 && visibleVideos.count > 1 {
-                        // Primary is not first - restart from first video
-                        
-                        // CRITICAL: Clear stale coordinatorWantsToPlay flags from other videos
-                        // Send pause commands to all videos except the first one
-                        // PHASE 2: Pause non-primary videos directly (not managed by SharedVideoPlayerManager)
-                        for (index, video) in visibleVideos.enumerated() where index > 0 {
-                            if let delegate = mediaCellDelegates[video.identifier] {
-                                delegate.shouldPauseVideo(withMid: video.videoMid)
-                            }
-                        }
-                        
-                        let firstVideo = visibleVideos[0]
-                        primaryVideoId = firstVideo.identifier
-                        currentlyPlayingVideoIds = [firstVideo.identifier]
-                        LocalHTTPServer.shared.setPrimaryMediaID(firstVideo.videoMid)
 
-                        // Direct delegate call — no broadcast notification
-                        if let delegate = mediaCellDelegates[firstVideo.identifier] {
-                            delegate.shouldPlayVideo(withMid: firstVideo.videoMid)
-                        }
-                    } else {
-                        // Primary is first or only video - resume it
-                        primaryVideoId = primary.identifier
-                        currentlyPlayingVideoIds = [primary.identifier]
-                        LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
+        guard !isPlaybackSuppressedByOverlay,
+              isFeedVisible else {
+            return
+        }
 
-                        // Direct delegate call — no broadcast notification
-                        if let delegate = mediaCellDelegates[primary.identifier] {
-                            delegate.shouldPlayVideo(withMid: primary.videoMid)
-                        }
-                    }
-                } else {
-                    // Primary video no longer in list (scrolled out), restart playback
-                    phase = .idle
-                    primaryVideoId = nil
-                    currentlyPlayingVideoIds.removeAll()
-                    if !visibleVideos.isEmpty {
-                        startPrimaryVideoPlayback()
-                    }
-                }
-            }
-        } else {
-            // RESET STATE: User scrolled away or no active state
-            
-            // Clear flag
-            shouldPreserveStateOnForeground = false
-            
-            // Clear playing state
+        playbackDebounceTimer?.invalidate()
+        playbackDebounceTimer = nil
+        pendingPrimaryCandidate = nil
+
+        guard !visibleVideos.isEmpty else {
             currentlyPlayingVideoIds.removeAll()
             primaryVideoId = nil
             phase = .idle
-            
-            // Cancel all timers
-            playbackDebounceTimer?.invalidate()
-            playbackDebounceTimer = nil
-
-            cachedVisibilityRatios.removeAll()
-            
-            // If there are visible videos, restart playback
-            if !visibleVideos.isEmpty {
-                
-                // Small delay to ensure video infrastructure is ready
-                let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
-                    DispatchQueue.main.async {
-                        guard let self = self else { return }
-                        if self.phase == .idle && !self.visibleVideos.isEmpty {
-                            self.startPrimaryVideoPlayback()
-                        }
-                    }
-                }
-                RunLoop.main.add(timer, forMode: .common)
-                playbackDebounceTimer = timer
-            }
+            return
         }
+
+        let currentPrimary = primaryVideoId.flatMap { primaryId in
+            visibleVideos.first(where: { $0.identifier == primaryId })
+        }
+        let target: VideoPlaybackInfo
+        if let currentPrimary,
+           let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == currentPrimary.identifier }),
+           currentIndex == 0 || visibleVideos.count == 1 {
+            target = currentPrimary
+        } else {
+            target = visibleVideos[0]
+        }
+
+        if !onScreenMediaCells.isEmpty, !onScreenMediaCells.contains(target.identifier) {
+            phase = .idle
+            primaryVideoId = nil
+            currentlyPlayingVideoIds.removeAll()
+            startPrimaryVideoPlayback()
+            return
+        }
+
+        guard let delegate = mediaCellDelegates[target.identifier] else {
+            phase = .idle
+            primaryVideoId = nil
+            currentlyPlayingVideoIds.removeAll()
+            startPrimaryVideoPlayback()
+            return
+        }
+
+        for video in visibleVideos where video.identifier != target.identifier {
+            pauseVideo(video)
+        }
+
+        phase = .primaryPlaying
+        primaryVideoId = target.identifier
+        currentlyPlayingVideoIds = [target.identifier]
+        cachedVisibilityRatios[target.identifier] = 0.7
+        lastPrimarySwitchTime = Date()
+        LocalHTTPServer.shared.setPrimaryMediaID(target.videoMid)
+        delegate.shouldPlayVideo(withMid: target.videoMid)
+        refreshDirectionalPreloads(reason: "foreground recovery \(reason)", throttle: false)
     }
 
     /// Foreground return is a fresh autoplay decision for whatever is onscreen.

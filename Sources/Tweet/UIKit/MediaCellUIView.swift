@@ -2425,8 +2425,17 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if wantsPlayback {
             coordinatorWantsToPlay = true
         }
+        let restoredRecoveryPoster = restoreForegroundRecoveryPosterIfNeeded(reason: reason)
         if let transitionState {
-            transitionTo(transitionState)
+            let resolvedState: VideoCellState
+            if restoredRecoveryPoster, transitionState == .noContent {
+                resolvedState = wantsPlayback ? .playerLoading : .thumbnail
+            } else {
+                resolvedState = transitionState
+            }
+            transitionTo(resolvedState)
+        } else if restoredRecoveryPoster, wantsPlayback {
+            transitionTo(.playerLoading)
         }
         acquirePlayer(attachment: context.attachment, url: context.url, parentTweet: context.parentTweet)
         return true
@@ -2444,6 +2453,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
         replayButton.isHidden = true
+        restoreForegroundRecoveryPosterIfNeeded(reason: "coordinatorPlay")
 
         let returningPlayer: AVPlayer? = {
             if let player, isLiveSurfaceHandoff(player, mid: mid) {
@@ -3926,6 +3936,47 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
     }
 
+    @discardableResult
+    private func restoreForegroundRecoveryPosterIfNeeded(reason: String) -> Bool {
+        guard isVideoAttachment,
+              let mid = attachment?.mid else { return false }
+
+        if let player, isVisibleVideoFrameReady(player) {
+            return false
+        }
+
+        if videoThumbnailObserver == nil {
+            observeCachedVideoThumbnail(for: mid)
+        }
+
+        if imageView.image == nil,
+           let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+            imageView.image = cached
+        }
+
+        guard imageView.image != nil else {
+            requestFallbackVideoThumbnailIfNeeded(for: mid)
+            return false
+        }
+
+        // Detail/fullscreen can cover the feed during backgrounding, so the feed
+        // cell may miss prepareVideoForBackground(). Promote any cached poster into
+        // the protected foreground cover state before rebuilding AVPlayer.
+        isHoldingBackgroundVideoCover = true
+        backgroundVideoCoverMid = mid
+        SharedAssetCache.shared.protectBackgroundPoster(for: mid)
+
+        switch videoCellState {
+        case .noContent, .thumbnail:
+            transitionTo(.thumbnail)
+        case .playerLoading, .playerReady, .playing, .paused, .failed:
+            transitionTo(videoCellState)
+        }
+
+        logVerbose("🖼️ restored foreground recovery poster (\(reason))")
+        return true
+    }
+
     /// Central handler for all video loading failures. Preserves frame, cleans up player,
     /// shows retry button if visible and coordinator wants play, otherwise goes idle.
     private func handleVideoLoadFailure(reason: String) {
@@ -4300,6 +4351,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             attachSharedPlayerForHandoff(cachedPlayer, reason: "restoreVisibleLoadingState-\(reason)")
             activePlayer = cachedPlayer
         } else {
+            restoreForegroundRecoveryPosterIfNeeded(reason: "restoreVisibleLoadingState-\(reason)")
             return
         }
 
@@ -4501,6 +4553,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard isVideoAttachment else { return }
         guard let player else {
             if coordinatorWantsToPlay {
+                restoreForegroundRecoveryPosterIfNeeded(reason: "foreground-layer.missingPlayer")
                 _ = reacquirePlayerForCurrentVideo(reason: "foreground-layer.missingPlayer")
             }
             return

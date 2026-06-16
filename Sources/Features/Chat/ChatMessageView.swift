@@ -699,43 +699,8 @@ struct ChatVideoContainer: View {
                 .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
         )
         .onAppear {
-            // Load the player asynchronously without blocking
             if player == nil {
-                Task {
-                    // PERFORMANCE: Add 150ms delay to let scroll settle before loading video
-                    // This prevents video loading from competing with scroll rendering
-                    try? await Task.sleep(nanoseconds: 150_000_000) // 150ms delay
-                    
-                    // Check if still nil after delay (view might have disappeared)
-                    guard self.player == nil else { return }
-                    
-                    let loadedPlayer = await ChatVideoManager.shared.getOrCreateVideoPlayer(
-                        messageId: messageId,
-                        attachment: attachment,
-                        isFromCurrentUser: isFromCurrentUser,
-                        senderUser: senderUser,
-                        senderBaseUrl: senderBaseUrl,
-                        isChatScreenVisible: isChatScreenVisible,
-                        receiptId: receiptId
-                    )
-                    await MainActor.run {
-                        player = loadedPlayer
-                        // Check if player is already ready to play
-                        if let loadedPlayer, let playerItem = loadedPlayer.currentItem {
-                            setupPlayerPlaybackObserver(for: loadedPlayer)
-                            if playerItem.status == .readyToPlay {
-                                // Hide loading spinner immediately if already ready
-                                isLoading = isPlaying && loadedPlayer.timeControlStatus != .playing
-                            } else {
-                                // Observe player item status to hide spinner when ready
-                                setupPlayerReadyObserver(for: loadedPlayer)
-                            }
-                        } else {
-                            // No player item, hide spinner
-                            isLoading = false
-                        }
-                    }
-                }
+                loadVideoPlayer(reason: "onAppear", delayNanoseconds: 150_000_000)
             }
         }
         .onChange(of: baseUrl) { _, newBaseUrl in
@@ -747,30 +712,26 @@ struct ChatVideoContainer: View {
             oldPlayer?.pause()
             cancellables.removeAll()
             ChatVideoManager.shared.removeVideoPlayer(messageId: messageId)
-            Task {
-                let loadedPlayer = await ChatVideoManager.shared.getOrCreateVideoPlayer(
-                    messageId: messageId,
-                    attachment: attachment,
-                    isFromCurrentUser: isFromCurrentUser,
-                    senderUser: senderUser,
-                    senderBaseUrl: senderBaseUrl,
-                    isChatScreenVisible: isChatScreenVisible,
-                    receiptId: receiptId
-                )
-                await MainActor.run {
-                    player = loadedPlayer
-                    if let loadedPlayer, let playerItem = loadedPlayer.currentItem {
-                        setupPlayerPlaybackObserver(for: loadedPlayer)
-                        if playerItem.status == .readyToPlay {
-                            isLoading = isPlaying && loadedPlayer.timeControlStatus != .playing
-                        } else {
-                            setupPlayerReadyObserver(for: loadedPlayer)
-                        }
-                    } else {
-                        isLoading = false
-                    }
-                }
-            }
+            loadVideoPlayer(reason: "baseUrlChanged")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .chatVideoShouldRecover)) { notification in
+            guard notification.userInfo?["videoMid"] as? String == attachment.mid,
+                  notification.userInfo?["receiptId"] as? String == receiptId else { return }
+            let reason = notification.userInfo?["reason"] as? String ?? "chatRecovery"
+            recoverVideoPlayer(reason: reason)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ChatVideoShouldPlay"))) { notification in
+            guard notification.userInfo?["videoMid"] as? String == attachment.mid,
+                  notification.userInfo?["receiptId"] as? String == receiptId,
+                  let shouldPlay = notification.userInfo?["shouldPlay"] as? Bool else { return }
+            handleChatPlaybackCommand(shouldPlay: shouldPlay)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ChatVideoShouldStop"))) { notification in
+            guard notification.userInfo?["videoMid"] as? String == attachment.mid,
+                  notification.userInfo?["receiptId"] as? String == receiptId else { return }
+            player?.pause()
+            isPlaying = false
+            isLoading = false
         }
         .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
             if let player, wasPlayingBeforeFullscreen {
@@ -806,6 +767,108 @@ struct ChatVideoContainer: View {
             wasPlayingBeforeFullscreen = false
         }
         showFullScreen = true
+    }
+
+    private func isPlayerBroken(_ player: AVPlayer?) -> Bool {
+        guard let player else { return true }
+        guard let item = player.currentItem else { return true }
+        return item.status == .failed || item.error != nil || player.error != nil
+    }
+
+    private func loadVideoPlayer(reason: String, delayNanoseconds: UInt64 = 0) {
+        Task {
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            }
+
+            let loadedPlayer = await ChatVideoManager.shared.getOrCreateVideoPlayer(
+                messageId: messageId,
+                attachment: attachment,
+                isFromCurrentUser: isFromCurrentUser,
+                senderUser: senderUser,
+                senderBaseUrl: senderBaseUrl,
+                isChatScreenVisible: isChatScreenVisible,
+                receiptId: receiptId
+            )
+
+            await MainActor.run {
+                installLoadedPlayer(loadedPlayer, reason: reason)
+            }
+        }
+    }
+
+    private func installLoadedPlayer(_ loadedPlayer: AVPlayer?, reason: String) {
+        player = loadedPlayer
+        cancellables.removeAll()
+        removeVideoCompletionObserver()
+
+        guard let loadedPlayer, let playerItem = loadedPlayer.currentItem else {
+            isPlaying = false
+            isLoading = false
+            return
+        }
+
+        loadedPlayer.isMuted = muteState.isMuted
+        setupVideoCompletionObserver(for: loadedPlayer)
+        setupPlayerPlaybackObserver(for: loadedPlayer)
+        if playerItem.status == .readyToPlay {
+            isLoading = false
+        } else {
+            setupPlayerReadyObserver(for: loadedPlayer)
+            isLoading = true
+        }
+
+        if isChatScreenVisible,
+           ChatVideoManager.shared.shouldPlayVideo(mid: attachment.mid, receiptId: receiptId) {
+            loadedPlayer.play()
+            isPlaying = true
+            isLoading = loadedPlayer.timeControlStatus != .playing
+        } else {
+            isPlaying = false
+        }
+
+        print("DEBUG: [ChatVideoContainer] Installed player for \(attachment.mid) after \(reason)")
+    }
+
+    private func recoverVideoPlayer(reason: String) {
+        guard isChatScreenVisible else { return }
+
+        if let player, !isPlayerBroken(player) {
+            if ChatVideoManager.shared.shouldPlayVideo(mid: attachment.mid, receiptId: receiptId) {
+                player.play()
+                isPlaying = true
+                isLoading = player.timeControlStatus != .playing
+            }
+            return
+        }
+
+        player?.pause()
+        player = nil
+        isPlaying = false
+        isLoading = true
+        cancellables.removeAll()
+        removeVideoCompletionObserver()
+        ChatVideoManager.shared.removeVideoPlayer(messageId: messageId)
+        loadVideoPlayer(reason: reason)
+    }
+
+    private func handleChatPlaybackCommand(shouldPlay: Bool) {
+        guard shouldPlay else {
+            player?.pause()
+            isPlaying = false
+            isLoading = false
+            return
+        }
+
+        guard isChatScreenVisible else { return }
+        if isPlayerBroken(player) {
+            recoverVideoPlayer(reason: "playCommand")
+            return
+        }
+
+        player?.play()
+        isPlaying = true
+        isLoading = player?.timeControlStatus != .playing
     }
     
     private func createFullScreenVideoTweet() -> Tweet {

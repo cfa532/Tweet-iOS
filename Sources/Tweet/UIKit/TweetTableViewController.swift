@@ -605,6 +605,7 @@ class TweetTableViewController: UITableViewController {
         lastContinuePlaybackVideoIds = []
         lastOnScreenVideoIds = []
         updateVisibleTweetsForVideoPlayback()
+        videoCoordinator.recoverVisiblePlaybackAfterForeground(reason: "tableForegroundRestore")
 
         print("✅ [VIDEO RESTORE] Video restoration complete - healthy players retained, broken ones will be recreated")
     }
