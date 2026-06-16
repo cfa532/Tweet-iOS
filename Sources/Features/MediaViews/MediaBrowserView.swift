@@ -34,6 +34,7 @@ struct MediaBrowserView: View {
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
+    @State private var isDismissingForBackground = false
     @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
     private var attachments: [MimeiFileType] {
         // Audio is handled by the compact playlist player; the browser pages visual media only.
@@ -169,11 +170,22 @@ struct MediaBrowserView: View {
                 // MediaCell videos manage themselves via VideoPlaybackCoordinator
                 // Fullscreen manager is now inactive and won't interfere
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                dismissFullscreenForBackground()
+            }
     }
 
     private func dismissFullScreen() {
         OrientationManager.shared.lockToPortrait()
         dismiss()
+    }
+
+    private func dismissFullscreenForBackground() {
+        guard !isDismissingForBackground else { return }
+        isDismissingForBackground = true
+        // Keep long-background recovery focused on feed/detail. Fullscreen will
+        // save position and release its player through the normal onDisappear path.
+        dismissFullScreen()
     }
     
     private func setupFullScreenManager() {
