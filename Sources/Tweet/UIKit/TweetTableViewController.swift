@@ -506,8 +506,8 @@ class TweetTableViewController: UITableViewController {
         // these direct warmup tasks here so they do not keep network work alive.
         cancelDirectionalImagePreloads()
 
-        // Save/pause visible videos before backgrounding. Visual foreground recovery
-        // should come from the cached player/video data, not a synthetic cover image.
+        // Save/pause visible videos before backgrounding. Keep a captured cover frame
+        // on screen so foreground recovery can rebuild the proxy/player underneath it.
         if !isTableViewUpdating {
             for cell in tableView.visibleCells {
                 guard let tweetCell = cell as? TweetTableViewCell else { continue }

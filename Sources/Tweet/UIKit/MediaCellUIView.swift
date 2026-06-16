@@ -294,6 +294,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var playbackStartupRecoveryTask: Task<Void, Never>?
     private var playbackStartupRecoveryRequestDate: Date?
     private var playbackStartupRecoveryDelay: UInt64?
+    /// True after app backgrounding captured a visible feed frame. While active,
+    /// keep that frame over the player so foreground proxy/player recovery never
+    /// exposes a black AVPlayerLayer.
+    private var isHoldingBackgroundVideoCover = false
+    private var backgroundVideoCoverMid: String?
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -527,6 +532,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func transitionTo(_ state: VideoCellState) {
         let oldState = videoCellState
         videoCellState = state
+        let holdBackgroundCover = isHoldingBackgroundVideoCover
+            && backgroundVideoCoverMid == attachment?.mid
+            && imageView.image != nil
 
         // Log state transitions
         if oldState != state {
@@ -541,8 +549,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         switch state {
         case .noContent:
-            hideImageViewImmediately()
-            videoPlayerView.isHidden = false  // black backdrop for spinner
+            if holdBackgroundCover {
+                showImageView()
+                videoPlayerView.isHidden = true
+            } else {
+                hideImageViewImmediately()
+                videoPlayerView.isHidden = false  // black backdrop for spinner
+            }
             if coordinatorWantsToPlay {
                 showPrimarySpinnerAfterDebounce()
             } else if shouldShowVisibleVideoCoverSpinner(hasCover: false) {
@@ -555,7 +568,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             videoPlayerView.isHidden = true
             // If this is the selected video, a newly captured cover frame should not
             // briefly dismiss loading feedback before AVPlayer is actually playing.
-            if coordinatorWantsToPlay {
+            if shouldShowBackgroundRecoverySpinner {
+                loadingSpinner.startAnimating()
+            } else if coordinatorWantsToPlay {
                 showPrimarySpinnerAfterDebounce()
             } else {
                 loadingSpinner.stopAnimating()
@@ -574,7 +589,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             videoPlayerView.isHidden = hasThumbnail
             // Primary videos always show loading chrome. Visible non-primary videos
             // also show it until their cover frame arrives; off-screen preloads stay quiet.
-            if coordinatorWantsToPlay {
+            if shouldShowBackgroundRecoverySpinner {
+                loadingSpinner.startAnimating()
+            } else if coordinatorWantsToPlay {
                 showPrimarySpinnerAfterDebounce(for: player)
             } else if shouldShowVisibleVideoCoverSpinner() {
                 loadingSpinner.startAnimating()
@@ -668,6 +685,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard isVideoAttachment,
               imageView.image != nil,
               !imageView.isHidden else {
+            clearBackgroundVideoCoverHold()
             hideImageViewImmediately()
             return
         }
@@ -690,7 +708,21 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
             self.imageView.isHidden = true
             self.imageView.alpha = 1
+            self.clearBackgroundVideoCoverHold()
         }
+    }
+
+    private var shouldShowBackgroundRecoverySpinner: Bool {
+        isHoldingBackgroundVideoCover
+            && backgroundVideoCoverMid == attachment?.mid
+            && isVisible
+            && isVideoAttachment
+            && (coordinatorWantsToPlay || setupPlayerTask != nil || playerAcquireDebounceTask != nil)
+    }
+
+    private func clearBackgroundVideoCoverHold() {
+        isHoldingBackgroundVideoCover = false
+        backgroundVideoCoverMid = nil
     }
 
     private func removeVideoCoverIfLoadedAndDisplayable(_ player: AVPlayer, reason: String) {
@@ -699,12 +731,56 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               imageView.image != nil else { return }
         guard playerHasLoadedData(player),
               videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer else { return }
+        if isHoldingBackgroundVideoCover,
+           backgroundVideoCoverMid == attachment?.mid,
+           !isVisibleVideoFrameReady(player) {
+            return
+        }
 
         videoPlayerView.isHidden = false
         hideImageViewImmediately()
         imageView.image = nil
+        clearBackgroundVideoCoverHold()
         loadingSpinner.stopAnimating()
         logVerbose("🖼️ removed video cover after loaded data (\(reason))")
+    }
+
+    @discardableResult
+    private func settleForegroundCachedPlayerIfReady(_ player: AVPlayer, reason: String) -> Bool {
+        guard isVisible,
+              isVideoAttachment,
+              self.player === player,
+              let item = player.currentItem,
+              item.status == .readyToPlay,
+              playerHasLoadedData(player) else { return false }
+
+        restoreCachedPosterForFailureIfNeeded()
+        if videoPlayerView.isLayerReadyForDisplay {
+            hasRenderedFrameForCurrentPlayer = true
+        }
+
+        if videoCellState == .noContent || videoCellState == .playerLoading {
+            transitionTo(.playerReady)
+        }
+
+        if coordinatorWantsToPlay {
+            requestPlaybackStartIfNeeded(player, reason: "\(reason)-cachedReady")
+        }
+
+        if isHoldingBackgroundVideoCover,
+           coordinatorWantsToPlay,
+           !isVisibleVideoFrameReady(player),
+           !isVideoAtEnd(player) {
+            loadingSpinner.startAnimating()
+        } else if imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
+            cancelDelayedPrimarySpinner()
+            loadingSpinner.stopAnimating()
+        } else {
+            updateLoadingSpinnerForPlayback(player)
+        }
+
+        logVerbose("✅ foreground cached player settled (\(reason)): buffered=\(String(format: "%.2f", bufferedTimeAhead(for: player)))s")
+        return true
     }
 
     private var hasVideoCoverForSpinner: Bool {
@@ -1580,6 +1656,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         removeVideoCoverIfLoadedAndDisplayable(newPlayer, reason: "alreadyReady")
+        settleForegroundCachedPlayerIfReady(newPlayer, reason: "alreadyReady")
 
         if coordinatorWantsToPlay {
             if isVideoAtEnd(newPlayer, tolerance: 5.0) {
@@ -4377,15 +4454,20 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     func prepareVideoForBackground() {
         guard isVideoAttachment, isVisible else { return }
         guard videoCellState == .playing || videoCellState == .paused || videoCellState == .playerReady else { return }
+        guard let mid = attachment?.mid else { return }
+
         if let player {
             saveCurrentPosition(player: player, wasPlaying: player.rate > 0 || coordinatorWantsToPlay)
             player.pause()
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         }
-        if preserveFrameToCache(skipImageView: true) || preserveFrameToCache(useVideoOutput: false) {
-            if let mid = attachment?.mid {
-                SharedAssetCache.shared.protectBackgroundPoster(for: mid)
-            }
+
+        let didCaptureCover = preserveFrameToCache(skipImageView: true)
+            || preserveFrameToCache(useVideoOutput: false)
+        if didCaptureCover || restoreCachedPosterForBackgroundIfNeeded(mid: mid) {
+            isHoldingBackgroundVideoCover = true
+            backgroundVideoCoverMid = mid
+            SharedAssetCache.shared.protectBackgroundPoster(for: mid)
             transitionTo(.thumbnail)
         } else if videoPlayerView.isLayerReadyForDisplay {
             hasRenderedFrameForCurrentPlayer = true
@@ -4402,6 +4484,15 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         cancelDelayedPrimarySpinner()
         loadingSpinner.stopAnimating()
         teardownPlayerAndObservers()
+    }
+
+    private func restoreCachedPosterForBackgroundIfNeeded(mid: String) -> Bool {
+        guard imageView.image == nil,
+              let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) else {
+            return imageView.image != nil
+        }
+        imageView.image = cached
+        return true
     }
 
     /// Refresh visible playback after foreground without tearing down a healthy layer.
@@ -4428,6 +4519,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             )
             return
         }
+
+        let didSettleCachedPlayer = settleForegroundCachedPlayerIfReady(player, reason: "foreground-layer-start")
 
         let expectedMid = attachment?.mid
         let currentTime = player.currentTime()
@@ -4475,7 +4568,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             } else {
                 requestPlaybackStartIfNeeded(player, reason: "foreground-layer-refresh")
             }
-            updateLoadingSpinnerForPlayback(player)
+            if !didSettleCachedPlayer {
+                updateLoadingSpinnerForPlayback(player)
+            }
         }
 
         Task { @MainActor [weak self, weak player] in
@@ -4490,6 +4585,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 self.hasRenderedFrameForCurrentPlayer = true
             }
 
+            let didSettleCachedPlayer = self.settleForegroundCachedPlayerIfReady(player, reason: "foreground-layer-delayed")
+
             if self.coordinatorWantsToPlay {
                 if self.isVisibleVideoFrameReady(player) {
                     self.fadeOutVideoCoverForPlayback()
@@ -4497,7 +4594,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     return
                 }
                 self.requestPlaybackStartIfNeeded(player, reason: "foreground-layer-refresh-fallback")
-                self.updateLoadingSpinnerForPlayback(player)
+                if !didSettleCachedPlayer {
+                    self.updateLoadingSpinnerForPlayback(player)
+                }
             } else if self.videoCellState == .playerLoading {
                 self.transitionTo(.playerReady)
                 self.loadingSpinner.stopAnimating()
@@ -4658,6 +4757,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastSlowLoadingNudgeDate = .distantPast
         lastStartupBufferReleaseDate = .distantPast
         startupBufferReleaseUntil = .distantPast
+        clearBackgroundVideoCoverHold()
         requestedFallbackThumbnailMid = nil
         resetFeedPlayerRebuildBudget()
         resetPlaybackProgressTracking()

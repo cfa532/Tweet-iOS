@@ -1114,6 +1114,7 @@ struct SingletonVideoPlayerView: View {
     @ObservedObject private var manager = FullScreenVideoManager.shared
     @State private var handoffThumbnail: UIImage?
     @State private var handoffThumbnailMid: String?
+    @State private var readyForDisplayMid: String?
 
     private var didThisVideoFailToLoad: Bool {
         manager.loadFailedVideoMid == mid
@@ -1124,8 +1125,17 @@ struct SingletonVideoPlayerView: View {
             ZStack {
                 // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
                 if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
+                    let layerReadyForCurrentVideo = readyForDisplayMid == mid
                     // Show player
-                    FullscreenPlayerLayerView(player: player, mid: mid)
+                    FullscreenPlayerLayerView(
+                        player: player,
+                        mid: mid,
+                        onReadyForDisplay: {
+                            DispatchQueue.main.async {
+                                readyForDisplayMid = mid
+                            }
+                        }
+                    )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                         .simultaneousGesture(
@@ -1134,13 +1144,13 @@ struct SingletonVideoPlayerView: View {
                             }
                         )
 
-                    if shouldShowHandoffPoster(for: player) {
+                    if shouldShowHandoffPoster(for: player, layerReadyForDisplay: layerReadyForCurrentVideo) {
                         posterImage
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }
 
-                    if shouldShowAttachedItemSpinner(for: player) {
+                    if shouldShowAttachedItemSpinner(for: player, layerReadyForDisplay: layerReadyForCurrentVideo) {
                         loadingSpinnerOverlay
                             .transition(.opacity)
                             .allowsHitTesting(false)
@@ -1161,10 +1171,24 @@ struct SingletonVideoPlayerView: View {
                 refreshHandoffThumbnail(for: mid)
             }
             .onChange(of: mid) { _, newMid in
+                readyForDisplayMid = nil
                 refreshHandoffThumbnail(for: newMid)
             }
             .onReceive(NotificationCenter.default.publisher(for: .videoThumbnailCached)) { notification in
                 guard notification.userInfo?["mediaID"] as? String == mid else { return }
+                refreshHandoffThumbnail(for: mid)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .videoPlayerItemReplaced)) { notification in
+                guard notification.userInfo?["mediaID"] as? String == mid else { return }
+                readyForDisplayMid = nil
+                refreshHandoffThumbnail(for: mid)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in
+                readyForDisplayMid = nil
+                refreshHandoffThumbnail(for: mid)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                readyForDisplayMid = nil
                 refreshHandoffThumbnail(for: mid)
             }
         }
@@ -1175,14 +1199,14 @@ struct SingletonVideoPlayerView: View {
         handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mediaID)
     }
 
-    private func shouldShowAttachedItemSpinner(for player: AVPlayer) -> Bool {
+    private func shouldShowAttachedItemSpinner(for player: AVPlayer, layerReadyForDisplay: Bool) -> Bool {
         guard manager.currentVideoMid == mid,
               let item = player.currentItem else {
             return false
         }
 
-        guard player.timeControlStatus != .playing else {
-            return false
+        if player.timeControlStatus == .playing {
+            return !layerReadyForDisplay && manager.isPlaying && !isVideoAtEnd(player)
         }
 
         if manager.isBuffering {
@@ -1205,14 +1229,15 @@ struct SingletonVideoPlayerView: View {
         return !manager.isItemReady
     }
 
-    private func shouldShowHandoffPoster(for player: AVPlayer) -> Bool {
+    private func shouldShowHandoffPoster(for player: AVPlayer, layerReadyForDisplay: Bool) -> Bool {
         guard manager.currentVideoMid == mid,
               currentPosterImage != nil,
               !isVideoAtEnd(player) else {
             return false
         }
 
-        return player.timeControlStatus != .playing
+        return !layerReadyForDisplay
+            || player.timeControlStatus != .playing
             || manager.isBuffering
             || !manager.isItemReady
             || isBeforeFirstVisibleFrame(player)
@@ -1435,19 +1460,24 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
 private struct FullscreenPlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
     let mid: String
+    let onReadyForDisplay: () -> Void
 
     func makeUIView(context: Context) -> LightweightVideoPlayerView {
         let view = LightweightVideoPlayerView()
         view.backgroundColor = .black
         view.setVideoGravity(.resizeAspect)
+        view.onReadyForDisplay = onReadyForDisplay
         view.setPlayer(player)
+        view.observeReadyForDisplay()
         markSurfaceReady(for: player, mid: mid)
         return view
     }
 
     func updateUIView(_ uiView: LightweightVideoPlayerView, context: Context) {
         uiView.setVideoGravity(.resizeAspect)
+        uiView.onReadyForDisplay = onReadyForDisplay
         uiView.setPlayer(player)
+        uiView.observeReadyForDisplay()
         markSurfaceReady(for: player, mid: mid)
     }
 

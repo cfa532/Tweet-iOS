@@ -745,7 +745,6 @@ private struct DetailSingletonVideoPlayerView: View {
             || !isThisVideoLoaded
             || isThisVideoPreparing
             || (manager.currentVideoMid == mid
-                && !isThisVideoReady
                 && !manager.isPlaybackRendering
                 && !didThisVideoFinishPlayback
                 && !didThisVideoFailToLoad)

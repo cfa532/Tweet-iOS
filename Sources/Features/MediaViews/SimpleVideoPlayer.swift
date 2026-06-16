@@ -1184,9 +1184,13 @@ struct SimpleVideoPlayer: View {
             // Check for various broken states
             let isFailed = playerItem.status == .failed
             let hasError = playerItem.error != nil || player.error != nil
-            let isStuckLoading = loadingState.isLoading && playerItem.status == .readyToPlay && !playerItem.loadedTimeRanges.isEmpty
+            let isReadyWhileLoading = loadingState.isLoading && playerItem.status == .readyToPlay && !playerItem.loadedTimeRanges.isEmpty
             
-            if isFailed || hasError || isStuckLoading {
+            if isReadyWhileLoading {
+                markLoadedFromCachedPlayerIfReady(player, reason: "onAppearReadyWhileLoading")
+            }
+
+            if isFailed || hasError {
                 handleError(strategy: .loadFailure)
                 return
             }
@@ -2309,10 +2313,9 @@ struct SimpleVideoPlayer: View {
             // Check if player is broken or stuck in loading
             if let player = self.player, let playerItem = player.currentItem {
                 let isBroken = self.isPlayerBroken()
-                let isStuckLoading = self.loadingState.isLoading && playerItem.status == .readyToPlay
                 let hasError = playerItem.error != nil || player.error != nil
                 
-                if isBroken || isStuckLoading || hasError {
+                if isBroken || hasError {
                     
                     // Clean up observers
                     if let observer = self.timeObserver, let observerPlayer = self.timeObserverPlayer {
@@ -2337,18 +2340,9 @@ struct SimpleVideoPlayer: View {
                         self.setupPlayer()
                     }
                 } else if self.loadingState.isLoading && playerItem.status == .readyToPlay {
-                    // Player is ready but loadingState is stuck - fix it
-                    // CRITICAL: Also check if there's buffered data before declaring it loaded
-                    let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-                    let bufferedDuration = self.bufferedTimeAhead(for: playerItem, player: player)
-                    
-                    if hasBufferedData && bufferedDuration >= self.firstFrameMinimumBuffer {
-                        self.loadingState = .loaded
-                        self.retryAttempts = 0
-                        if self.mode == .mediaCell {
-                            self.hasInitialized = true
-                        }
-                    }
+                    // Player is ready but loadingState is stale after foreground; do not rebuild
+                    // a usable cached player.
+                    self.markLoadedFromCachedPlayerIfReady(player, reason: "delayedHealthCheck")
                 }
             }
         }
@@ -3018,6 +3012,10 @@ struct SimpleVideoPlayer: View {
                 // Wait for player to be created and ready
                 var attempts = 0
                 while (self.player == nil || self.loadingState.isLoading) && attempts < 30 {
+                    if let player = self.player,
+                       self.markLoadedFromCachedPlayerIfReady(player, reason: "reloadVisibleVideosOnlyWaitLoop") {
+                        break
+                    }
                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                     attempts += 1
                 }
@@ -3025,6 +3023,10 @@ struct SimpleVideoPlayer: View {
                 // Check if player is ready and should be playing
                 guard self.isVisible, self.shouldLoadVideo else {
                     return
+                }
+
+                if let player = self.player {
+                    self.markLoadedFromCachedPlayerIfReady(player, reason: "reloadVisibleVideosOnlyBeforeTimeout")
                 }
 
                 // CRITICAL FIX: If player is still not ready after timeout, force retry
@@ -3052,22 +3054,13 @@ struct SimpleVideoPlayer: View {
                 }
 
                 guard let player = self.player,
-                      let playerItem = player.currentItem else {
+                      player.currentItem != nil else {
                     return
                 }
                 
                 // Check if loading state is stuck
                 if self.loadingState.isLoading {
-                    let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-                    let bufferedDuration = self.bufferedTimeAhead(for: playerItem, player: player)
-                    
-                    if hasBufferedData && bufferedDuration >= self.firstFrameMinimumBuffer {
-                        self.loadingState = .loaded
-                        self.retryAttempts = 0
-                        if self.mode == .mediaCell {
-                            self.hasInitialized = true
-                        }
-                    }
+                    self.markLoadedFromCachedPlayerIfReady(player, reason: "reloadVisibleVideosOnlyDelayed")
                 }
                 
                 // CRITICAL: Check if video was playing before share sheet/overlay
@@ -3111,14 +3104,10 @@ struct SimpleVideoPlayer: View {
             
             // CRITICAL FIX: Check if loading state is stuck even though player is ready
             // This can happen after long background when KVO observers don't fire properly
-            if loadingState.isLoading, let playerItem = player?.currentItem,
-               playerItem.status == .readyToPlay, !playerItem.loadedTimeRanges.isEmpty {
-                let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player!)
-                if bufferedDuration >= firstFrameMinimumBuffer {
-                    // Loading state stuck after background - fixing
-                    loadingState = .loaded
-                    retryAttempts = 0
-                }
+            if loadingState.isLoading, let player {
+                // Loading state can be stale after foreground because KVO may have fired
+                // while video infrastructure was restarting.
+                markLoadedFromCachedPlayerIfReady(player, reason: "reloadVisibleVideosOnlyIntact")
             }
             
             // ==============================================================
@@ -4360,11 +4349,12 @@ struct SimpleVideoPlayer: View {
         self.player = player
         // DON'T set loadingState = .loaded here! Let the KVO observers handle it based on actual readiness
         // If player is already ready with data, set to .loaded immediately to prevent stuck spinner
-        if let playerItem = player.currentItem,
-           playerItem.status == .readyToPlay,
-           !playerItem.loadedTimeRanges.isEmpty {
+        if markLoadedFromCachedPlayerIfReady(player, reason: "configurePlayer") {
+            // Player already ready with buffered data.
+        } else if let playerItem = player.currentItem,
+                  playerItem.status == .readyToPlay,
+                  !playerItem.loadedTimeRanges.isEmpty {
             self.loadingState = .loaded
-            // Player already ready with buffered data
         } else if !self.loadingState.isLoaded {
             self.loadingState = .loading  // Show spinner while video loads
         }
@@ -5134,6 +5124,33 @@ struct SimpleVideoPlayer: View {
     
     private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
         bufferedTimeAhead(for: item, relativeTo: player.currentTime())
+    }
+
+    @discardableResult
+    private func markLoadedFromCachedPlayerIfReady(_ player: AVPlayer, reason: String) -> Bool {
+        guard let item = player.currentItem,
+              item.status == .readyToPlay,
+              !item.loadedTimeRanges.isEmpty else { return false }
+
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+
+        guard mode == .mediaCell else { return false }
+
+        if loadingState.isLoading {
+            loadingState = .loaded
+        }
+        retryAttempts = 0
+        hasInitialized = true
+        if isHoldingRecoveryCover {
+            isHoldingRecoveryCover = false
+        }
+        recoveryTimeoutTask?.cancel()
+        recoveryTimeoutTask = nil
+
+#if DEBUG
+        print("✅ [SimpleVideoPlayer] Cached player ready for \(mid) after \(reason), buffered=\(String(format: "%.2f", bufferedAhead))s")
+#endif
+        return true
     }
     
     private func bufferedTimeAhead(for item: AVPlayerItem, relativeTo currentTime: CMTime) -> Double {

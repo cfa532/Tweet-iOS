@@ -733,6 +733,17 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     @Published private(set) var loadFailedVideoMid: String?
     @Published private var transitionPoster: UIImage?
     private var transitionPosterMediaID: String?
+
+    private struct FullscreenRecoveryRequest {
+        let url: URL
+        let mid: String
+        let tweetId: String
+        let cellTweetId: String
+        let videoIndex: Int
+        let mediaType: MediaType
+    }
+
+    private var lastRequestedFullscreenVideo: FullscreenRecoveryRequest?
     
     // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)?
@@ -866,6 +877,15 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// Load and play a video in the singleton player
     func loadVideo(url: URL, mid: String, tweetId: String, cellTweetId: String, videoIndex: Int, mediaType: MediaType) {
         print("🎬 [FullScreenVideoManager] loadVideo start \(shortMID(mid)): mediaType=\(mediaType), current=\(shortMID(currentVideoMid)), loading=\(shortMID(loadingMid)), hasItem=\(singletonPlayer?.currentItem != nil)")
+        lastRequestedFullscreenVideo = FullscreenRecoveryRequest(
+            url: url,
+            mid: mid,
+            tweetId: tweetId,
+            cellTweetId: cellTweetId,
+            videoIndex: videoIndex,
+            mediaType: mediaType
+        )
+
         // CRITICAL: If we're already loading this exact video, ignore duplicate calls.
         // TabView/container/page onAppear can all fire for the selected page. The first
         // load owns the handoff; repeating the suspend step can interrupt unrelated feed work
@@ -2180,30 +2200,73 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Check if player needs recreation
         let playerMissing = (singletonPlayer == nil)
         let itemMissing = (singletonPlayer?.currentItem == nil)
-        let playerBroken = isPlayerBroken()
+        let playerBroken = playerMissing ? false : isPlayerBroken()
+        let playerEmptyAfterRestart = shouldReloadFullscreenPlayerAfterInfrastructureRestart()
 
-        guard playerMissing || itemMissing || playerBroken else {
+        guard playerMissing || itemMissing || playerBroken || playerEmptyAfterRestart else {
             // Player is healthy, nothing to do
             print("✅ [FullScreenVideoManager] handleReloadVisibleVideosOnly - player healthy")
             return
         }
 
-        print("🔄 [FullScreenVideoManager] handleReloadVisibleVideosOnly - player needs reload (playerMissing:\(playerMissing), itemMissing:\(itemMissing), playerBroken:\(playerBroken))")
+        print("🔄 [FullScreenVideoManager] handleReloadVisibleVideosOnly - player needs reload (playerMissing:\(playerMissing), itemMissing:\(itemMissing), playerBroken:\(playerBroken), emptyAfterRestart:\(playerEmptyAfterRestart))")
 
-        // Check if we have saved video info to reload
-        guard let videoMid = currentVideoMid else {
+        guard let request = lastRequestedFullscreenVideo,
+              request.mid == currentVideoMid || currentVideoMid == nil || request.mid == loadingMid else {
             print("⚠️ [FullScreenVideoManager] handleReloadVisibleVideosOnly - no video info to reload")
             return
         }
 
-        // Get the video URL from SharedAssetCache or reconstruct it
-        // We need to reload the video - the view's onAppear should handle this
-        // Clear state to trigger reload in SingletonVideoPlayerView
+        if let player = singletonPlayer,
+           let videoMid = currentVideoMid {
+            captureTransitionPoster(from: player, mediaID: videoMid)
+            let t = player.currentTime()
+            if t.isValid, t.seconds.isFinite, t.seconds > 0.25 {
+                saveFullscreenPlaybackState(
+                    videoMid: videoMid,
+                    currentTime: t,
+                    wasPlaying: isPlaying || player.rate > 0,
+                    duration: player.currentItem?.duration ?? .invalid
+                )
+            }
+        }
+
         clearBrokenPlayer()
 
-        // Post notification so the fullscreen view knows to reload
-        // SingletonVideoPlayerView checks player state in onAppear and will call loadVideo
-        print("🔔 [FullScreenVideoManager] Cleared broken player - view should reload video \(videoMid)")
+        print("🔔 [FullScreenVideoManager] Reloading fullscreen video after infrastructure restart \(shortMID(request.mid))")
+        loadVideo(
+            url: request.url,
+            mid: request.mid,
+            tweetId: request.tweetId,
+            cellTweetId: request.cellTweetId,
+            videoIndex: request.videoIndex,
+            mediaType: request.mediaType
+        )
+    }
+
+    private func shouldReloadFullscreenPlayerAfterInfrastructureRestart() -> Bool {
+        guard let player = singletonPlayer,
+              let item = player.currentItem,
+              currentVideoMid != nil else {
+            return false
+        }
+
+        if item.status == .failed || item.error != nil || player.error != nil {
+            return true
+        }
+
+        let hasLoadedData = item.loadedTimeRanges.contains { value in
+            let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
+            return duration.isFinite && duration > 0
+        }
+
+        if item.status == .readyToPlay,
+           !hasLoadedData,
+           player.timeControlStatus != .playing {
+            return true
+        }
+
+        return false
     }
 
     // No "search function" anymore; the coordinator is canonical.
@@ -2397,6 +2460,18 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 }
             }
         )
+
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .reloadVisibleVideosOnly,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleReloadVisibleVideosOnly()
+                }
+            }
+        )
     }
 
     // MARK: - DetailView lifecycle coordination
@@ -2505,6 +2580,15 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
            let videoMid = currentVideoMid {
             preserveDetailFrameToCache(player: player, mediaID: videoMid)
         }
+        itemStatusObserver?.invalidate()
+        itemStatusObserver = nil
+        timeControlStatusObserver?.invalidate()
+        timeControlStatusObserver = nil
+        removeDetailRenderingObservers()
+        detailStartupRecoveryTask?.cancel()
+        detailStartupRecoveryTask = nil
+        detailStartupRecoveryItem = nil
+        detailStartupRecoveryAttemptCount = 0
         if hasKVOObserver, let playerItem = currentPlayer?.currentItem {
             playerItem.removeObserver(self, forKeyPath: "status")
             hasKVOObserver = false
@@ -2515,7 +2599,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
         currentPlayer?.pause()
         currentPlayer?.replaceCurrentItem(with: nil)
-        removeDetailRenderingObservers()
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
@@ -2581,6 +2664,14 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private var isSeekingToStartupPosition = false
     private var startupAudioMuteUntil: Date = .distantPast
     private var startupAudioUnmuteTask: Task<Void, Never>?
+
+    private struct DetailRecoveryRequest {
+        let url: URL
+        let mid: String
+        let mediaType: MediaType
+    }
+
+    private var lastRequestedDetailVideo: DetailRecoveryRequest?
 
     private func shortMID(_ mid: String?) -> String {
         guard let mid else { return "nil" }
@@ -2656,6 +2747,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     /// Only ONE video plays at a time — the selected page in the detail TabView.
     func loadVideo(url: URL, mid: String, mediaType: MediaType) {
         print("📱 [DetailVideoManager] loadVideo start \(shortMID(mid)): mediaType=\(mediaType), current=\(shortMID(currentVideoMid)), hasItem=\(currentPlayer?.currentItem != nil)")
+        lastRequestedDetailVideo = DetailRecoveryRequest(url: url, mid: mid, mediaType: mediaType)
+
         // Fast path: same video already loaded and healthy
         if currentVideoMid == mid, currentPlayer?.currentItem != nil, !isPlayerBroken() {
             print("📱 [DetailVideoManager] Reusing existing player \(shortMID(mid)): \(detailDiagnostic(currentPlayer, item: currentPlayer?.currentItem))")
@@ -3975,6 +4068,69 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 }
             }
         }
+    }
+
+    private func handleReloadVisibleVideosOnly() {
+        guard isActive else { return }
+
+        let playerMissing = currentPlayer == nil
+        let itemMissing = currentPlayer?.currentItem == nil
+        let playerBroken = playerMissing ? false : isPlayerBroken()
+        let playerEmptyAfterRestart = shouldReloadDetailPlayerAfterInfrastructureRestart()
+
+        guard playerMissing || itemMissing || playerBroken || playerEmptyAfterRestart else {
+            print("✅ [DetailVideoManager] handleReloadVisibleVideosOnly - player healthy")
+            return
+        }
+
+        guard let request = lastRequestedDetailVideo,
+              request.mid == currentVideoMid || currentVideoMid == nil else {
+            print("⚠️ [DetailVideoManager] handleReloadVisibleVideosOnly - no video info to reload")
+            return
+        }
+
+        if let player = currentPlayer,
+           let videoMid = currentVideoMid {
+            let currentTime = player.currentTime()
+            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
+                PersistentVideoStateManager.shared.saveState(
+                    videoMid: videoMid,
+                    currentTime: currentTime,
+                    wasPlaying: isPlaying || player.rate > 0,
+                    context: .detailView,
+                    duration: player.currentItem?.duration ?? .invalid
+                )
+            }
+        }
+
+        print("🔄 [DetailVideoManager] Reloading detail video after infrastructure restart \(shortMID(request.mid)) (playerMissing:\(playerMissing), itemMissing:\(itemMissing), playerBroken:\(playerBroken), emptyAfterRestart:\(playerEmptyAfterRestart))")
+        clearBrokenPlayer()
+        loadVideo(url: request.url, mid: request.mid, mediaType: request.mediaType)
+    }
+
+    private func shouldReloadDetailPlayerAfterInfrastructureRestart() -> Bool {
+        guard let player = currentPlayer,
+              let item = player.currentItem,
+              currentVideoMid != nil else {
+            return false
+        }
+
+        if item.status == .failed || item.error != nil || player.error != nil {
+            return true
+        }
+
+        let hasLoadedData = item.loadedTimeRanges.contains { value in
+            let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
+            return duration.isFinite && duration > 0
+        }
+
+        if item.status == .readyToPlay,
+           !hasLoadedData,
+           player.timeControlStatus != .playing {
+            return true
+        }
+
+        return false
     }
     
     // MARK: - App Lifecycle (via VideoPlayerLifecycleManager protocol)
