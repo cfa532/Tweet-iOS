@@ -259,6 +259,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     /// KVO observers
     private var playerItemStatusObserver: NSKeyValueObservation?
+    private var playerItemLoadedTimeRangesObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
 
     /// Notification observers
@@ -583,8 +584,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         case .playerReady:
             let hasThumbnail = imageView.image != nil
             let hasDisplayableCover = hasVideoCoverForSpinner
-            // Always keep thumbnail visible as cover — prevents black flash during buffering.
-            // Thumbnail is hidden only when smooth playback begins (timeControlStatus KVO).
+            // Keep a thumbnail only until the player has buffered data and the layer can
+            // display a frame. Removing it before play() avoids a visible cover handoff
+            // right as playback starts.
             if hasThumbnail {
                 showImageView()
             } else {
@@ -689,6 +691,20 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             self.imageView.isHidden = true
             self.imageView.alpha = 1
         }
+    }
+
+    private func removeVideoCoverIfLoadedAndDisplayable(_ player: AVPlayer, reason: String) {
+        guard isVideoAttachment,
+              self.player === player,
+              imageView.image != nil else { return }
+        guard playerHasLoadedData(player),
+              videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer else { return }
+
+        videoPlayerView.isHidden = false
+        hideImageViewImmediately()
+        imageView.image = nil
+        loadingSpinner.stopAnimating()
+        logVerbose("🖼️ removed video cover after loaded data (\(reason))")
     }
 
     private var hasVideoCoverForSpinner: Bool {
@@ -1514,6 +1530,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
 
             if let player = self.player {
+                self.removeVideoCoverIfLoadedAndDisplayable(player, reason: "onReadyForDisplay")
                 self.updateLoadingSpinnerForPlayback(player)
                 if self.isVisibleVideoFrameReady(player),
                    self.videoCellState == .playing || self.videoCellState == .playerReady {
@@ -1561,6 +1578,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if videoCellState != .playing {
             transitionTo(.playerReady)
         }
+
+        removeVideoCoverIfLoadedAndDisplayable(newPlayer, reason: "alreadyReady")
 
         if coordinatorWantsToPlay {
             if isVideoAtEnd(newPlayer, tolerance: 5.0) {
@@ -3023,6 +3042,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
         }
 
+        playerItemLoadedTimeRangesObserver = playerItem.observe(\.loadedTimeRanges, options: [.new]) { [weak self, weak player] item, _ in
+            DispatchQueue.main.async {
+                guard let self,
+                      let player,
+                      self.player === player,
+                      player.currentItem === item else { return }
+                self.removeVideoCoverIfLoadedAndDisplayable(player, reason: "loadedTimeRanges")
+            }
+        }
+
         // KVO: player item status — tracks logical readiness (for coordinator play commands)
         // NOTE: .initial removed — it fires the callback synchronously during observe() setup,
         // causing a main-thread hitch. Initial state is checked manually in configurePlayer().
@@ -3038,6 +3067,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
                     let firstReadyTransition = change.oldValue != .readyToPlay
                     self.logVerbose("📺 statusKVO: readyToPlay (first=\(firstReadyTransition), coordWants=\(self.coordinatorWantsToPlay), state=\(self.videoCellState))")
+                    if let player = self.player {
+                        self.removeVideoCoverIfLoadedAndDisplayable(player, reason: "statusKVO-ready")
+                    }
 
                     // If playback already started before status reached readyToPlay,
                     // reveal player layer now (safe point) instead of relying on an
@@ -3221,6 +3253,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         videoCompletionObserver = nil
         playerItemStatusObserver?.invalidate()
         playerItemStatusObserver = nil
+        playerItemLoadedTimeRangesObserver?.invalidate()
+        playerItemLoadedTimeRangesObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
     }
@@ -4321,6 +4355,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private var canShowCachedCoverForCurrentVideo: Bool {
+        if let player,
+           playerHasLoadedData(player),
+           videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer {
+            return false
+        }
         if hasPlaybackCoverForCurrentVideo { return true }
         guard let mid = attachment?.mid else { return false }
         if SharedAssetCache.shared.hasPreloadedThumbnail(for: mid) { return true }
@@ -4522,6 +4561,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             timeObserverToken != nil ||
             player != nil ||
             playerItemStatusObserver != nil ||
+            playerItemLoadedTimeRangesObserver != nil ||
             timeControlStatusObserver != nil ||
             videoCompletionObserver != nil ||
             stopAllObserver != nil ||
@@ -4730,6 +4770,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             NotificationCenter.default.removeObserver(o)
         }
         playerItemStatusObserver?.invalidate()
+        playerItemLoadedTimeRangesObserver?.invalidate()
         timeControlStatusObserver?.invalidate()
         removePlayerTimeObserver()
         timerHideTask?.cancel()
