@@ -211,10 +211,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
-    /// Timer: when scroll starts, gives in-flight preloads a brief grace period to finish.
-    /// If scroll is still active after the delay, cancel off-screen directional preloads.
-    private var scrollCancelTimer: Timer?
-
     /// Track async tasks to prevent leaks
     /// MEMORY FIX: Use UUID-based tracking so tasks can remove themselves on completion
     /// Since this class is @MainActor, all access is serialized on the main actor
@@ -872,8 +868,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             playableIdentifiers,
             continuePlaybackIdentifiers: continuePlaybackIdentifiers
         )
-        refreshDirectionalPreloads(reason: "viewport", throttle: true)
-
         reconcilePlaybackForCurrentVisibility()
     }
     
@@ -913,8 +907,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         let filteredTweetIds = tweetIds.intersection(feedVisibleVideoTweetIds)
 
         self.visibleTweetIds = filteredTweetIds
-        self.isScrolling = true
-
         // On initial feed load (no scroll), trigger preload once as if scroll stopped.
         if !initialPreloadDone && !filteredTweetIds.isEmpty && !allVideos.isEmpty {
             initialPreloadDone = true
@@ -1405,8 +1397,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         activePreloadMids.removeAll()
         lastDirectionalPreloadRefreshTime = 0
         SharedAssetCache.shared.updateProtectedPreloadMids([])
-        scrollCancelTimer?.invalidate()
-        scrollCancelTimer = nil
     }
 
     // MARK: - Private Methods
@@ -1417,31 +1407,32 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Called when scroll starts (scrollViewWillBeginDragging).
-    /// Give current preloads a short grace period, then cancel them if the user keeps scrolling.
+    /// Directional preloads are started only after scrolling stops, so cancel stale
+    /// off-screen preload work as soon as the user starts moving again.
     func onScrollStarted() {
-        scrollCancelTimer?.invalidate()
         isScrolling = true
-
-        let timer = Timer(timeInterval: 1.0, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.isScrolling else { return }
-                self.refreshDirectionalPreloads(reason: "scroll still active", throttle: false)
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        scrollCancelTimer = timer
+        let onScreenMids = currentOnScreenVideoMids()
+        SharedAssetCache.shared.cancelDirectionalPreloadsForScrollStart(except: onScreenMids)
+        activePreloadMids.formIntersection(onScreenMids)
+        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids)
     }
     
     /// Called on scroll stop and initial load.
     /// Tracks only the next videos in the scroll direction so stale preloads are easy to cancel.
     func performPreloadOnScrollStop() {
-        scrollCancelTimer?.invalidate()
-        scrollCancelTimer = nil
         onScrollStopped()
         refreshDirectionalPreloads(reason: "scroll stop", throttle: false)
     }
 
+    private var isScrollStoppedForDirectionalPreload: Bool {
+        guard !isScrolling else { return false }
+        guard let tableView else { return true }
+        return !tableView.isTracking && !tableView.isDragging && !tableView.isDecelerating
+    }
+
     private func refreshDirectionalPreloads(reason: String, throttle: Bool) {
+        guard isScrollStoppedForDirectionalPreload else { return }
+
         if throttle {
             let now = CACurrentMediaTime()
             guard now - lastDirectionalPreloadRefreshTime >= directionalPreloadRefreshInterval else { return }

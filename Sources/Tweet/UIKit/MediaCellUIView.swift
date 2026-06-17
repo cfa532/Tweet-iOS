@@ -2249,6 +2249,25 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     @discardableResult
+    private func waitForActiveHLSDownloadsIfNeeded(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
+        guard attachment?.type == .hls_video,
+              player.currentItem?.status == .unknown,
+              bufferedAhead < 0.25,
+              let mid = attachment?.mid,
+              LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) else { return false }
+
+        let activeSegments = LocalHTTPServer.shared.activeHLSSegmentKeys(for: mid)
+        let segmentLabel = activeSegments.isEmpty ? "segment" : activeSegments.joined(separator: ",")
+        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        player.currentItem?.preferredForwardBufferDuration = 0
+        player.automaticallyWaitsToMinimizeStalling = true
+        updateLoadingSpinnerForPlayback(player)
+        print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with no buffered data, waiting for active download: \(segmentLabel)")
+        scheduleStartupRecoveryAfterCurrentTask(for: player, reason: "activeHLSSegment-\(reason)")
+        return true
+    }
+
+    @discardableResult
     private func nudgeSlowLoadingPrimaryIfUseful(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
         guard coordinatorWantsToPlay,
               canDriveForegroundPlayback,
@@ -2262,6 +2281,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let now = Date()
         guard now.timeIntervalSince(lastSlowLoadingNudgeDate) >= Self.slowLoadingNudgeInterval else { return false }
         guard !isVisibleVideoFrameReady(player) else { return false }
+
+        if waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: reason) {
+            lastSlowLoadingNudgeDate = now
+            return true
+        }
 
         let hasSomethingWorthKeeping = playerHasLoadedData(player)
             || bufferedAhead > 0
@@ -2486,15 +2510,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if attachment?.type == .hls_video,
            let mid = attachment?.mid,
            LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) {
-            let activeSegments = LocalHTTPServer.shared.activeHLSSegmentKeys(for: mid)
-            let segmentLabel = activeSegments.isEmpty ? "segment" : activeSegments.joined(separator: ",")
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            player.currentItem?.preferredForwardBufferDuration = 0
-            player.automaticallyWaitsToMinimizeStalling = true
-            player.play()
-            updateLoadingSpinnerForPlayback(player)
-            print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with no buffered data, waiting for active download: \(segmentLabel)")
-            scheduleStartupRecoveryAfterCurrentTask(for: player, reason: "activeHLSSegment-\(reason)")
+            waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: reason)
             return true
         }
 
@@ -2979,6 +2995,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                           self.coordinatorWantsToPlay,
                           self.canDriveForegroundPlayback,
                           player.currentItem?.status == .unknown else { return }
+                    if self.waitForActiveHLSDownloadsIfNeeded(
+                        player,
+                        bufferedAhead: self.bufferedTimeAhead(for: player),
+                        reason: "statusKVO fallback"
+                    ) {
+                        return
+                    }
                     print("\(self.logPrefix) ⏰ statusKVO fallback: item still .unknown after 2s, enabling network + play")
                     player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                     self.actuallyStartPlayback(player)

@@ -997,11 +997,24 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     private func relativeHLSSegmentPath(from url: URL?, mediaID: String) -> String? {
         guard let path = url?.path, path.hasSuffix(".ts") else { return nil }
+        return relativeHLSPath(from: url, mediaID: mediaID)
+    }
+
+    private func relativeHLSPath(from url: URL?, mediaID: String) -> String? {
+        guard let path = url?.path else { return nil }
         let prefix = "/ipfs/\(mediaID)/"
         if let range = path.range(of: prefix) {
             return String(path[range.upperBound...])
         }
+        let mmPrefix = "/mm/\(mediaID)/"
+        if let range = path.range(of: mmPrefix) {
+            return String(path[range.upperBound...])
+        }
         return URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    private func hlsLogPath(for url: URL, mediaID: String) -> String {
+        relativeHLSPath(from: url, mediaID: mediaID) ?? url.lastPathComponent
     }
 
     private func hasActiveHLSSegmentDownload(for mediaID: String, relativePath: String) -> Bool {
@@ -1527,6 +1540,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
         let isCached = isUsableCachedFile(atPath: cachePath)
+        let logPath = hlsLogPath(for: fullRealURL, mediaID: mediaID)
 
         // Check cache first
         if isCached {
@@ -1542,7 +1556,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         "Content-Length": "\(modifiedData.count)",
                         "Accept-Ranges": "bytes"
                     ]
-                    print("📄 [HLS LOCAL] \(shortMID(mediaID)) served cached \(fullRealURL.lastPathComponent) (\(modifiedData.count) bytes)")
+                    print("📄 [HLS LOCAL] \(shortMID(mediaID)) served cached \(logPath) (\(modifiedData.count) bytes)")
                     sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
                     return
                 }
@@ -1556,16 +1570,17 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // Not cached - fetch from real server (no deduplication for non-.ts files)
-        print("📄 [HLS LOCAL] \(shortMID(mediaID)) fetching \(fullRealURL.lastPathComponent) from upstream")
+        print("📄 [HLS LOCAL] \(shortMID(mediaID)) fetching \(logPath) from upstream")
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
     }
     
     private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
+        let logPath = hlsLogPath(for: fullRealURL, mediaID: mediaID)
 
         // Check cache first — always serve cached content regardless of concurrency
         if isUsableCachedFile(atPath: cachePath) {
-            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(fullRealURL.lastPathComponent)")
+            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(logPath)")
             autoreleasepool {
                 serveFile(path: cachePath, connection: connection, method: method)
             }
@@ -1580,19 +1595,30 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Note: clearCancelledMediaID is called when a fresh player is registered (on becoming
         // primary), so this guard only fires while the mediaID remains non-primary.
         if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
-            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(fullRealURL.lastPathComponent) because media is cancelled")
+            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(logPath) because media is cancelled")
             connection.cancel()
             return
         }
 
         let downloadKey = cachePath
+        var isPrimary = isCurrentPrimary(mediaID)
 
-        // Deduplicate concurrent requests for the same segment.
-        // If in-flight, poll for the cache file to appear on disk. Do not force-clear an
-        // active primary download: the URLSession still owns the single HLS slot, and
-        // duplicate AVPlayer requests should wait for that original download.
-        if !(await activeDownloadsActor.startIfNotInFlight(for: downloadKey)) {
-            let requestedSegmentPath = relativeHLSSegmentPath(from: fullRealURL, mediaID: mediaID) ?? fullRealURL.lastPathComponent
+        // Deduplicate preload/background segment requests. For the current primary
+        // player, let AVPlayer issue independent retries/variant requests and rely
+        // on the primary slot cap below to keep memory/bandwidth bounded.
+        let requestedSegmentPath = relativeHLSSegmentPath(from: fullRealURL, mediaID: mediaID) ?? fullRealURL.lastPathComponent
+        let hasMatchingSegmentTask = hasActiveHLSSegmentDownload(for: mediaID, relativePath: requestedSegmentPath)
+        var shouldWaitForInFlightDownload = false
+        if !isPrimary {
+            if hasMatchingSegmentTask {
+                shouldWaitForInFlightDownload = true
+            } else {
+                let didStartDownload = await activeDownloadsActor.startIfNotInFlight(for: downloadKey)
+                shouldWaitForInFlightDownload = !didStartDownload
+            }
+        }
+
+        if shouldWaitForInFlightDownload {
             let maxPolls = 240
             switch connection.state {
             case .cancelled, .failed: return
@@ -1604,12 +1630,13 @@ public class LocalHTTPServer: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: pollInterval)
 
                 if isUsableCachedFile(atPath: cachePath) {
-                    print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(fullRealURL.lastPathComponent) after waiting for in-flight download")
+                    print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(logPath) after waiting for in-flight download")
                     autoreleasepool { serveFile(path: cachePath, connection: connection, method: method) }
                     return
                 }
                 // Download removed from active set — failed without writing to disk
-                if !(await activeDownloadsActor.hasDownload(for: downloadKey)) { break }
+                if !(await activeDownloadsActor.hasDownload(for: downloadKey)),
+                   !hasActiveHLSSegmentDownload(for: mediaID, relativePath: requestedSegmentPath) { break }
                 if await activeDownloadsActor.isMediaIDCancelled(mediaID) { connection.cancel(); return }
                 switch connection.state {
                 case .cancelled, .failed: return
@@ -1624,8 +1651,8 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
 
             let stillMarkedActive = await activeDownloadsActor.hasDownload(for: downloadKey)
-            if stillMarkedActive,
-               hasActiveHLSSegmentDownload(for: mediaID, relativePath: requestedSegmentPath) {
+            let stillHasMatchingSegmentTask = hasActiveHLSSegmentDownload(for: mediaID, relativePath: requestedSegmentPath)
+            if stillMarkedActive || stillHasMatchingSegmentTask {
                 connection.cancel()
                 return
             }
@@ -1645,7 +1672,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Primary bypasses the preload cap, but still honors its own segment cap.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
-        var isPrimary = isCurrentPrimary(mediaID)
+        isPrimary = isCurrentPrimary(mediaID)
         var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 3)
         // Poll when the cap is full. Primary bypasses the preload cap, but still honors
         // its own HLS segment cap so startup cannot launch parallel segment downloads.
@@ -1661,7 +1688,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         guard slotAcquired else {
             await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
-            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(fullRealURL.lastPathComponent) because no download slot was available")
+            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(logPath) because no download slot was available")
             connection.cancel()
             return
         }
@@ -1672,7 +1699,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // fires, the second release would decrement the wrong slot count.
         let slotGuard = SlotReleaseGuard()
 
-        print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) fetching \(fullRealURL.lastPathComponent) from upstream")
+        print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) fetching \(logPath) from upstream")
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method,
                       onConnectionDead: slotAcquired ? {
                           Task { if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) } }
@@ -2551,6 +2578,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         completion: (() -> Void)?
     ) {
         let taskKey = UUID()
+        let logPath = hlsLogPath(for: url, mediaID: mediaID)
         let task = connectionPool.downloadTask(with: url) { [weak self] tempURL, response, error in
             guard let self = self else {
                 completion?()
@@ -2572,7 +2600,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if nsError.code != NSURLErrorCancelled, attempt < maxAttempts, isRetryable {
                     let delay = Double(attempt)
                     if LocalHTTPServer.verboseLogsEnabled {
-                        print("🔄 [LocalHTTPServer] Segment retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
+                        print("🔄 [LocalHTTPServer] Segment retry \(attempt)/\(maxAttempts - 1) for \(logPath) after \(delay)s")
                     }
                     self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "\(nsError.domain) \(nsError.code)")
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
@@ -2594,7 +2622,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if !mediaID.isEmpty, nsError.code != NSURLErrorCancelled {
                     BlackList.shared.recordFailure(mediaID)
                 }
-                print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(url.lastPathComponent) network error \(nsError.domain) \(nsError.code)")
+                print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(logPath) network error \(nsError.domain) \(nsError.code)")
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil, completion: completion)
                 return
             }
@@ -2603,7 +2631,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if !mediaID.isEmpty {
                     BlackList.shared.recordFailure(mediaID)
                 }
-                print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(url.lastPathComponent) missing HTTP response")
+                print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(logPath) missing HTTP response")
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil, completion: completion)
                 return
             }
@@ -2611,7 +2639,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             if httpResponse.statusCode >= 500, attempt < maxAttempts {
                 let delay = Double(attempt)
                 if LocalHTTPServer.verboseLogsEnabled {
-                    print("🔄 [LocalHTTPServer] Segment retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
+                    print("🔄 [LocalHTTPServer] Segment retry \(attempt)/\(maxAttempts - 1) for \(logPath) (HTTP \(httpResponse.statusCode))")
                 }
                 self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "HTTP \(httpResponse.statusCode)")
                 DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
@@ -2634,7 +2662,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if !mediaID.isEmpty {
                     BlackList.shared.recordFailure(mediaID)
                 }
-                print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(url.lastPathComponent) upstream HTTP \(httpResponse.statusCode)")
+                print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(logPath) upstream HTTP \(httpResponse.statusCode)")
                 self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: [:], body: nil, completion: completion)
                 return
             }
@@ -2643,7 +2671,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if !mediaID.isEmpty {
                     BlackList.shared.recordFailure(mediaID)
                 }
-                print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(url.lastPathComponent) missing temp file")
+                print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(logPath) missing temp file")
                 self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil, completion: completion)
                 return
             }
@@ -2651,6 +2679,29 @@ public class LocalHTTPServer: @unchecked Sendable {
             let cacheURL = URL(fileURLWithPath: cachePath)
             guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
                 completion?()
+                return
+            }
+
+            if self.isUsableCachedFile(atPath: cachePath) {
+                try? FileManager.default.removeItem(at: tempURL)
+                let attributes = try? FileManager.default.attributesOfItem(atPath: cachePath)
+                let fileSize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+                let headers: [String: String] = [
+                    "Content-Type": self.getMimeType(for: cachePath),
+                    "Content-Length": "\(fileSize)",
+                    "Accept-Ranges": "bytes"
+                ]
+                print("🎞️ [HLS SEGMENT] \(self.shortMID(mediaID)) served cached \(logPath) after independent primary fetch")
+                self.streamFileResponse(
+                    connection: connection,
+                    statusCode: 200,
+                    headers: headers,
+                    fileURL: cacheURL,
+                    fileSize: fileSize,
+                    method: method,
+                    onConnectionDead: onConnectionDead,
+                    completion: completion
+                )
                 return
             }
 
@@ -2670,7 +2721,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
                     }
-                    print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(url.lastPathComponent) upstream returned empty file")
+                    print("❌ [HLS SEGMENT] \(self.shortMID(mediaID)) \(logPath) upstream returned empty file")
                     self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil, completion: completion)
                     return
                 }
@@ -2687,7 +2738,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     "Accept-Ranges": "bytes"
                 ]
 
-                print("✅ [HLS SEGMENT] \(self.shortMID(mediaID)) served \(url.lastPathComponent) from upstream (\(fileSize) bytes)")
+                print("✅ [HLS SEGMENT] \(self.shortMID(mediaID)) served \(logPath) from upstream (\(fileSize) bytes)")
                 self.streamFileResponse(
                     connection: connection,
                     statusCode: 200,
@@ -2702,7 +2753,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if !mediaID.isEmpty {
                     BlackList.shared.recordFailure(mediaID)
                 }
-                print("⚠️ [HLS SEGMENT] \(self.shortMID(mediaID)) failed to cache \(url.lastPathComponent): \(error.localizedDescription)")
+                print("⚠️ [HLS SEGMENT] \(self.shortMID(mediaID)) failed to cache \(logPath): \(error.localizedDescription)")
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil, completion: completion)
             }
         }
@@ -2715,6 +2766,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let taskKey = UUID()
         let isPlaylist = cachePath.hasSuffix(".m3u8")
         let isSegment = cachePath.hasSuffix(".ts")
+        let logPath = hlsLogPath(for: url, mediaID: mediaID)
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else { return }
             self.untrackHLSDataTask(mediaID: mediaID, taskKey: taskKey)
@@ -2736,7 +2788,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     if nsError.code != NSURLErrorCancelled, attempt < maxAttempts, isRetryable {
                         let delay = Double(attempt) // 1s, 2s backoff
                         if LocalHTTPServer.verboseLogsEnabled {
-                            print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
+                            print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(logPath) after \(delay)s")
                         }
                         self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "\(nsError.domain) \(nsError.code)")
                         DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
@@ -2750,7 +2802,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         BlackList.shared.recordFailure(mediaID)
                     }
                     if isPlaylist || isSegment {
-                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(url.lastPathComponent) network error \(nsError.domain) \(nsError.code)")
+                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(logPath) network error \(nsError.domain) \(nsError.code)")
                     }
                     self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                     completion?()
@@ -2763,7 +2815,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         BlackList.shared.recordFailure(mediaID)
                     }
                     if isPlaylist || isSegment {
-                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(url.lastPathComponent) missing HTTP response")
+                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(logPath) missing HTTP response")
                     }
                     self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                     completion?()
@@ -2774,7 +2826,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if httpResponse.statusCode >= 500, attempt < maxAttempts {
                     let delay = Double(attempt)
                     if LocalHTTPServer.verboseLogsEnabled {
-                        print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
+                        print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(logPath) (HTTP \(httpResponse.statusCode))")
                     }
                     self.refreshConnectionPoolForRetry(mediaID: mediaID, reason: "HTTP \(httpResponse.statusCode)")
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
@@ -2788,7 +2840,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         BlackList.shared.recordFailure(mediaID)
                     }
                     if isPlaylist || isSegment {
-                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(url.lastPathComponent) upstream HTTP \(httpResponse.statusCode)")
+                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(logPath) upstream HTTP \(httpResponse.statusCode)")
                     }
                     self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: [:], body: nil)
                     completion?()
@@ -2800,7 +2852,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         BlackList.shared.recordFailure(mediaID)
                     }
                     if isPlaylist || isSegment {
-                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(url.lastPathComponent) upstream returned empty data")
+                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(logPath) upstream returned empty data")
                     }
                     self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                     completion?()
@@ -2860,9 +2912,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                     self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
                 } else {
                     if isPlaylist {
-                        print("✅ [HLS LOCAL] \(self.shortMID(mediaID)) served \(url.lastPathComponent) from upstream (\(finalData.count) bytes)")
+                        print("✅ [HLS LOCAL] \(self.shortMID(mediaID)) served \(logPath) from upstream (\(finalData.count) bytes)")
                     } else if isSegment {
-                        print("✅ [HLS SEGMENT] \(self.shortMID(mediaID)) served \(url.lastPathComponent) from upstream (\(finalData.count) bytes)")
+                        print("✅ [HLS SEGMENT] \(self.shortMID(mediaID)) served \(logPath) from upstream (\(finalData.count) bytes)")
                     }
                     self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: finalData)
                 }

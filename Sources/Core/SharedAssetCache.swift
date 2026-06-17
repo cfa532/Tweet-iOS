@@ -1043,6 +1043,40 @@ class SharedAssetCache: ObservableObject {
         // Don't release cached player — LRU handles eviction
     }
 
+    /// Stop all directional preload work that is no longer on screen.
+    /// Unlike `cancelPreloadTask(for:)`, this does not give completed preload players
+    /// a grace window; a fresh scroll means the old directional target is stale.
+    @discardableResult
+    @MainActor func cancelDirectionalPreloadsForScrollStart(except keepMids: Set<String>) -> Int {
+        let stalePreloadMids = Set(preloadTasks.keys)
+            .union(protectedPreloadMids)
+            .union(preloadedPlayerMids)
+            .union(preloadedPlayerGraceExpirations.keys)
+            .subtracting(keepMids)
+
+        guard !stalePreloadMids.isEmpty else { return 0 }
+
+        for mediaID in stalePreloadMids {
+            protectedPreloadMids.remove(mediaID)
+            preloadedPlayerMids.remove(mediaID)
+            preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+
+            cancelPreloadTaskEntry(for: mediaID)
+            cancelAssetLoadTask(for: mediaID)
+            cancelPlayerCreationTasks(for: mediaID)
+
+            if let cachingPlayerItem = cachingPlayerItems[mediaID] {
+                cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                cachingPlayerItem.asset.cancelLoading()
+            }
+
+            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        }
+
+        print("🎬 [SharedAssetCache] Scroll start cancelled \(stalePreloadMids.count) previous preload(s)")
+        return stalePreloadMids.count
+    }
+
     /// Fullscreen owns the user's active video. Match Android's behavior: stop preload
     /// work, release stale preloaded players, and pause other feed players without
     /// tearing down the tapped/protected playback path.

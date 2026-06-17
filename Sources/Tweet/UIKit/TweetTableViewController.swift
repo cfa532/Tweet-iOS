@@ -1934,7 +1934,8 @@ class TweetTableViewController: UITableViewController {
         isUserDragging = true
         isDecelerating = false
         lastCallbackOffset = scrollView.contentOffset.y
-        // Start 2s grace period — preloads cancelled if scroll still active after 2s
+        // Directional preloads restart only after scrolling stops.
+        cancelDirectionalImagePreloads()
         videoCoordinator.onScrollStarted()
     }
 
