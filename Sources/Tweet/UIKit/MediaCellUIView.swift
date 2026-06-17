@@ -1269,8 +1269,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
            item.status == .unknown,
            playerHasLoadedData(player),
            !isSurfaceReturnHandoffPlayer(player, mid: mid) {
-            print("\(logPrefix) 🔄 \(source) cached HLS player has buffered data but item is still .unknown for \(mid): buffered=\(String(format: "%.1f", bufferedAhead))s - rebuilding from proxy cache")
-            return true
+            print("\(logPrefix) ⏳ \(source) cached HLS player has buffered data but item is still .unknown for \(mid): buffered=\(String(format: "%.1f", bufferedAhead))s - keeping player for playback kick")
+            return false
         }
 
         guard coordinatorWantsToPlay,
@@ -2263,7 +2263,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         player.automaticallyWaitsToMinimizeStalling = true
         updateLoadingSpinnerForPlayback(player)
         print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with no buffered data, waiting for active download: \(segmentLabel)")
-        scheduleStartupRecoveryAfterCurrentTask(for: player, reason: "activeHLSSegment-\(reason)")
+        let recoveryReason = reason.hasPrefix("activeHLSSegment-") ? reason : "activeHLSSegment-\(reason)"
+        scheduleStartupRecoveryAfterCurrentTask(for: player, reason: recoveryReason)
         return true
     }
 

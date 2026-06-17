@@ -2275,9 +2275,11 @@ class SharedAssetCache: ObservableObject {
     private func shouldReleaseUnreadyHLSPreload(_ player: AVPlayer, mediaType: MediaType?) -> Bool {
         guard let item = player.currentItem else { return false }
         let isHLSVideo = mediaType == .hls_video || item is CachingPlayerItem
-        guard isHLSVideo,
-              item.status == .unknown else { return false }
-        return playerHasLoadedData(player)
+        guard isHLSVideo else { return false }
+        // Local HLS/proxy players can legitimately remain .unknown until foreground
+        // playback drives AVPlayer. Do not throw away partially warmed HLS preloads;
+        // scroll-start cancellation owns stopping stale preload work.
+        return item.status == .failed
     }
 
     private func startPreloadThumbnailTask(for player: AVPlayer, mediaID: String) {
@@ -2319,13 +2321,19 @@ class SharedAssetCache: ObservableObject {
             let readyEnough = await MainActor.run {
                 if item.status == .readyToPlay { return true }
                 if item.status == .failed { return false }
-                if isHLSVideo { return false }
+                if isHLSVideo {
+                    return self.playerHasLoadedData(player) ||
+                        LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mediaID)
+                }
                 return self.bufferedTimeAhead(for: player) >= 0.75
             }
             if readyEnough { return true }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        return false
+        // HLS can stay .unknown during preload even when the proxy/player is valid.
+        // Keep the player around so promotion to primary can continue from the same
+        // AVPlayerItem instead of restarting playlist and segment requests.
+        return isHLSVideo && item.status != .failed
     }
 
     /// Decode one real frame from a preloaded AVPlayer and cache it as the poster.

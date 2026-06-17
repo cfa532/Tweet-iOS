@@ -339,6 +339,14 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// Truncate a mediaID to 8 chars for log readability.
     private func shortMID(_ id: String) -> String { id.count > 8 ? String(id.prefix(8)) : id }
 
+    private func isExpectedClientClose(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == "Network.NWError" else { return false }
+        // AVPlayer closes proxy responses when it switches variants, has enough
+        // buffered data, or the item is replaced. These are not server failures.
+        return nsError.code == 89 || nsError.code == 32 || nsError.code == 57
+    }
+
     private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
     private let mediaLock = NSLock() // Protects mediaCache and mediaRealURLs
     // Concurrent queue: NWConnection serializes per-connection events internally, so different
@@ -1693,6 +1701,18 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
 
+        // Another independent primary request may have populated the cache while
+        // this request waited for the segment slot. Re-check before going upstream.
+        if isUsableCachedFile(atPath: cachePath) {
+            await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
+            await pool.releaseSlot(mediaID: mediaID)
+            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(logPath) after waiting for segment slot")
+            autoreleasepool {
+                serveFile(path: cachePath, connection: connection, method: method)
+            }
+            return
+        }
+
         // SlotReleaseGuard prevents a double-release: both onConnectionDead (NWConnection closes
         // during bitrate switch) and the IPFS completion callback call releaseSlot. Without
         // the guard, if a new segment for the same mediaID acquired a slot between the two
@@ -2265,11 +2285,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
             connection.send(content: headerData, completion: .contentProcessed { [weak self] error in
                 if let error = error {
-                    // Check if this is a normal cancellation (NWError 89 - Operation canceled)
-                    let nsError = error as NSError
-                    let isCancellation = nsError.domain == "Network.NWError" && nsError.code == 89
-                    
-                    if !isCancellation {
+                    if self?.isExpectedClientClose(error) != true {
                         // Only log non-cancellation errors
                         print("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
                     }
@@ -2312,16 +2328,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
                 if let error = error {
-                    // Check if this is a normal cancellation (NWError 89 - Operation canceled)
-                    // This is expected when AVPlayer cancels requests (e.g., after buffering enough or seeking)
-                    let nsError = error as NSError
-                    let isCancellation = nsError.domain == "Network.NWError" && nsError.code == 89
-                    let isBrokenPipe = nsError.domain == "Network.NWError" && nsError.code == 32
-
-                    if isCancellation || isBrokenPipe {
-                        // Normal cancellation (89) or broken pipe (32) - don't log as warning
-                        // AVPlayer closes connections when it has enough data, is stopped, or replaced
-                    } else {
+                    if self?.isExpectedClientClose(error) != true {
                         // Actual error - log as warning
                         print("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
                     }
