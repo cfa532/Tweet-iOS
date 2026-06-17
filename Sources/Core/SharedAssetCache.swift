@@ -1003,6 +1003,25 @@ class SharedAssetCache: ObservableObject {
         preloadedPlayerGraceExpirations[mediaID] = now.addingTimeInterval(preloadedPlayerGraceInterval)
     }
 
+    @MainActor
+    private func releaseUnreadyPreloadedPlayer(for mediaID: String, player: AVPlayer) {
+        guard playerCache[mediaID] === player,
+              !visibleVideoMids.contains(mediaID) else { return }
+
+        playerCache.removeValue(forKey: mediaID)
+        cacheTimestamps.removeValue(forKey: mediaID)
+        preloadedPlayerMids.remove(mediaID)
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+        cachingPlayerItems.removeValue(forKey: mediaID)
+        cachingPlayerDelegates.removeValue(forKey: mediaID)
+        resourceLoaderDelegates.removeValue(forKey: mediaID)
+
+        releasePlayer(player)
+        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        print("🔮 [PLAYER PRELOAD] Released unready HLS preload for \(shortMID(mediaID)) - disk cache preserved")
+    }
+
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
     /// Called by VideoPlaybackCoordinator when the directional preload set changes and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
@@ -2148,21 +2167,26 @@ class SharedAssetCache: ObservableObject {
 
         // Skip if player already cached
         if let player = playerCache[mediaID] {
-            preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-            preloadedPlayerMids.insert(mediaID)
-            NotificationCenter.default.post(
-                name: .videoPlayerPreloaded,
-                object: self,
-                userInfo: ["mediaID": mediaID]
-            )
-            if !visibleVideoMids.contains(mediaID), player.rate == 0 {
-                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-            }
+            if shouldReleaseUnreadyHLSPreload(player, mediaType: mediaType) {
+                releaseUnreadyPreloadedPlayer(for: mediaID, player: player)
+                if playerCache[mediaID] != nil { return }
+            } else {
+                preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+                preloadedPlayerMids.insert(mediaID)
+                NotificationCenter.default.post(
+                    name: .videoPlayerPreloaded,
+                    object: self,
+                    userInfo: ["mediaID": mediaID]
+                )
+                if !visibleVideoMids.contains(mediaID), player.rate == 0 {
+                    player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                }
 
-            if cachedThumbnail(for: mediaID) == nil {
-                startPreloadThumbnailTask(for: player, mediaID: mediaID)
+                if cachedThumbnail(for: mediaID) == nil {
+                    startPreloadThumbnailTask(for: player, mediaID: mediaID)
+                }
+                return
             }
-            return
         }
 
         // A visibility pass can request the same directional preload several times
@@ -2176,7 +2200,13 @@ class SharedAssetCache: ObservableObject {
             }
             do {
                 let player = try await getOrCreatePlayer(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType)
-                await warmPreloadedPlayer(player, mediaID: mediaID)
+                let didWarm = await warmPreloadedPlayer(player, mediaID: mediaID, mediaType: mediaType)
+                guard didWarm else {
+                    await MainActor.run {
+                        self.releaseUnreadyPreloadedPlayer(for: mediaID, player: player)
+                    }
+                    return
+                }
 
                 if cachedThumbnail(for: mediaID) == nil,
                    let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID) {
@@ -2208,6 +2238,14 @@ class SharedAssetCache: ObservableObject {
         preloadTasks[mediaID] = task
     }
 
+    private func shouldReleaseUnreadyHLSPreload(_ player: AVPlayer, mediaType: MediaType?) -> Bool {
+        guard let item = player.currentItem else { return false }
+        let isHLSVideo = mediaType == .hls_video || item is CachingPlayerItem
+        guard isHLSVideo,
+              item.status == .unknown else { return false }
+        return playerHasLoadedData(player)
+    }
+
     private func startPreloadThumbnailTask(for player: AVPlayer, mediaID: String) {
         guard preloadTasks[mediaID] == nil else { return }
 
@@ -2226,8 +2264,9 @@ class SharedAssetCache: ObservableObject {
         preloadTasks[mediaID] = task
     }
 
-    private func warmPreloadedPlayer(_ player: AVPlayer, mediaID: String) async {
-        guard let item = player.currentItem else { return }
+    private func warmPreloadedPlayer(_ player: AVPlayer, mediaID: String, mediaType: MediaType?) async -> Bool {
+        guard let item = player.currentItem else { return false }
+        let isHLSVideo = mediaType == .hls_video || item is CachingPlayerItem
 
         await MainActor.run {
             item.preferredForwardBufferDuration = 1.0
@@ -2240,14 +2279,19 @@ class SharedAssetCache: ObservableObject {
             }
         }
 
-        for _ in 0..<20 {
-            if Task.isCancelled { return }
+        let attempts = isHLSVideo ? 40 : 20
+        for _ in 0..<attempts {
+            if Task.isCancelled { return false }
             let readyEnough = await MainActor.run {
-                item.status == .readyToPlay || self.bufferedTimeAhead(for: player) >= 0.75
+                if item.status == .readyToPlay { return true }
+                if item.status == .failed { return false }
+                if isHLSVideo { return false }
+                return self.bufferedTimeAhead(for: player) >= 0.75
             }
-            if readyEnough { return }
+            if readyEnough { return true }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
+        return false
     }
 
     /// Decode one real frame from a preloaded AVPlayer and cache it as the poster.

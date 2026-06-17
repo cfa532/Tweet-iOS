@@ -321,10 +321,17 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastDecodedPlaybackSeconds: Double = 0
     private var lastObservedPlaybackSeconds: Double = 0
     private var lastPlaybackRequestPositionSeconds: Double = 0
+    private var hlsBufferedUnknownStartDate: Date = .distantPast
     /// True after the current AVPlayerLayer has rendered a frame for this player.
     /// This lets visible non-primary videos stop their spinner once they have
     /// something real to show, even if frame capture did not produce a poster.
-    private var hasRenderedFrameForCurrentPlayer: Bool = false
+    private var hasRenderedFrameForCurrentPlayer: Bool = false {
+        didSet {
+            if hasRenderedFrameForCurrentPlayer {
+                hlsBufferedUnknownStartDate = .distantPast
+            }
+        }
+    }
     /// Last time this cell asked AVPlayer to play. This is intent only; it is
     /// intentionally separate from lastActualPlaybackDate.
     private var lastPlaybackRequestDate: Date = .distantPast
@@ -1253,9 +1260,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func shouldRebuildCachedFeedPlayer(_ player: AVPlayer, mid: String, source: String) -> Bool {
         guard let item = player.currentItem else { return true }
 
-        guard !playerHasLoadedData(player) else { return false }
-
         if player.error != nil || item.error != nil || item.status == .failed {
+            return true
+        }
+
+        let bufferedAhead = bufferedTimeAhead(for: player)
+        if attachment?.type == .hls_video,
+           item.status == .unknown,
+           playerHasLoadedData(player),
+           !isSurfaceReturnHandoffPlayer(player, mid: mid) {
+            print("\(logPrefix) 🔄 \(source) cached HLS player has buffered data but item is still .unknown for \(mid): buffered=\(String(format: "%.1f", bufferedAhead))s - rebuilding from proxy cache")
             return true
         }
 
@@ -1263,7 +1277,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               isVisible,
               !isVideoAtEnd(player) else { return false }
 
-        let bufferedAhead = bufferedTimeAhead(for: player)
         let isWaitingWithoutBuffer = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
             && bufferedAhead < 0.25
         let isUnknownAndWaiting = item.status == .unknown
@@ -1324,6 +1337,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func softResetFeedPlayerIfEmpty(_ player: AVPlayer, mid: String) {
+        if attachment?.type == .hls_video,
+           player.currentItem?.status == .unknown,
+           playerHasLoadedData(player) {
+            print("\(logPrefix) 🔄 Releasing buffered-but-unknown HLS player for \(mid)")
+            VideoStateCache.shared.clearCachedState(for: mid)
+            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+            LocalHTTPServer.shared.clearCancelledState(for: mid)
+            return
+        }
+
         guard !playerHasLoadedData(player) else {
             print("\(logPrefix) ⏳ Keeping buffered player for \(mid) - loaded data exists")
             return
@@ -1334,7 +1357,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     @discardableResult
     private func rebuildCachedFeedPlayer(_ player: AVPlayer, mid: String, reason: String) -> Bool {
-        guard !playerHasLoadedData(player) else {
+        let isBufferedUnknownHLS = attachment?.type == .hls_video
+            && player.currentItem?.status == .unknown
+            && playerHasLoadedData(player)
+
+        guard !playerHasLoadedData(player) || isBufferedUnknownHLS else {
             print("\(logPrefix) ⏳ \(reason): cached player has loaded data - keeping it")
             return false
         }
@@ -1348,7 +1375,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         player.pause()
         VideoStateCache.shared.clearCachedState(for: mid)
-        SharedAssetCache.shared.softResetPlayer(for: mid)
+        if isBufferedUnknownHLS {
+            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+            LocalHTTPServer.shared.clearCancelledState(for: mid)
+        } else {
+            SharedAssetCache.shared.softResetPlayer(for: mid)
+        }
         return true
     }
 
@@ -2307,6 +2339,45 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
 
         if attachment?.type == .hls_video {
+            let now = Date()
+            let hasDecodedPlayback = hasEstablishedDecodedPlayback(for: player)
+                || lastActualPlaybackDate != .distantPast
+            let hasBufferedUnknownNoFrame = !hasDecodedPlayback
+                && !isVisibleVideoFrameReady(player)
+                && bufferedAhead >= 2.0
+
+            if hasBufferedUnknownNoFrame {
+                if hlsBufferedUnknownStartDate == .distantPast {
+                    hlsBufferedUnknownStartDate = now
+                }
+            } else {
+                hlsBufferedUnknownStartDate = .distantPast
+            }
+
+            let waitedForBufferedUnknown = hlsBufferedUnknownStartDate != .distantPast
+                && now.timeIntervalSince(hlsBufferedUnknownStartDate) >= 8.0
+
+            if hasBufferedUnknownNoFrame,
+               waitedForBufferedUnknown {
+                if let resumeTime = trustedRecoverySeekTime(for: player),
+                   resumeTime.isValid,
+                   resumeTime.seconds.isFinite {
+                    pendingRecoverySeekTime = resumeTime
+                }
+
+                guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
+
+                hlsBufferedUnknownStartDate = .distantPast
+                preserveFrameToCache(skipImageView: imageView.image != nil)
+                restoreCachedPosterForFailureIfNeeded()
+                print("\(logPrefix) 🔄 \(reason): HLS item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered and no decoded frame — rebuilding feed player from proxy cache")
+                return rebuildCurrentFeedPlayerFromProxyCache(
+                    mid: mid,
+                    reacquireReason: "unknownHLSBufferedStartupRecovery",
+                    transitionState: imageView.image != nil ? .thumbnail : .playerLoading
+                )
+            }
+
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             player.currentItem?.preferredForwardBufferDuration = 0
             player.automaticallyWaitsToMinimizeStalling = true
@@ -4958,6 +5029,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastSlowLoadingNudgeDate = .distantPast
         lastStartupBufferReleaseDate = .distantPast
         startupBufferReleaseUntil = .distantPast
+        hlsBufferedUnknownStartDate = .distantPast
         clearBackgroundVideoCoverHold()
         requestedFallbackThumbnailMid = nil
         resetFeedPlayerRebuildBudget()

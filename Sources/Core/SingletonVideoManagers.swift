@@ -709,6 +709,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if isNearEnd { return false }
 
         let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        let hasLoadedData = item.loadedTimeRanges.contains { value in
+            let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
+            return duration.isFinite && duration > 0
+        }
+        if item is CachingPlayerItem,
+           item.status == .unknown,
+           hasLoadedData {
+            return true
+        }
+
         let isWaitingOrColdUnknown = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
             || item.status == .unknown
         return isWaitingOrColdUnknown
@@ -3214,6 +3224,16 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         if isVideoAtEnd(player) { return false }
 
         let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        let hasLoadedData = item.loadedTimeRanges.contains { value in
+            let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
+            return duration.isFinite && duration > 0
+        }
+        if item is CachingPlayerItem,
+           item.status == .unknown,
+           hasLoadedData {
+            return true
+        }
+
         let isWaitingOrColdUnknown = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
             || item.status == .unknown
         return isWaitingOrColdUnknown
