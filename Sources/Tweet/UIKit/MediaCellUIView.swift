@@ -3461,29 +3461,23 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         player.isMuted = MuteState.shared.isMuted
         // Sync capture with skipImageView: imageView may hold a stale first-frame thumbnail,
         // so we go directly to video output to capture the actual last rendered frame.
-        preserveFrameToCache(skipImageView: true)
+        let preservedFinalFrame = preserveFrameToCache(skipImageView: true)
         clearFeedResumeState(for: mid)
-        VideoStateCache.shared.cacheVideoState(
-            for: mid,
-            player: player,
-            time: .zero,
-            wasPlaying: false,
-            originalMuteState: player.isMuted
-        )
-        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
-            DispatchQueue.main.async {
-                guard let self,
-                      let player,
-                      self.player === player,
-                      self.attachment?.mid == mid,
-                      self.isHandlingFinishEvent else { return }
-                self.videoCellState = .paused
-                self.videoPlayerView.isHidden = false
-                self.imageView.isHidden = true
-                self.loadingSpinner.stopAnimating()
-                self.updateReplayButtonVisibility()
-            }
+        VideoStateCache.shared.clearCache(for: mid, force: true)
+
+        if !preservedFinalFrame {
+            restoreCachedPosterForFailureIfNeeded()
         }
+        if imageView.image != nil {
+            showImageView()
+            videoPlayerView.isHidden = true
+        } else {
+            hideImageViewImmediately()
+            videoPlayerView.isHidden = false
+        }
+
+        detachFinishedPlayer(for: mid)
+        videoCellState = .paused
 
         // Notify coordinator to advance to next video (include full identifier: tweet id + video id + index)
         var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweet?.mid ?? ""]
@@ -3501,6 +3495,42 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         cancelDelayedPrimarySpinner()
         loadingSpinner.stopAnimating()
         updateReplayButtonVisibility()
+    }
+
+    private func detachFinishedPlayer(for mid: String) {
+        playerAcquireDebounceTask?.cancel()
+        playerAcquireDebounceTask = nil
+        setupPlayerTask?.cancel()
+        setupPlayerTask = nil
+        slowLoadingRecoveryTask?.cancel()
+        slowLoadingRecoveryTask = nil
+        statusUnknownFallbackTask?.cancel()
+        statusUnknownFallbackTask = nil
+        playbackStartupRecoveryTask?.cancel()
+        playbackStartupRecoveryTask = nil
+        playbackStartupRecoveryRequestDate = nil
+        playbackStartupRecoveryDelay = nil
+
+        removePlayerObservers()
+        removePlayerTimeObserver()
+
+        if let item = videoOutputAttachedItem, let output = videoOutput {
+            item.remove(output)
+        }
+        videoOutput = nil
+        videoOutputAttachedItem = nil
+
+        videoPlayerView.onReadyForDisplay = nil
+        videoPlayerView.setPlayer(nil)
+        hasRenderedFrameForCurrentPlayer = false
+        let detachedPlayer = player
+        player = nil
+
+        detachedPlayer?.pause()
+        detachedPlayer?.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        detachedPlayer?.currentItem?.asset.cancelLoading()
+        detachedPlayer?.replaceCurrentItem(with: nil)
+        SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
     }
 
     // MARK: - Utilities
