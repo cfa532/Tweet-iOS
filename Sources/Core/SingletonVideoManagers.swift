@@ -2886,6 +2886,13 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 isBuffering = true
                 pendingFeedResumeTime = nil
                 activeFeedHandoffTime = nil
+                if isVideoAtEnd(cachedPlayer) {
+                    // A feed player can be handed to detail while it is within the
+                    // finish threshold. Pause before installing completion observers
+                    // so detail gets a controlled rewind instead of an immediate
+                    // finish event followed by a spinner-only resume.
+                    cachedPlayer.pause()
+                }
                 resetDetailRenderingProgress(to: currentPlayer?.currentTime() ?? .zero)
                 setupDetailVideoOutput(for: cachedItem)
                 applyStartupAudioMuteIfNeeded()
@@ -3226,6 +3233,23 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
 
         if isUsingBorrowedFeedPlayer {
+            if duration.isValid && duration.seconds > 0 {
+                let remaining = duration.seconds - playerItem.currentTime().seconds
+                if remaining <= 0.5 {
+                    let player = currentPlayer
+                    markWaitingForStartupSeek()
+                    print("📱 [DetailVideoManager] Seek borrowed feed player at end \(shortMID(mid)): remaining=\(String(format: "%.2f", remaining))")
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            self?.isSeekingToStartupPosition = false
+                            self?.applyStartupAudioMuteIfNeeded()
+                            self?.startDetailPlayback(player: player, item: playerItem, log: "borrowed feed player at end")
+                            print("▶️ [DetailVideoManager] Playing borrowed feed player from beginning")
+                        }
+                    }
+                    return
+                }
+            }
             applyStartupAudioMuteIfNeeded()
             startDetailPlayback(player: currentPlayer, item: playerItem, log: "borrowed feed player")
             print("▶️ [DetailVideoManager] Playing borrowed feed player without seek")

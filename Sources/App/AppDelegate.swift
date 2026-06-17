@@ -11,6 +11,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// During long background recovery we restart LocalHTTPServer + clear players asynchronously; attempting
     /// to recover/play while this is in-flight causes "zombie" players (nil currentItem / NaN time).
     static var isVideoInfrastructureReady = true
+    #if DEBUG
+    /// Test hook: force the localhost proxy down on every real background entry so
+    /// foreground recovery exercises the same path as an OS-killed listener.
+    private static let forceStopLocalHTTPServerOnBackground = true
+    #endif
     
     // Loading overlay window for server restart
     private var loadingWindow: UIWindow?
@@ -356,6 +361,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("🔥 [AppDelegate] Performing immediate background memory release")
             MemoryCapManager.shared.performBackgroundMemoryRelease()
             AppDelegate.didPerformAggressiveCleanup = true
+            #if DEBUG
+            if AppDelegate.forceStopLocalHTTPServerOnBackground {
+                print("[AppDelegate] 🧪 DEBUG: stopping LocalHTTPServer for foreground recovery testing")
+                LocalHTTPServer.shared.stopImmediatelyForBackground()
+            }
+            #endif
 
             print("[AppDelegate] 🚀 Performing IMMEDIATE background message check after cleanup")
             self?.performImmediateBackgroundCheck()
