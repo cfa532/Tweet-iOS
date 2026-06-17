@@ -1,6 +1,6 @@
 # Memory Management System
 
-**Last Updated:** June 3, 2026
+**Last Updated:** June 17, 2026
 **Status:** Active
 
 ## Overview
@@ -154,16 +154,21 @@ private let emergencyThreshold: Double = 0.95 // 95% = 1.9GB
 
 **Video Feed Fine Tuning (June 2026):**
 
-All feed surfaces now use the same preload budget so profile navigation has the same next-video smoothness as the main feed:
+All feed surfaces now use the same preload budget so profile navigation has the same next-video behavior as the main feed:
 
-| Surface | Tweet preload window | Directional AVPlayer pre-creation | Max concurrent video loads |
-|---------|----------------------|------------------------------------|----------------------------|
-| Main/standard feeds | current + next 2 tweets | 2 nearby off-screen players | 4 |
-| Profile feeds | current + next 2 tweets | 2 nearby off-screen players | 4 |
+| Surface | Directional video preload window | Directional image preload window | Max concurrent player creations |
+|---------|----------------------------------|------------------------------------|-----------------------------|
+| Main/standard feeds | current visible video + next 1 likely video after scroll stop | 2 rows ahead + 1 opposite row, max 4 image tasks | 2 |
+| Profile feeds | current visible video + next 1 likely video after scroll stop | 2 rows ahead + 1 opposite row, max 4 image tasks | 2 |
 
 Additional guardrails:
+- Visibility decisions are media-level, not tweet-level. The actual image/video cell intersection controls load/cancel behavior.
+- When scrolling starts, pending directional image/video preloads are cancelled. On-screen video work remains protected.
+- Directional video preloads start only after initial load or scroll stop. They do not start while the table is tracking, dragging, or decelerating.
+- Scroll-start cancellation also stops stale preload tasks, asset loads, player creation tasks, and active local-server downloads for non-visible media. It intentionally skips the completed-preload grace period.
 - Off-screen preloaded players may decode/cache a poster frame, but paused off-screen players do not keep network streaming enabled.
 - Visible media still gets priority over background preload work.
+- If a feed player is released or rebuilt for memory, keep a last-frame cover when possible. Remove any stale cover as soon as the attached player has displayable content.
 - Directional preloads are cleared when the active window changes so stale adjacent players do not survive fast scrolling.
 
 **Caching Strategy:**
@@ -985,16 +990,20 @@ print("DEBUG: [ImageCacheManager] ...")
 - **Solution:** Synchronized both with 1GB threshold
 - **Impact:** No double cleanup on warnings
 
-### 7. Video Preload Fine Tuning (June 2026)
-- **Problem:** Off-screen preloaded players could continue network streaming while paused after poster-frame work.
+### 7. Video Preload, Visibility, and Cover Rules (June 2026)
+- **Problem:** Off-screen preloaded players could continue network streaming while paused after poster-frame work, and tweet-level visibility made some media load/cancel decisions too broad.
 - **Solution:**
-  - Main, standard, and profile feeds use the same preload budget: current + next 2 tweets, 2 directional off-screen players, and 4 concurrent video loads.
+  - Main, standard, and profile feeds use the same preload budget: the current visible video plus 1 likely next video after scroll stop, with at most 2 player creations in flight.
+  - Image preloads use 2 rows ahead, 1 opposite row, and 4 in-flight directional image tasks.
+  - Scrolling start cancels pending directional preloads and stale non-visible downloads. Scrolling stop is the normal time to schedule new directional video preloads.
   - Paused off-screen preloaded players no longer keep network streaming enabled after poster-frame work.
-  - Any positive media-cell intersection counts as visible for loading.
+  - Media visibility, not tweet visibility, controls media load and cancel decisions. Any positive media-cell intersection counts as visible for loading.
+  - Feed player release/rebuild preserves a last-frame cover when possible, and loaded player content removes stale covers before playback starts.
 - **Impact:**
   - Profile feeds keep the same next-video smoothness as the main feed.
   - Background players are less likely to continue downloading large media while paused.
-  - Visible or partially visible videos are prioritized for loading.
+  - Visible or partially visible media is prioritized for loading without keeping invisible media downloads alive.
+  - Memory-saving player release is less visually disruptive.
 
 ---
 

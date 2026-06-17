@@ -1,7 +1,7 @@
 # Tweet-iOS Architecture Overview
 
-**Last Updated:** May 2026  
-**Version:** 3.2
+**Last Updated:** June 2026  
+**Version:** 3.3
 
 ## What This Architecture Optimizes For
 
@@ -98,19 +98,23 @@ At a high level:
 #### Video strategy: from user intent to network behavior
 
 **Visibility-driven autoplay**
-- Start threshold is about when media becomes meaningfully visible.
+- Visibility is measured at the media cell level, not the containing tweet row.
+- Any positive media-cell intersection can begin cover/player loading.
+- Autoplay still uses stricter visible-video selection so rapid edge intersections do not steal playback.
 - Continue threshold is stricter, which reduces rapid start/stop flapping while scrolling.
 
 **Directional preload strategy**
-- Preload the next likely-to-watch videos with a small directional window.
-- Main, standard, and profile feeds pre-create up to 2 nearby off-screen players.
-- Feed-level video preloading uses current + next 2 tweets and caps concurrent video loads at 4.
+- Preload the next likely-to-watch video with a small directional window.
+- Main, standard, and profile feeds pre-create up to 1 nearby off-screen player after scroll stop.
+- Feed-level player creation is capped at 2 in-flight creations, with visible/primary work taking priority.
+- Directional image preload stays wider: 2 rows ahead, 1 opposite row, max 4 image tasks.
 - Keep preload scope intentionally tight to avoid over-downloading content users may never see.
 
 **Off-screen cancellation strategy**
+- Scroll start cancels pending directional image/video preload work before new dragging/deceleration begins.
 - Once media is behind the active window, cancel unnecessary work in batches.
 - Cancellation includes async loading, in-flight player creation, and proxy downloads.
-- Protected sets prevent accidental cancellation of media that is about to be visible.
+- Protected sets prevent accidental cancellation of media that is on-screen or actively selected.
 
 **Primary video prioritization**
 - As soon as coordinator selects a primary video, proxy/network paths prioritize it.

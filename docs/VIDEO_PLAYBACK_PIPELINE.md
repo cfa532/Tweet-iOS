@@ -34,7 +34,15 @@ When the coordinator picks a primary:
 
 If the primary video gets stuck (hasn't actually played for 15 seconds), the coordinator picks a different one.
 
-**Directional preload budget:** The coordinator pre-creates a small number of nearby off-screen players so the next likely video can appear quickly. Main, standard, and profile feeds use 2 directional player preloads.
+**Directional preload budget:** The coordinator pre-creates only the next likely off-screen player after scrolling has stopped. Main, standard, and profile feeds use 1 directional player preload.
+
+**Current business rules:**
+- Visibility is measured at the media cell level, not the tweet row level. A partially visible image/video can load its cover/player, but off-screen media should stop network work.
+- When scrolling starts, pending directional video and image preloads are cancelled. On-screen video work stays protected.
+- While scrolling is active, directional video preloads do not start. They resume only after scroll stop or initial load.
+- Primary playback is foreground work. Preloads must never starve the selected visible video.
+- If a feed player is released or rebuilt to save memory, keep a last-frame cover when possible. Once the attached player has displayable content, remove any stale cover before playback starts.
+- On first HLS access, race `master.m3u8` and `playlist.m3u8`; use whichever valid playlist responds first.
 
 ---
 
@@ -65,7 +73,7 @@ noContent → thumbnail → playerLoading → playerReady → playing
 - The player item must be in `.readyToPlay` status (not still loading or failed)
 
 **After play() is called**, the system watches two KVO signals:
-- **`timeControlStatus == .playing`**: Actual frames are rendering → stop spinner, hide thumbnail, show real video
+- **`timeControlStatus == .playing`**: Actual frames are rendering → stop spinner, remove the cover, show real video
 - **`timeControlStatus == .waitingToPlayAtSpecifiedRate`**: Buffering → show spinner
 - **`item.status == .failed`**: Something broke → clean up, show retry button
 
@@ -109,9 +117,12 @@ AVPlayer request → localhost proxy → check disk cache →
 
 | Event | What happens |
 |---|---|
-| Cell scrolls onto screen | Register with coordinator, start loading thumbnail, debounce player creation |
+| Media cell becomes visible | Register with coordinator, start loading cover/thumbnail, debounce player creation |
+| User starts scrolling | Cancel pending directional image/video preloads, keep on-screen video work protected |
+| User is still scrolling | Do not start new directional video preloads |
+| Scroll stops | Start the next likely directional video preload and nearby image preloads |
 | Coordinator selects this cell | Send play command, set bandwidth priority |
-| Cell scrolls off screen | Pause player, cancel network downloads, save position, unregister from coordinator |
+| Media cell scrolls off screen | Pause player, cancel network downloads, save position, unregister from coordinator |
 | User scrolls back to same cell | Reclaim cached player (instant), resume from saved position |
 | User taps video | Loan player to fullscreen view, pause feed playback |
 | User closes fullscreen | Reclaim loaned player, resume in feed |
@@ -152,7 +163,7 @@ Cell appears on screen
               → fetchAndServe() → IPFS download
               → SegmentStreamDelegate: stream to AVPlayer + write to disk
   → KVO: timeControlStatus → .playing
-     → spinner stops, thumbnail hides, video is playing
+     → spinner stops, cover is removed, video is playing
 ```
 
 ---
@@ -169,7 +180,7 @@ IPFS bandwidth is limited. Playing multiple videos simultaneously would cause al
 Creating an AVPlayer is expensive (memory, network, CPU). During fast scrolling, cells appear and disappear in under 100ms. The debounce prevents creating players for cells the user will never see.
 
 ### Why profile feeds use the same preload budget?
-Profiles now use the same preload budget as the main feed: current + 2 next tweets for loading, 2 directional off-screen AVPlayers, and 4 concurrent video loads. This keeps profile scrolling behavior consistent with the main feed while relying on the paused-preload guardrail below to avoid unnecessary background downloading.
+Profiles now use the same preload budget as the main feed: the current visible video plus 1 next likely directional off-screen AVPlayer, with at most 2 player creations in flight. This keeps profile scrolling behavior consistent with the main feed while keeping memory and IPFS bandwidth predictable.
 
 Paused off-screen preload players are also not allowed to keep network streaming enabled after poster-frame work. This preserves a fast next-video path without letting background players continue downloading large media.
 
