@@ -263,6 +263,7 @@ class FollowingsTweetViewModel: ObservableObject {
     }
     
     func handleDeletedTweet(_ tweetId: String) {
+        TweetDeletionRegistry.shared.markDeleted(tweetId)
         tweets.removeAll { $0.mid == tweetId }
         TweetCacheManager.shared.deleteTweet(mid: tweetId)
         // Also remove from main feed cache if it exists there

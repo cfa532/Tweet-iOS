@@ -3336,6 +3336,17 @@ final class HproseInstance: ObservableObject {
 
         print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
 
+        await MainActor.run {
+            TweetDeletionRegistry.shared.markDeleted(deletedTweetId)
+            TweetCacheManager.shared.deleteTweet(mid: deletedTweetId)
+            Tweet.clearInstance(mid: deletedTweetId)
+            NotificationCenter.default.post(
+                name: .tweetDeleted,
+                object: nil,
+                userInfo: ["tweetId": deletedTweetId, "confirmed": true]
+            )
+        }
+
         // Only decrement tweetCount if appUser is the author
         // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
         if tweetAuthorId == appUser.mid {

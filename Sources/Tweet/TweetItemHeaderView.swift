@@ -407,6 +407,7 @@ struct TweetMenu: View {
             }
             
             // If deletion fails, post restoration notification
+            TweetDeletionRegistry.shared.unmarkDeleted(tweet.mid)
             NotificationCenter.default.post(
                 name: .tweetRestored,
                 object: nil,

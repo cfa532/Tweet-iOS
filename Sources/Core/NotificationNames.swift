@@ -1,6 +1,34 @@
 import Foundation
 import Combine
 
+final class TweetDeletionRegistry {
+    static let shared = TweetDeletionRegistry()
+
+    private let lock = NSLock()
+    private var deletedTweetIds: Set<String> = []
+
+    private init() {}
+
+    func markDeleted(_ tweetId: String) {
+        lock.lock()
+        deletedTweetIds.insert(tweetId)
+        lock.unlock()
+    }
+
+    func unmarkDeleted(_ tweetId: String) {
+        lock.lock()
+        deletedTweetIds.remove(tweetId)
+        lock.unlock()
+    }
+
+    func isDeleted(_ tweetId: String) -> Bool {
+        lock.lock()
+        let isDeleted = deletedTweetIds.contains(tweetId)
+        lock.unlock()
+        return isDeleted
+    }
+}
+
 extension Notification.Name {
     // MARK: - User Related
     /// Posted when a user's avatar changes

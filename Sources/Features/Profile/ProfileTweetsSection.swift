@@ -59,6 +59,9 @@ class ProfileTweetsViewModel: ObservableObject {
             // Filter out pinned tweets from server response
             let filteredTweets = serverTweets.filter { tweet in
                 if let tweet = tweet {
+                    guard !TweetDeletionRegistry.shared.isDeleted(tweet.mid) else {
+                        return false
+                    }
                     let isPinned = pinnedTweetIds.contains(tweet.mid)
                     if isPinned {
                     }
@@ -84,6 +87,8 @@ class ProfileTweetsViewModel: ObservableObject {
     }
 
     func handleNewTweet(_ tweet: Tweet) {
+        guard !TweetDeletionRegistry.shared.isDeleted(tweet.mid) else { return }
+
         // Only show private tweets if the current user is the author
         if !(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid {
             // Don't add the tweet if it's pinned
@@ -101,6 +106,7 @@ class ProfileTweetsViewModel: ObservableObject {
     func mergeResyncedTweets(_ resyncedTweets: [Tweet]) {
         let visibleTweets = resyncedTweets.filter { tweet in
             tweet.authorId == user.mid &&
+            !TweetDeletionRegistry.shared.isDeleted(tweet.mid) &&
             (!(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid) &&
             !pinnedTweetIds.contains(tweet.mid)
         }
@@ -114,6 +120,7 @@ class ProfileTweetsViewModel: ObservableObject {
     }
 
     func handleDeletedTweet(_ tweetId: String) {
+        TweetDeletionRegistry.shared.markDeleted(tweetId)
         tweets.removeAll { $0.mid == tweetId }
         TweetCacheManager.shared.deleteTweet(mid: tweetId)
     }

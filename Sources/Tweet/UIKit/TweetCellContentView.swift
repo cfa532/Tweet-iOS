@@ -853,6 +853,7 @@ class TweetCellContentView: UIView {
                     } catch {
                         print("DEBUG: [TweetCellContentView] deleteTweet FAILED — raw error: \(error) | localizedDescription: \(error.localizedDescription)")
                         // Restore tweet on failure
+                        TweetDeletionRegistry.shared.unmarkDeleted(tweet.mid)
                         NotificationCenter.default.post(
                             name: .tweetRestored,
                             object: nil,

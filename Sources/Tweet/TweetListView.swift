@@ -130,6 +130,10 @@ struct TweetListView: View {
             }
         }
     }
+
+    private func visibleTweetsExcludingDeleted(_ candidateTweets: [Tweet]) -> [Tweet] {
+        candidateTweets.filter { !TweetDeletionRegistry.shared.isDeleted($0.mid) }
+    }
     
     /// Trim oldest tweets from memory if array exceeds maximum size
     /// Keeps most recent tweets to prevent unbounded memory growth
@@ -429,6 +433,7 @@ struct TweetListView: View {
                         let tweetIndex = tweetsBinding.wrappedValue.firstIndex(where: { $0.mid == tweetId })
                         
                         if notification.name == .tweetDeleted {
+                            TweetDeletionRegistry.shared.markDeleted(tweetId)
                             // For tweet deletion, handle directly in TweetListView
                             if let index = tweetIndex {
                                 tweetsBinding.wrappedValue.remove(at: index)
@@ -466,6 +471,7 @@ struct TweetListView: View {
             queue: .main
         ) { notif in
             guard let tweetId = notif.userInfo?["tweetId"] as? String else { return }
+            TweetDeletionRegistry.shared.unmarkDeleted(tweetId)
             // Only restore if not already in the list
             guard !tweetsBinding.wrappedValue.contains(where: { $0.mid == tweetId }) else { return }
             if let tweet = Tweet.getInstance(for: tweetId) {
@@ -526,7 +532,7 @@ struct TweetListView: View {
         do {
             // Fetch fresh tweets from server (page 0, no cache)
             let freshTweets = try await tweetFetcher(0, pageSize, false)
-            let validTweets = freshTweets.compactMap { $0 }
+            let validTweets = visibleTweetsExcludingDeleted(freshTweets.compactMap { $0 })
             
             await MainActor.run {
                 if !validTweets.isEmpty {
@@ -566,7 +572,7 @@ struct TweetListView: View {
             // Android: if the requested cached page has anything renderable, show it
             // immediately and let server refresh / scroll pagination handle the rest.
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
-            let validPage = tweetsFromCache.compactMap { $0 }
+            let validPage = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
             let hasCachedContent = !validPage.isEmpty
 
             if hasCachedContent {
@@ -725,10 +731,11 @@ struct TweetListView: View {
                     await MainActor.run {
                         // For preserveOrder lists (bookmarks/favorites), append in server order
                         // For other lists, merge with timestamp sorting
+                        let visibleCachedTweets = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
                         if preserveOrder {
-                            tweets.appendTweetsPreservingOrder(tweetsFromCache.compactMap { $0 })
+                            tweets.appendTweetsPreservingOrder(visibleCachedTweets)
                         } else {
-                            tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
+                            tweets.mergeTweets(visibleCachedTweets)
                         }
 
                         // Set hasMoreTweets based on cache - if we got a full page, there might be more
@@ -796,7 +803,7 @@ struct TweetListView: View {
         while true {
             do {
                 let tweetsFromServer = try await tweetFetcher(pageToLoad, pageSize, false)
-                let validServerTweets = tweetsFromServer.compactMap { $0 }
+                let validServerTweets = visibleTweetsExcludingDeleted(tweetsFromServer.compactMap { $0 })
                 let shouldLoadNextPage = validServerTweets.isEmpty && tweetsFromServer.count >= pageSize
                 foundValidTweets = foundValidTweets || !validServerTweets.isEmpty
                 lastResponseSize = tweetsFromServer.count
