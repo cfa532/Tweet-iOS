@@ -495,6 +495,7 @@ struct SimpleVideoPlayer: View {
     @State private var timeRemainingDisplayTask: Task<Void, Never>?
     // Track setup tasks to cancel them when view disappears
     @State private var setupPlayerTask: Task<Void, Never>?
+    @State private var retryTask: Task<Void, Never>?
     var timeRemainingText: String {
         guard let duration = player?.currentItem?.duration.seconds,
               duration.isFinite,
@@ -1258,6 +1259,12 @@ struct SimpleVideoPlayer: View {
         // CRITICAL FIX: Cancel any pending setup tasks to prevent memory leaks
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
+        retryTask?.cancel()
+        retryTask = nil
+
+        if mode != .mediaCell {
+            SharedAssetCache.shared.cancelTransientLoading(for: mid)
+        }
 
         // CRITICAL FIX: Cancel any pending waiting task to prevent memory leaks during fast scrolling
         waitingForPlayerTask?.cancel()
@@ -1322,20 +1329,9 @@ struct SimpleVideoPlayer: View {
                 // Applied mute state on disappear
             }
             
-            // Stop network usage when video goes out of sight
-            if let playerItem = player?.currentItem {
-                if let cachingPlayerItem = playerItem as? CachingPlayerItem {
-                    cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-                }
-            }
-            
-            // Also cancel loading tasks in SharedAssetCache for this video
-            Task { @MainActor in
-                if let parentTweetId = parentTweetId {
-                    // Cancel loading tasks even if cached content exists (video is out of sight)
-                    SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweetId)
-                }
-            }
+            // Tweet-wide download cancellation is handled by the media grid when
+            // the tweet leaves the viewport. A single media view disappearing is
+            // not enough to declare the tweet out of sight.
         } else if mode == .mediaBrowser {
             // Exiting fullscreen - ALWAYS pause and restore mute state for MediaCell reuse
             player?.pause()
@@ -4958,7 +4954,10 @@ struct SimpleVideoPlayer: View {
                 player = nil
                 retryAttempts += 1
 
-                Task { @MainActor in
+                retryTask?.cancel()
+                retryTask = Task { @MainActor in
+                    defer { self.retryTask = nil }
+
                     // Check author health first
                     if let authorId = self.authorId {
                         do {
@@ -4971,7 +4970,7 @@ struct SimpleVideoPlayer: View {
                     try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
 
                     // Only retry if still visible and should load
-                    guard self.isVisible && self.shouldLoadVideo else {
+                    guard !Task.isCancelled, self.isVisible && self.shouldLoadVideo else {
                         return
                     }
 
@@ -4999,6 +4998,8 @@ struct SimpleVideoPlayer: View {
         case .manualReset, .networkRecovery:
             // CRITICAL: For manual reset, completely clean up the broken player
             // This ensures we don't reuse a broken cached player
+            retryTask?.cancel()
+            retryTask = nil
             removePlayerObservers()
             cleanupFailedPlayer()
             
@@ -5015,6 +5016,8 @@ struct SimpleVideoPlayer: View {
             }
             
         case .backgroundRecovery:
+            retryTask?.cancel()
+            retryTask = nil
             player = nil
             playbackState = .notStarted
             loadingState = .idle  // Reset to idle - setupPlayer() will set to .loading

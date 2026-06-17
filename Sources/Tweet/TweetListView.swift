@@ -357,8 +357,9 @@ struct TweetListView: View {
             // This prevents unnecessary video stop/restart cycles that cause flickering
             if hasAppearedOnce {
                 // Returning from navigation - notify to restart video playback
-                // Delay slightly to ensure layout is complete
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                // Notify promptly so the UIKit viewWillAppear fallback can stand down.
+                // TweetTableViewController applies the actual settle delay before resuming.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     NotificationCenter.default.post(name: .feedViewDidAppear, object: nil,
                                                     userInfo: ["feedIdentifier": feedIdentifier])
                 }
@@ -491,10 +492,7 @@ struct TweetListView: View {
     
     /// Setup observer to fetch new tweets when app comes to foreground
     private func setupForegroundObserver() {
-        // Remove existing observer if any
-        if let observer = foregroundObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
+        guard foregroundObserver == nil else { return }
         
         // Listen for app becoming active (returning from background or screen lock)
         foregroundObserver = NotificationCenter.default.addObserver(
@@ -514,8 +512,6 @@ struct TweetListView: View {
                 await self.fetchNewTweetsOnForeground()
             }
         }
-        
-        print("📱 [FOREGROUND] Observer set up - will fetch tweets on app foreground")
     }
     
     /// Fetch new tweets when app comes to foreground

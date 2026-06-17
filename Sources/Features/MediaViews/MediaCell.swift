@@ -63,6 +63,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     @State private var videoReloadTrigger = false
     @State private var videoFrame: CGRect = .zero
     @State private var isInViewport: Bool = false
+    @State private var imageLoadTask: Task<Void, Never>?
     @ObservedObject private var muteState = MuteState.shared
     @Environment(\.videoListProvider) private var videoListProvider
 
@@ -227,6 +228,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             isVisible = false
 
             // Cancel any pending image loads to prevent memory leaks
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
             GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
 
             // Clean up foreground observer
@@ -480,13 +483,22 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         // Capture necessary data before entering detached task
         let attachmentCopy = attachment
         let effectiveBaseUrlCopy = effectiveBaseUrl
+        let imageCache = imageCache
         
-        Task.detached(priority: .userInitiated) {
-            // ✅ CRITICAL: This runs on BACKGROUND thread, not main thread
+        imageLoadTask?.cancel()
+        imageLoadTask = Task.detached(priority: .userInitiated) {
+            guard !Task.isCancelled else { return }
+            // This runs on a background thread; disk I/O stays off the main thread.
             // Disk I/O happens here without blocking UI rendering
             let cachedImage = imageCache.getCompressedImage(for: attachmentCopy)
+            guard !Task.isCancelled else { return }
             
             await MainActor.run {
+                guard !Task.isCancelled,
+                      self.isVisible,
+                      self.attachment.mid == attachmentCopy.mid else { return }
+
+                self.imageLoadTask = nil
                 if let cachedImage = cachedImage {
                     self.image = cachedImage
                     self.isLoading = false
@@ -499,6 +511,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                         attachment: attachmentCopy,
                         baseUrl: effectiveBaseUrlCopy
                     ) { loadedImage in
+                        guard self.isVisible,
+                              self.attachment.mid == attachmentCopy.mid else { return }
                         self.image = loadedImage
                         self.isLoading = false
                     }

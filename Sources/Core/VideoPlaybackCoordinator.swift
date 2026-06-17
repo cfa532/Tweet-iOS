@@ -454,7 +454,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                       tableView.window != nil else {
                     return
                 }
-                self.recoverVisiblePlaybackAfterForeground(reason: "overlayDismiss")
+                self.recoverVisiblePlaybackAfterInterruption(
+                    reason: "overlayDismiss",
+                    isForegroundRecovery: false
+                )
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -843,7 +846,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// and its retweet are tracked independently.
     private var previousVisibleIdentifiers: Set<String> = []
 
-    /// Update media cells in visible tweet rows and therefore should load.
+    /// Update media cells that are physically visible and therefore should load.
     /// This is intentionally broader than updateOnScreenMediaCells(_:), which is
     /// the autoplay set and requires a media cell to be at least 50% visible.
     func updateLoadVisibleMediaCells(_ identifiers: Set<String>) {
@@ -1217,10 +1220,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Re-issue or rebuild playback for the visible primary when returning to the feed.
-    /// Used by older feed-appear hooks; delegates to the foreground recovery path so
-    /// stale primaryPlaying state cannot suppress player recreation.
+    /// This is a navigation/feed visibility recovery, not an app foreground recovery.
     func requestResumePrimaryPlaybackIfVisible() {
-        recoverVisiblePlaybackAfterForeground(reason: "feedResume")
+        recoverVisiblePlaybackAfterInterruption(reason: "feedResume", isForegroundRecovery: false)
     }
 
     // MARK: - Background/Foreground Video Memory Management
@@ -1345,7 +1347,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Get up to `count` preloadable videos in the scroll direction that are not currently visible.
     private func getNextVideosInScrollDirection(count: Int) -> [VideoPlaybackInfo] {
-        // Use the tweet-row load-visible set so media in any partially visible tweet is
+        // Use the low-threshold load-visible set so any media already on screen is
         // treated as foreground work. Preload starts after the farthest visible media,
         // so the target may be beyond the adjacent tweet if that tweet is still visible.
         let visibleIndices: [Int]
@@ -1796,11 +1798,16 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// old primary is already playing.
     @objc private func handleForegroundRecovery(_ notification: Notification) {
         shouldPreserveStateOnForeground = false
-        recoverVisiblePlaybackAfterForeground(reason: "reloadVisibleVideosOnly")
+        recoverVisiblePlaybackAfterInterruption(
+            reason: "reloadVisibleVideosOnly",
+            isForegroundRecovery: true
+        )
     }
 
-    func recoverVisiblePlaybackAfterForeground(reason: String) {
-        clearFinishedAutoplayGateForForeground()
+    func recoverVisiblePlaybackAfterInterruption(reason: String, isForegroundRecovery: Bool) {
+        if isForegroundRecovery {
+            clearFinishedAutoplayGateForForeground()
+        }
 
         guard !isPlaybackSuppressedByOverlay,
               isFeedVisible else {
@@ -1857,7 +1864,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         lastPrimarySwitchTime = Date()
         LocalHTTPServer.shared.setPrimaryMediaID(target.videoMid)
         delegate.shouldPlayVideo(withMid: target.videoMid)
-        refreshDirectionalPreloads(reason: "foreground recovery \(reason)", throttle: false)
+        let preloadReason = isForegroundRecovery ? "foreground recovery \(reason)" : reason
+        refreshDirectionalPreloads(reason: preloadReason, throttle: false)
     }
 
     /// Foreground return is a fresh autoplay decision for whatever is onscreen.

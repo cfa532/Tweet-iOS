@@ -30,6 +30,23 @@ class TweetUploadManager {
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
     }
+
+    private static func isVideoTypeIdentifier(_ typeIdentifier: String) -> Bool {
+        let value = typeIdentifier.lowercased()
+        return value.hasPrefix("public.movie") ||
+            value.hasPrefix("public.video") ||
+            value.contains("video") ||
+            value.contains("movie") ||
+            value.contains("quicktime") ||
+            value.contains("mpeg-4") ||
+            value.contains("mpeg4") ||
+            value.contains("mp4") ||
+            value.contains("m4v") ||
+            value.contains("mov") ||
+            value.contains("avi") ||
+            value.contains("mkv") ||
+            value.contains("webm")
+    }
     
     /// Cancel current upload task
     func cancelCurrentUpload() {
@@ -66,6 +83,7 @@ class TweetUploadManager {
             fileName: fileName,
             data: data
         )
+        print("📎 [Upload] Detected media type: \(mediaType.rawValue) for typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil")")
         
         // Video needs special processing (normalization, HLS conversion)
         if mediaType == .video {
@@ -98,7 +116,7 @@ class TweetUploadManager {
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
         // Check if any items contain videos
         let hasVideos = itemData.contains { item in
-            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+            Self.isVideoTypeIdentifier(item.typeIdentifier)
         }
         
         // Use upload queue to prevent concurrent upload conflicts
@@ -113,7 +131,7 @@ class TweetUploadManager {
     func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
         // Check if any items contain videos
         let hasVideos = itemData.contains { item in
-            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+            Self.isVideoTypeIdentifier(item.typeIdentifier)
         }
         
         // Use upload queue to prevent concurrent upload conflicts
@@ -133,7 +151,7 @@ class TweetUploadManager {
     ) {
         // Check if any items contain videos
         let hasVideos = itemData.contains { item in
-            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+            Self.isVideoTypeIdentifier(item.typeIdentifier)
         }
         
         // Use upload queue to prevent concurrent upload conflicts
@@ -1484,14 +1502,7 @@ extension TweetUploadManager {
             
             // Determine if this is a video BEFORE calling uploadToIPFS so we can capture it in the closure
             let typeIdLower = item.typeIdentifier.lowercased()
-            let isVideo = typeIdLower.contains("video") || 
-                          typeIdLower.contains("movie") || 
-                          typeIdLower.contains("mpeg") ||
-                          typeIdLower.contains("mp4") ||
-                          typeIdLower.contains("m4v") ||
-                          typeIdLower.contains("quicktime") ||
-                          typeIdLower.contains("avi") ||
-                          typeIdLower.contains("mov")
+            let isVideo = Self.isVideoTypeIdentifier(item.typeIdentifier)
             
             // Determine if this is an image for local caching
             let isImage = typeIdLower.contains("image") ||
@@ -1698,7 +1709,7 @@ extension TweetUploadManager {
         var hasVideoItem = false
         
         for item in pendingUpload.itemData {
-            if item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie") {
+            if Self.isVideoTypeIdentifier(item.typeIdentifier) {
                 hasVideoItem = true
                 
                 var aspectRatio: Float?
@@ -1817,9 +1828,7 @@ extension TweetUploadManager {
             return
         }
         
-        guard let videoItem = pendingUpload.itemData.first(where: {
-            $0.typeIdentifier.contains("video") || $0.typeIdentifier.contains("movie")
-        }) else {
+        guard let videoItem = pendingUpload.itemData.first(where: { Self.isVideoTypeIdentifier($0.typeIdentifier) }) else {
             print("DEBUG: No video item found for polling resume")
             return
         }

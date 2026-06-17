@@ -984,20 +984,28 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// Synchronous — safe to call from the main thread (uses NSLock, not actor).
     /// Used by the duration-mismatch timer to avoid treating a quality-switch stall as a finished video.
     func hasActiveHLSSegmentDownloads(for mediaID: String) -> Bool {
-        streamingSessionsLock.lock()
-        defer { streamingSessionsLock.unlock() }
-        return streamingSessions.keys.contains { $0.hasPrefix("\(mediaID)/stream/") }
+        hlsDataTasksLock.lock()
+        defer { hlsDataTasksLock.unlock() }
+        return hlsDataTasks[mediaID]?.values.contains { task in
+            let path = task.currentRequest?.url?.path ?? task.originalRequest?.url?.path ?? ""
+            return path.hasSuffix(".ts")
+        } ?? false
     }
 
     /// Returns the relative paths of all in-flight HLS segments for a mediaID (e.g. ["480p/segment001.ts"]).
     /// Used by the duration-mismatch timer to log exactly which segment is blocking playback.
     func activeHLSSegmentKeys(for mediaID: String) -> [String] {
-        streamingSessionsLock.lock()
-        defer { streamingSessionsLock.unlock() }
-        let prefix = "\(mediaID)/stream/"
-        return streamingSessions.keys
-            .filter { $0.hasPrefix(prefix) }
-            .map { String($0.dropFirst(prefix.count)) }
+        hlsDataTasksLock.lock()
+        defer { hlsDataTasksLock.unlock() }
+        let prefix = "/ipfs/\(mediaID)/"
+        return hlsDataTasks[mediaID]?.values.compactMap { task in
+            let path = task.currentRequest?.url?.path ?? task.originalRequest?.url?.path ?? ""
+            guard path.hasSuffix(".ts") else { return nil }
+            if let range = path.range(of: prefix) {
+                return String(path[range.upperBound...])
+            }
+            return URL(fileURLWithPath: path).lastPathComponent
+        }.sorted() ?? []
     }
 
     /// Set the current primary mediaID so its segment requests bypass the concurrent download limit.
@@ -1079,6 +1087,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Fallback: percent-encode the path for URLs with special characters
             let encodedPath = realURL.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? realURL.path
             return URL(string: "\(Constants.LOCAL_HOST):\(port)\(encodedPath)")!
+        }
+        if realURL.pathExtension.lowercased() == "m3u8" {
+            print("📄 [HLS LOCAL] \(shortMID(mediaID)) registered \(realURL.lastPathComponent) -> \(localhostURL.path)")
         }
         return localhostURL
     }
@@ -1442,6 +1453,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                             "Content-Length": "\(modifiedData.count)",
                             "Accept-Ranges": "bytes"
                         ]
+                        print("📄 [HLS LOCAL] \(shortMID(mediaID)) served cached \(filePathComponents) (\(modifiedData.count) bytes)")
                         sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
                         completion()
                         return
@@ -1516,6 +1528,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         "Content-Length": "\(modifiedData.count)",
                         "Accept-Ranges": "bytes"
                     ]
+                    print("📄 [HLS LOCAL] \(shortMID(mediaID)) served cached \(fullRealURL.lastPathComponent) (\(modifiedData.count) bytes)")
                     sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
                     return
                 }
@@ -1529,7 +1542,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // Not cached - fetch from real server (no deduplication for non-.ts files)
-        // Removed repetitive fetch log
+        print("📄 [HLS LOCAL] \(shortMID(mediaID)) fetching \(fullRealURL.lastPathComponent) from upstream")
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
     }
     
@@ -1538,6 +1551,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Check cache first — always serve cached content regardless of concurrency
         if isUsableCachedFile(atPath: cachePath) {
+            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(fullRealURL.lastPathComponent)")
             autoreleasepool {
                 serveFile(path: cachePath, connection: connection, method: method)
             }
@@ -1552,6 +1566,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Note: clearCancelledMediaID is called when a fresh player is registered (on becoming
         // primary), so this guard only fires while the mediaID remains non-primary.
         if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
+            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(fullRealURL.lastPathComponent) because media is cancelled")
             connection.cancel()
             return
         }
@@ -1581,6 +1596,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: pollInterval)
 
                 if isUsableCachedFile(atPath: cachePath) {
+                    print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(fullRealURL.lastPathComponent) after waiting for in-flight download")
                     autoreleasepool { serveFile(path: cachePath, connection: connection, method: method) }
                     return
                 }
@@ -1631,6 +1647,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         guard slotAcquired || isPrimary else {
             await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
+            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(fullRealURL.lastPathComponent) because no download slot was available")
             connection.cancel()
             return
         }
@@ -1641,6 +1658,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // fires, the second release would decrement the wrong slot count.
         let slotGuard = SlotReleaseGuard()
 
+        print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) fetching \(fullRealURL.lastPathComponent) from upstream")
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method,
                       onConnectionDead: slotAcquired ? {
                           Task { if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) } }
@@ -2391,6 +2409,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                                       nsError.code == NSURLErrorNetworkConnectionLost ||
                                       nsError.code == NSURLErrorNotConnectedToInternet
 
+                    if nsError.code == NSURLErrorCancelled {
+                        completion?()
+                        return
+                    }
+
                     if nsError.code != NSURLErrorCancelled, attempt < maxAttempts, isRetryable {
                         let delay = Double(attempt) // 1s, 2s backoff
                         if LocalHTTPServer.verboseLogsEnabled {
@@ -2490,6 +2513,8 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func fetchWithRetry(url: URL, cachePath: String, connection: NWConnection, method: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
 
         let taskKey = UUID()
+        let isPlaylist = cachePath.hasSuffix(".m3u8")
+        let isSegment = cachePath.hasSuffix(".ts")
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else { return }
             self.untrackHLSDataTask(mediaID: mediaID, taskKey: taskKey)
@@ -2502,6 +2527,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let isRetryable = nsError.code == NSURLErrorTimedOut ||
                                       nsError.code == NSURLErrorNetworkConnectionLost ||
                                       nsError.code == NSURLErrorNotConnectedToInternet
+
+                    if nsError.code == NSURLErrorCancelled {
+                        completion?()
+                        return
+                    }
 
                     if nsError.code != NSURLErrorCancelled, attempt < maxAttempts, isRetryable {
                         let delay = Double(attempt) // 1s, 2s backoff
@@ -2519,6 +2549,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                     if !mediaID.isEmpty, nsError.code != NSURLErrorCancelled {
                         BlackList.shared.recordFailure(mediaID)
                     }
+                    if isPlaylist || isSegment {
+                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(url.lastPathComponent) network error \(nsError.domain) \(nsError.code)")
+                    }
                     self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                     completion?()
                     return
@@ -2528,6 +2561,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                 guard let httpResponse = response as? HTTPURLResponse else {
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
+                    }
+                    if isPlaylist || isSegment {
+                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(url.lastPathComponent) missing HTTP response")
                     }
                     self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                     completion?()
@@ -2551,6 +2587,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
                     }
+                    if isPlaylist || isSegment {
+                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(url.lastPathComponent) upstream HTTP \(httpResponse.statusCode)")
+                    }
                     self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: [:], body: nil)
                     completion?()
                     return
@@ -2559,6 +2598,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                 guard let data = data, !data.isEmpty else {
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
+                    }
+                    if isPlaylist || isSegment {
+                        print("❌ [HLS LOCAL] \(self.shortMID(mediaID)) \(url.lastPathComponent) upstream returned empty data")
                     }
                     self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                     completion?()
@@ -2617,6 +2659,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if method == "HEAD" {
                     self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
                 } else {
+                    if isPlaylist {
+                        print("✅ [HLS LOCAL] \(self.shortMID(mediaID)) served \(url.lastPathComponent) from upstream (\(finalData.count) bytes)")
+                    } else if isSegment {
+                        print("✅ [HLS SEGMENT] \(self.shortMID(mediaID)) served \(url.lastPathComponent) from upstream (\(finalData.count) bytes)")
+                    }
                     self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: finalData)
                 }
                 // MEMORY FIX: All Data objects released when autoreleasepool exits

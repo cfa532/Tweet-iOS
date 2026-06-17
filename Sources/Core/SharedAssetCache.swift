@@ -343,6 +343,24 @@ class SharedAssetCache: ObservableObject {
             finishVideoLoad(mediaID: mediaID, kind: .player)
         }
     }
+
+    /// Cancel transient load work for a media item without evicting a finished cached player.
+    /// Use this when a surface disappears or retries and the old request should not keep
+    /// downloading/creating in the background.
+    @MainActor func cancelTransientLoading(for mediaID: String, stopDownloads: Bool = true) {
+        cancelAssetLoadTask(for: mediaID)
+        cancelPreloadTaskEntry(for: mediaID)
+        cancelPlayerCreationTasks(for: mediaID)
+
+        if let cachingPlayerItem = cachingPlayerItems[mediaID] {
+            cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            cachingPlayerItem.asset.cancelLoading()
+        }
+
+        if stopDownloads {
+            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        }
+    }
     
     // MARK: - Player Creation Deduplication
     private var activeCreationTasks: [String: Task<AVPlayer, Error>] = [:] // mediaID -> creation task (for cancellation)
@@ -1210,8 +1228,11 @@ class SharedAssetCache: ObservableObject {
     ///   disk cache is preserved for the next attempt. Pass true only when content is likely corrupt
     ///   (e.g. player status == .failed) or to reclaim disk space.
     @MainActor func clearPlayerForMediaID(_ mediaID: String, deleteDiskCache: Bool = true) {
+        var releasedPlayer: AVPlayer?
+
         // CRITICAL: Properly release player to free memory (not just pause!)
         if let player = playerCache.removeValue(forKey: mediaID) {
+            releasedPlayer = player
             releasePlayer(player) // ✅ Calls replaceCurrentItem(nil) to release memory
         }
 
@@ -1250,6 +1271,14 @@ class SharedAssetCache: ObservableObject {
                     CachingPlayerItem.clearHLSCache(for: mediaID)
                 }
             }
+        }
+
+        if releasedPlayer != nil {
+            NotificationCenter.default.post(
+                name: .videoPlayerItemReplaced,
+                object: self,
+                userInfo: ["mediaID": mediaID, "released": true]
+            )
         }
 
         print("🗑️ [MEMORY LEAK FIX] Released player for \(mediaID) (deleteDiskCache: \(deleteDiskCache))")
@@ -1856,11 +1885,12 @@ class SharedAssetCache: ObservableObject {
                 // Remove underscore prefix from filename only (e.g., _master.m3u8 -> master.m3u8)
                 let cachedFileName = found.url.lastPathComponent
                 let fileName = cachedFileName.hasPrefix("_") ? String(cachedFileName.dropFirst()) : cachedFileName
-                
+
                 // baseURL already contains the full path including mediaID (e.g., http://.../ipfs/QmHash)
                 // We just need to append the filename directly
                 let reconstructedURL = baseURL.appendingPathComponent(fileName)
-                
+                print("🏁 [HLS PLAYLIST CACHE] \(shortMID(mediaID)) using cached \(fileName)")
+
                 return reconstructedURL
             }
         }
@@ -1868,9 +1898,8 @@ class SharedAssetCache: ObservableObject {
         return nil
     }
     
-    /// Resolve HLS URL with specific fallback strategy
-    /// Sequential approach: tries master.m3u8 first, then playlist.m3u8 only if master fails
-    /// Does NOT try them simultaneously
+    /// Resolve HLS URL by racing the common playlist targets.
+    /// The first target that responds successfully wins; the slower probe is cancelled.
     private func resolveHLSURL(_ url: URL) async -> URL {
         let urlString = url.absoluteString
 
@@ -1887,31 +1916,48 @@ class SharedAssetCache: ObservableObject {
         // HLS fallback strategy: try master.m3u8 and playlist.m3u8 in parallel
         let masterURL = url.appendingPathComponent("master.m3u8")
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
+        let mediaID = extractMediaID(from: url) ?? url.lastPathComponent
+        let raceStartedAt = Date()
 
-        // Launch both HEAD requests concurrently
-        async let masterExists = urlExists(masterURL, timeout: 8.0)
-        async let playlistExists = urlExists(playlistURL, timeout: 8.0)
+        print("🏁 [HLS PLAYLIST RACE] \(shortMID(mediaID)) racing master.m3u8 vs playlist.m3u8")
 
-        // Prefer master.m3u8 if it exists
-        if await masterExists {
-            return masterURL
+        return await withTaskGroup(of: URL?.self, returning: URL.self) { group in
+            for candidateURL in [masterURL, playlistURL] {
+                group.addTask {
+                    let start = Date()
+                    let exists = await Self.urlExists(candidateURL, timeout: 8.0)
+                    guard !Task.isCancelled else { return nil }
+                    let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+                    print("🏁 [HLS PLAYLIST RACE] \(candidateURL.lastPathComponent) \(exists ? "OK" : "miss") in \(elapsedMs)ms")
+                    return exists ? candidateURL : nil
+                }
+            }
+
+            while let resolvedURL = await group.next() {
+                if let resolvedURL {
+                    group.cancelAll()
+                    let elapsedMs = Int(Date().timeIntervalSince(raceStartedAt) * 1000)
+                    print("🏁 [HLS PLAYLIST RACE] \(shortMID(mediaID)) winner: \(resolvedURL.lastPathComponent) in \(elapsedMs)ms")
+                    return resolvedURL
+                }
+            }
+
+            // If both fail, return original URL and let it fail
+            let elapsedMs = Int(Date().timeIntervalSince(raceStartedAt) * 1000)
+            print("🏁 [HLS PLAYLIST RACE] \(shortMID(mediaID)) no playlist target responded in \(elapsedMs)ms")
+            return url
         }
-
-        if await playlistExists {
-            return playlistURL
-        }
-
-        // If both fail, return original URL and let it fail
-        return url
     }
     
     /// Check if URL exists with configurable timeout
-    private func urlExists(_ url: URL, timeout: TimeInterval = 8.0) async -> Bool {
+    private static func urlExists(_ url: URL, timeout: TimeInterval = 8.0) async -> Bool {
+        guard !Task.isCancelled else { return false }
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "HEAD"
             request.timeoutInterval = timeout
             let (_, response) = try await URLSession.shared.data(for: request)
+            guard !Task.isCancelled else { return false }
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
             return false

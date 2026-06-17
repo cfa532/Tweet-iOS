@@ -3325,14 +3325,15 @@ final class HproseInstance: ObservableObject {
         // unwrapV2Response already threw for success=false.
         // Trust the success signal; fall back to the input tweetId if the server
         // doesn't echo it back, so we never spuriously restore the UI.
-        var deletedTweetId: String = tweetId
+        var resolvedDeletedTweetId: String = tweetId
         if let response = unwrappedResponse as? [String: Any] {
             if let tid = response["tweetid"] as? String, !tid.isEmpty {
-                deletedTweetId = tid
+                resolvedDeletedTweetId = tid
             } else if let tid = response["tweetid"] as? NSString, tid.length > 0 {
-                deletedTweetId = tid as String
+                resolvedDeletedTweetId = tid as String
             }
         }
+        let deletedTweetId = resolvedDeletedTweetId
 
         print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
 
@@ -4107,16 +4108,30 @@ final class HproseInstance: ObservableObject {
         
         /// Detect media type from type identifier, filename, and file header
         static func detectMediaType(from typeIdentifier: String, fileName: String?, data: Data) async -> MediaType {
+            let typeId = typeIdentifier.lowercased()
+
             // Check type identifier first
-            if typeIdentifier.hasPrefix("public.image") {
+            if typeId.hasPrefix("public.image") || typeId.contains("image") {
                 return .image
-            } else if typeIdentifier.hasPrefix("public.movie") || typeIdentifier.contains("quicktime-movie") || typeIdentifier.contains("movie") {
+            } else if typeId.hasPrefix("public.movie") ||
+                        typeId.hasPrefix("public.video") ||
+                        typeId.contains("video") ||
+                        typeId.contains("movie") ||
+                        typeId.contains("quicktime") ||
+                        typeId.contains("mpeg-4") ||
+                        typeId.contains("mpeg4") ||
+                        typeId.contains("mp4") ||
+                        typeId.contains("m4v") ||
+                        typeId.contains("mov") ||
+                        typeId.contains("avi") ||
+                        typeId.contains("mkv") ||
+                        typeId.contains("webm") {
                 return .video
-            } else if typeIdentifier.hasPrefix("public.audio") || typeIdentifier.contains("audio") {
+            } else if typeId.hasPrefix("public.audio") || typeId.contains("audio") {
                 return .audio
-            } else if typeIdentifier == "public.composite-content" {
+            } else if typeId == "public.composite-content" {
                 return .pdf
-            } else if typeIdentifier == "public.zip-archive" {
+            } else if typeId == "public.zip-archive" {
                 return .zip
             }
             
@@ -6591,6 +6606,23 @@ final class HproseInstance: ObservableObject {
             }
         }
     }
+
+    private func isVideoUploadTypeIdentifier(_ typeIdentifier: String) -> Bool {
+        let value = typeIdentifier.lowercased()
+        return value.hasPrefix("public.movie") ||
+            value.hasPrefix("public.video") ||
+            value.contains("video") ||
+            value.contains("movie") ||
+            value.contains("quicktime") ||
+            value.contains("mpeg-4") ||
+            value.contains("mpeg4") ||
+            value.contains("mp4") ||
+            value.contains("m4v") ||
+            value.contains("mov") ||
+            value.contains("avi") ||
+            value.contains("mkv") ||
+            value.contains("webm")
+    }
     
     private func uploadChatMessageWithPersistenceAndRetry(message: inout ChatMessage, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0) async {
         do {
@@ -6624,7 +6656,7 @@ final class HproseInstance: ObservableObject {
         
         // Check if we have any video items that need job ID tracking
         let hasVideoItems = itemData.contains { item in
-            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+            isVideoUploadTypeIdentifier(item.typeIdentifier)
         }
         
         if hasVideoItems {
@@ -6774,7 +6806,7 @@ final class HproseInstance: ObservableObject {
         var hasVideoItem = false
         
         for item in pendingUpload.itemData {
-            if item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie") {
+            if isVideoUploadTypeIdentifier(item.typeIdentifier) {
                 hasVideoItem = true
                 
                 // Create MimeiFileType for the completed video
@@ -6917,9 +6949,7 @@ final class HproseInstance: ObservableObject {
         }
         
         // Find the video item to get its data
-        guard let videoItem = pendingUpload.itemData.first(where: { 
-            $0.typeIdentifier.contains("video") || $0.typeIdentifier.contains("movie") 
-        }) else {
+        guard let videoItem = pendingUpload.itemData.first(where: { isVideoUploadTypeIdentifier($0.typeIdentifier) }) else {
             print("DEBUG: No video item found for polling resume")
             return
         }

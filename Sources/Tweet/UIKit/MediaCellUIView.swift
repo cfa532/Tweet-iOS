@@ -335,6 +335,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastBufferingWaitLogKey: String?
     private var lastBufferingWaitLogDate: Date = .distantPast
     private var lastSlowLoadWaitLogDate: Date = .distantPast
+    private var didLogFirstDecodedPlayback = false
+    private var didLogFirstPlaybackProgress = false
     private var lastStartupBufferReleaseDate: Date = .distantPast
     private var startupBufferReleaseUntil: Date = .distantPast
     private var pendingRecoverySeekTime: CMTime?
@@ -1025,15 +1027,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                   claimedMid == self.attachment?.mid,
                   claimerHash != myIdentity,
                   self.player != nil else { return }
-            // Another cell took the player — release KVO observers and nil our reference.
-            // Time observer must go first (removePlayerTimeObserver uses timeObserverPlayer,
-            // not self.player, so it's safe to call before nilling).
-            self.removePlayerTimeObserver()
-            self.removePlayerObservers()
-            self.player = nil
-            if self.videoCellState == .playing || self.videoCellState == .playerReady {
-                self.transitionTo(self.imageView.image != nil ? .thumbnail : .noContent)
-            }
+            self.detachSharedPlayerReference(reason: "claimedByAnotherCell")
         }
 
         videoPlayerItemReplacedObserver = NotificationCenter.default.addObserver(
@@ -1043,6 +1037,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                   let replacedMid = notification.userInfo?["mediaID"] as? String,
                   replacedMid == self.attachment?.mid,
                   let player = self.player else { return }
+            if notification.userInfo?["released"] as? Bool == true || player.currentItem == nil {
+                self.detachSharedPlayerReference(reason: "sharedPlayerReleased")
+                return
+            }
             self.refreshAfterSharedPlayerItemReplacement(player, reason: "sharedItemReplaced")
         }
 
@@ -1557,6 +1555,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         }
         hasRenderedFrameForCurrentPlayer = false
+        didLogFirstDecodedPlayback = false
+        didLogFirstPlaybackProgress = false
         resetPlaybackProgressTracking(to: newPlayer.currentTime())
         removePlayerObservers()
         self.player = newPlayer
@@ -1739,8 +1739,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func refreshAfterSharedPlayerItemReplacement(_ player: AVPlayer, reason: String) {
-        guard self.player === player,
-              let item = player.currentItem else { return }
+        guard self.player === player else { return }
+        guard let item = player.currentItem else {
+            detachSharedPlayerReference(reason: "\(reason).nilItem")
+            return
+        }
 
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = isVisible || coordinatorWantsToPlay
         setupPlayerObservers(player)
@@ -1763,6 +1766,27 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         } else if isVisible && videoCellState == .noContent {
             transitionTo(imageView.image == nil ? .noContent : .thumbnail)
         }
+    }
+
+    private func detachSharedPlayerReference(reason: String) {
+        logVerbose("🔁 detached shared player after \(reason)")
+        cancelDelayedPrimarySpinner()
+        playbackStartupRecoveryTask?.cancel()
+        playbackStartupRecoveryTask = nil
+        playbackStartupRecoveryRequestDate = nil
+        playbackStartupRecoveryDelay = nil
+        slowLoadingRecoveryTask?.cancel()
+        slowLoadingRecoveryTask = nil
+        statusUnknownFallbackTask?.cancel()
+        statusUnknownFallbackTask = nil
+        removePlayerTimeObserver()
+        removePlayerObservers()
+        videoPlayerView.setPlayer(nil)
+        player = nil
+        coordinatorWantsToPlay = false
+        loadingSpinner.stopAnimating()
+        restoreCachedPosterForFailureIfNeeded()
+        transitionTo(imageView.image != nil ? .thumbnail : .noContent)
     }
 
     /// Canonical readiness check from AVPlayerItem status.
@@ -2223,6 +2247,30 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastSlowLoadingNudgeDate = now
 
         let currentSeconds = seconds(from: player.currentTime())
+        if attachment?.type == .hls_video,
+           lastActualPlaybackDate == .distantPast,
+           !hasEstablishedDecodedPlayback(for: player),
+           currentSeconds > 0.25 {
+            clearFeedResumeState(for: mid)
+            print("\(logPrefix) 🔄 \(reason): cold HLS player stuck at \(String(format: "%.1f", currentSeconds))s before decoded playback — seeking to start")
+            player.currentItem?.cancelPendingSeeks()
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
+                DispatchQueue.main.async {
+                    guard let self,
+                          let player,
+                          self.player === player,
+                          self.coordinatorWantsToPlay,
+                          self.canDriveForegroundPlayback,
+                          !self.isVideoAtEnd(player) else { return }
+                    self.applyAVPlayerBufferDefaults(to: player)
+                    self.resetPlaybackProgressTracking(to: .zero)
+                    player.play()
+                    self.updateLoadingSpinnerForPlayback(player)
+                    self.scheduleStartupRecovery(for: player, reason: "coldHLSSeekToStart-\(reason)")
+                }
+            }
+            return true
+        }
         print("\(logPrefix) ⏳ \(reason): slow-loading nudge, keeping player, cover=\(hasSomethingWorthKeeping), pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, itemStatus=\(item.status.rawValue), timeControl=\(player.timeControlStatus.rawValue)")
 
         player.pause()
@@ -2257,6 +2305,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               !isVideoAtEnd(player),
               let mid = attachment?.mid else { return false }
         guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
+
+        if attachment?.type == .hls_video {
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            player.currentItem?.preferredForwardBufferDuration = 0
+            player.automaticallyWaitsToMinimizeStalling = true
+            lastPlaybackRequestDate = Date()
+            resetPlaybackProgressTracking(to: player.currentTime())
+            player.play()
+            updateLoadingSpinnerForPlayback(player)
+            print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — keeping existing player")
+            return true
+        }
 
         // If playback has already shown real progress, do not tear down the
         // visible layer. Rebuilding at that point causes frames -> black -> reload.
@@ -2351,6 +2411,21 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               Date().timeIntervalSince(lastPlaybackRequestDate) >= 30.0,
               !isVisibleVideoFrameReady(player),
               !isVideoAtEnd(player) else { return false }
+
+        if attachment?.type == .hls_video,
+           let mid = attachment?.mid,
+           LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) {
+            let activeSegments = LocalHTTPServer.shared.activeHLSSegmentKeys(for: mid)
+            let segmentLabel = activeSegments.isEmpty ? "segment" : activeSegments.joined(separator: ",")
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            player.currentItem?.preferredForwardBufferDuration = 0
+            player.automaticallyWaitsToMinimizeStalling = true
+            player.play()
+            updateLoadingSpinnerForPlayback(player)
+            print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with no buffered data, waiting for active download: \(segmentLabel)")
+            scheduleStartupRecoveryAfterCurrentTask(for: player, reason: "activeHLSSegment-\(reason)")
+            return true
+        }
 
         print("\(logPrefix) ❌ \(reason): item stayed .unknown with no buffered data - moving to next video")
         handleVideoLoadFailure(reason: "\(reason) unknown item timed out")
@@ -2547,6 +2622,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             retryButton.isHidden = true
             _ = reacquirePlayerForCurrentVideo(
                 reason: "coordinatorPlay.failedStateRetry",
+                clearCachedPlayer: true,
                 transitionState: imageView.image != nil ? .thumbnail : .noContent
             )
             return
@@ -2810,7 +2886,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // never fire .readyToPlay. Clean up and re-acquire instead of spinning forever.
             if itemStatus == .failed || player.currentItem == nil {
                 print("\(logPrefix) 🔄 Item terminal — cleaning up for re-acquisition")
-                _ = reacquirePlayerForCurrentVideo(reason: "requestPlayback.terminalItem")
+                _ = reacquirePlayerForCurrentVideo(
+                    reason: "requestPlayback.terminalItem",
+                    clearCachedPlayer: true
+                )
                 return
             }
             // Primary loading feedback is debounced so cached/quick starts don't flash.
@@ -3123,9 +3202,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         videoCompletionObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem, queue: .main
-        ) { [weak self] _ in
+        ) { [weak self, weak player, weak playerItem] _ in
             Task { @MainActor in
-                await self?.handleVideoFinished()
+                guard let player, let playerItem else { return }
+                await self?.handleVideoFinished(player: player, item: playerItem)
             }
         }
 
@@ -3349,24 +3429,32 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     // MARK: - Video Finished
 
-    private func handleVideoFinished() async {
+    private func handleVideoFinished(player: AVPlayer, item: AVPlayerItem) async {
         guard !isHandlingFinishEvent else { return }
-        isHandlingFinishEvent = true
-        // Note: flag stays true until cell is reused (cleanupVideoPlayer)
-        // or coordinator sends a new play command (handleCoordinatorPlayCommand)
 
-        guard let player = player, let item = player.currentItem,
+        guard self.player === player,
+              player.currentItem === item,
+              item.status == .readyToPlay,
               let mid = attachment?.mid else { return }
 
         let duration = item.duration
-        guard duration.isValid, duration.seconds > 0 else { return }
+        guard duration.isValid,
+              !duration.isIndefinite,
+              duration.seconds.isFinite,
+              duration.seconds > 0 else { return }
 
         let currentTime = player.currentTime().seconds
+        guard currentTime.isFinite else { return }
         let timeUntilEnd = duration.seconds - currentTime
 
         guard timeUntilEnd < 0.5 else {
             return
         }
+
+        isHandlingFinishEvent = true
+        print("\(logPrefix) ✅ video finished: current=\(String(format: "%.1f", currentTime))s, duration=\(String(format: "%.1f", duration.seconds))s")
+        // Note: flag stays true until cell is reused (cleanupVideoPlayer)
+        // or coordinator sends a new play command (handleCoordinatorPlayCommand)
 
         // Pause immediately
         player.pause()
@@ -3419,6 +3507,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func saveCurrentPosition(player: AVPlayer, wasPlaying: Bool) {
         guard let mid = attachment?.mid else { return }
+        guard hasEstablishedDecodedPlayback(for: player) || lastActualPlaybackDate != .distantPast else {
+            FeedVideoResumeStore.clear(mid: mid)
+            return
+        }
         FeedVideoResumeStore.save(mid: mid, player: player, wasPlaying: wasPlaying)
     }
 
@@ -3439,6 +3531,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if let resumeTime = savedFeedResumeTime(for: mid, player: player),
            resumeTime.isValid,
            resumeTime.seconds.isFinite {
+            if lastActualPlaybackDate == .distantPast,
+               !hasEstablishedDecodedPlayback(for: player),
+               attachment?.type == .hls_video {
+                pendingRecoverySeekTime = nil
+                return .zero
+            }
+
             if resumeTime.seconds == 0,
                currentTime.isValid,
                currentSeconds.isFinite,
@@ -3464,6 +3563,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
            currentSeconds.isFinite,
            currentSeconds > 0.25 {
             pendingRecoverySeekTime = nil
+            if lastActualPlaybackDate == .distantPast,
+               !hasEstablishedDecodedPlayback(for: player) {
+                return .zero
+            }
             return nil
         }
 
@@ -3534,8 +3637,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func isVideoAtEnd(_ player: AVPlayer, tolerance: Double = 0.5) -> Bool {
         guard let item = player.currentItem else { return false }
         let duration = item.duration
-        guard duration.isValid, !duration.isIndefinite else { return false }
-        let diff = CMTimeSubtract(duration, player.currentTime())
+        guard duration.isValid,
+              !duration.isIndefinite,
+              duration.seconds.isFinite,
+              duration.seconds > 0 else { return false }
+        let currentTime = player.currentTime()
+        guard currentTime.isValid, currentTime.seconds.isFinite else { return false }
+        let diff = CMTimeSubtract(duration, currentTime)
         return CMTimeCompare(diff, CMTime(seconds: tolerance, preferredTimescale: duration.timescale)) <= 0
     }
 
@@ -3724,12 +3832,20 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 lastDecodedPlaybackSeconds = decodedSeconds
                 lastDecodedPlaybackProgressDate = Date()
                 hasRenderedFrameForCurrentPlayer = true
+                if !didLogFirstDecodedPlayback {
+                    didLogFirstDecodedPlayback = true
+                    print("\(logPrefix) ✅ decoded playback started: t=\(String(format: "%.1f", decodedSeconds))s, itemStatus=\(player.currentItem?.status.rawValue ?? -1), timeControl=\(player.timeControlStatus.rawValue)")
+                }
             }
         }
 
         if currentSeconds > lastObservedPlaybackSeconds + 0.05 {
             lastObservedPlaybackSeconds = currentSeconds
             lastPlaybackProgressDate = Date()
+            if !didLogFirstPlaybackProgress {
+                didLogFirstPlaybackProgress = true
+                print("\(logPrefix) ▶️ playback clock advancing: t=\(String(format: "%.1f", currentSeconds))s, itemStatus=\(player?.currentItem?.status.rawValue ?? -1), timeControl=\(player?.timeControlStatus.rawValue ?? -1)")
+            }
             if let player, coordinatorWantsToPlay {
                 updateLoadingSpinnerForPlayback(player)
                 if isVisibleVideoFrameReady(player),
@@ -4805,6 +4921,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastBufferingWaitLogKey = nil
         lastBufferingWaitLogDate = .distantPast
         lastSlowLoadWaitLogDate = .distantPast
+        didLogFirstDecodedPlayback = false
+        didLogFirstPlaybackProgress = false
         slowLoadingRecoveryTask?.cancel()
         slowLoadingRecoveryTask = nil
         lastSlowLoadingNudgeDate = .distantPast

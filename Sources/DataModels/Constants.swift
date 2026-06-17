@@ -43,6 +43,8 @@ enum FeedPlaybackTuning {
 
     // Scroll visibility
     static let videoVisibilityThrottleInterval: TimeInterval = 0.15
+    static let mediaLoadVisibleMinHeight: CGFloat = 48
+    static let mediaLoadVisibleMinRatio: CGFloat = 0.08
     static let tweetVisibleRatio: CGFloat = 0.50
 
     // Video playback visibility

@@ -334,6 +334,7 @@ struct MediaUploadHelper {
                     // Get the type identifier and determine file extension
                     let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                     let fileExtension = getFileExtension(for: typeIdentifier)
+                    print("📎 [MediaUpload] Prepared picker item: typeIdentifier=\(typeIdentifier), extension=\(fileExtension), size=\(data.count) bytes")
                     
                     
                     // Create a unique filename with timestamp
@@ -385,6 +386,7 @@ struct MediaUploadHelper {
                 let videoData = try Data(contentsOf: videoURL)
                 let timestamp = Int(Date().timeIntervalSince1970)
                 let filename = "\(timestamp)_\(UUID().uuidString).mov"
+                print("📎 [MediaUpload] Prepared camera video: typeIdentifier=video/quicktime, extension=mov, size=\(videoData.count) bytes")
                 
                 itemData.append(HproseInstance.PendingTweetUpload.ItemData(
                     identifier: UUID().uuidString,
