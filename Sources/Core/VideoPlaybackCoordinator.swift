@@ -843,7 +843,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// and its retweet are tracked independently.
     private var previousVisibleIdentifiers: Set<String> = []
 
-    /// Update media cells that are physically visible and therefore should load.
+    /// Update media cells in visible tweet rows and therefore should load.
     /// This is intentionally broader than updateOnScreenMediaCells(_:), which is
     /// the autoplay set and requires a media cell to be at least 50% visible.
     func updateLoadVisibleMediaCells(_ identifiers: Set<String>) {
@@ -1345,7 +1345,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Get up to `count` preloadable videos in the scroll direction that are not currently visible.
     private func getNextVideosInScrollDirection(count: Int) -> [VideoPlaybackInfo] {
-        // Use the low-threshold load-visible set so any media already on screen is
+        // Use the tweet-row load-visible set so media in any partially visible tweet is
         // treated as foreground work. Preload starts after the farthest visible media,
         // so the target may be beyond the adjacent tweet if that tweet is still visible.
         let visibleIndices: [Int]

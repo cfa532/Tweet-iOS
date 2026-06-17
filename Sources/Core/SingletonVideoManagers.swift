@@ -2597,6 +2597,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         detailStartupRecoveryTask = nil
         detailStartupRecoveryItem = nil
         detailStartupRecoveryAttemptCount = 0
+        detailStartupUnknownAttemptCount = 0
         if hasKVOObserver, let playerItem = currentPlayer?.currentItem {
             playerItem.removeObserver(self, forKeyPath: "status")
             hasKVOObserver = false
@@ -2663,9 +2664,11 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private var detailPlaybackStartSeconds: Double = 0
     private var detailStartupRecoveryTask: Task<Void, Never>?
     private var detailStartupRecoveryAttemptCount = 0
+    private var detailStartupUnknownAttemptCount = 0
     private var detailStallItemRebuildCount = 0
     private let detailStartupRecoveryDelay: UInt64 = 1_500_000_000
     private let detailStartupRecoveryMaxAttempts = 4
+    private let detailStartupUnknownMaxAttempts = 12
     private var pendingFeedResumeTime: CMTime?
     private var activeFeedHandoffTime: CMTime?
     private var isUsingBorrowedFeedPlayer = false
@@ -2852,6 +2855,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         detailStartupRecoveryTask = nil
         detailStartupRecoveryItem = nil
         detailStartupRecoveryAttemptCount = 0
+        detailStartupUnknownAttemptCount = 0
         detailStallItemRebuildCount = 0
         if let obs = videoCompletionObserver {
             NotificationCenter.default.removeObserver(obs)
@@ -2922,7 +2926,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                         self.isPlaybackRendering = false
                         return
                     }
-                    print("📱 [DetailVideoManager] Shared player load ready \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
+                    print("📱 [DetailVideoManager] Shared player available \(self.shortMID(mid)): itemStatus=\(playerItem.status.rawValue)")
                     playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                     AudioSessionManager.shared.activateForVideoPlayback()
                     self.currentPlayer = sharedPlayer
@@ -2987,6 +2991,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     self.isItemReady = true
                     self.isBuffering = !self.isPlaybackRendering
                     self.loadFailedVideoMid = nil
+                    self.detailStartupUnknownAttemptCount = 0
                     self.itemStatusObserver?.invalidate()
                     self.itemStatusObserver = nil
                     self.seekAndPlay(playerItem: item, mid: mid)
@@ -3183,6 +3188,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         detailStartupRecoveryTask = nil
         detailStartupRecoveryItem = nil
         detailStartupRecoveryAttemptCount = 0
+        detailStartupUnknownAttemptCount = 0
         detailStallItemRebuildCount = 0
 
         if hasKVOObserver, let playerItem = currentPlayer?.currentItem {
@@ -3494,6 +3500,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         detailStartupRecoveryTask = nil
         detailStartupRecoveryItem = nil
         detailStartupRecoveryAttemptCount = 0
+        detailStartupUnknownAttemptCount = 0
 
         player.pause()
         player.replaceCurrentItem(with: replacementItem)
@@ -3552,19 +3559,44 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
             if item.status == .readyToPlay {
                 self.isItemReady = true
+                self.detailStartupUnknownAttemptCount = 0
                 self.isBuffering = self.currentPlayer?.timeControlStatus == .waitingToPlayAtSpecifiedRate
             }
             print("📱 [DetailVideoManager] recovery check \(self.shortMID(mid)): \(self.detailDiagnostic(player, item: item))")
-            self.detailStartupRecoveryAttemptCount += 1
 
             if self.markDetailRenderingIfDecoded(player: player, item: item) {
                 self.isItemReady = true
                 self.detailStartupRecoveryAttemptCount = 0
+                self.detailStartupUnknownAttemptCount = 0
                 self.detailStartupRecoveryTask = nil
                 self.detailStartupRecoveryItem = nil
                 return
             }
 
+            if item.status == .failed {
+                self.failDetailVideoLoad(reason: "recovery observed item status failed", mid: mid, deleteDiskCache: true)
+                return
+            }
+
+            if item.status == .unknown {
+                self.detailStartupUnknownAttemptCount += 1
+                self.isBuffering = true
+                player.play()
+
+                guard self.detailStartupUnknownAttemptCount < self.detailStartupUnknownMaxAttempts else {
+                    print("📱 [DetailVideoManager] recovery startup timeout \(self.shortMID(mid)): unknownAttempts=\(self.detailStartupUnknownAttemptCount), \(self.detailDiagnostic(player, item: item))")
+                    self.failDetailVideoLoad(reason: "startup timed out while item status stayed unknown", mid: mid, deleteDiskCache: false)
+                    return
+                }
+
+                self.detailStartupRecoveryTask = nil
+                self.detailStartupRecoveryItem = nil
+                print("📱 [DetailVideoManager] recovery waiting for item readiness \(self.shortMID(mid)): unknownAttempts=\(self.detailStartupUnknownAttemptCount), \(self.detailDiagnostic(player, item: item))")
+                self.scheduleDetailStartupRecovery(for: item, mid: mid)
+                return
+            }
+
+            self.detailStartupRecoveryAttemptCount += 1
             let bufferedAhead = self.bufferedTimeAhead(for: item, player: player)
             let keepUp = item.isPlaybackLikelyToKeepUp
             let requiredBuffer = feedStyleRequiredBufferAhead(for: item, player: player)
@@ -3602,6 +3634,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             if self.markDetailRenderingIfDecoded(player: player, item: item) {
                 self.isItemReady = true
                 self.detailStartupRecoveryAttemptCount = 0
+                self.detailStartupUnknownAttemptCount = 0
             } else if item.status == .readyToPlay {
                 if self.rebuildDetailItemAfterStall(player: player, item: item, mid: mid, reason: "no decoded frame after play nudge") {
                     return
@@ -3735,6 +3768,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isPlaybackRendering = true
         isItemReady = true
         detailStartupRecoveryAttemptCount = 0
+        detailStartupUnknownAttemptCount = 0
         isBuffering = shouldKeepDetailBuffering(player: player, item: item) || !hasAdvancedPastCover
         if !isBuffering {
             activeFeedHandoffTime = nil
@@ -3960,6 +3994,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         detailStartupRecoveryTask = nil
         detailStartupRecoveryItem = nil
         detailStartupRecoveryAttemptCount = 0
+        detailStartupUnknownAttemptCount = 0
         detailStallItemRebuildCount = 0
         isItemReady = false
         isBuffering = false

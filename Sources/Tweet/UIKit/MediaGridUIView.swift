@@ -38,8 +38,6 @@ class MediaGridUIView: UIView {
     /// Height last computed from actual bounds.width — drives intrinsicContentSize
     private var computedGridHeight: CGFloat = 0
     private let playbackContinueVisibilityThreshold = FeedPlaybackTuning.videoContinueVisibilityRatio
-    private let mediaLoadVisibleMinHeight = FeedPlaybackTuning.mediaLoadVisibleMinHeight
-    private let mediaLoadVisibleMinRatio = FeedPlaybackTuning.mediaLoadVisibleMinRatio
 
     var isGridVisible: Bool = false {
         didSet {
@@ -502,8 +500,8 @@ class MediaGridUIView: UIView {
     }
 
     /// Updates per-media visibility.
-    /// `loadVisible` treats any positive on-screen intersection as visible so partially
-    /// visible media can start loading a cover frame/player.
+    /// `loadVisible` follows tweet-row visibility: once any part of the tweet is
+    /// visible, all rendered media in that tweet is considered visible for loading.
     /// `continuePlayback` is stricter than `playable`: the current feed video stops once it drops below this threshold.
     /// `playable` keeps the 50% threshold used by the video coordinator for new autoplay candidates.
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
@@ -518,9 +516,7 @@ class MediaGridUIView: UIView {
             let visibleArea = max(0, intersection.width) * max(0, intersection.height)
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
-            let isLoadVisible = isGridVisible &&
-                visibleArea > 0 &&
-                (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
+            let isLoadVisible = isGridVisible
             cellView.setVisible(isLoadVisible, shouldAcquirePlayer: isLoadVisible)
 
             guard cellView.isVideoAttachment,

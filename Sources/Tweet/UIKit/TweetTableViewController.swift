@@ -96,7 +96,7 @@ class TweetTableViewController: UITableViewController {
     private var lastVideoVisibilityUpdate: CFTimeInterval = 0
     private let videoVisibilityThrottleInterval = FeedPlaybackTuning.videoVisibilityThrottleInterval
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
-    private var lastLoadVisibleVideoIds: Set<String> = [] // Cache media that is physically on screen and should load
+    private var lastLoadVisibleVideoIds: Set<String> = [] // Cache media in tweets that are visible enough to load
     private var lastContinuePlaybackVideoIds: Set<String> = [] // Cache media visible enough to keep current playback
     private var lastOnScreenVideoIds: Set<String> = [] // Cache per-cell on-screen video identifiers
     
@@ -143,8 +143,6 @@ class TweetTableViewController: UITableViewController {
     private let maxDirectionalImagePreloadsInFlight = FeedPlaybackTuning.maxDirectionalImagePreloadsInFlight
     private var activeDirectionalImagePreloadTasks: [String: Task<Void, Never>] = [:]
     private var didScheduleInitialVisibilityRefresh = false
-    private let mediaLoadVisibleMinHeight = FeedPlaybackTuning.mediaLoadVisibleMinHeight
-    private let mediaLoadVisibleMinRatio = FeedPlaybackTuning.mediaLoadVisibleMinRatio
 
     // Scroll state tracking to prevent direction detection jitter during deceleration
     private var isUserDragging: Bool = false
@@ -2319,7 +2317,7 @@ class TweetTableViewController: UITableViewController {
         let visibleBottom = tableView.contentOffset.y + tableView.bounds.height - insets.bottom
         let visibleRect = CGRect(x: 0, y: visibleTop, width: tableView.bounds.width, height: max(0, visibleBottom - visibleTop))
 
-        // Single pass over visible cells: compute tweet visibility, toggle media visibility,
+        // Single pass over visible cells: compute tweet visibility, toggle media loading visibility,
         // and gather load-visible/playable video IDs together so scrolling does less repeated work.
         var visibleTweetIds = Set<String>()
         var loadVisibleVideoIds = Set<String>()
@@ -2332,13 +2330,12 @@ class TweetTableViewController: UITableViewController {
             let intersection = cellRect.intersection(visibleRect)
             let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
             let isRowOnScreen = intersection.height > 0
-            let isRowLoadVisible = isRowOnScreen &&
-                (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
             let isTweetVisible = ratio >= FeedPlaybackTuning.tweetVisibleRatio
 
-            // Loading uses a small threshold; autoplay still uses the stricter
-            // media-cell threshold returned as `playable`.
-            tweetCell.tweetContentView.setMediaVisible(isRowLoadVisible)
+            // Loading treats the whole tweet as visible once any part of the row
+            // intersects the viewport. Autoplay still uses the stricter media-cell
+            // threshold returned as `playable`.
+            tweetCell.tweetContentView.setMediaVisible(isRowOnScreen)
             let mediaVisibility = tweetCell.tweetContentView.mediaVisibilityIdentifiers(
                 visibleRect: visibleRect,
                 coordinateSpace: tableView

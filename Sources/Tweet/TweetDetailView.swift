@@ -827,9 +827,9 @@ private struct DetailSingletonVideoPlayerView: View {
             manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
         } label: {
             Image(systemName: "arrow.clockwise.circle")
-                .font(.system(size: 28, weight: .medium))
+                .font(.system(size: 32, weight: .medium))
                 .foregroundColor(.white.opacity(0.7))
-                .frame(width: 44, height: 44)
+                .frame(width: 52, height: 52)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
