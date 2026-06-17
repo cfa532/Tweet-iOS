@@ -1646,7 +1646,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         var isPrimary = isCurrentPrimary(mediaID)
-        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary)
+        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 3)
         // Poll when the cap is full. Primary bypasses the preload cap, but still honors
         // its own HLS segment cap so startup cannot launch parallel segment downloads.
         if !slotAcquired {
@@ -1654,7 +1654,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 switch connection.state { case .cancelled, .failed: return; default: break }
                 isPrimary = isCurrentPrimary(mediaID)
-                slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary)
+                slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 3)
                 if slotAcquired { break }
                 if !isPrimary && attempt >= 9 { break }
             }
