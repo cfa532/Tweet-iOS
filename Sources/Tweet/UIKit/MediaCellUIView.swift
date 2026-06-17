@@ -322,6 +322,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastObservedPlaybackSeconds: Double = 0
     private var lastPlaybackRequestPositionSeconds: Double = 0
     private var hlsBufferedUnknownStartDate: Date = .distantPast
+    private var hlsEmptyWaitingStartDate: Date = .distantPast
     /// True after the current AVPlayerLayer has rendered a frame for this player.
     /// This lets visible non-primary videos stop their spinner once they have
     /// something real to show, even if frame capture did not produce a poster.
@@ -329,6 +330,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         didSet {
             if hasRenderedFrameForCurrentPlayer {
                 hlsBufferedUnknownStartDate = .distantPast
+                hlsEmptyWaitingStartDate = .distantPast
             }
         }
     }
@@ -734,16 +736,17 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         backgroundVideoCoverMid = nil
     }
 
-    private func removeVideoCoverIfLoadedAndDisplayable(_ player: AVPlayer, reason: String) {
+    @discardableResult
+    private func removeVideoCoverIfLoadedAndDisplayable(_ player: AVPlayer, reason: String) -> Bool {
         guard isVideoAttachment,
               self.player === player,
-              imageView.image != nil else { return }
+              imageView.image != nil else { return false }
         guard playerHasLoadedData(player),
-              videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer else { return }
+              videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer else { return false }
         if isHoldingBackgroundVideoCover,
            backgroundVideoCoverMid == attachment?.mid,
            !isVisibleVideoFrameReady(player) {
-            return
+            return false
         }
 
         videoPlayerView.isHidden = false
@@ -752,6 +755,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         clearBackgroundVideoCoverHold()
         loadingSpinner.stopAnimating()
         logVerbose("🖼️ removed video cover after loaded data (\(reason))")
+        return true
     }
 
     @discardableResult
@@ -763,9 +767,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               item.status == .readyToPlay,
               playerHasLoadedData(player) else { return false }
 
-        restoreCachedPosterForFailureIfNeeded()
         if videoPlayerView.isLayerReadyForDisplay {
             hasRenderedFrameForCurrentPlayer = true
+            removeVideoCoverIfLoadedAndDisplayable(player, reason: "\(reason)-settle")
+        } else {
+            restoreCachedPosterForFailureIfNeeded()
         }
 
         if videoCellState == .noContent || videoCellState == .playerLoading {
@@ -1296,7 +1302,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let recentRebuilds = Self.feedPlayerRebuildHistory[mid, default: []].filter { $0 >= rebuildWindowStart }
         guard recentRebuilds.count < Self.maxFeedPlayerRebuildsPerWindow else {
             print("\(logPrefix) ❌ \(reason): rebuild budget exceeded for \(mid) in \(Int(Self.feedPlayerRebuildWindow))s - stopping recovery loop")
-            preserveFrameToCache(skipImageView: true)
+            preserveReleaseCoverForCurrentVideo(reason: "\(reason).rebuildBudget", showCover: isVisible)
             restoreCachedPosterForFailureIfNeeded()
             softResetFeedPlayerIfEmpty(player, mid: mid)
             handleVideoLoadFailure(reason: "\(reason) repeated rebuilds")
@@ -1312,7 +1318,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         guard feedPlayerRebuildCount < 2 else {
             print("\(logPrefix) ❌ \(reason): rebuild budget exceeded for \(mid) - stopping recovery loop")
-            preserveFrameToCache(skipImageView: true)
+            preserveReleaseCoverForCurrentVideo(reason: "\(reason).cellRebuildBudget", showCover: isVisible)
             restoreCachedPosterForFailureIfNeeded()
             softResetFeedPlayerIfEmpty(player, mid: mid)
             handleVideoLoadFailure(reason: "\(reason) repeated rebuilds")
@@ -1341,6 +1347,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
            player.currentItem?.status == .unknown,
            playerHasLoadedData(player) {
             print("\(logPrefix) 🔄 Releasing buffered-but-unknown HLS player for \(mid)")
+            preserveReleaseCoverForCurrentVideo(reason: "softReset.bufferedUnknownHLS", showCover: isVisible)
             VideoStateCache.shared.clearCachedState(for: mid)
             SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
             LocalHTTPServer.shared.clearCancelledState(for: mid)
@@ -1352,6 +1359,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return
         }
         VideoStateCache.shared.clearCachedState(for: mid)
+        preserveReleaseCoverForCurrentVideo(reason: "softReset.emptyPlayer", showCover: isVisible)
         SharedAssetCache.shared.softResetPlayer(for: mid)
     }
 
@@ -1375,6 +1383,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         player.pause()
         VideoStateCache.shared.clearCachedState(for: mid)
+        preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
         if isBufferedUnknownHLS {
             SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
             LocalHTTPServer.shared.clearCancelledState(for: mid)
@@ -1781,8 +1790,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         setupPlayerObservers(player)
         ensureVideoOutputAttached(for: player)
         resetPlaybackProgressTracking(to: player.currentTime())
-        if let mid = attachment?.mid,
-           !shouldSuppressPositionRestore(for: player, mid: mid) {
+        if playerHasLoadedData(player),
+           videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer {
+            hasRenderedFrameForCurrentPlayer = true
+            removeVideoCoverIfLoadedAndDisplayable(player, reason: "sharedItemRefresh-\(reason)")
+        } else if let mid = attachment?.mid,
+                  !shouldSuppressPositionRestore(for: player, mid: mid) {
             restoreCachedPosterForFailureIfNeeded()
         }
         logVerbose("🔁 refreshed shared item after \(reason): status=\(item.status.rawValue), coordWants=\(coordinatorWantsToPlay), state=\(videoCellState)")
@@ -2067,8 +2080,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             player.currentItem?.status == .readyToPlay &&
             player.timeControlStatus == .waitingToPlayAtSpecifiedRate
         let isSlowLoadingNudgeFollowUp = reason.hasPrefix("slowLoading")
+        let isHLSWaitFollowUp = reason.hasPrefix("activeHLSSegment-")
+            || reason.hasPrefix("emptyHLSWait-")
         let recoveryDelay: UInt64
-        if isSlowLoadingNudgeFollowUp {
+        if isHLSWaitFollowUp {
+            recoveryDelay = 2_000_000_000
+        } else if isSlowLoadingNudgeFollowUp {
             recoveryDelay = Self.slowLoadingNudgeIntervalNanos
         } else if isResumeWaitAttempt {
             recoveryDelay = 4_000_000_000
@@ -2126,6 +2143,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
 
             if self.releaseStartupBufferIfReady(player, bufferedAhead: bufferedAhead, reason: reason) {
+                return
+            }
+
+            if self.waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
+                return
+            }
+
+            if self.rebuildEmptyWaitingHLSPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
                 return
             }
 
@@ -2236,6 +2261,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         reacquireReason: String,
         transitionState: VideoCellState? = nil
     ) -> Bool {
+        preserveReleaseCoverForCurrentVideo(reason: reacquireReason, showCover: isVisible)
         VideoStateCache.shared.clearCachedState(for: mid)
         SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
         LocalHTTPServer.shared.clearCancelledState(for: mid)
@@ -2258,14 +2284,46 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         let activeSegments = LocalHTTPServer.shared.activeHLSSegmentKeys(for: mid)
         let segmentLabel = activeSegments.isEmpty ? "segment" : activeSegments.joined(separator: ",")
+        notePrimaryPlaybackIntentWhileWaiting(player)
+        hlsEmptyWaitingStartDate = .distantPast
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.currentItem?.preferredForwardBufferDuration = 0
         player.automaticallyWaitsToMinimizeStalling = true
         updateLoadingSpinnerForPlayback(player)
         print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with no buffered data, waiting for active download: \(segmentLabel)")
-        let recoveryReason = reason.hasPrefix("activeHLSSegment-") ? reason : "activeHLSSegment-\(reason)"
+        let recoveryReason = normalizedRecoveryReason(prefix: "activeHLSSegment-", reason: reason)
         scheduleStartupRecoveryAfterCurrentTask(for: player, reason: recoveryReason)
         return true
+    }
+
+    private func normalizedRecoveryReason(prefix: String, reason: String) -> String {
+        if let range = reason.range(of: prefix) {
+            return prefix + String(reason[range.upperBound...])
+        }
+        return prefix + reason
+    }
+
+    private func notePrimaryPlaybackIntentWhileWaiting(_ player: AVPlayer) {
+        guard coordinatorWantsToPlay,
+              canDriveForegroundPlayback,
+              !isVideoAtEnd(player) else { return }
+
+        if lastPlaybackRequestDate == .distantPast {
+            lastPlaybackRequestDate = Date()
+            resetPlaybackProgressTracking(to: player.currentTime())
+        }
+
+        if videoCellState != .playing {
+            transitionTo(.playing)
+        } else {
+            showPrimarySpinnerAfterDebounce(for: player)
+        }
+        applyAVPlayerBufferDefaults(to: player)
+        player.isMuted = MuteState.shared.isMuted
+        if player.rate == 0 {
+            player.play()
+        }
+        retryButton.isHidden = true
     }
 
     @discardableResult
@@ -2393,7 +2451,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
 
                 hlsBufferedUnknownStartDate = .distantPast
-                preserveFrameToCache(skipImageView: imageView.image != nil)
+                preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
                 restoreCachedPosterForFailureIfNeeded()
                 print("\(logPrefix) 🔄 \(reason): HLS item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered and no decoded frame — rebuilding feed player from proxy cache")
                 return rebuildCurrentFeedPlayerFromProxyCache(
@@ -2445,6 +2503,77 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     @discardableResult
+    private func rebuildEmptyWaitingHLSPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
+        guard coordinatorWantsToPlay,
+              canDriveForegroundPlayback,
+              videoCellState == .playing,
+              attachment?.type == .hls_video,
+              let item = player.currentItem,
+              item.status == .unknown,
+              bufferedAhead < 0.25,
+              !isVideoAtEnd(player),
+              let mid = attachment?.mid else { return false }
+        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
+
+        if LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) {
+            return waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: reason)
+        }
+
+        let isEmptyWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            || item.isPlaybackBufferEmpty
+            || !item.isPlaybackLikelyToKeepUp
+        guard isEmptyWaiting, !playerHasLoadedData(player) else {
+            hlsEmptyWaitingStartDate = .distantPast
+            return false
+        }
+
+        notePrimaryPlaybackIntentWhileWaiting(player)
+        let now = Date()
+        if hlsEmptyWaitingStartDate == .distantPast {
+            hlsEmptyWaitingStartDate = now
+            applyAVPlayerBufferDefaults(to: player)
+            updateLoadingSpinnerForPlayback(player)
+            print("\(logPrefix) ⏳ \(reason): HLS item still empty after downloads went idle — rechecking shortly")
+            scheduleStartupRecoveryAfterCurrentTask(
+                for: player,
+                reason: normalizedRecoveryReason(prefix: "emptyHLSWait-", reason: reason)
+            )
+            return true
+        }
+
+        guard now.timeIntervalSince(hlsEmptyWaitingStartDate) >= 2.0 else {
+            applyAVPlayerBufferDefaults(to: player)
+            updateLoadingSpinnerForPlayback(player)
+            scheduleStartupRecoveryAfterCurrentTask(
+                for: player,
+                reason: normalizedRecoveryReason(prefix: "emptyHLSWait-", reason: reason)
+            )
+            return true
+        }
+
+        if let resumeTime = trustedRecoverySeekTime(for: player),
+           resumeTime.isValid,
+           resumeTime.seconds.isFinite {
+            pendingRecoverySeekTime = resumeTime
+        }
+
+        guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else {
+            hlsEmptyWaitingStartDate = .distantPast
+            return true
+        }
+
+        hlsEmptyWaitingStartDate = .distantPast
+        preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
+        restoreCachedPosterForFailureIfNeeded()
+        print("\(logPrefix) 🔄 \(reason): HLS primary stayed empty with no active segment downloads — rebuilding feed player from proxy cache")
+        return rebuildCurrentFeedPlayerFromProxyCache(
+            mid: mid,
+            reacquireReason: "emptyWaitingHLSStartupRecovery",
+            transitionState: imageView.image != nil ? .thumbnail : .playerLoading
+        )
+    }
+
+    @discardableResult
     private func rebuildStarvedReadyPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
         guard coordinatorWantsToPlay,
               videoCellState == .playing,
@@ -2456,8 +2585,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
 
         let now = Date()
-        let waitedForVisibleStart = lastPlaybackRequestDate != .distantPast
-            && now.timeIntervalSince(lastPlaybackRequestDate) >= 8.0
         let hasPlaybackHistory = hasEstablishedDecodedPlayback(for: player)
             || lastActualPlaybackDate != .distantPast
             || lastPlaybackProgressDate != .distantPast
@@ -2471,10 +2598,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             && noRecentPlaybackProgress
             && noRecentDecodedProgress
         let waitedForColdStart = !hasPlaybackHistory
-            && waitedForVisibleStart
+            && lastPlaybackRequestDate != .distantPast
+            && now.timeIntervalSince(lastPlaybackRequestDate) >= 20.0
             && noRecentDecodedProgress
-        guard (!hasPlaybackHistory && bufferingWaitCount >= 2)
-            || waitedForColdStart
+        guard waitedForColdStart
             || waitedLongWithCover else { return false }
 
         if let resumeTime = trustedRecoverySeekTime(for: player),
@@ -2485,7 +2612,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
 
-        preserveFrameToCache(skipImageView: imageView.image != nil)
+        preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
         restoreCachedPosterForFailureIfNeeded()
         print("\(logPrefix) 🔄 \(reason): ready item starved with \(String(format: "%.1f", bufferedAhead))s buffered, cover=\(hasPlaybackHistory) — rebuilding feed player")
         return rebuildCurrentFeedPlayerFromProxyCache(
@@ -2571,6 +2698,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         let mid = context.attachment.mid
         if clearCachedPlayer {
+            preserveReleaseCoverForCurrentVideo(reason: "\(reason).clearCachedPlayer", showCover: isVisible)
             SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
             LocalHTTPServer.shared.clearCancelledState(for: mid)
             LocalHTTPServer.shared.setPrimaryMediaID(mid)
@@ -2829,6 +2957,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 if !isVisible {
                     // Cell is off-screen — release player to free network resources
                     // instead of waiting for the coordinator's stall timer.
+                    preserveReleaseCoverForCurrentVideo(reason: "coordinatorStop.offscreen", showCover: false)
                     removePlayerObservers()
                     SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
                     self.player = nil
@@ -3012,6 +3141,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         logVerbose("▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
+        removeVideoCoverIfLoadedAndDisplayable(player, reason: "requestPlayback-\(reason)")
         let isLiveHandoff: Bool
         if let mid = attachment?.mid {
             isLiveHandoff = isLiveSurfaceHandoff(player, mid: mid)
@@ -3054,8 +3184,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func startPlaybackWithFade(_ player: AVPlayer) {
-        // No deferral needed: actuallyStartPlayback() keeps the thumbnail visible
-        // and timeControlStatus KVO hides it when smooth playback starts.
+        // No deferral needed: actuallyStartPlayback() removes stale cover art as
+        // soon as the attached player has displayable content.
         actuallyStartPlayback(player)
     }
 
@@ -3071,19 +3201,22 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         videoPlayerView.isHidden = false
 
         // Update state directly — skip transitionTo() to avoid touching imageView.
-        // The layer already has content from preload; just let the player play.
-        // imageView stays as-is: visible (thumbnail cover) or hidden (layer showing).
-        // timeControlStatus KVO will hide the thumbnail when smooth playback starts.
+        // If the layer already has content from preload/cache, remove the cover
+        // before play() so playback does not flash through a stale thumbnail.
         if videoCellState != .playing {
             logVerbose("State: \(videoCellState) → playing")
         }
         videoCellState = .playing
         retryButton.isHidden = true
 
+        let removedDisplayableCover = removeVideoCoverIfLoadedAndDisplayable(player, reason: "actuallyStartPlayback")
+
         // Show loading feedback only if playback does not start quickly. Cached
         // videos already have a poster/frame, so a 0.5s grace period avoids a
         // distracting spinner flash on instant starts.
-        showPrimarySpinnerAfterDebounce(for: player)
+        if !removedDisplayableCover {
+            showPrimarySpinnerAfterDebounce(for: player)
+        }
 
         // Primary playback must own network recovery. Preloaded players may be
         // paused with background-friendly settings, so restore AVPlayer's normal
@@ -3287,6 +3420,31 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
     }
 
+    @discardableResult
+    private func preserveReleaseCoverForCurrentVideo(reason: String, showCover: Bool = true) -> Bool {
+        guard isVideoAttachment else { return false }
+        guard player != nil, player?.currentItem != nil else {
+            restoreCachedPosterForFailureIfNeeded()
+            return imageView.image != nil
+        }
+
+        let didPreserveCover = preserveFrameToCache(skipImageView: true)
+            || preserveFrameToCache(useVideoOutput: false, skipImageView: true)
+
+        if !didPreserveCover {
+            restoreCachedPosterForFailureIfNeeded()
+        }
+
+        guard imageView.image != nil else { return false }
+
+        if showCover {
+            showImageView()
+            videoPlayerView.isHidden = true
+        }
+        logVerbose("🖼️ preserved release cover (\(reason)), capturedOrCached=\(didPreserveCover)")
+        return true
+    }
+
     // MARK: - Player Observers
 
     private func setupPlayerObservers(_ player: AVPlayer) {
@@ -3323,6 +3481,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 guard let mid = self.attachment?.mid else { return }
 
                 if item.status == .readyToPlay {
+                    self.hlsEmptyWaitingStartDate = .distantPast
                     // Cancel the fallback task — statusKVO arrived before the timeout.
                     self.statusUnknownFallbackTask?.cancel()
                     self.statusUnknownFallbackTask = nil
@@ -3413,6 +3572,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                         let fullscreenOwnsMid = OverlayVisibilityCoordinator.shared.isCovered
                             && FullScreenVideoManager.shared.currentVideoMid == mid
                         if !fullscreenOwnsMid {
+                            self.preserveReleaseCoverForCurrentVideo(reason: "playerItem.failed", showCover: self.isVisible)
                             // Delete disk cache so corrupt/partial IPFS data isn't re-served on retry.
                             SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: true)
                         }
@@ -3466,6 +3626,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 }
 
                 if player.timeControlStatus == .playing {
+                    self.hlsEmptyWaitingStartDate = .distantPast
                     self.playbackStartupRecoveryTask?.cancel()
                     self.playbackStartupRecoveryTask = nil
                     self.playbackStartupRecoveryRequestDate = nil
@@ -4111,7 +4272,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard isVideoAttachment else { return }
 
         print("\(logPrefix) 🔄 Manual video retry")
-        preserveFrameToCache(skipImageView: imageView.image != nil)
+        preserveReleaseCoverForCurrentVideo(reason: "manualRetry", showCover: isVisible)
         restoreCachedPosterForFailureIfNeeded()
         retryButton.isHidden = true
         replayButton.isHidden = true
@@ -4228,7 +4389,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         // Capture frame BEFORE cleanup — for partially-played videos,
         // this preserves the last rendered frame as thumbnail behind the retry button.
-        preserveFrameToCache()
+        preserveReleaseCoverForCurrentVideo(reason: "loadFailure.\(reason)", showCover: isVisible)
         let failedMid = attachment?.mid
         cleanupFailedPlayerState()
         if let failedMid {
@@ -4755,8 +4916,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         }
 
-        let didCaptureCover = preserveFrameToCache(skipImageView: true)
-            || preserveFrameToCache(useVideoOutput: false)
+        let didCaptureCover = preserveReleaseCoverForCurrentVideo(reason: "background", showCover: true)
         if didCaptureCover || restoreCachedPosterForBackgroundIfNeeded(mid: mid) {
             isHoldingBackgroundVideoCover = true
             backgroundVideoCoverMid = mid
@@ -4938,7 +5098,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func cleanupVideoPlayer(reason: String) {
         if isVideoAttachment {
-            preserveFrameToCache()
+            preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
         }
 
         // Cancel any pending debounce — prevents player acquisition after cleanup.
@@ -5054,6 +5214,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastStartupBufferReleaseDate = .distantPast
         startupBufferReleaseUntil = .distantPast
         hlsBufferedUnknownStartDate = .distantPast
+        hlsEmptyWaitingStartDate = .distantPast
         clearBackgroundVideoCoverHold()
         requestedFallbackThumbnailMid = nil
         resetFeedPlayerRebuildBudget()
