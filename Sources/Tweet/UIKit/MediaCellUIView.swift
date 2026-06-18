@@ -1012,7 +1012,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if hasSameVideoRecoveryCover {
             isHoldingBackgroundVideoCover = true
             backgroundVideoCoverMid = attachment.mid
-            foregroundRecoveryLoadingDeadline = Date().addingTimeInterval(20.0)
+            foregroundRecoveryLoadingDeadline = Date().addingTimeInterval(5.0)
             SharedAssetCache.shared.protectBackgroundPoster(for: attachment.mid)
         }
 
@@ -4381,7 +4381,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // the protected foreground cover state before rebuilding AVPlayer.
         isHoldingBackgroundVideoCover = true
         backgroundVideoCoverMid = mid
-        foregroundRecoveryLoadingDeadline = Date().addingTimeInterval(20.0)
+        foregroundRecoveryLoadingDeadline = Date().addingTimeInterval(5.0)
         SharedAssetCache.shared.protectBackgroundPoster(for: mid)
 
         switch videoCellState {
