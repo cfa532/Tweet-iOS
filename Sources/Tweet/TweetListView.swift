@@ -68,6 +68,7 @@ struct TweetListView: View {
     @State private var lastVisibleTweetIdBeforeLoad: String? = nil
     @State private var scrollProxy: ScrollViewProxy? = nil
     @State private var contentHeight: CGFloat = 0
+    @State private var isDirectFeedRefreshActive: Bool = false
     @State private var screenHeight: CGFloat = 0
     @State private var needsMoreContent: Bool = true
     @State private var startupTime: Date = Date()
@@ -246,7 +247,7 @@ struct TweetListView: View {
                     hasMoreTweets: $hasMoreTweets,
                     isLoading: isLoading,
                     isLoadingMore: isLoadingMore,
-                    allowNewTweetsBanner: allowNewTweetsBanner && initialLoadComplete && !isLoading && !isLoadingMore,
+                    allowNewTweetsBanner: allowNewTweetsBanner && initialLoadComplete && !isLoading && !isLoadingMore && !isDirectFeedRefreshActive,
                     loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
                     onRefresh: {
                         await refreshTweets()
@@ -668,6 +669,10 @@ struct TweetListView: View {
             return
         }
 
+        isDirectFeedRefreshActive = true
+        defer {
+            isDirectFeedRefreshActive = false
+        }
         isLoading = true
         initialLoadComplete = false
         didConfirmEmptyFromServer = false

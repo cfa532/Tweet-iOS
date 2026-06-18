@@ -90,7 +90,10 @@ struct TweetTableView: UIViewControllerRepresentable {
 
         // Only update tweets if they actually changed
         let currentTweetIds = tweets.map { $0.mid }
-        if coordinator.lastTweetIds != currentTweetIds {
+        if !allowNewTweetsBanner && uiViewController.hasPendingNewTweetsBanner {
+            coordinator.lastTweetIds = currentTweetIds
+            uiViewController.applyDirectTweetsAndClearPendingBanner(tweets)
+        } else if coordinator.lastTweetIds != currentTweetIds {
             coordinator.lastTweetIds = currentTweetIds
             uiViewController.updateTweets(tweets)
         } else {

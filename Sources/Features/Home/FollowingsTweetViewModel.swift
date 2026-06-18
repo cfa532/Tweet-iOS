@@ -107,19 +107,28 @@ class FollowingsTweetViewModel: ObservableObject {
         feedRefreshTask = nil
     }
 
-    private func beginPageZeroFetchIfNeeded(page: UInt) -> Bool {
+    private func beginPageZeroFetchIfNeeded(page: UInt, isPeriodicRefresh: Bool) async -> Bool {
         guard page == 0 else { return true }
 
-        pageZeroFetchLock.lock()
-        defer { pageZeroFetchLock.unlock() }
+        while !Task.isCancelled {
+            pageZeroFetchLock.lock()
+            if !pageZeroFetchInFlight {
+                pageZeroFetchInFlight = true
+                pageZeroFetchLock.unlock()
+                return true
+            }
+            pageZeroFetchLock.unlock()
 
-        if pageZeroFetchInFlight {
-            print("DEBUG: [FollowingsTweetViewModel] Skipping duplicate page 0 fetch")
-            return false
+            if isPeriodicRefresh {
+                print("DEBUG: [FollowingsTweetViewModel] Skipping duplicate periodic page 0 fetch")
+                return false
+            }
+
+            print("DEBUG: [FollowingsTweetViewModel] Waiting for in-flight page 0 fetch before direct refresh")
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
 
-        pageZeroFetchInFlight = true
-        return true
+        return false
     }
 
     private func endPageZeroFetchIfNeeded(page: UInt) {
@@ -131,7 +140,7 @@ class FollowingsTweetViewModel: ObservableObject {
     }
     
     func fetchTweets(page: UInt, pageSize: UInt, isPeriodicRefresh: Bool = false) async throws -> [Tweet?] {
-        guard beginPageZeroFetchIfNeeded(page: page) else {
+        guard await beginPageZeroFetchIfNeeded(page: page, isPeriodicRefresh: isPeriodicRefresh) else {
             return []
         }
         defer {

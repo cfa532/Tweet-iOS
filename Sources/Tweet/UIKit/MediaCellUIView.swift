@@ -1902,6 +1902,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func shouldDebouncePrimarySpinner(for player: AVPlayer? = nil) -> Bool {
         if let player {
+            if lastPlaybackRequestDate != .distantPast,
+               !isVideoAtEnd(player),
+               !isVisibleVideoFrameReady(player) {
+                return false
+            }
+
             let isEstablishedStall = lastActualPlaybackDate != .distantPast
                 && !isVideoAtEnd(player)
                 && !isVisibleVideoFrameReady(player)
@@ -2606,15 +2612,39 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let noRecentPlaybackProgress = lastPlaybackProgressDate == .distantPast
             || now.timeIntervalSince(lastPlaybackProgressDate) >= 20.0
         let noRecentDecodedProgress = !hasRecentDecodedPlayback(for: player, maxAge: 20.0)
+        let coldReadyStarved = !hasPlaybackHistory
+            && lastPlaybackRequestDate != .distantPast
+            && noRecentDecodedProgress
+        let coldReadyWaitSeconds: TimeInterval = 60.0
         let waitedLongWithCover = hasPlaybackHistory
             && lastPlaybackRequestDate != .distantPast
             && now.timeIntervalSince(lastPlaybackRequestDate) >= 45.0
             && noRecentPlaybackProgress
             && noRecentDecodedProgress
-        let waitedForColdStart = !hasPlaybackHistory
-            && lastPlaybackRequestDate != .distantPast
-            && now.timeIntervalSince(lastPlaybackRequestDate) >= 20.0
-            && noRecentDecodedProgress
+        let waitedForColdStart = coldReadyStarved
+            && now.timeIntervalSince(lastPlaybackRequestDate) >= coldReadyWaitSeconds
+            && noRecentPlaybackProgress
+
+        if coldReadyStarved,
+           !waitedForColdStart {
+            notePrimaryPlaybackIntentWhileWaiting(player)
+            applyAVPlayerBufferDefaults(to: player)
+            updateLoadingSpinnerForPlayback(player)
+            if player.rate == 0 {
+                player.play()
+            }
+            if now.timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
+                let waited = now.timeIntervalSince(lastPlaybackRequestDate)
+                print("\(logPrefix) ⏳ \(reason): cold ready item has \(String(format: "%.1f", bufferedAhead))s buffered after \(String(format: "%.1f", waited))s — keeping existing player")
+                lastSlowLoadWaitLogDate = now
+            }
+            scheduleStartupRecoveryAfterCurrentTask(
+                for: player,
+                reason: normalizedRecoveryReason(prefix: "readyStarvedColdWait-", reason: reason)
+            )
+            return true
+        }
+
         guard waitedForColdStart
             || waitedLongWithCover else { return false }
 
@@ -4610,6 +4640,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 if attachment.getUrl(effectiveBaseUrl) != nil {
                     SharedAssetCache.shared.markAsVisible(attachment.mid)
                     VideoStateCache.shared.markAsVisible(attachment.mid)
+                }
+                if shouldAcquirePlayer,
+                   player == nil,
+                   setupPlayerTask == nil,
+                   videoCellState != .failed {
+                    transitionTo(.playerLoading)
                 }
                 if !shouldAcquirePlayer {
                     restoreForegroundRecoveryPosterIfNeeded(reason: "visibleWithoutInfrastructure")

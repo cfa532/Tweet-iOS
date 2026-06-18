@@ -955,6 +955,20 @@ class TweetTableViewController: UITableViewController {
         showNewTweetsButton(count: pendingPrependedTweets.count)
     }
 
+    var hasPendingNewTweetsBanner: Bool {
+        !pendingPrependedTweets.isEmpty || pendingFullTweetsAfterPrepend != nil
+    }
+
+    func applyDirectTweetsAndClearPendingBanner(_ directTweets: [Tweet]) {
+        let previousAllowNewTweetsBanner = allowNewTweetsBanner
+        allowNewTweetsBanner = false
+        pendingPrependedTweets.removeAll()
+        pendingFullTweetsAfterPrepend = nil
+        hideNewTweetsButton()
+        updateTweets(directTweets)
+        allowNewTweetsBanner = previousAllowNewTweetsBanner
+    }
+
     private func showNewTweetsButton(count: Int) {
         didAutoHideNewTweetsBanner = false
         scheduleNewTweetsBannerAutoHide()
