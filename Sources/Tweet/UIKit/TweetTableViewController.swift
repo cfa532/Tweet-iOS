@@ -118,6 +118,7 @@ class TweetTableViewController: UITableViewController {
     private var foregroundObserver: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
     private var didBecomeActiveObserver: NSObjectProtocol?
+    private var reloadVisibleVideosObserver: NSObjectProtocol?
     private var needsVideoLayerRefresh = false
     private var scrollPositionBeforeBackground: CGFloat?
 
@@ -286,6 +287,10 @@ class TweetTableViewController: UITableViewController {
         }
 
         if let observer = didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = reloadVisibleVideosObserver {
             NotificationCenter.default.removeObserver(observer)
         }
 
@@ -480,6 +485,16 @@ class TweetTableViewController: UITableViewController {
                 self?.handleAppDidBecomeActive()
             }
         }
+
+        reloadVisibleVideosObserver = NotificationCenter.default.addObserver(
+            forName: .reloadVisibleVideosOnly,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleReloadVisibleVideosOnly()
+            }
+        }
     }
 
     @MainActor
@@ -561,6 +576,23 @@ class TweetTableViewController: UITableViewController {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
             tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
         }
+    }
+
+    @MainActor
+    private func handleReloadVisibleVideosOnly() {
+        guard videoCoordinator.isFeedVisible else { return }
+        guard isReadyForFeedVideoResume, !isTableViewUpdating else { return }
+
+        forceLayoutVisibleCellsForVisibilityPass()
+        lastVisibleTweetIds = []
+        lastLoadVisibleVideoIds = []
+        lastContinuePlaybackVideoIds = []
+        lastOnScreenVideoIds = []
+        updateVisibleTweetsForVideoPlayback()
+        videoCoordinator.recoverVisiblePlaybackAfterInterruption(
+            reason: "tableReloadVisibleVideosOnly",
+            isForegroundRecovery: true
+        )
     }
 
     /// End the background task and invalidate the identifier

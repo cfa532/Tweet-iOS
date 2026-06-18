@@ -1431,6 +1431,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     private func refreshDirectionalPreloads(reason: String, throttle: Bool) {
+        guard AppDelegate.isVideoInfrastructureReady else { return }
         guard isScrollStoppedForDirectionalPreload else { return }
 
         if throttle {
@@ -1535,6 +1536,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         playbackDebounceTimer = nil
         pendingPrimaryCandidate = nil
 
+        guard AppDelegate.isVideoInfrastructureReady else {
+            print("🎬 [COORD] startPrimary: video infrastructure not ready")
+            return
+        }
         guard !isPlaybackSuppressedByOverlay else {
             print("🎬 [COORD] startPrimary: blocked by overlay")
             return
@@ -1796,6 +1801,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     func recoverVisiblePlaybackAfterInterruption(reason: String, isForegroundRecovery: Bool) {
+        guard !isForegroundRecovery || AppDelegate.isVideoInfrastructureReady else {
+            print("🎬 [COORD] foreground recovery \(reason): video infrastructure not ready")
+            return
+        }
+
         if isForegroundRecovery {
             clearFinishedAutoplayGateForForeground()
         }

@@ -292,8 +292,6 @@ class MemoryCapManager {
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
         VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
-        LocalHTTPServer.shared.resetAllConnectionsImmediately()
-        LocalHTTPServer.shared.stopImmediatelyForBackground()
 
         updateMemoryUsage()
         let afterMB = currentMemoryUsage / (1024 * 1024)

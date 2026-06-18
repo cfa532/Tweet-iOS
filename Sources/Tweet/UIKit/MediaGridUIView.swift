@@ -521,7 +521,10 @@ class MediaGridUIView: UIView {
             let isLoadVisible = isGridVisible &&
                 visibleArea > 0 &&
                 (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
-            cellView.setVisible(isLoadVisible, shouldAcquirePlayer: isLoadVisible)
+            cellView.setVisible(
+                isLoadVisible,
+                shouldAcquirePlayer: isLoadVisible && AppDelegate.isVideoInfrastructureReady
+            )
 
             guard cellView.isVideoAttachment,
                   let identifier = cellView.videoIdentifier else { continue }

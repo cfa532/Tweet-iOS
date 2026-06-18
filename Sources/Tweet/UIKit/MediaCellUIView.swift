@@ -4611,6 +4611,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     SharedAssetCache.shared.markAsVisible(attachment.mid)
                     VideoStateCache.shared.markAsVisible(attachment.mid)
                 }
+                if !shouldAcquirePlayer {
+                    restoreForegroundRecoveryPosterIfNeeded(reason: "visibleWithoutInfrastructure")
+                }
             }
 
             // Register delegate for video coordination (keyed by identifier so
@@ -4622,7 +4625,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
             // If video was in failed state, trigger a fresh retry on becoming visible again.
             // Don't call clearPlayerForMediaID — disk cache is preserved for faster recovery.
-            if isVideoAttachment && videoCellState == .failed {
+            if isVideoAttachment && shouldAcquirePlayer && videoCellState == .failed {
                 print("\(logPrefix) 🔄 Became visible with failed video - retrying")
                 retryButton.isHidden = true
                 if let url = attachment.getUrl(effectiveBaseUrl), let parentTweet = parentTweet {
