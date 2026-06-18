@@ -382,6 +382,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var attachmentIndex: Int = 0
     private var aspectRatio: Float = 1.0
     private var cellTweetId: String?
+    private var isEmbeddedMedia: Bool = false
     private var shouldLoadVideo: Bool = true
     private var isVisible: Bool = false
     private var effectiveBaseUrl: URL = HproseInstance.baseUrl
@@ -398,6 +399,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let mediaTweetId = parentTweet?.mid ?? ""
         let outerTweetId = cellTweetId ?? mediaTweetId
         return "\(outerTweetId)_\(mediaTweetId)_\(attachment.mid)_\(attachmentIndex)"
+    }
+
+    private var usesIndependentPlayerInstance: Bool {
+        isEmbeddedMedia
     }
 
     private var imageLoadTask: Task<Void, Never>?
@@ -685,8 +690,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 hideImageViewImmediately()
                 videoPlayerView.isHidden = false
             }
-            loadingSpinner.stopAnimating()
-            retryButton.isHidden = false
+            if automaticTransientRetryTask != nil {
+                loadingSpinner.startAnimating()
+                retryButton.isHidden = true
+            } else {
+                loadingSpinner.stopAnimating()
+                retryButton.isHidden = false
+            }
         }
     }
 
@@ -758,7 +768,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         hideImageViewImmediately()
         imageView.image = nil
         clearBackgroundVideoCoverHold()
-        loadingSpinner.stopAnimating()
+        if coordinatorWantsToPlay {
+            updateLoadingSpinnerForPlayback(player)
+        } else {
+            loadingSpinner.stopAnimating()
+        }
         logVerbose("🖼️ removed video cover after loaded data (\(reason))")
         return true
     }
@@ -787,11 +801,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             requestPlaybackStartIfNeeded(player, reason: "\(reason)-cachedReady")
         }
 
-        if isHoldingBackgroundVideoCover,
-           coordinatorWantsToPlay,
-           !isVisibleVideoFrameReady(player),
-           !isVideoAtEnd(player) {
-            loadingSpinner.startAnimating()
+        if coordinatorWantsToPlay {
+            updateLoadingSpinnerForPlayback(player)
         } else if imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
             cancelDelayedPrimarySpinner()
             loadingSpinner.stopAnimating()
@@ -839,6 +850,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
            self.attachmentIndex == attachmentIndex,
            self.attachment != nil {
             self.aspectRatio = aspectRatio
+            self.isEmbeddedMedia = isEmbedded
             self.shouldLoadVideo = shouldLoadVideo
             self.cellTweetId = cellTweetId
             self.isSingleMedia = isSingleMedia
@@ -850,6 +862,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
+        self.isEmbeddedMedia = isEmbedded
         self.shouldLoadVideo = shouldLoadVideo
         self.cellTweetId = cellTweetId
         self.isSingleMedia = isSingleMedia
@@ -1052,6 +1065,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             forName: .videoPlayerClaimedByCell, object: nil, queue: .main
         ) { [weak self] notification in
             guard let self,
+                  !self.usesIndependentPlayerInstance,
                   let claimedMid = notification.userInfo?["videoMid"] as? String,
                   let claimerHash = notification.userInfo?["claimerIdentity"] as? Int,
                   claimedMid == self.attachment?.mid,
@@ -1064,6 +1078,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             forName: .videoPlayerItemReplaced, object: nil, queue: .main
         ) { [weak self] notification in
             guard let self,
+                  !self.usesIndependentPlayerInstance,
                   let replacedMid = notification.userInfo?["mediaID"] as? String,
                   replacedMid == self.attachment?.mid,
                   let player = self.player else { return }
@@ -1213,6 +1228,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         let mid = attachment.mid
 
+        if usesIndependentPlayerInstance {
+            acquireIndependentPlayer(attachment: attachment, url: url, parentTweet: parentTweet)
+            return
+        }
+
         // TIER 1: Synchronous cache hit (VideoStateCache)
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             let cachedPlayer = cachedState.player
@@ -1278,6 +1298,96 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         // TIER 3: Async loading
         acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
+    }
+
+    private func acquireIndependentPlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
+        guard shouldLoadVideo else { return }
+
+        let mid = attachment.mid
+
+        if let cachedPlayer = VideoStateCache.shared.getCachedState(for: mid)?.player ?? SharedAssetCache.shared.getCachedPlayer(for: mid),
+           let cachedItem = cachedPlayer.currentItem,
+           cachedItem.status != .failed {
+            let playerItem = AVPlayerItem(asset: cachedItem.asset)
+            playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = isVisible || coordinatorWantsToPlay
+            let newPlayer = AVPlayer(playerItem: playerItem)
+            newPlayer.isMuted = MuteState.shared.isMuted
+            configurePlayer(newPlayer)
+            return
+        }
+
+        acquireIndependentPlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
+    }
+
+    private func acquireIndependentPlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
+        guard shouldLoadVideo else { return }
+
+        let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
+        let mediaType = attachment.type
+        let expectedMid = attachment.mid
+
+        setupPlayerTask?.cancel()
+        setupPlayerTask = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try Task.checkCancellation()
+                let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
+                    for: uniqueURL,
+                    mediaID: expectedMid,
+                    mediaType: mediaType
+                )
+                try Task.checkCancellation()
+
+                let newPlayer = AVPlayer(playerItem: playerItem)
+                let muteState = await MainActor.run { MuteState.shared.isMuted }
+                newPlayer.isMuted = muteState
+
+                await MainActor.run { [weak self] in
+                    guard !Task.isCancelled, let self else { return }
+                    guard self.attachment?.mid == expectedMid,
+                          self.usesIndependentPlayerInstance,
+                          self.isVisible else {
+                        print("\(self.logPrefix) ⚠️ Independent player for \(expectedMid) arrived after cell reuse — discarding")
+                        return
+                    }
+
+                    newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = self.isVisible || self.coordinatorWantsToPlay
+                    newPlayer.isMuted = MuteState.shared.isMuted
+                    self.configurePlayer(newPlayer)
+                    self.setupPlayerTask = nil
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                let nsError = error as NSError
+                let isCancellation = nsError.code == NSURLErrorCancelled || error is CancellationError
+                let isBlacklisted = nsError.domain == "SharedAssetCache" && nsError.code == -2
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    guard self.isVisible else {
+                        self.setupPlayerTask = nil
+                        return
+                    }
+                    if isCancellation {
+                        print("\(self.logPrefix) ⚠️ Independent player creation cancelled")
+                        self.setupPlayerTask = nil
+                        return
+                    }
+                    if isBlacklisted {
+                        print("\(self.logPrefix) 🚫 Video blacklisted - no retry")
+                        self.loadingSpinner.stopAnimating()
+                        self.setupPlayerTask = nil
+                        if self.imageView.image != nil {
+                            self.transitionTo(.thumbnail)
+                        } else {
+                            self.videoPlayerView.isHidden = true
+                            self.videoCellState = .thumbnail
+                        }
+                        return
+                    }
+                    let nsErr = error as NSError
+                    self.handleVideoLoadFailure(reason: "Independent player creation failed: \(nsErr.domain) \(nsErr.code)")
+                }
+            }
+        }
     }
 
     private func shouldRebuildCachedFeedPlayer(_ player: AVPlayer, mid: String, source: String) -> Bool {
@@ -1628,7 +1738,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // Notify other feed cells that may hold the same player (tweet + retweet case)
         // to release their KVO observers. Must post after self.player = newPlayer so that
         // when the notification fires synchronously, this cell is already the owner.
-        if let mid = attachment?.mid {
+        if let mid = attachment?.mid, !usesIndependentPlayerInstance {
             NotificationCenter.default.post(
                 name: .videoPlayerClaimedByCell,
                 object: nil,
@@ -1789,7 +1899,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 showImageView()
             }
 
-            if let mid = attachment?.mid {
+            if let mid = attachment?.mid, !usesIndependentPlayerInstance {
                 NotificationCenter.default.post(
                     name: .videoPlayerClaimedByCell,
                     object: nil,
@@ -1865,7 +1975,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func hasVisiblePlaybackProgress(for player: AVPlayer) -> Bool {
-        guard lastPlaybackRequestDate != .distantPast else { return true }
+        guard lastPlaybackRequestDate != .distantPast else { return !coordinatorWantsToPlay }
         guard let mid = attachment?.mid,
               let decodedTime = VideoPlaybackSessionStore.shared.trustedVisibleTime(
                 for: mid,
@@ -1912,6 +2022,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func shouldDebouncePrimarySpinner(for player: AVPlayer? = nil) -> Bool {
         if let player {
+            if player.timeControlStatus == .playing,
+               !isVideoAtEnd(player),
+               !isVisibleVideoFrameReady(player) {
+                return false
+            }
+
             if lastPlaybackRequestDate != .distantPast,
                !isVideoAtEnd(player),
                !isVisibleVideoFrameReady(player) {
@@ -1958,12 +2074,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return
         }
 
-        if delayedPrimarySpinnerTask != nil {
-            loadingSpinner.stopAnimating()
+        if loadingSpinner.isAnimating {
             return
         }
 
-        if loadingSpinner.isAnimating {
+        if delayedPrimarySpinnerTask != nil {
             return
         }
 
@@ -4336,16 +4451,21 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
     }
 
-    private func retryVideoLoad() {
+    private func retryVideoLoad(isAutomatic: Bool = false) {
         guard isVideoAttachment else { return }
 
-        print("\(logPrefix) 🔄 Manual video retry")
-        preserveReleaseCoverForCurrentVideo(reason: "manualRetry", showCover: isVisible)
+        print("\(logPrefix) 🔄 \(isAutomatic ? "Automatic" : "Manual") video retry")
+        if !isAutomatic {
+            automaticTransientRetryTask?.cancel()
+            automaticTransientRetryTask = nil
+        }
+        let retryReason = isAutomatic ? "automaticTransientRetry" : "manualRetry"
+        preserveReleaseCoverForCurrentVideo(reason: retryReason, showCover: isVisible)
         restoreCachedPosterForFailureIfNeeded()
         retryButton.isHidden = true
         replayButton.isHidden = true
         _ = reacquirePlayerForCurrentVideo(
-            reason: "manualRetry",
+            reason: retryReason,
             clearCachedPlayer: true,
             transitionState: imageView.image != nil ? .playerLoading : .noContent,
             wantsPlayback: true
@@ -4487,8 +4607,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return
         }
 
-        // Visible failure → show retry button over current frame/black backdrop.
-        print("\(logPrefix) ❌ \(reason) - showing retry button")
+        let hasAutomaticRetryPending = automaticTransientRetryTask != nil
+        print("\(logPrefix) ❌ \(reason) - \(hasAutomaticRetryPending ? "automatic retry pending" : "showing retry button")")
         coordinatorWantsToPlay = false
         restoreCachedPosterForFailureIfNeeded()
         transitionTo(.failed)
@@ -4915,7 +5035,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                   self.videoCellState == .failed else { return }
 
             print("\(self.logPrefix) 🔄 Automatic transient video retry #\(attempt)")
-            self.retryVideoLoad()
+            self.retryVideoLoad(isAutomatic: true)
         }
     }
 
@@ -5427,6 +5547,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // Reset state
         pendingRecoverySeekTime = nil
         videoCellState = .noContent
+        isEmbeddedMedia = false
         attachment = nil
         parentTweet = nil
         isVisible = false
