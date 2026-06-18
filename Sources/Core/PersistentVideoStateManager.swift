@@ -154,7 +154,6 @@ class PersistentVideoStateManager: ObservableObject {
     /// Remove saved state for a video
     func clearState(videoMid: String, context: VideoPlaybackState.VideoContext) {
         videoStates[context]?.removeValue(forKey: videoMid)
-        print("🗑️ [VIDEO STATE] Cleared state for \(videoMid) in context \(context.rawValue)")
     }
 
     /// Remove saved state for a video across all contexts
@@ -162,7 +161,6 @@ class PersistentVideoStateManager: ObservableObject {
         for context in VideoPlaybackState.VideoContext.allCases {
             videoStates[context]?.removeValue(forKey: videoMid)
         }
-        print("🗑️ [VIDEO STATE] Cleared state for \(videoMid) (all contexts)")
     }
     
     /// Clear states older than 1 hour

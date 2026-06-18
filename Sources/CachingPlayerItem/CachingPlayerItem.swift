@@ -449,7 +449,6 @@ public final class CachingPlayerItem: AVPlayerItem {
         // Remove segments directory
         try? FileManager.default.removeItem(atPath: segmentsPath)
         
-        print("DEBUG: [CachingPlayerItem] Cleared HLS cache for mediaID: \(mediaID)")
     }
     
     /// Clear all cached content (both HLS and progressive videos)

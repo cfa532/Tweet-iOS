@@ -1334,7 +1334,6 @@ class SharedAssetCache: ObservableObject {
             )
         }
 
-        print("🗑️ [MEMORY LEAK FIX] Released player for \(mediaID) (deleteDiskCache: \(deleteDiskCache))")
     }
     
     /// Get cached player or create new one. Bandwidth is managed by NodeConnectionPool in
