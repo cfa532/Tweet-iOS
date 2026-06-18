@@ -356,12 +356,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("🔥 [AppDelegate] Performing immediate background memory release")
             MemoryCapManager.shared.performBackgroundMemoryRelease()
             AppDelegate.didPerformAggressiveCleanup = true
-            // Release builds need to exercise the same foreground recovery path:
-            // iOS can suspend or kill the listener after backgrounding, so stop it
-            // deterministically once visible video cells have captured their covers.
-            LocalHTTPServer.shared.resetAllConnectionsImmediately()
-            LocalHTTPServer.shared.stopImmediatelyForBackground()
-            print("[AppDelegate] Stopped LocalHTTPServer for background recovery")
 
             print("[AppDelegate] 🚀 Performing IMMEDIATE background message check after cleanup")
             self?.performImmediateBackgroundCheck()
@@ -417,16 +411,17 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         endBackgroundCleanupTask()
 
+        guard let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date else {
+            print("🚀 [AppDelegate] No background timestamp - skipping foreground recovery during startup")
+            AppDelegate.isVideoInfrastructureReady = true
+            return
+        }
+
         // FAST PATH: background memory release didn't run — server & players are intact
         // Safety: if process was suspended before cleanup could fire AND we were
         // gone >5 minutes, the NWListener is likely dead. Fall through to slow path.
         if !AppDelegate.didPerformAggressiveCleanup {
-            let timeInBackground: Int
-            if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
-                timeInBackground = Int(Date().timeIntervalSince(backgroundDate))
-            } else {
-                timeInBackground = 0
-            }
+            let timeInBackground = Int(Date().timeIntervalSince(backgroundDate))
 
             if timeInBackground < 300 {
                 print("⚡ [AppDelegate] Fast recovery (\(timeInBackground)s) — checking proxy health")
@@ -454,36 +449,25 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         // SLOW PATH: Aggressive cleanup already happened — need full recovery
         // Check how long app was in background
-        if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
-            let timeInBackground = Date().timeIntervalSince(backgroundDate)
-            print("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background (aggressive cleanup performed)")
+        let timeInBackground = Date().timeIntervalSince(backgroundDate)
+        print("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background (aggressive cleanup performed)")
 
-            // CRITICAL: Use DURATION-based recovery, not isRunning check
-            // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
-            if timeInBackground > 300 {  // 5 minutes
-                print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - checking proxy health")
-                AppDelegate.isVideoInfrastructureReady = false
-                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                    await self.recoverVideoInfrastructureAfterForeground(reason: "long foreground \(Int(timeInBackground))s")
-                }
-            } else {
-                // SHORT background (<5min) but aggressive cleanup happened
-                print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - recovery after aggressive cleanup")
-
-                AppDelegate.isVideoInfrastructureReady = false
-                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                    await self.recoverVideoInfrastructureAfterForeground(reason: "short foreground after cleanup \(Int(timeInBackground))s")
-                }
+        // CRITICAL: Use DURATION-based recovery, not isRunning check
+        // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
+        if timeInBackground > 300 {  // 5 minutes
+            print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - checking proxy health")
+            AppDelegate.isVideoInfrastructureReady = false
+            infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                await self.recoverVideoInfrastructureAfterForeground(reason: "long foreground \(Int(timeInBackground))s")
             }
         } else {
-            // No background timestamp - this means app was just launched or killed
-            print("🚀 [AppDelegate] App startup or crash recovery - ensuring server is running")
-            if !LocalHTTPServer.shared.isRunning {
-                LocalHTTPServer.shared.start()
-            } else {
-                print("✅ [AppDelegate] Server already running - no recovery needed")
+            // SHORT background (<5min) but aggressive cleanup happened
+            print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - recovery after aggressive cleanup")
+
+            AppDelegate.isVideoInfrastructureReady = false
+            infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                await self.recoverVideoInfrastructureAfterForeground(reason: "short foreground after cleanup \(Int(timeInBackground))s")
             }
-            AppDelegate.isVideoInfrastructureReady = true
         }
 
         // Check for new messages when returning to foreground (only updates badge, no notifications)

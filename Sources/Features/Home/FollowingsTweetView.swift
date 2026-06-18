@@ -64,6 +64,7 @@ struct FollowingsTweetView: View {
                 onScroll?(offset, delta)
             },
             allowDeleteAll: true,
+            allowNewTweetsBanner: viewModel.isPeriodicFeedRefreshActive,
             onAvatarTap: { user in onAvatarTap(user) },
             onTweetTap: { tweet in onTweetTap(tweet) },
             onShowLogin: onShowLogin,

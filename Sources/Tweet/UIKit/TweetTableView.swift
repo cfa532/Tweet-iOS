@@ -15,7 +15,9 @@ struct TweetTableView: UIViewControllerRepresentable {
     let headerRefreshToken: Int
     let hproseInstance: HproseInstance
     @Binding var hasMoreTweets: Bool
+    let isLoading: Bool
     let isLoadingMore: Bool
+    let allowNewTweetsBanner: Bool
     let loadMoreTweets: (Bool) -> Void  // Parameter: forceLoad
     let onRefresh: (() async -> Void)?
     let onScroll: ((CGFloat, CGFloat) -> Void)?
@@ -71,6 +73,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.onShowLogin = onShowLogin
         controller.onShowToast = onShowToast
         controller.allowDeleteAll = allowDeleteAll
+        controller.allowNewTweetsBanner = allowNewTweetsBanner
 
         controller.updateHeader()
         context.coordinator.lastHeaderWasPresent = header != nil
@@ -82,6 +85,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: TweetTableViewController, context: Context) {
         let coordinator = context.coordinator
         uiViewController.isDarkModeEnabled = isDarkMode
+        uiViewController.allowNewTweetsBanner = allowNewTweetsBanner
         uiViewController.applyTheme()
 
         // Only update tweets if they actually changed
@@ -89,6 +93,8 @@ struct TweetTableView: UIViewControllerRepresentable {
         if coordinator.lastTweetIds != currentTweetIds {
             coordinator.lastTweetIds = currentTweetIds
             uiViewController.updateTweets(tweets)
+        } else {
+            uiViewController.refreshHiddenPendingTweetsBannerIfNeeded(currentTweets: tweets)
         }
 
         // Only update pinned tweets if they actually changed
@@ -100,6 +106,7 @@ struct TweetTableView: UIViewControllerRepresentable {
 
         // Update loading state
         uiViewController.updateLoadingState(
+            isLoading: isLoading,
             isLoadingMore: isLoadingMore,
             hasMoreTweets: hasMoreTweets
         )

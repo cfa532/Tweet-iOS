@@ -12,6 +12,7 @@ import UIKit
 class FollowingsTweetViewModel: ObservableObject {
     @Published var tweets: [Tweet] = []     // tweet list to be displayed on screen.
     @Published var isLoading: Bool = false
+    @Published var isPeriodicFeedRefreshActive: Bool = false
     @Published var showTweetDetail: Bool = false
     @Published var selectedTweet: Tweet?
     let hproseInstance: HproseInstance
@@ -79,9 +80,19 @@ class FollowingsTweetViewModel: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
+                await MainActor.run {
+                    self.isPeriodicFeedRefreshActive = true
+                }
+                defer {
+                    Task { @MainActor [weak self] in
+                        self?.isPeriodicFeedRefreshActive = false
+                    }
+                }
+
                 do {
                     print("DEBUG: [FollowingsTweetViewModel] 5-minute foreground feed refresh")
-                    _ = try await self.fetchTweets(page: 0, pageSize: 10)
+                    _ = try await self.fetchTweets(page: 0, pageSize: 10, isPeriodicRefresh: true)
+                    NotificationCenter.default.post(name: .mainFeedPeriodicRefreshCompleted, object: nil)
                 } catch {
                     print("ERROR: [FollowingsTweetViewModel] Foreground feed refresh failed: \(error)")
                 }
@@ -119,7 +130,7 @@ class FollowingsTweetViewModel: ObservableObject {
         pageZeroFetchLock.unlock()
     }
     
-    func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
+    func fetchTweets(page: UInt, pageSize: UInt, isPeriodicRefresh: Bool = false) async throws -> [Tweet?] {
         guard beginPageZeroFetchIfNeeded(page: page) else {
             return []
         }
@@ -197,7 +208,11 @@ class FollowingsTweetViewModel: ObservableObject {
                 TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
             }
             if page == 0 {
-                refreshFollowingTweets(pageSize: pageSize)
+                if isPeriodicRefresh {
+                    await refreshFollowingTweetsAsync(pageSize: pageSize)
+                } else {
+                    refreshFollowingTweets(pageSize: pageSize)
+                }
             }
             
             let elapsed = Date().timeIntervalSince(startTime) * 1000
@@ -213,29 +228,32 @@ class FollowingsTweetViewModel: ObservableObject {
     private func refreshFollowingTweets(pageSize: UInt) {
         Task { [weak self] in
             guard let self = self else { return }
+            await self.refreshFollowingTweetsAsync(pageSize: pageSize)
+        }
+    }
 
-            do {
-                let newTweets = try await self.hproseInstance.fetchTweetFeed(
-                    user: self.hproseInstance.appUser,
-                    pageNumber: 0,
-                    pageSize: pageSize,
-                    entry: "update_following_tweets"
-                )
-                let filteredTweets = newTweets.compactMap { $0 }
-                guard !filteredTweets.isEmpty else { return }
+    private func refreshFollowingTweetsAsync(pageSize: UInt) async {
+        do {
+            let newTweets = try await hproseInstance.fetchTweetFeed(
+                user: hproseInstance.appUser,
+                pageNumber: 0,
+                pageSize: pageSize,
+                entry: "update_following_tweets"
+            )
+            let filteredTweets = newTweets.compactMap { $0 }
+            guard !filteredTweets.isEmpty else { return }
 
-                await MainActor.run {
-                    self.tweets.mergeTweets(filteredTweets)
-                }
-
-                let cacheKey = self.hproseInstance.appUser.mid
-                for tweet in filteredTweets {
-                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
-                }
-                print("DEBUG: [FollowingsTweetViewModel] Merged \(filteredTweets.count) newly synced following tweets")
-            } catch {
-                print("ERROR: [FollowingsTweetViewModel] update_following_tweets failed: \(error)")
+            await MainActor.run {
+                tweets.mergeTweets(filteredTweets)
             }
+
+            let cacheKey = hproseInstance.appUser.mid
+            for tweet in filteredTweets {
+                TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
+            }
+            print("DEBUG: [FollowingsTweetViewModel] Merged \(filteredTweets.count) newly synced following tweets")
+        } catch {
+            print("ERROR: [FollowingsTweetViewModel] update_following_tweets failed: \(error)")
         }
     }
     

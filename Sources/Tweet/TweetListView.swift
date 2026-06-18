@@ -37,6 +37,7 @@ struct TweetListView: View {
     let feedIdentifier: String  // Unique identifier for persistent scroll position
     let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
     let allowDeleteAll: Bool  // If true, appUser can delete any tweet (main feed); otherwise only own tweets
+    let allowNewTweetsBanner: Bool
     /// External signal used by profile route recovery to reload page 0 while preserving currently visible tweets.
     let externalRefreshToken: Int
     let emptyStateText: LocalizedStringKey?
@@ -175,6 +176,7 @@ struct TweetListView: View {
         feedIdentifier: String = "mainFeed",
         preserveOrder: Bool = false,
         allowDeleteAll: Bool = false,
+        allowNewTweetsBanner: Bool = false,
         externalRefreshToken: Int = 0,
         emptyStateText: LocalizedStringKey? = nil,
         header: (() -> AnyView)? = nil,
@@ -196,6 +198,7 @@ struct TweetListView: View {
         self.feedIdentifier = feedIdentifier
         self.preserveOrder = preserveOrder
         self.allowDeleteAll = allowDeleteAll
+        self.allowNewTweetsBanner = allowNewTweetsBanner
         self.externalRefreshToken = externalRefreshToken
         self.emptyStateText = emptyStateText
         self.header = header
@@ -241,7 +244,9 @@ struct TweetListView: View {
                     headerRefreshToken: headerRefreshToken,
                     hproseInstance: hproseInstance,
                     hasMoreTweets: $hasMoreTweets,
+                    isLoading: isLoading,
                     isLoadingMore: isLoadingMore,
+                    allowNewTweetsBanner: allowNewTweetsBanner && initialLoadComplete && !isLoading && !isLoadingMore,
                     loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
                     onRefresh: {
                         await refreshTweets()

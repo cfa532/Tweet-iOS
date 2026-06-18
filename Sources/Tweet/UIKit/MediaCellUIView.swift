@@ -130,8 +130,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private static var feedPlayerRebuildHistory: [String: [Date]] = [:]
     private static let maxFeedPlayerRebuildsPerWindow = 2
     private static let feedPlayerRebuildWindow: TimeInterval = 90
-    private static let slowLoadingNudgeInterval: TimeInterval = 10
-    private static let slowLoadingNudgeIntervalNanos: UInt64 = 10_000_000_000
+    private static let slowLoadingNudgeInterval: TimeInterval = 5
+    private static let slowLoadingNudgeIntervalNanos: UInt64 = 5_000_000_000
 
 #if DEBUG && VERBOSE_VIDEO_LOGS
     private static let verboseLogsEnabled = true
@@ -2104,7 +2104,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         } else if isResumeWaitAttempt {
             recoveryDelay = 4_000_000_000
         } else {
-            recoveryDelay = isStartupAttempt ? 12_000_000_000 : 15_000_000_000
+            recoveryDelay = isStartupAttempt ? 5_000_000_000 : 15_000_000_000
         }
         if playbackStartupRecoveryTask != nil,
            playbackStartupRecoveryRequestDate == requestDate,

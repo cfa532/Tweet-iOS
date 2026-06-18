@@ -62,6 +62,8 @@ extension Notification.Name {
     
     /// Posted when a tweet's privacy status is successfully updated (for toast notification)
     static let tweetPrivacyUpdated = Notification.Name("TweetPrivacyUpdated")
+    /// Posted when the main feed's periodic foreground refresh completes.
+    static let mainFeedPeriodicRefreshCompleted = Notification.Name("MainFeedPeriodicRefreshCompleted")
 
     /// Posted when a new comment is added by the current user
     static let newCommentAdded = Notification.Name("newCommentAdded")
