@@ -283,6 +283,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// Fallback task: if item.status stays .unknown after deferring to statusKVO,
     /// enable network and kick playback after a delay (same as deadlock fix).
     private var statusUnknownFallbackTask: Task<Void, Never>?
+    private var automaticTransientRetryTask: Task<Void, Never>?
+    private var automaticTransientRetryCount = 0
     /// Defers the primary spinner for cached/covered videos so instant starts do
     /// not flash loading chrome over an already-present frame.
     private var delayedPrimarySpinnerTask: Task<Void, Never>?
@@ -3625,8 +3627,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                             && FullScreenVideoManager.shared.currentVideoMid == mid
                         if !fullscreenOwnsMid {
                             self.preserveReleaseCoverForCurrentVideo(reason: "playerItem.failed", showCover: self.isVisible)
-                            // Delete disk cache so corrupt/partial IPFS data isn't re-served on retry.
-                            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: true)
+                            let deleteDiskCache = self.shouldDeleteDiskCacheAfterPlayerFailure(nsError)
+                            if !deleteDiskCache {
+                                print("\(self.logPrefix) ⚠️ Preserving disk cache after transient player failure: \(errorMsg)")
+                            }
+                            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: deleteDiskCache)
+                            if !deleteDiskCache {
+                                self.scheduleAutomaticTransientRetryIfNeeded(errorMsg: errorMsg)
+                            }
                         }
                     }
                     self.handleVideoLoadFailure(reason: "playerItem.status == .failed (\(errorMsg))")
@@ -4173,6 +4181,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 hasRenderedFrameForCurrentPlayer = true
                 if !didLogFirstDecodedPlayback {
                     didLogFirstDecodedPlayback = true
+                    automaticTransientRetryTask?.cancel()
+                    automaticTransientRetryTask = nil
+                    automaticTransientRetryCount = 0
                     print("\(logPrefix) ✅ decoded playback started: t=\(String(format: "%.1f", decodedSeconds))s, itemStatus=\(player.currentItem?.status.rawValue ?? -1), timeControl=\(player.timeControlStatus.rawValue)")
                 }
             }
@@ -4859,6 +4870,51 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
     }
 
+    private func shouldDeleteDiskCacheAfterPlayerFailure(_ error: NSError?) -> Bool {
+        guard let error else { return true }
+        guard error.domain == NSURLErrorDomain else { return true }
+
+        let transientNetworkCodes: Set<Int> = [
+            NSURLErrorTimedOut,
+            NSURLErrorCannotFindHost,
+            NSURLErrorCannotConnectToHost,
+            NSURLErrorNetworkConnectionLost,
+            NSURLErrorDNSLookupFailed,
+            NSURLErrorNotConnectedToInternet,
+            NSURLErrorDataNotAllowed,
+            NSURLErrorInternationalRoamingOff,
+            NSURLErrorCallIsActive
+        ]
+        return !transientNetworkCodes.contains(error.code)
+    }
+
+    private func scheduleAutomaticTransientRetryIfNeeded(errorMsg: String) {
+        guard isVisible,
+              isVideoAttachment,
+              shouldLoadVideo,
+              automaticTransientRetryTask == nil,
+              automaticTransientRetryCount < 2 else { return }
+
+        automaticTransientRetryCount += 1
+        let attempt = automaticTransientRetryCount
+        let delaySeconds: UInt64 = attempt == 1 ? 2 : 5
+        print("\(logPrefix) 🔄 Scheduling automatic transient video retry #\(attempt) after \(delaySeconds)s (\(errorMsg))")
+
+        automaticTransientRetryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
+            guard let self else { return }
+            defer { self.automaticTransientRetryTask = nil }
+            guard !Task.isCancelled,
+                  self.isVisible,
+                  self.isVideoAttachment,
+                  self.shouldLoadVideo,
+                  self.videoCellState == .failed else { return }
+
+            print("\(self.logPrefix) 🔄 Automatic transient video retry #\(attempt)")
+            self.retryVideoLoad()
+        }
+    }
+
     /// True when coordinator commanded play but the player/item is still being acquired or loaded.
     /// Prevents false stall detection: IPFS/HLS can take >3s before play() is even callable.
     /// Returns false once item fails (.failed) or becomes ready (.readyToPlay), so genuine stalls
@@ -5210,6 +5266,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         slowLoadingRecoveryTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
+        automaticTransientRetryTask?.cancel()
+        automaticTransientRetryTask = nil
         cancelDelayedPrimarySpinner()
         playbackStartupRecoveryTask?.cancel()
         playbackStartupRecoveryTask = nil
@@ -5311,6 +5369,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         timerHideTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
+        automaticTransientRetryTask?.cancel()
+        automaticTransientRetryTask = nil
+        automaticTransientRetryCount = 0
         playbackStartupRecoveryTask?.cancel()
         playbackStartupRecoveryTask = nil
         playbackStartupRecoveryRequestDate = nil
