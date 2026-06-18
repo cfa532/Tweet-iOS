@@ -588,11 +588,15 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 loadingSpinner.stopAnimating()
             }
         case .playerLoading:
-            let hasThumbnail = imageView.image != nil
+            let hasLoadedData = currentPlayerHasLoadedData
+            let hasThumbnail = imageView.image != nil && !hasLoadedData
             if hasThumbnail {
                 showImageView()
             } else {
                 hideImageViewImmediately()
+                if hasLoadedData {
+                    imageView.image = nil
+                }
             }
             // Hide videoPlayerView when thumbnail exists — the player hasn't rendered
             // a frame yet so it would show black on top of the thumbnail. The layer
@@ -605,21 +609,24 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 loadingSpinner.startAnimating()
             } else if coordinatorWantsToPlay {
                 showPrimarySpinnerAfterDebounce(for: player)
-            } else if shouldShowVisibleVideoCoverSpinner() {
+            } else if shouldShowVisibleVideoCoverSpinner(hasCover: hasLoadedData || hasVideoCoverForSpinner) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
             }
         case .playerReady:
-            let hasThumbnail = imageView.image != nil
-            let hasDisplayableCover = hasVideoCoverForSpinner
-            // Keep a thumbnail only until the player has buffered data and the layer can
-            // display a frame. Removing it before play() avoids a visible cover handoff
-            // right as playback starts.
+            let hasLoadedData = currentPlayerHasLoadedData
+            let hasThumbnail = imageView.image != nil && !hasLoadedData
+            let hasDisplayableCover = hasLoadedData || hasVideoCoverForSpinner
+            // Keep a thumbnail only until the player has buffered data. Removing it
+            // before play() avoids a visible cover handoff right as playback starts.
             if hasThumbnail {
                 showImageView()
             } else {
                 hideImageViewImmediately()
+                if hasLoadedData {
+                    imageView.image = nil
+                }
             }
             if hasThumbnail && !coordinatorWantsToPlay {
                 // Non-primary video: hide player layer (no need to decode yet)
@@ -651,13 +658,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             } else {
                 loadingSpinner.stopAnimating()
             }
-            // Keep thumbnail as cover until player is confirmed smooth-playing.
-            // This prevents black flash during buffering, retries, and fullscreen return.
-            // Always keep thumbnail as cover during state transitions.
-            // timeControlStatus KVO is the sole authority for hiding it
-            // once smooth playback is confirmed — prevents stale isLayerReadyForDisplay
-            // from prematurely revealing wrong frames during seek/resume.
-            if imageView.image == nil {
+            // Keep thumbnail as cover only until the player has data. After that,
+            // the AVPlayer surface owns the visual handoff so playback does not
+            // flash through a stale poster at start.
+            if currentPlayerHasLoadedData {
+                hideImageViewImmediately()
+                imageView.image = nil
+            } else if imageView.image == nil {
                 hideImageViewImmediately()
             } else {
                 showImageView()
@@ -743,13 +750,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard isVideoAttachment,
               self.player === player,
               imageView.image != nil else { return false }
-        guard playerHasLoadedData(player),
-              videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer else { return false }
-        if isHoldingBackgroundVideoCover,
-           backgroundVideoCoverMid == attachment?.mid,
-           !isVisibleVideoFrameReady(player) {
-            return false
-        }
+        guard playerHasLoadedData(player) else { return false }
 
         videoPlayerView.isHidden = false
         hideImageViewImmediately()
@@ -1350,10 +1351,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func playerHasLoadedData(_ player: AVPlayer) -> Bool {
         guard let item = player.currentItem else { return false }
+        if item.status == .readyToPlay { return true }
         return item.loadedTimeRanges.contains { value in
             let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
             return duration.isFinite && duration > 0
         }
+    }
+
+    private var currentPlayerHasLoadedData: Bool {
+        guard let player else { return false }
+        return playerHasLoadedData(player)
     }
 
     private func softResetFeedPlayerIfEmpty(_ player: AVPlayer, mid: String) {
@@ -1500,6 +1507,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // and the spinner from actuallyStartPlayback never stops.
         setupPlayerObservers(newPlayer)
         attachPlayerToLayer(newPlayer)
+        removeVideoCoverIfLoadedAndDisplayable(newPlayer, reason: "configure-loadedData")
         handleAlreadyReadyPlayer(newPlayer)
         continueCoordinatorPlaybackAfterConfigurationIfNeeded(newPlayer)
         deferVideoOutputAttachment(newPlayer)
@@ -4947,8 +4955,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private var canShowCachedCoverForCurrentVideo: Bool {
         if let player,
-           playerHasLoadedData(player),
-           videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer {
+           playerHasLoadedData(player) {
             return false
         }
         if hasPlaybackCoverForCurrentVideo { return true }
