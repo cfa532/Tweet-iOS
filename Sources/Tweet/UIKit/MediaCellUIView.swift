@@ -2625,14 +2625,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let coldReadyStarved = !hasPlaybackHistory
             && lastPlaybackRequestDate != .distantPast
             && noRecentDecodedProgress
-        let coldReadyWaitSeconds: TimeInterval = 60.0
+        let coldReadyWaitSeconds: TimeInterval = 15.0
+        let hlsReadyStarved = attachment?.type == .hls_video
+            && coldReadyStarved
+            && !LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid)
+        let hlsReadyStarvedWaitSeconds: TimeInterval = 6.0
         let waitedLongWithCover = hasPlaybackHistory
             && lastPlaybackRequestDate != .distantPast
             && now.timeIntervalSince(lastPlaybackRequestDate) >= 45.0
             && noRecentPlaybackProgress
             && noRecentDecodedProgress
         let waitedForColdStart = coldReadyStarved
-            && now.timeIntervalSince(lastPlaybackRequestDate) >= coldReadyWaitSeconds
+            && now.timeIntervalSince(lastPlaybackRequestDate) >= (hlsReadyStarved ? hlsReadyStarvedWaitSeconds : coldReadyWaitSeconds)
             && noRecentPlaybackProgress
 
         if coldReadyStarved,

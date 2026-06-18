@@ -65,8 +65,6 @@ class PersistentVideoStateManager: ObservableObject {
         var bucket = videoStates[context] ?? [:]
         bucket[videoMid] = state
         videoStates[context] = bucket
-        
-        print("📝 [VIDEO STATE] Saved state for \(videoMid): time=\(currentTime.seconds)s, wasPlaying=\(wasPlaying), context=\(context.rawValue)")
     }
     
     /// Save video playback state with duration check
