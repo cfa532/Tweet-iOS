@@ -1,6 +1,6 @@
 # Tweet-iOS Architecture Overview
 
-**Last Updated:** June 2026  
+**Last Updated:** June 2026
 **Version:** 3.3
 
 ## What This Architecture Optimizes For

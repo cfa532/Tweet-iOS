@@ -299,6 +299,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// exposes a black AVPlayerLayer.
     private var isHoldingBackgroundVideoCover = false
     private var backgroundVideoCoverMid: String?
+    private var foregroundRecoveryLoadingDeadline: Date?
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -734,6 +735,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func clearBackgroundVideoCoverHold() {
         isHoldingBackgroundVideoCover = false
         backgroundVideoCoverMid = nil
+        foregroundRecoveryLoadingDeadline = nil
     }
 
     @discardableResult
@@ -999,8 +1001,20 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func setupVideoCell(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
 
         // Reset any previous video state
+        let hasSameVideoRecoveryCover = isVideoAttachment
+            && self.attachment?.mid == attachment.mid
+            && imageView.image != nil
         pendingRecoverySeekTime = nil
-        cleanupVideoPlayer(reason: "setupVideoCell")
+        cleanupVideoPlayer(
+            reason: "setupVideoCell",
+            preserveBackgroundCover: hasSameVideoRecoveryCover
+        )
+        if hasSameVideoRecoveryCover {
+            isHoldingBackgroundVideoCover = true
+            backgroundVideoCoverMid = attachment.mid
+            foregroundRecoveryLoadingDeadline = Date().addingTimeInterval(20.0)
+            SharedAssetCache.shared.protectBackgroundPoster(for: attachment.mid)
+        }
 
         // Set spinner color for video (white on dark background)
         loadingSpinner.color = .white.withAlphaComponent(0.7)
@@ -1008,7 +1022,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // Start with a dark loading state, then apply/generate any cached poster
         // immediately. If AVPlayer stalls before first render, a poster is much
         // better feedback than a black rectangle.
-        transitionTo(.noContent)
+        transitionTo(imageView.image == nil ? .noContent : .thumbnail)
         observeCachedVideoThumbnail(for: attachment.mid)
         observePreloadedVideoPlayer(for: attachment.mid)
         if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: attachment.mid) {
@@ -3627,6 +3641,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
                 if player.timeControlStatus == .playing {
                     self.hlsEmptyWaitingStartDate = .distantPast
+                    self.foregroundRecoveryLoadingDeadline = nil
                     self.playbackStartupRecoveryTask?.cancel()
                     self.playbackStartupRecoveryTask = nil
                     self.playbackStartupRecoveryRequestDate = nil
@@ -4366,6 +4381,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // the protected foreground cover state before rebuilding AVPlayer.
         isHoldingBackgroundVideoCover = true
         backgroundVideoCoverMid = mid
+        foregroundRecoveryLoadingDeadline = Date().addingTimeInterval(20.0)
         SharedAssetCache.shared.protectBackgroundPoster(for: mid)
 
         switch videoCellState {
@@ -4806,6 +4822,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if !AppDelegate.isVideoInfrastructureReady {
             return true
         }
+        if let deadline = foregroundRecoveryLoadingDeadline,
+           Date() > deadline {
+            print("\(logPrefix) ⏱️ foreground recovery loading deadline exceeded - allowing coordinator restart")
+            return false
+        }
         if setupPlayerTask != nil || playerAcquireDebounceTask != nil {
             return true
         }
@@ -5096,7 +5117,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     // MARK: - Cleanup
 
-    private func cleanupVideoPlayer(reason: String) {
+    private func cleanupVideoPlayer(reason: String, preserveBackgroundCover: Bool = false) {
         if isVideoAttachment {
             preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
         }
@@ -5132,7 +5153,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if hasWork {
             teardownPlayerAndObservers()
         }
-        resetVideoState()
+        resetVideoState(preserveBackgroundCover: preserveBackgroundCover)
     }
 
     /// Cancel tasks, remove all observers, detach player from layer, nil player.
@@ -5190,7 +5211,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     /// Reset all video-related flags and counters to initial values.
-    private func resetVideoState() {
+    private func resetVideoState(preserveBackgroundCover: Bool = false) {
         coordinatorWantsToPlay = false
         isHandlingFinishEvent = false
         videoCellState = .noContent
@@ -5215,7 +5236,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         startupBufferReleaseUntil = .distantPast
         hlsBufferedUnknownStartDate = .distantPast
         hlsEmptyWaitingStartDate = .distantPast
-        clearBackgroundVideoCoverHold()
+        if !preserveBackgroundCover {
+            clearBackgroundVideoCoverHold()
+        }
         requestedFallbackThumbnailMid = nil
         resetFeedPlayerRebuildBudget()
         resetPlaybackProgressTracking()
