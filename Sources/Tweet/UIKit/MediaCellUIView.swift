@@ -2367,12 +2367,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let now = Date()
         let currentSeconds = seconds(from: player.currentTime())
         let isStartup = lastActualPlaybackDate == .distantPast && currentSeconds < 1.0
-        let isVisuallyStuck = !isVisibleVideoFrameReady(player)
-        if hasEstablishedDecodedPlayback(for: player),
-           !hasRecentDecodedPlayback(for: player, maxAge: 4.0),
-           isVisuallyStuck {
-            return false
-        }
         let hasNoRecentProgress = lastPlaybackProgressDate == .distantPast
             || now.timeIntervalSince(lastPlaybackProgressDate) >= 2.0
         let isStalledResume = lastActualPlaybackDate != .distantPast && hasNoRecentProgress
@@ -2387,11 +2381,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
         let hasUsableBuffer = bufferedAhead >= requiredBuffer
         guard hasUsableBuffer else { return false }
-        if !isStartup,
-           isVisuallyStuck,
-           now.timeIntervalSince(lastPlaybackRequestDate) >= 4.0 {
-            return false
-        }
 
         startupBufferReleaseUntil = now.addingTimeInterval(6.0)
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
