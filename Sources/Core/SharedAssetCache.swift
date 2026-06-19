@@ -938,7 +938,25 @@ class SharedAssetCache: ObservableObject {
     /// Remove invalid cached player
     /// Mark a video as visible (prevents player removal)
     func markAsVisible(_ mediaID: String) {
+        let wasVisible = visibleVideoMidCounts[mediaID, default: 0] > 0
         visibleVideoMidCounts[mediaID, default: 0] += 1
+
+        guard !wasVisible else { return }
+        promoteForegroundVisibleMedia(mediaID)
+    }
+
+    /// A foreground-visible media item is not a directional preload, even when it
+    /// is not the autoplay primary. Promote it out of preload tracking so its
+    /// visible cell can continue loading through the foreground path.
+    func promoteForegroundVisibleMedia(_ mediaID: String) {
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+
+        if let item = playerCache[mediaID]?.currentItem {
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        }
+        LocalHTTPServer.shared.resumeVisibleDownloads(for: mediaID)
     }
     
     /// Mark a video as not visible (allows player removal)
@@ -993,9 +1011,17 @@ class SharedAssetCache: ObservableObject {
     }
 
     @MainActor
-    private func releaseUnreadyPreloadedPlayer(for mediaID: String, player: AVPlayer) {
+    private func releaseUnreadyPreloadedPlayer(
+        for mediaID: String,
+        player: AVPlayer,
+        mediaType: MediaType?,
+        reason: String
+    ) {
         guard playerCache[mediaID] === player,
               !visibleVideoMids.contains(mediaID) else { return }
+
+        let isHLS = mediaType == .hls_video || player.currentItem is CachingPlayerItem
+        let hasCompleteProgressiveCache = !isHLS && LocalHTTPServer.shared.hasCompleteProgressiveCache(for: mediaID)
 
         playerCache.removeValue(forKey: mediaID)
         cacheTimestamps.removeValue(forKey: mediaID)
@@ -1007,8 +1033,13 @@ class SharedAssetCache: ObservableObject {
         resourceLoaderDelegates.removeValue(forKey: mediaID)
 
         releasePlayer(player)
-        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
-        print("🔮 [PLAYER PRELOAD] Released unready HLS preload for \(shortMID(mediaID)) - disk cache preserved")
+        if !hasCompleteProgressiveCache {
+            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        }
+
+        let kind = isHLS ? "HLS" : "progressive"
+        let cacheNote = hasCompleteProgressiveCache ? "complete disk cache preserved" : "disk cache preserved"
+        print("🔮 [PLAYER PRELOAD] Released \(kind) preload for \(shortMID(mediaID)) (\(reason)) - \(cacheNote)")
     }
 
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
@@ -2201,7 +2232,12 @@ class SharedAssetCache: ObservableObject {
         // Skip if player already cached
         if let player = playerCache[mediaID] {
             if shouldReleaseUnreadyHLSPreload(player, mediaType: mediaType) {
-                releaseUnreadyPreloadedPlayer(for: mediaID, player: player)
+                releaseUnreadyPreloadedPlayer(
+                    for: mediaID,
+                    player: player,
+                    mediaType: mediaType,
+                    reason: "failed player item"
+                )
                 if playerCache[mediaID] != nil { return }
             } else {
                 preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
@@ -2236,7 +2272,12 @@ class SharedAssetCache: ObservableObject {
                 let didWarm = await warmPreloadedPlayer(player, mediaID: mediaID, mediaType: mediaType)
                 guard didWarm else {
                     await MainActor.run {
-                        self.releaseUnreadyPreloadedPlayer(for: mediaID, player: player)
+                        self.releaseUnreadyPreloadedPlayer(
+                            for: mediaID,
+                            player: player,
+                            mediaType: mediaType,
+                            reason: Task.isCancelled ? "cancelled before warm" : "not warm enough"
+                        )
                     }
                     return
                 }

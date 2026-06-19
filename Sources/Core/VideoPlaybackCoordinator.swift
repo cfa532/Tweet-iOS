@@ -862,6 +862,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         updateScrollDirectionFromTableView()
 
         loadVisibleMediaCells = loadVisibleIdentifiers
+        promoteForegroundVisibleMedia(reason: "viewport")
         updateFeedVisibleTweets(tweetIds)
         updatePlayableMediaCells(
             playableIdentifiers,
@@ -1196,7 +1197,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             startPrimaryVideoPlayback()
             return
         }
-        if delegate.isActuallyPlaying { return }  // Primary is healthy — nothing to do
+        if delegate.isActuallyPlaying {
+            refreshDirectionalPreloads(reason: "primary healthy", throttle: true)
+            return
+        }  // Primary is healthy — nothing to do
         // Primary has been commanded to play but AVPlayerItem is still loading (status=.unknown).
         // This is not a stall — it's normal IPFS/HLS latency. Let it load; once the item
         // reaches readyToPlay and play() is called, the buffering timeout in
@@ -1206,7 +1210,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         // non-playing state (e.g. mid-startup, buffering). AVPlayer self-manages stall recovery
         // via automaticallyWaitsToMinimizeStalling=true (default), surfacing gaps as
         // .waitingToPlayAtSpecifiedRate (caught by isActuallyPlaying), not .paused.
-        if delegate.isRecentlyPlaying { return }
+        if delegate.isRecentlyPlaying {
+            refreshDirectionalPreloads(reason: "primary recently playing", throttle: true)
+            return
+        }
         // Primary is stuck — reset and restart. identifyPrimaryVideo naturally prefers a
         // different candidate when one exists (direction fix picks bottommost when scrolling down).
         // Do NOT set failedPrimaryIdentifier: if this is the only visible video it would block
@@ -1434,7 +1441,25 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Tracks only the next videos in the scroll direction so stale preloads are easy to cancel.
     func performPreloadOnScrollStop() {
         onScrollStopped()
+        promoteForegroundVisibleMedia(reason: "scroll stop")
         refreshDirectionalPreloads(reason: "scroll stop", throttle: false)
+    }
+
+    func canRunDirectionalPreloads() -> Bool {
+        guard AppDelegate.isVideoInfrastructureReady,
+              isScrollStoppedForDirectionalPreload,
+              !isPlaybackSuppressedByOverlay,
+              isFeedVisible else { return false }
+
+        guard !visibleVideos.isEmpty else { return true }
+
+        guard phase == .primaryPlaying,
+              let primaryId = primaryVideoId,
+              let delegate = mediaCellDelegates[primaryId] else {
+            return false
+        }
+
+        return delegate.isActuallyPlaying || delegate.isRecentlyPlaying
     }
 
     private var isScrollStoppedForDirectionalPreload: Bool {
@@ -1446,6 +1471,14 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func refreshDirectionalPreloads(reason: String, throttle: Bool) {
         guard AppDelegate.isVideoInfrastructureReady else { return }
         guard isScrollStoppedForDirectionalPreload else { return }
+        promoteForegroundVisibleMedia(reason: reason)
+
+        guard canRunDirectionalPreloads() else {
+            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
+            activePreloadMids.removeAll()
+            SharedAssetCache.shared.updateProtectedPreloadMids([])
+            return
+        }
 
         if throttle {
             let now = CACurrentMediaTime()
@@ -1484,6 +1517,22 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func currentOnScreenVideoMids() -> Set<String> {
         let visibleIdentifiers = loadVisibleMediaCells.isEmpty ? onScreenMediaCells : loadVisibleMediaCells
         return Set(allVideos.filter { visibleIdentifiers.contains($0.identifier) }.map { $0.videoMid })
+    }
+
+    private func promoteForegroundVisibleMedia(reason: String) {
+        guard !loadVisibleMediaCells.isEmpty else { return }
+
+        let foregroundMids = Set(allVideos.filter {
+            loadVisibleMediaCells.contains($0.identifier) && $0.isInVisibleMediaRange
+        }.map { $0.videoMid })
+        guard !foregroundMids.isEmpty else { return }
+
+        activePreloadMids.subtract(foregroundMids)
+        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids)
+
+        for mediaID in foregroundMids {
+            SharedAssetCache.shared.promoteForegroundVisibleMedia(mediaID)
+        }
     }
 
     private func cancelTrackedPreloads(except keepMids: Set<String>, reason: String) {

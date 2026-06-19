@@ -104,10 +104,12 @@ At a high level:
 - Continue threshold is stricter, which reduces rapid start/stop flapping while scrolling.
 
 **Directional preload strategy**
-- Preload the next likely-to-watch video with a small directional window.
+- Preload only invisible media. Visible media loads through the visible-cell path and must not be counted as directional preload.
+- Preload the next likely-to-watch invisible video with a small directional window.
 - Main, standard, and profile feeds pre-create up to 1 nearby off-screen player after scroll stop.
 - Feed-level player creation is capped at 2 in-flight creations, with visible/primary work taking priority.
-- Directional image preload stays wider: 2 rows ahead, 1 opposite row, max 4 image tasks.
+- Directional image preload stays wider: 2 rows ahead, 1 opposite row, max 4 invisible image tasks.
+- Directional image/video preloads start only when the selected visible primary video is actually playing or recently playing.
 - Keep preload scope intentionally tight to avoid over-downloading content users may never see.
 
 **Off-screen cancellation strategy**
@@ -119,6 +121,7 @@ At a high level:
 **Primary video prioritization**
 - As soon as coordinator selects a primary video, proxy/network paths prioritize it.
 - Primary is promoted explicitly (`setPrimaryMediaID`) instead of relying on passive queue timing.
+- If the primary is still loading, buffering, or recovering, invisible preloads pause so foreground playback gets the bandwidth.
 
 **IPFS optimization strategy**
 - Deduplicate segment/range work whenever possible.

@@ -2547,7 +2547,11 @@ class TweetTableViewController: UITableViewController {
             firstVisibleRow: firstVisible.row,
             lastVisibleRow: lastVisible.row
         )
-        preloadImagesForRows(preloadRows + oppositeRows)
+        if videoCoordinator.canRunDirectionalPreloads() {
+            preloadImagesForRows(preloadRows + oppositeRows)
+        } else {
+            cancelDirectionalImagePreloads()
+        }
 
         videoCoordinator.performPreloadOnScrollStop()
     }

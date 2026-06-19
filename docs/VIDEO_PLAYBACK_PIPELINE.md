@@ -40,7 +40,9 @@ If the primary video gets stuck (hasn't actually played for 15 seconds), the coo
 - Visibility is measured at the media cell level, not the tweet row level. A partially visible image/video can load its cover/player, but off-screen media should stop network work.
 - When scrolling starts, pending directional video and image preloads are cancelled. On-screen video work stays protected.
 - While scrolling is active, directional video preloads do not start. They resume only after scroll stop or initial load.
-- Primary playback is foreground work. Preloads must never starve the selected visible video.
+- Directional preloads are for invisible media only. Visible media loads through its own visible-cell path.
+- Primary playback is foreground work. It gets network priority over visible non-primary media and all preloads.
+- Invisible video/image preloads may start only when the selected visible primary is stable enough: actually playing or recently playing. If the primary is still loading, buffering, or recovering, directional preloads pause/cancel.
 - If a feed player is released or rebuilt to save memory, keep a last-frame cover when possible. Once the attached player has displayable content, remove any stale cover before playback starts.
 - On first HLS access, race `master.m3u8` and `playlist.m3u8`; use whichever valid playlist responds first.
 
@@ -120,7 +122,7 @@ AVPlayer request → localhost proxy → check disk cache →
 | Media cell becomes visible | Register with coordinator, start loading cover/thumbnail, debounce player creation |
 | User starts scrolling | Cancel pending directional image/video preloads, keep on-screen video work protected |
 | User is still scrolling | Do not start new directional video preloads |
-| Scroll stops | Start the next likely directional video preload and nearby image preloads |
+| Scroll stops | If the primary is stable, start the next likely invisible directional video preload and nearby invisible image preloads |
 | Coordinator selects this cell | Send play command, set bandwidth priority |
 | Media cell scrolls off screen | Pause player, cancel network downloads, save position, unregister from coordinator |
 | User scrolls back to same cell | Reclaim cached player (instant), resume from saved position |

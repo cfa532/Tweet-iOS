@@ -11,7 +11,7 @@ import SwiftUI
 import Combine
 import AVFoundation
 
-class TweetActionBarView: UIView {
+class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     // MARK: - Action Buttons
 
@@ -64,8 +64,8 @@ class TweetActionBarView: UIView {
     private var attachmentPreviewImage: UIImage?
     private var isPreparingShare = false
 
-    // Comment overlay cleanup observer (stored to prevent accumulation)
-    private var commentDismissObserver: NSObjectProtocol?
+    // UIKit comment composer overlay currently suppressing feed playback.
+    private var activeCommentOverlayId: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -251,33 +251,25 @@ class TweetActionBarView: UIView {
                 .environmentObject(hproseInstance)
             let hostingController = UIHostingController(rootView: commentCompose)
 
-            // Register overlay
-            OverlayVisibilityCoordinator.shared.beginOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionBarView")
+            let overlayId = "commentCompose_\(tweet.mid)"
+            activeCommentOverlayId = overlayId
+            OverlayVisibilityCoordinator.shared.beginOverlay(id: overlayId, source: "TweetActionBarView")
+
+            hostingController.presentationController?.delegate = self
 
             // Present modally
             parentVC.present(hostingController, animated: true)
-
-            // Observe dismissal to clean up overlay — store token to prevent accumulation
-            if let existing = commentDismissObserver {
-                NotificationCenter.default.removeObserver(existing)
-            }
-            commentDismissObserver = NotificationCenter.default.addObserver(
-                forName: UIApplication.didBecomeActiveNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                guard let self = self, let tweet = self.currentTweet else { return }
-                if parentVC.presentedViewController == nil {
-                    if let obs = self.commentDismissObserver {
-                        NotificationCenter.default.removeObserver(obs)
-                        self.commentDismissObserver = nil
-                    }
-                    Task { @MainActor in
-                        OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionBarView")
-                    }
-                }
-            }
         }
+    }
+
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        endActiveCommentOverlay(source: "TweetActionBarView")
+    }
+
+    private func endActiveCommentOverlay(source: String) {
+        guard let overlayId = activeCommentOverlayId else { return }
+        activeCommentOverlayId = nil
+        OverlayVisibilityCoordinator.shared.endOverlay(id: overlayId, source: source)
     }
 
     private func handleRetweet() {
@@ -1104,10 +1096,7 @@ class TweetActionBarView: UIView {
 
     func prepareForReuse() {
         cancellables.removeAll()
-        if let obs = commentDismissObserver {
-            NotificationCenter.default.removeObserver(obs)
-            commentDismissObserver = nil
-        }
+        endActiveCommentOverlay(source: "TweetActionBarView.prepareForReuse")
         currentTweetId = nil
         currentTweet = nil
         hproseInstance = nil

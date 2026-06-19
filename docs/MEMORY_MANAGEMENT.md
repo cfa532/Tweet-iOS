@@ -164,7 +164,9 @@ All feed surfaces now use the same preload budget so profile navigation has the 
 Additional guardrails:
 - Visibility decisions are media-level, not tweet-level. The actual image/video cell intersection controls load/cancel behavior.
 - When scrolling starts, pending directional image/video preloads are cancelled. On-screen video work remains protected.
+- Directional video/image preloads are for invisible media only. Visible media loads through visible-cell loading paths.
 - Directional video preloads start only after initial load or scroll stop. They do not start while the table is tracking, dragging, or decelerating.
+- Directional preloads start only when the selected visible primary video is actually playing or recently playing. If primary playback is loading, buffering, or recovering, preload work is cancelled/paused.
 - Scroll-start cancellation also stops stale preload tasks, asset loads, player creation tasks, and active local-server downloads for non-visible media. It intentionally skips the completed-preload grace period.
 - Off-screen preloaded players may decode/cache a poster frame, but paused off-screen players do not keep network streaming enabled.
 - Visible media still gets priority over background preload work.

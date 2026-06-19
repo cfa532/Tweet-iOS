@@ -344,7 +344,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         guard nsError.domain == "Network.NWError" else { return false }
         // AVPlayer closes proxy responses when it switches variants, has enough
         // buffered data, or the item is replaced. These are not server failures.
-        return nsError.code == 89 || nsError.code == 32 || nsError.code == 57
+        return nsError.code == 89 || nsError.code == 32 || nsError.code == 57 || nsError.code == 54
     }
 
     private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
@@ -434,9 +434,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
     private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
 
-    // Log deduplication: suppress duplicate CACHE MISS logs for same mediaID+range within 3s
-    private var recentCacheMissLogs: [String: Date] = [:]
-    private let cacheMissLogLock = NSLock()
+    // Log deduplication: suppress duplicate progressive cache decision logs for same mediaID+range within 3s
+    private var recentProgressiveCacheLogs: [String: Date] = [:]
+    private let progressiveCacheLogLock = NSLock()
 
     // Primary video tracking — used to set isPrimary when acquiring NodeConnectionPool slots.
     private var currentPrimaryMediaID: String?
@@ -967,6 +967,28 @@ public class LocalHTTPServer: @unchecked Sendable {
         progressiveCacheWritersLock.lock()
         progressiveCacheWriters = progressiveCacheWriters.filter { !$0.hasPrefix(mediaID) }
         progressiveCacheWritersLock.unlock()
+    }
+
+    /// Clear stale preload cancellation state when a media cell becomes visible.
+    /// Visible cells own their own loading path; they must not inherit a cancelled
+    /// directional-preload marker from before they entered the viewport.
+    public func resumeVisibleDownloads(for mediaID: String) {
+        Task {
+            await activeDownloadsActor.clearCancelledMediaID(mediaID)
+            await activeDownloadsActor.releaseStalledDownloads(for: mediaID)
+        }
+    }
+
+    public func hasCompleteProgressiveCache(for mediaID: String) -> Bool {
+        let cacheFileURL = progressiveCacheFileURL(for: mediaID)
+        guard FileManager.default.fileExists(atPath: cacheFileURL.path),
+              let totalSize = loadProgressiveTotalSize(mediaID: mediaID),
+              totalSize > 0 else {
+            return false
+        }
+
+        let cachedSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
+        return cachedSize >= totalSize && isValidProgressiveCache(fileURL: cacheFileURL)
     }
 
     private func trackHLSDataTask(_ task: URLSessionTask, mediaID: String, taskKey: UUID) {
@@ -1621,26 +1643,32 @@ public class LocalHTTPServer: @unchecked Sendable {
         // primary), so this guard only fires while the mediaID remains non-primary.
         if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
             print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(logPath) because media is cancelled")
-            connection.cancel()
+            sendResponse(
+                connection: connection,
+                statusCode: 410,
+                headers: [
+                    "Content-Length": "0",
+                    "Cache-Control": "no-store"
+                ],
+                body: nil
+            )
             return
         }
 
         let downloadKey = cachePath
         var isPrimary = isCurrentPrimary(mediaID)
 
-        // Deduplicate preload/background segment requests. For the current primary
-        // player, let AVPlayer issue independent retries/variant requests and rely
-        // on the primary slot cap below to keep memory/bandwidth bounded.
+        // Deduplicate segment requests for every player. When a media becomes
+        // primary, setPrimaryMediaID clears stale preload dedup entries first, so
+        // this only makes duplicate primary requests wait for the active fetch.
         let requestedSegmentPath = relativeHLSSegmentPath(from: fullRealURL, mediaID: mediaID) ?? fullRealURL.lastPathComponent
         let hasMatchingSegmentTask = hasActiveHLSSegmentDownload(for: mediaID, relativePath: requestedSegmentPath)
         var shouldWaitForInFlightDownload = false
-        if !isPrimary {
-            if hasMatchingSegmentTask {
-                shouldWaitForInFlightDownload = true
-            } else {
-                let didStartDownload = await activeDownloadsActor.startIfNotInFlight(for: downloadKey)
-                shouldWaitForInFlightDownload = !didStartDownload
-            }
+        if hasMatchingSegmentTask {
+            shouldWaitForInFlightDownload = true
+        } else {
+            let didStartDownload = await activeDownloadsActor.startIfNotInFlight(for: downloadKey)
+            shouldWaitForInFlightDownload = !didStartDownload
         }
 
         if shouldWaitForInFlightDownload {
@@ -1838,23 +1866,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
-        // Deduplicate: suppress identical cache miss logs within 3 seconds
-        let logKey = "\(mediaID)_\(rangeStr)"
-        let now = Date()
-        let shouldLog = cacheMissLogLock.withLock {
-            let lastLog = recentCacheMissLogs[logKey]
-            let should = lastLog == nil || now.timeIntervalSince(lastLog!) >= 3.0
-            if should { recentCacheMissLogs[logKey] = now }
-            // Prune old entries periodically
-            if recentCacheMissLogs.count > 50 {
-                recentCacheMissLogs = recentCacheMissLogs.filter { now.timeIntervalSince($0.value) < 5.0 }
-            }
-            return should
-        }
-        if shouldLog {
-        }
-        
         // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
         // Primary bypasses the preload cap, but still honors its own range cap.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
@@ -2040,18 +2051,37 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func cachedContiguousSize(for mediaID: String, cacheFileURL: URL) -> Int64 {
-        if let stored = loadProgressiveContiguousSize(mediaID: mediaID), stored > 0 {
-            return min(stored, progressiveDiskCacheLimit)
+        let stored = loadProgressiveContiguousSize(mediaID: mediaID).map { min($0, progressiveDiskCacheLimit) }
+
+        if let stored, stored > 0 {
+            let fileSize: Int64
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
+                fileSize = min((attributes[.size] as? NSNumber)?.int64Value ?? 0, progressiveDiskCacheLimit)
+            } catch {
+                return stored
+            }
+            guard fileSize > stored else {
+                return stored
+            }
+            
+            let inferred = inferContiguousSizeIfAvailable(mediaID: mediaID, cacheFileURL: cacheFileURL).map { min($0, progressiveDiskCacheLimit) }
+            guard let inferred, inferred > stored else {
+                return stored
+            }
+            storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: inferred)
+            print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) recovered contiguous metadata: stored=\(stored), inferred=\(inferred)")
+            return inferred
         }
-        
-        guard let inferred = inferContiguousSizeIfAvailable(mediaID: mediaID, cacheFileURL: cacheFileURL) else {
+
+        let inferred = inferContiguousSizeIfAvailable(mediaID: mediaID, cacheFileURL: cacheFileURL).map { min($0, progressiveDiskCacheLimit) }
+        guard let inferred, inferred > 0 else {
             return 0
         }
-        
-        if inferred > 0 {
-            storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: inferred)
-        }
-        return min(inferred, progressiveDiskCacheLimit)
+
+        storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: inferred)
+        print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) restored missing contiguous metadata: inferred=\(inferred)")
+        return inferred
     }
     
     private func inferContiguousSizeIfAvailable(mediaID: String, cacheFileURL: URL) -> Int64? {
@@ -2137,6 +2167,43 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Return nil so caller can handle appropriately (e.g., fetch from network)
         return nil
     }
+
+    private func logProgressiveCacheDecision(
+        mediaID: String,
+        rangeHeader: String?,
+        start: Int64,
+        end: Int64?,
+        cachedSize: Int64,
+        fileSize: Int64?,
+        totalSize: Int64?,
+        decision: String,
+        reason: String
+    ) {
+        // AVPlayer may request cached progressive data in many tiny ranges.
+        // Logging every cached subrange hides the state-machine logs we need.
+        if decision == "HIT", reason == "cached-range", start > 0 {
+            return
+        }
+
+        let rangeDescription = rangeHeader ?? "full"
+        let logKey = "\(mediaID)_\(rangeDescription)_\(decision)_\(reason)"
+        let now = Date()
+        let shouldLog = progressiveCacheLogLock.withLock {
+            let lastLog = recentProgressiveCacheLogs[logKey]
+            let should = lastLog == nil || now.timeIntervalSince(lastLog!) >= 3.0
+            if should { recentProgressiveCacheLogs[logKey] = now }
+            if recentProgressiveCacheLogs.count > 80 {
+                recentProgressiveCacheLogs = recentProgressiveCacheLogs.filter { now.timeIntervalSince($0.value) < 5.0 }
+            }
+            return should
+        }
+        guard shouldLog else { return }
+
+        let endDescription = end.map(String.init) ?? "open"
+        let fileDescription = fileSize.map(String.init) ?? "none"
+        let totalDescription = totalSize.map(String.init) ?? "unknown"
+        print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) \(decision): reason=\(reason), req=\(start)-\(endDescription), header=\(rangeDescription), cached=\(cachedSize), file=\(fileDescription), total=\(totalDescription)")
+    }
     
     private func serveProgressiveCacheIfAvailable(
         mediaID: String,
@@ -2147,142 +2214,263 @@ public class LocalHTTPServer: @unchecked Sendable {
         connection: NWConnection
     ) -> Bool {
         let cacheFileURL = progressiveCacheFileURL(for: mediaID)
-        if FileManager.default.fileExists(atPath: cacheFileURL.path) {
-            let totalSize = loadProgressiveTotalSize(mediaID: mediaID)
-            let contiguousSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
-            let cachedSize: Int64
-            do {
-                let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
-                let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-                let cappedFileSize = min(fileSize, progressiveDiskCacheLimit)
-                cachedSize = contiguousSize > 0 ? min(contiguousSize, cappedFileSize) : cappedFileSize
-            } catch {
-                print("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
-                return false
-            }
-            
-            let shouldValidate: Bool = {
-                guard let totalSize = totalSize else { return false }
-                let tolerance: Int64 = 512 * 1024 // 512KB tolerance
-                return cachedSize + tolerance >= totalSize
-            }()
-            
-            if shouldValidate {
-                let hasRealDataAtStart: Bool = {
-                    do {
-                        let fileHandle = try FileHandle(forReadingFrom: cacheFileURL)
-                        defer { try? fileHandle.close() }
-                        let prefix = try fileHandle.read(upToCount: 8192) ?? Data()
-                        return prefix.contains { $0 != 0 }
-                    } catch {
-                        print("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache prefix for \(mediaID): \(error.localizedDescription)")
-                        return false
-                    }
-                }()
-                
-                if !hasRealDataAtStart {
-                } else if !isValidProgressiveCache(fileURL: cacheFileURL) {
-                    print("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted COMPLETE cache for \(mediaID), deleting entire cache directory")
-                    // Delete the entire cache directory (including legacy per-range files)
-                    let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                    let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-                    try? FileManager.default.removeItem(at: mediaCacheDir)
-                    // Fall through to network fetch
-                    return false
-                }
-            } else if totalSize != nil {
-            }
-            
-            guard start < cachedSize else {
-                return false
-            }
-            
-            let availableLength = cachedSize - start
-            
-            let requestedLength: Int64
-            if let end = end {
-                // Explicit range request - honor it fully if available
-                let rangeLength = end - start + 1
-                requestedLength = min(availableLength, rangeLength)
-            } else {
-                // Open-ended request - return all available cached data
-                requestedLength = availableLength
-            }
-            
-            guard requestedLength > 0 else {
-                return false
-            }
-            
-            let actualEnd = start + requestedLength - 1
-            
-            // Ensure the requested range actually has non-zero data (avoid sparse holes)
-            do {
-                let probeHandle = try FileHandle(forReadingFrom: cacheFileURL)
-                defer { try? probeHandle.close() }
-                try probeHandle.seek(toOffset: UInt64(start))
-                let probeCount = min(Int(requestedLength), 4096)
-                let probeData = try probeHandle.read(upToCount: probeCount) ?? Data()
-                let hasRealData: Bool
-                if requestedLength < 8 || probeData.count < 8 {
-                    hasRealData = true
-                } else {
-                    hasRealData = probeData.contains { $0 != 0 }
-                }
-                if !hasRealData {
-                    return false
-                }
-            } catch {
-                print("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
-                return false
-            }
-            
-            // If an explicit finite range extends beyond the cached data, fall back
-            // to the network so AVPlayer gets exactly the bytes it asked for.
-            // For open-ended range requests such as "bytes=0-", serving the cached
-            // contiguous prefix is useful after foreground recovery: AVPlayer can
-            // render immediately, then ask for the next range instead of waiting on
-            // a fresh upstream request for data we already have on disk.
-            let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
-            let canServeCachedPrefix = rangeHeader != nil && end == nil
-            if actualEnd < requestedEnd && !canServeCachedPrefix {
-                return false
-            }
-
-            var headers: [String: String] = [
-                "Content-Type": "video/mp4",
-                "Content-Length": "\(requestedLength)",
-                "Accept-Ranges": "bytes"
-            ]
-            
-            var statusCode = 200
-            
-            if rangeHeader != nil {
-                if let total = totalSize {
-                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
-                } else {
-                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
-                }
-                statusCode = 206
-            }
-            let _ = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
-            
-            if method == "HEAD" {
-                sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
-                return true
-            }
-            
-            sendHeadersAndStreamRange(
-                connection: connection,
-                statusCode: statusCode,
-                headers: headers,
-                fileURL: cacheFileURL,
-                offset: start,
-                length: requestedLength
+        guard FileManager.default.fileExists(atPath: cacheFileURL.path) else {
+            logProgressiveCacheDecision(
+                mediaID: mediaID,
+                rangeHeader: rangeHeader,
+                start: start,
+                end: end,
+                cachedSize: 0,
+                fileSize: nil,
+                totalSize: loadProgressiveTotalSize(mediaID: mediaID),
+                decision: "MISS",
+                reason: "no-file"
             )
+            return false
+        }
+
+        let totalSize = loadProgressiveTotalSize(mediaID: mediaID)
+        let contiguousSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
+        let cachedSize: Int64
+        let fileSize: Int64
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
+            fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            let cappedFileSize = min(fileSize, progressiveDiskCacheLimit)
+            cachedSize = min(contiguousSize, cappedFileSize)
+        } catch {
+            print("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
+            logProgressiveCacheDecision(
+                mediaID: mediaID,
+                rangeHeader: rangeHeader,
+                start: start,
+                end: end,
+                cachedSize: 0,
+                fileSize: nil,
+                totalSize: totalSize,
+                decision: "MISS",
+                reason: "attributes"
+            )
+            return false
+        }
+        let shouldValidate: Bool = {
+            guard let totalSize = totalSize else { return false }
+            let tolerance: Int64 = 512 * 1024 // 512KB tolerance
+            return cachedSize + tolerance >= totalSize
+        }()
+
+        if shouldValidate {
+            let hasRealDataAtStart: Bool = {
+                do {
+                    let fileHandle = try FileHandle(forReadingFrom: cacheFileURL)
+                    defer { try? fileHandle.close() }
+                    let prefix = try fileHandle.read(upToCount: 8192) ?? Data()
+                    return prefix.contains { $0 != 0 }
+                } catch {
+                    print("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache prefix for \(mediaID): \(error.localizedDescription)")
+                    return false
+                }
+            }()
+
+            if !hasRealDataAtStart {
+                logProgressiveCacheDecision(
+                    mediaID: mediaID,
+                    rangeHeader: rangeHeader,
+                    start: start,
+                    end: end,
+                    cachedSize: cachedSize,
+                    fileSize: fileSize,
+                    totalSize: totalSize,
+                    decision: "MISS",
+                    reason: "zero-prefix"
+                )
+                return false
+            } else if !isValidProgressiveCache(fileURL: cacheFileURL) {
+                print("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted COMPLETE cache for \(mediaID), deleting entire cache directory")
+                // Delete the entire cache directory (including legacy per-range files)
+                let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+                try? FileManager.default.removeItem(at: mediaCacheDir)
+                // Fall through to network fetch
+                return false
+            }
+        }
+
+        guard start < cachedSize else {
+            logProgressiveCacheDecision(
+                mediaID: mediaID,
+                rangeHeader: rangeHeader,
+                start: start,
+                end: end,
+                cachedSize: cachedSize,
+                fileSize: fileSize,
+                totalSize: totalSize,
+                decision: "MISS",
+                reason: "range-beyond-cache"
+            )
+            return false
+        }
+
+        let availableLength = cachedSize - start
+
+        let requestedLength: Int64
+        if let end = end {
+            // Explicit range request - honor it fully if available
+            let rangeLength = end - start + 1
+            requestedLength = min(availableLength, rangeLength)
+        } else {
+            // Open-ended request - return all available cached data
+            requestedLength = availableLength
+        }
+
+        guard requestedLength > 0 else {
+            logProgressiveCacheDecision(
+                mediaID: mediaID,
+                rangeHeader: rangeHeader,
+                start: start,
+                end: end,
+                cachedSize: cachedSize,
+                fileSize: fileSize,
+                totalSize: totalSize,
+                decision: "MISS",
+                reason: "empty-request"
+            )
+            return false
+        }
+
+        let actualEnd = start + requestedLength - 1
+
+        // Ensure the requested range actually has non-zero data (avoid sparse holes)
+        do {
+            let probeHandle = try FileHandle(forReadingFrom: cacheFileURL)
+            defer { try? probeHandle.close() }
+            try probeHandle.seek(toOffset: UInt64(start))
+            let probeCount = min(Int(requestedLength), 4096)
+            let probeData = try probeHandle.read(upToCount: probeCount) ?? Data()
+            let hasRealData: Bool
+            if requestedLength < 8 || probeData.count < 8 {
+                hasRealData = true
+            } else {
+                hasRealData = probeData.contains { $0 != 0 }
+            }
+            if !hasRealData {
+                logProgressiveCacheDecision(
+                    mediaID: mediaID,
+                    rangeHeader: rangeHeader,
+                    start: start,
+                    end: end,
+                    cachedSize: cachedSize,
+                    fileSize: fileSize,
+                    totalSize: totalSize,
+                    decision: "MISS",
+                    reason: "zero-range"
+                )
+                return false
+            }
+        } catch {
+            print("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
+            logProgressiveCacheDecision(
+                mediaID: mediaID,
+                rangeHeader: rangeHeader,
+                start: start,
+                end: end,
+                cachedSize: cachedSize,
+                fileSize: fileSize,
+                totalSize: totalSize,
+                decision: "MISS",
+                reason: "probe-error"
+            )
+            return false
+        }
+
+        // Serve a cached prefix only for open-ended requests. For explicit finite
+        // ranges (e.g. bytes=0-2281145), AVPlayer expects that exact range; sending
+        // only the currently cached prefix can make the item fail immediately.
+        let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
+        let isPartialPrefix = actualEnd < requestedEnd
+        let canServeCachedPrefix = rangeHeader != nil && end == nil
+        if isPartialPrefix && !canServeCachedPrefix {
+            logProgressiveCacheDecision(
+                mediaID: mediaID,
+                rangeHeader: rangeHeader,
+                start: start,
+                end: end,
+                cachedSize: cachedSize,
+                fileSize: fileSize,
+                totalSize: totalSize,
+                decision: "MISS",
+                reason: "partial-explicit-range"
+            )
+            return false
+        }
+        let minimumUsefulCachedPrefix: Int64 = 128 * 1024
+        if isPartialPrefix && requestedLength < minimumUsefulCachedPrefix {
+            logProgressiveCacheDecision(
+                mediaID: mediaID,
+                rangeHeader: rangeHeader,
+                start: start,
+                end: end,
+                cachedSize: cachedSize,
+                fileSize: fileSize,
+                totalSize: totalSize,
+                decision: "MISS",
+                reason: "tiny-cached-prefix"
+            )
+            return false
+        }
+
+        var headers: [String: String] = [
+            "Content-Type": "video/mp4",
+            "Content-Length": "\(requestedLength)",
+            "Accept-Ranges": "bytes"
+        ]
+
+        var statusCode = 200
+
+        if rangeHeader != nil {
+            if let total = totalSize {
+                headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
+            } else {
+                headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
+            }
+            statusCode = 206
+        }
+        if method == "HEAD" {
+            logProgressiveCacheDecision(
+                mediaID: mediaID,
+                rangeHeader: rangeHeader,
+                start: start,
+                end: end,
+                cachedSize: cachedSize,
+                fileSize: fileSize,
+                totalSize: totalSize,
+                decision: "HIT",
+                reason: "headers"
+            )
+            sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
             return true
         }
 
-        return false
+        logProgressiveCacheDecision(
+            mediaID: mediaID,
+            rangeHeader: rangeHeader,
+            start: start,
+            end: end,
+            cachedSize: cachedSize,
+            fileSize: fileSize,
+            totalSize: totalSize,
+            decision: "HIT",
+            reason: actualEnd < requestedEnd ? "cached-prefix" : "cached-range"
+        )
+        sendHeadersAndStreamRange(
+            connection: connection,
+            statusCode: statusCode,
+            headers: headers,
+            fileURL: cacheFileURL,
+            offset: start,
+            length: requestedLength
+        )
+        return true
     }
     
     private func sendHeadersAndStreamRange(
@@ -3250,6 +3438,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         switch statusCode {
         case 200: return "OK"
         case 206: return "Partial Content"
+        case 410: return "Gone"
         case 404: return "Not Found"
         case 405: return "Method Not Allowed"
         case 500: return "Internal Server Error"

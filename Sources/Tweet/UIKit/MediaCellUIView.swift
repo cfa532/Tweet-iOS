@@ -587,12 +587,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         case .playerLoading:
             let hasLoadedData = currentPlayerHasLoadedData
             let canRevealLoadedPlayer = currentPlayerCanReplaceCover
+            let hasDisplayableCover = canRevealLoadedPlayer || hasVideoCoverForSpinner
             let shouldShowThumbnail = imageView.image != nil && (!hasLoadedData || !canRevealLoadedPlayer)
             if shouldShowThumbnail {
                 showImageView()
             } else {
                 hideImageViewImmediately()
-                if hasLoadedData {
+                if canRevealLoadedPlayer {
                     imageView.image = nil
                 }
             }
@@ -607,7 +608,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 showPrimarySpinnerAfterDebounce(for: player)
             } else if coordinatorWantsToPlay {
                 showPrimarySpinnerAfterDebounce(for: player)
-            } else if shouldShowVisibleVideoCoverSpinner(hasCover: hasLoadedData || hasVideoCoverForSpinner) {
+            } else if shouldShowVisibleVideoCoverSpinner(hasCover: hasDisplayableCover) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -616,14 +617,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             let hasLoadedData = currentPlayerHasLoadedData
             let canRevealLoadedPlayer = currentPlayerCanReplaceCover
             let shouldShowThumbnail = imageView.image != nil && (!hasLoadedData || !canRevealLoadedPlayer)
-            let hasDisplayableCover = hasLoadedData || hasVideoCoverForSpinner
+            let hasDisplayableCover = canRevealLoadedPlayer || hasVideoCoverForSpinner
             // Keep a thumbnail only until the player has buffered data. Removing it
             // before play() avoids a visible cover handoff right as playback starts.
             if shouldShowThumbnail {
                 showImageView()
             } else {
                 hideImageViewImmediately()
-                if hasLoadedData {
+                if canRevealLoadedPlayer {
                     imageView.image = nil
                 }
             }
@@ -756,6 +757,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               self.player === player,
               imageView.image != nil else { return false }
         guard playerHasLoadedData(player) else { return false }
+        let canReplaceCover = coordinatorWantsToPlay
+            ? isVisibleVideoFrameReady(player)
+            : (videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer)
+        guard canReplaceCover else { return false }
 
         videoPlayerView.isHidden = false
         hideImageViewImmediately()
@@ -766,7 +771,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         } else {
             loadingSpinner.stopAnimating()
         }
-        logVerbose("🖼️ removed video cover after loaded data (\(reason))")
+        logVerbose("🖼️ removed video cover after displayable frame (\(reason))")
         return true
     }
 
@@ -1517,8 +1522,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if coordinatorWantsToPlay {
             return isVisibleVideoFrameReady(player)
         }
-        return playerHasLoadedData(player)
-            || videoPlayerView.isLayerReadyForDisplay
+        return videoPlayerView.isLayerReadyForDisplay
             || hasRenderedFrameForCurrentPlayer
     }
 
@@ -2076,6 +2080,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard coordinatorWantsToPlay else { return false }
 
         if let player {
+            if lastActualPlaybackDate != .distantPast,
+               player.timeControlStatus != .playing {
+                return false
+            }
             return !isVideoAtEnd(player)
         }
 
@@ -4624,11 +4632,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
         }
 
-        // Visible media failures should be actionable even when the cell is not
-        // the autoplay primary; otherwise a timed-out preview can collapse into
-        // a black square with no recovery affordance.
-        let shouldShowRetry = isVisible && (coordinatorWantsToPlay || shouldLoadVideo)
-        let wasPrimary = coordinatorWantsToPlay
+        // Only the actively selected playback should surface a retry button.
+        // coordinatorWantsToPlay can be cleared before AVPlayer reports a timeout,
+        // so also trust the coordinator's current primary selection.
+        let isPrimaryFailure = coordinatorWantsToPlay || isCurrentCoordinatorPrimary
+        let shouldShowRetry = isVisible && isPrimaryFailure
+        let wasPrimary = isPrimaryFailure
         let failedIdentifier = videoIdentifier
 
         if wasPrimary, let failedIdentifier {
@@ -5033,15 +5042,23 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             NSURLErrorNotConnectedToInternet,
             NSURLErrorDataNotAllowed,
             NSURLErrorInternationalRoamingOff,
-            NSURLErrorCallIsActive
+            NSURLErrorCallIsActive,
+            NSURLErrorResourceUnavailable
         ]
         return !transientNetworkCodes.contains(error.code)
     }
 
+    private var isCurrentCoordinatorPrimary: Bool {
+        guard let videoIdentifier else { return false }
+        return (videoCoordinator ?? .shared).primaryVideoId == videoIdentifier
+    }
+
     @discardableResult
     private func scheduleAutomaticTransientRetryIfNeeded(errorMsg: String) -> Bool {
+        let isPrimaryFailure = coordinatorWantsToPlay || isCurrentCoordinatorPrimary
         guard isVisible,
               isVideoAttachment,
+              isPrimaryFailure,
               shouldLoadVideo,
               automaticTransientRetryTask == nil,
               automaticTransientRetryCount < 1 else { return false }
@@ -5057,6 +5074,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             guard !Task.isCancelled,
                   self.isVisible,
                   self.isVideoAttachment,
+                  (self.coordinatorWantsToPlay || self.isCurrentCoordinatorPrimary),
                   self.shouldLoadVideo,
                   [
                     VideoCellState.failed,
