@@ -521,18 +521,25 @@ class SharedAssetCache: ObservableObject {
         
         var diskCacheExists = false
         
-        // Check if cache directory exists and has files
+        // Check if cache directory exists and has files. HLS cache entries are often
+        // nested under paths like mediaID/ipfs/hash/720p/segment.ts, so a top-level
+        // directory listing can incorrectly report "not cached" after foreground
+        // recovery and force the next player back to upstream.
         if FileManager.default.fileExists(atPath: mediaCacheDir.path) {
-            do {
-                let contents = try FileManager.default.contentsOfDirectory(atPath: mediaCacheDir.path)
-                // Check for any video files (playlists or segments)
-                let hasVideoFiles = contents.contains { file in
-                    file.hasSuffix(".m3u8") || file.hasSuffix(".ts") || file.hasSuffix(".mp4")
+            if let enumerator = FileManager.default.enumerator(
+                at: mediaCacheDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for case let fileURL as URL in enumerator {
+                    guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                          resourceValues.isRegularFile == true else { continue }
+                    let fileName = fileURL.lastPathComponent
+                    if fileName.hasSuffix(".m3u8") || fileName.hasSuffix(".ts") || fileName.hasSuffix(".mp4") {
+                        diskCacheExists = true
+                        break
+                    }
                 }
-                if hasVideoFiles {
-                    diskCacheExists = true
-                }
-            } catch {
             }
         }
         
@@ -1296,21 +1303,27 @@ class SharedAssetCache: ObservableObject {
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
 
-        // CRITICAL: Clear disk cache status so retry doesn't think there's cached content
-        diskCacheStatus.removeValue(forKey: mediaID)
+        if deleteDiskCache {
+            // CRITICAL: Clear disk cache status so retry doesn't think there's cached content
+            diskCacheStatus.removeValue(forKey: mediaID)
+        } else if diskCacheStatus[mediaID]?.exists == false {
+            // A non-destructive clear often happens while HLS cache writes are still
+            // in flight. Drop only a cached negative so the next check can see newly
+            // completed playlist/segment files instead of treating the video as cold.
+            diskCacheStatus.removeValue(forKey: mediaID)
+        }
 
         // Cancel any pending loading tasks
         cancelAssetLoadTask(for: mediaID)
         cancelPreloadTaskEntry(for: mediaID)
         cancelPlayerCreationTasks(for: mediaID)
 
-        // Cancel active LocalHTTPServer downloads for this mediaID BEFORE deleting disk cache.
-        // Without this, in-flight segment writes fail with "file not found" (directory deleted
-        // while download was writing), and dedup waiters time out and spawn untracked background
-        // retries that waste bandwidth even though the player is gone.
-        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
-
         if deleteDiskCache {
+            // Cancel active LocalHTTPServer downloads BEFORE deleting disk cache.
+            // Without this, in-flight segment writes fail with "file not found"
+            // because the directory is deleted while a download is writing.
+            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+
             // Delete disk cache files (segments, playlists) to free disk space and force a clean
             // retry when content is likely corrupt (.failed player status).
             // Skipped for stuck-player recovery — server was just slow, partial cache is still
@@ -3201,7 +3214,8 @@ class SharedAssetCache: ObservableObject {
         // Clear loading tasks to force fresh loads
         cancelAllLoadingTasks()
 
-        // CRITICAL: Clear disk cache status so videos will reload fresh from network
+        // Clear memoized disk status so foreground recovery does a fresh recursive
+        // disk check. This should still reuse playlists/segments that remain on disk.
         diskCacheStatus.removeAll()
 
         // Keep resourceLoaderDelegates - they're needed for HLS playback

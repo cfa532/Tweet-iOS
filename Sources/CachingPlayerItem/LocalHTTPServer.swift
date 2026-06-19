@@ -2219,10 +2219,15 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return false
             }
             
-            // If the requested range extends beyond the cached data, fall back to the network
-            // so we can stitch cached + network bytes in a single response.
+            // If an explicit finite range extends beyond the cached data, fall back
+            // to the network so AVPlayer gets exactly the bytes it asked for.
+            // For open-ended range requests such as "bytes=0-", serving the cached
+            // contiguous prefix is useful after foreground recovery: AVPlayer can
+            // render immediately, then ask for the next range instead of waiting on
+            // a fresh upstream request for data we already have on disk.
             let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
-            if actualEnd < requestedEnd {
+            let canServeCachedPrefix = rangeHeader != nil && end == nil
+            if actualEnd < requestedEnd && !canServeCachedPrefix {
                 return false
             }
 

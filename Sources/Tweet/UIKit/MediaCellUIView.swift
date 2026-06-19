@@ -132,6 +132,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private static let feedPlayerRebuildWindow: TimeInterval = 90
     private static let slowLoadingNudgeInterval: TimeInterval = 5
     private static let slowLoadingNudgeIntervalNanos: UInt64 = 5_000_000_000
+    private static let foregroundFeedResumeSuppressionDuration: TimeInterval = 30
 
 #if DEBUG && VERBOSE_VIDEO_LOGS
     private static let verboseLogsEnabled = true
@@ -302,6 +303,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var isHoldingBackgroundVideoCover = false
     private var backgroundVideoCoverMid: String?
     private var foregroundRecoveryLoadingDeadline: Date?
+    /// After app foreground recovery, feed autoplay should restart quickly from
+    /// the cached prefix instead of seeking to an old feed position that may sit
+    /// outside the progressive cache window.
+    private var suppressFeedResumeUntil: Date = .distantPast
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -3992,6 +3997,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return nil
         }
 
+        if Date() < suppressFeedResumeUntil {
+            pendingRecoverySeekTime = nil
+            let currentTime = player.currentTime()
+            let currentSeconds = currentTime.seconds
+            if currentTime.isValid,
+               currentSeconds.isFinite,
+               currentSeconds > 0.25 {
+                return .zero
+            }
+            return nil
+        }
+
         let currentTime = player.currentTime()
         let currentSeconds = currentTime.seconds
         if let resumeTime = savedFeedResumeTime(for: mid, player: player),
@@ -5099,6 +5116,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     self.loadImage(attachment: att, url: url)
                 }
             } else if self.isVideoAttachment {
+                self.suppressFeedResumeUntil = Date().addingTimeInterval(Self.foregroundFeedResumeSuppressionDuration)
                 // During backgrounding, clearVideoPlayersForBackgroundRecovery() calls
                 // replaceCurrentItem(with: nil) on all players and clears the cache.
                 // Our self.player still references the now-dead player (no currentItem).

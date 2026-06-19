@@ -8,6 +8,22 @@
 import AVFoundation
 import UIKit
 
+private actor PageZeroFetchGate {
+    private var isInFlight = false
+
+    func tryBegin(page: UInt) -> Bool {
+        guard page == 0 else { return true }
+        guard !isInFlight else { return false }
+        isInFlight = true
+        return true
+    }
+
+    func end(page: UInt) {
+        guard page == 0 else { return }
+        isInFlight = false
+    }
+}
+
 @available(iOS 16.0, *)
 class FollowingsTweetViewModel: ObservableObject {
     @Published var tweets: [Tweet] = []     // tweet list to be displayed on screen.
@@ -20,8 +36,7 @@ class FollowingsTweetViewModel: ObservableObject {
     private var feedRefreshTask: Task<Void, Never>?
     private var nextFeedRefreshAt: Date?
     private var foregroundObservers: [NSObjectProtocol] = []
-    private let pageZeroFetchLock = NSLock()
-    private var pageZeroFetchInFlight = false
+    private let pageZeroFetchGate = PageZeroFetchGate()
     
     // Shared instance to keep tweets in memory across navigation
     static let shared = FollowingsTweetViewModel(hproseInstance: HproseInstance.shared)
@@ -111,13 +126,9 @@ class FollowingsTweetViewModel: ObservableObject {
         guard page == 0 else { return true }
 
         while !Task.isCancelled {
-            pageZeroFetchLock.lock()
-            if !pageZeroFetchInFlight {
-                pageZeroFetchInFlight = true
-                pageZeroFetchLock.unlock()
+            if await pageZeroFetchGate.tryBegin(page: page) {
                 return true
             }
-            pageZeroFetchLock.unlock()
 
             if isPeriodicRefresh {
                 print("DEBUG: [FollowingsTweetViewModel] Skipping duplicate periodic page 0 fetch")
@@ -134,9 +145,10 @@ class FollowingsTweetViewModel: ObservableObject {
     private func endPageZeroFetchIfNeeded(page: UInt) {
         guard page == 0 else { return }
 
-        pageZeroFetchLock.lock()
-        pageZeroFetchInFlight = false
-        pageZeroFetchLock.unlock()
+        let gate = pageZeroFetchGate
+        Task {
+            await gate.end(page: page)
+        }
     }
     
     func fetchTweets(page: UInt, pageSize: UInt, isPeriodicRefresh: Bool = false) async throws -> [Tweet?] {

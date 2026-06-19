@@ -534,6 +534,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         let isProxyHealthy = await LocalHTTPServer.shared.isHealthyAsync()
         if isProxyHealthy {
+            if shouldRefreshAppUserBeforeForegroundVideoReload(reason: reason) {
+                print("[AppDelegate] 🔄 Refreshing appUser IP before foreground video reload...")
+                await refreshAppUserIP()
+                print("[AppDelegate] ✅ AppUser IP refresh complete")
+            }
             await MainActor.run {
                 AppDelegate.isVideoInfrastructureReady = true
                 SharedAssetCache.shared.refreshVideoLayersForShortBackground()
@@ -570,6 +575,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 print("❌ [AppDelegate] Proxy restart failed after \(reason) - visible videos will wait for next retry")
             }
         }
+    }
+
+    private func shouldRefreshAppUserBeforeForegroundVideoReload(reason: String) -> Bool {
+        // Fast foreground keeps existing players/items alive and already kicks IP
+        // refresh in parallel. After aggressive cleanup, long suspension, or screen
+        // lock recovery, visible players are recreated and regular-video proxy misses
+        // need a fresh upstream URL before playback is restarted.
+        !reason.hasPrefix("fast foreground")
     }
     
     /// Synchronous restart (for cases where blocking is acceptable)
