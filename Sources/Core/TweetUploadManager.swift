@@ -9,7 +9,6 @@
 import Foundation
 import AVFoundation
 import UIKit
-import ffmpegkit
 
 // MARK: - Video Conversion Status
 struct VideoConversionStatus {
@@ -604,35 +603,23 @@ extension TweetUploadManager {
                 
                 print("📝 [Background Submit] Submitting tweet with image attachments...")
                 
-                // Submit with retry — one retry, two total attempts
-                var submitRetryCount = 0
-                let maxRetries = 1
-                
-                while submitRetryCount <= maxRetries {
-                    do {
-                        if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
-                            // Success! (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
-                            await MainActor.run {
-                                NotificationCenter.default.post(
-                                    name: .newTweetCreated,
-                                    object: nil,
-                                    userInfo: ["tweet": uploadedTweet]
-                                )
-                            }
-                            print("✅ [Background Submit] Tweet posted successfully!")
-                            return
+                do {
+                    if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
+                        // Success! (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
+                        await MainActor.run {
+                            NotificationCenter.default.post(
+                                name: .newTweetCreated,
+                                object: nil,
+                                userInfo: ["tweet": uploadedTweet]
+                            )
                         }
-                    } catch {
-                        submitRetryCount += 1
-                        if submitRetryCount <= maxRetries {
-                            print("🔄 [Background Submit] Retry \(submitRetryCount)/\(maxRetries)...")
-                            try? await Task.sleep(nanoseconds: UInt64(submitRetryCount) * 2_000_000_000)
-                        } else {
-                            print("❌ [Background Submit] Max retries reached")
-                            await self.showFailureToast(message: NSLocalizedString("Failed to post tweet", comment: "Error"))
-                            return
-                        }
+                        print("✅ [Background Submit] Tweet posted successfully!")
+                    } else {
+                        throw NSError(domain: "TweetUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
                     }
+                } catch {
+                    print("❌ [Background Submit] Tweet submit failed without retry because add_tweet is non-idempotent: \(error)")
+                    await self.showFailureToast(message: NSLocalizedString("Failed to post tweet. Please refresh before retrying.", comment: "Error"))
                 }
             }
             
@@ -867,24 +854,9 @@ extension TweetUploadManager {
         } catch {
             print("❌ [Submit] Failed to post tweet (attempt \(retryCount + 1)): \(error)")
             
-            // One retry, two total attempts
-            let maxRetries = 1
-            if retryCount < maxRetries {
-                print("🔄 [Submit] Retrying tweet submission (\(retryCount + 1)/\(maxRetries))...")
-                let delay = UInt64(retryCount + 1) * 2_000_000_000 // 2s, 4s
-                try? await Task.sleep(nanoseconds: delay)
-                await submitTweetWithCompletedJobs(
-                    tweet: tweet,
-                    itemData: itemData,
-                    completedCIDs: completedCIDs,
-                    uploadedAttachments: uploadedAttachments,
-                    retryCount: retryCount + 1
-                )
-            } else {
-                print("❌ [Submit] Max retries reached, giving up")
-                await showFailureToast(message: NSLocalizedString("Failed to post tweet", comment: "Error"))
-                await removePendingUpload()
-            }
+            print("❌ [Submit] Not retrying tweet submission because add_tweet is non-idempotent")
+            await showFailureToast(message: NSLocalizedString("Failed to post tweet. Please refresh before retrying.", comment: "Error"))
+            await removePendingUpload()
         }
     }
     

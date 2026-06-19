@@ -2,7 +2,6 @@ import Foundation
 import hprose
 import PhotosUI
 import AVFoundation
-import ffmpegkit
 
 @objc protocol HproseService {
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
@@ -4570,15 +4569,14 @@ final class HproseInstance: ObservableObject {
                     "\(outputURL.path)"
                     """
                 
-                FFmpegKit.executeAsync(command) { session in
+                DynamicFFmpegKit.shared.executeAsync(command) { session in
                     guard let session = session else {
                         print("ERROR: Failed to create FFmpeg session")
                         continuation.resume(returning: false)
                         return
                     }
                     
-                    let returnCode = session.getReturnCode()
-                    let success = ReturnCode.isSuccess(returnCode)
+                    let success = session.isSuccess
                     
                     if success {
                         if FileManager.default.fileExists(atPath: outputURL.path) {
@@ -4590,7 +4588,7 @@ final class HproseInstance: ObservableObject {
                             continuation.resume(returning: false)
                         }
                     } else {
-                        print("ERROR: FFmpeg conversion failed (code: \(String(describing: returnCode)))")
+                        print("ERROR: FFmpeg conversion failed (code: \(session.returnCodeDescription))")
                         continuation.resume(returning: false)
                     }
                 }
@@ -4767,15 +4765,14 @@ final class HproseInstance: ObservableObject {
                             """
                     }
                     
-                    FFmpegKit.executeAsync(command) { session in
+                    DynamicFFmpegKit.shared.executeAsync(command) { session in
                         guard let session = session else {
                             print("ERROR: Failed to create FFmpeg session for normalization")
                             continuation.resume(returning: false)
                             return
                         }
                         
-                        let returnCode = session.getReturnCode()
-                        let success = ReturnCode.isSuccess(returnCode)
+                        let success = session.isSuccess
                         
                         if success {
                             if FileManager.default.fileExists(atPath: outputURL.path) {
@@ -4796,7 +4793,7 @@ final class HproseInstance: ObservableObject {
                                 continuation.resume(returning: false)
                             }
                         } else {
-                            print("ERROR: FFmpeg normalization failed (code: \(String(describing: returnCode)))")
+                            print("ERROR: FFmpeg normalization failed (code: \(session.returnCodeDescription))")
                             continuation.resume(returning: false)
                         }
                     }
@@ -5696,6 +5693,13 @@ final class HproseInstance: ObservableObject {
             uploadClient: HproseClient,
             appId: String
         ) async throws -> MimeiFileType {
+            let originalClientTimeout = uploadClient.timeout
+            let uploadClientTimeout = max(originalClientTimeout, 240.0)
+            if uploadClient.timeout < uploadClientTimeout {
+                uploadClient.timeout = uploadClientTimeout
+                print("DEBUG: [performUpload] Extended Hprose upload timeout to \(Int(uploadClientTimeout))s")
+            }
+            defer { uploadClient.timeout = originalClientTimeout }
             
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try data.write(to: tempURL)
@@ -5766,7 +5770,11 @@ final class HproseInstance: ObservableObject {
             print("Uploaded \(chunkCount) chunks, finalizing...")
             
             let rawFinalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
-            let finalResponse = try? HproseInstance.unwrapV2Response(rawFinalResponse)
+            guard rawFinalResponse != nil else {
+                print("ERROR: Upload finalization failed - nil response")
+                throw uploadTimeoutError("Upload finalization timed out")
+            }
+            let finalResponse = try HproseInstance.unwrapV2Response(rawFinalResponse)
             
             var cid: String? = nil
             if let stringResponse = finalResponse as? String {
@@ -6142,16 +6150,23 @@ final class HproseInstance: ObservableObject {
             data: NSData,
             chunkNumber: Int
         ) async throws -> Any {
-            // Add 3 minute timeout for each chunk upload (handles slow connections)
+            // Keep this safety timeout slightly above the Hprose client timeout so
+            // the blocking invoke normally returns first and does not leave work behind.
             return try await withThrowingTaskGroup(of: Any.self) { group in
                 group.addTask {
                     let rawResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]])
-                    return try HproseInstance.unwrapV2Response(rawResponse) as Any
+                    guard rawResponse != nil else {
+                        throw uploadTimeoutError("Upload timed out on chunk \(chunkNumber)")
+                    }
+                    guard let response = try HproseInstance.unwrapV2Response(rawResponse) else {
+                        throw uploadTimeoutError("Upload returned no response on chunk \(chunkNumber)")
+                    }
+                    return response as Any
                 }
                 
                 group.addTask {
-                    try await Task.sleep(nanoseconds: 180_000_000_000) // 180 seconds (3 minutes)
-                    throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload timeout - chunk \(chunkNumber) took too long"])
+                    try await Task.sleep(nanoseconds: 270_000_000_000) // 270 seconds
+                    throw uploadTimeoutError("Upload timeout - chunk \(chunkNumber) took too long")
                 }
                 
                 // Return the first result (either success or timeout)
@@ -6159,6 +6174,10 @@ final class HproseInstance: ObservableObject {
                 group.cancelAll()
                 return result
             }
+        }
+
+        private static func uploadTimeoutError(_ message: String) -> NSError {
+            NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut, userInfo: [NSLocalizedDescriptionKey: message])
         }
     }
     
@@ -6361,129 +6380,144 @@ final class HproseInstance: ObservableObject {
     typealias PendingTweetUpload = TweetUploadManager.PendingTweetUpload
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
-        return try await withRetry {
-            // Create a clean upload payload with only allowed fields (excluding nil values)
-            var uploadPayload: [String: Any] = [
-                "mid": tweet.mid,
-                "authorId": tweet.authorId,
-                "timestamp": tweet.timestamp.timeIntervalSince1970 * 1000 // milliseconds
-            ]
+        // add_tweet is non-idempotent on the backend: it creates a fresh server
+        // tweet id on every accepted request. Do not automatically retry this
+        // call after a timeout; only media/attachment upload is safe to retry.
+        // Use a longer timeout so tweets with large attachment references can
+        // finish without triggering duplicate creates.
+        // Create a clean upload payload with only allowed fields (excluding nil values)
+        var uploadPayload: [String: Any] = [
+            "mid": tweet.mid,
+            "authorId": tweet.authorId,
+            "timestamp": tweet.timestamp.timeIntervalSince1970 * 1000 // milliseconds
+        ]
             
-            // Add optional fields only if they are not nil
-            if let content = tweet.content {
-                uploadPayload["content"] = content
-            }
-            if let title = tweet.title {
-                uploadPayload["title"] = title
-            }
-            if let originalTweetId = tweet.originalTweetId {
-                uploadPayload["originalTweetId"] = originalTweetId
-            }
-            if let originalAuthorId = tweet.originalAuthorId {
-                uploadPayload["originalAuthorId"] = originalAuthorId
-            }
-            if let attachments = tweet.attachments, !attachments.isEmpty {
-                uploadPayload["attachments"] = attachments.map { attachment in
-                    var attachmentDict: [String: Any] = [
-                        "mid": attachment.mid,
-                        "type": attachment.type.rawValue
-                    ]
-                    attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
-                    
-                    // Add optional fields
-                    if let size = attachment.size {
-                        attachmentDict["size"] = size
-                    }
-                    if let fileName = attachment.fileName {
-                        attachmentDict["fileName"] = fileName
-                    }
-                    if let aspectRatio = attachment.aspectRatio {
-                        attachmentDict["aspectRatio"] = aspectRatio
-                    }
-                    
-                    return attachmentDict
-                }
-            }
-            if let isPrivate = tweet.isPrivate {
-                uploadPayload["isPrivate"] = isPrivate
-            }
-            if let downloadable = tweet.downloadable {
-                uploadPayload["downloadable"] = downloadable
-            }
-            
-            // Convert to JSON string
-            let jsonData = try JSONSerialization.data(withJSONObject: uploadPayload, options: [])
-            let tweetJSON = String(data: jsonData, encoding: .utf8) ?? ""
-            
-            // Capture appUser properties on main thread to avoid publishing warnings
-            let hostId = await MainActor.run {
-                self.appUser.hostIds?.first
-            }
-            let client = await MainActor.run {
-                self.appUser.hproseClient
-            }
-            
-            let params: [String: Any] = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "hostid": hostId as Any,
-                "tweet": tweetJSON
-            ]
-            
-            print("DEBUG: [uploadTweet] Complete params: \(params)")
-            print("DEBUG: [uploadTweet] Tweet JSON: \(tweetJSON)")
-            print("DEBUG: [uploadTweet] Tweet authorId: \(tweet.authorId), content: \(tweet.content ?? "nil"), attachments count: \(tweet.attachments?.count ?? 0)")
-            
-            let rawResponse = client?.invoke("runMApp", withArgs: ["add_tweet", params])
-            
-            print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
-            
-            // Unwrap v2 response
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
-            // Handle the JSON response format
-            guard let responseDict = unwrappedResponse as? [String: Any] else {
-                print("DEBUG: [uploadTweet] ERROR: Invalid response format - not a dictionary")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
-            }
-            
-            print("DEBUG: [uploadTweet] Response dictionary keys: \(responseDict.keys)")
-            
-            // unwrapV2Response already threw for success=false
-            guard let newTweetId = responseDict["mid"] as? String else {
-                print("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
-            }
-            print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
+        // Add optional fields only if they are not nil
+        if let content = tweet.content {
+            uploadPayload["content"] = content
+        }
+        if let title = tweet.title {
+            uploadPayload["title"] = title
+        }
+        if let originalTweetId = tweet.originalTweetId {
+            uploadPayload["originalTweetId"] = originalTweetId
+        }
+        if let originalAuthorId = tweet.originalAuthorId {
+            uploadPayload["originalAuthorId"] = originalAuthorId
+        }
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            uploadPayload["attachments"] = attachments.map { attachment in
+                var attachmentDict: [String: Any] = [
+                    "mid": attachment.mid,
+                    "type": attachment.type.rawValue
+                ]
+                attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
                 
-                // Immediately update appUser tweet count (like favorites/bookmarks)
-                await MainActor.run {
-                    let currentCount = self.appUser.tweetCount ?? 0
-                    self.appUser.tweetCount = currentCount + 1
-                    print("DEBUG: [uploadTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+                // Add optional fields
+                if let size = attachment.size {
+                    attachmentDict["size"] = size
+                }
+                if let fileName = attachment.fileName {
+                    attachmentDict["fileName"] = fileName
+                }
+                if let aspectRatio = attachment.aspectRatio {
+                    attachmentDict["aspectRatio"] = aspectRatio
                 }
                 
-                // Refresh appUser from server to get updated tweetCount and other properties
-                try? await self.refreshAppUserFromServer()
+                return attachmentDict
+            }
+        }
+        if let isPrivate = tweet.isPrivate {
+            uploadPayload["isPrivate"] = isPrivate
+        }
+        if let downloadable = tweet.downloadable {
+            uploadPayload["downloadable"] = downloadable
+        }
+            
+        // Convert to JSON string
+        let jsonData = try JSONSerialization.data(withJSONObject: uploadPayload, options: [])
+        let tweetJSON = String(data: jsonData, encoding: .utf8) ?? ""
+            
+        // Capture appUser properties on main thread to avoid publishing warnings
+        let hostId = await MainActor.run {
+            self.appUser.hostIds?.first
+        }
+        guard let client = await MainActor.run(body: { self.appUser.hproseClient }) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
+        }
+            
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "hostid": hostId as Any,
+            "tweet": tweetJSON
+        ]
+            
+        print("DEBUG: [uploadTweet] Complete params: \(params)")
+        print("DEBUG: [uploadTweet] Tweet JSON: \(tweetJSON)")
+        print("DEBUG: [uploadTweet] Tweet authorId: \(tweet.authorId), content: \(tweet.content ?? "nil"), attachments count: \(tweet.attachments?.count ?? 0)")
+        
+        let originalTimeout = client.timeout
+        let submitTimeout = max(originalTimeout, 240.0)
+        if client.timeout < submitTimeout {
+            client.timeout = submitTimeout
+            print("DEBUG: [uploadTweet] Extended non-idempotent add_tweet timeout to \(Int(submitTimeout))s")
+        }
+        defer { client.timeout = originalTimeout }
+        
+        let rawResponse = client.invoke("runMApp", withArgs: ["add_tweet", params])
+            
+        print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
+        
+        guard rawResponse != nil else {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Tweet submission timed out. Please refresh before retrying to avoid duplicate posts.", comment: "Tweet upload timeout")])
+        }
+        
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        // Handle the JSON response format
+        guard let responseDict = unwrappedResponse as? [String: Any] else {
+            print("DEBUG: [uploadTweet] ERROR: Invalid response format - not a dictionary")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
+        }
+        
+        print("DEBUG: [uploadTweet] Response dictionary keys: \(responseDict.keys)")
+        
+        // unwrapV2Response already threw for success=false
+        guard let newTweetId = responseDict["mid"] as? String else {
+            print("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
+        }
+        print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
                 
-                // IMPORTANT: Fetch the complete tweet from server to avoid showing partial data
-                // This ensures all server-generated fields are populated correctly
-                print("DEBUG: [uploadTweet] Fetching complete tweet from server: \(newTweetId)")
-                if let completeTweet = try? await self.getTweet(tweetId: newTweetId, authorId: tweet.authorId) {
-                    print("DEBUG: [uploadTweet] Successfully fetched complete tweet with all fields")
-                    return completeTweet
-                } else {
-                    print("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
-                    // Fallback: return partial tweet if fetch fails
-                    let uploadedTweet = tweet
-                    let author = try? await self.fetchUser(tweet.authorId)
-                    await MainActor.run {
-                        uploadedTweet.mid = newTweetId
-                        uploadedTweet.author = author
-                    }
-                    return uploadedTweet
-                }
+        // Immediately update appUser tweet count (like favorites/bookmarks)
+        await MainActor.run {
+            let currentCount = self.appUser.tweetCount ?? 0
+            self.appUser.tweetCount = currentCount + 1
+            print("DEBUG: [uploadTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+        }
+                
+        // Refresh appUser from server to get updated tweetCount and other properties
+        try? await self.refreshAppUserFromServer()
+                
+        // IMPORTANT: Fetch the complete tweet from server to avoid showing partial data
+        // This ensures all server-generated fields are populated correctly
+        print("DEBUG: [uploadTweet] Fetching complete tweet from server: \(newTweetId)")
+        if let completeTweet = try? await self.getTweet(tweetId: newTweetId, authorId: tweet.authorId) {
+            print("DEBUG: [uploadTweet] Successfully fetched complete tweet with all fields")
+            return completeTweet
+        } else {
+            print("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
+            // Fallback: return partial tweet if fetch fails
+            let uploadedTweet = tweet
+            let author = try? await self.fetchUser(tweet.authorId)
+            await MainActor.run {
+                uploadedTweet.mid = newTweetId
+                uploadedTweet.author = author
+            }
+            return uploadedTweet
         }
     }
     

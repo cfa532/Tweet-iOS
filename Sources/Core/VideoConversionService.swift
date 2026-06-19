@@ -1,6 +1,7 @@
 import Foundation
-import ffmpegkit
 import UIKit
+import Darwin
+import ObjectiveC.runtime
 
 struct HLSConversionResult {
     let success: Bool
@@ -899,34 +900,31 @@ class VideoConversionService {
         print("🎬 [FFMPEG] Starting conversion to \(resolution)")
         print("  Full command: \(command)")
         
-        FFmpegKit.executeAsync(command) { session in
+        DynamicFFmpegKit.shared.executeAsync(command) { session in
             guard let session = session else {
                 print("❌ [FFMPEG] Failed to create FFmpeg session for \(resolution)")
                 completion(false)
                 return
             }
             
-            let returnCode = session.getReturnCode()
-            let logs = session.getLogs()
+            let logs = session.logMessages
             
-            print("🎬 [FFMPEG] Conversion to \(resolution) completed with return code: \(String(describing: returnCode))")
+            print("🎬 [FFMPEG] Conversion to \(resolution) completed with return code: \(session.returnCodeDescription)")
             
             // Log FFmpeg output for debugging (show last 10 log entries, excluding verbose HLS segment messages)
-            if let logs = logs, logs.count > 0 {
+            if logs.count > 0 {
                 print("🎬 [FFMPEG] Showing last \(min(10, logs.count)) log entries:")
                 let lastLogs = logs.suffix(10)
-                for log in lastLogs {
-                    if let logObj = log as? Log, let message = logObj.getMessage() {
-                        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                        // Skip verbose HLS segment opening messages
-                        if !trimmed.isEmpty && !trimmed.contains("Opening") && !trimmed.contains("for writing") {
-                            print("  \(trimmed)")
-                        }
+                for message in lastLogs {
+                    let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Skip verbose HLS segment opening messages
+                    if !trimmed.isEmpty && !trimmed.contains("Opening") && !trimmed.contains("for writing") {
+                        print("  \(trimmed)")
                     }
                 }
             }
             
-            let success = ReturnCode.isSuccess(returnCode)
+            let success = session.isSuccess
             
             if success {
                 // Verify output file exists
@@ -963,26 +961,23 @@ class VideoConversionService {
     ) {
         let command = "-i \"\(inputURL.path)\" -f null -"
         
-        FFmpegKit.executeAsync(command) { session in
+        DynamicFFmpegKit.shared.executeAsync(command) { session in
             guard let session = session else {
                 completion(nil)
                 return
             }
             
-            let logs = session.getLogs()
-            let videoInfo = self.parseVideoInfo(from: logs?.compactMap { $0 as? Log } ?? [])
+            let videoInfo = self.parseVideoInfo(from: session.logMessages)
             completion(videoInfo)
         }
     }
     
-    private func parseVideoInfo(from logs: [Log]) -> VideoInfo? {
+    private func parseVideoInfo(from logs: [String]) -> VideoInfo? {
         var width: Int = 0
         var height: Int = 0
         var duration: Double?
         
-        for log in logs {
-            guard let message = log.getMessage() else { continue }
-            
+        for message in logs {
             // Parse resolution from stream info
             if message.contains("Stream #0:0") && message.contains("Video:") {
                 let components = message.components(separatedBy: ",")
@@ -1020,5 +1015,207 @@ class VideoConversionService {
         }
         
         return VideoInfo(width: width, height: height, duration: duration)
+    }
+}
+
+final class DynamicFFmpegKit {
+    static let shared = DynamicFFmpegKit()
+
+    private enum LoaderError: Error, CustomStringConvertible {
+        case missingFramework
+        case dlopenFailed(String)
+        case missingClass(String)
+        case missingSelector(String)
+
+        var description: String {
+            switch self {
+            case .missingFramework:
+                return "ffmpegkit.framework was not found in the app bundle"
+            case .dlopenFailed(let message):
+                return "dlopen failed: \(message)"
+            case .missingClass(let name):
+                return "FFmpegKit class not found: \(name)"
+            case .missingSelector(let name):
+                return "FFmpegKit selector not found: \(name)"
+            }
+        }
+    }
+
+    private let lock = NSLock()
+    private var frameworkHandle: UnsafeMutableRawPointer?
+    private var didConfigureLogLevel = false
+    private var activeCompletionBlocks: [UUID: AnyObject] = [:]
+
+    private init() {}
+
+    func executeAsync(_ command: String, completion: @escaping (DynamicFFmpegSession?) -> Void) {
+        do {
+            let ffmpegClass: AnyClass = try loadFFmpegKitClass()
+            let selector = NSSelectorFromString("executeAsync:withCompleteCallback:")
+            let implementation = try classImplementation(ffmpegClass, selector: selector)
+            typealias ExecuteAsync = @convention(c) (AnyClass, Selector, NSString, AnyObject) -> AnyObject?
+            let executeAsync = unsafeBitCast(implementation, to: ExecuteAsync.self)
+
+            let blockId = UUID()
+            let block: @convention(block) (AnyObject?) -> Void = { [weak self] rawSession in
+                let session = rawSession.map(DynamicFFmpegSession.init(rawSession:))
+                completion(session)
+                self?.releaseCompletionBlock(blockId)
+            }
+            let blockObject = unsafeBitCast(block, to: AnyObject.self)
+            retainCompletionBlock(blockObject, id: blockId)
+
+            _ = executeAsync(ffmpegClass, selector, command as NSString, blockObject)
+        } catch {
+            print("ERROR: [DynamicFFmpegKit] \(error)")
+            completion(nil)
+        }
+    }
+
+    private func loadFFmpegKitClass() throws -> AnyClass {
+        try loadFrameworkIfNeeded()
+        try configureLogLevelIfNeeded()
+
+        guard let ffmpegClass = NSClassFromString("FFmpegKit") else {
+            throw LoaderError.missingClass("FFmpegKit")
+        }
+        return ffmpegClass
+    }
+
+    private func loadFrameworkIfNeeded() throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if frameworkHandle != nil { return }
+
+        guard let frameworkURL = Bundle.main.privateFrameworksURL?
+            .appendingPathComponent("ffmpegkit.framework")
+            .appendingPathComponent("ffmpegkit"),
+              FileManager.default.fileExists(atPath: frameworkURL.path) else {
+            throw LoaderError.missingFramework
+        }
+
+        print("Loading ffmpeg-kit on demand.")
+        guard let handle = dlopen(frameworkURL.path, RTLD_NOW | RTLD_LOCAL) else {
+            let message = dlerror().map { String(cString: $0) } ?? "unknown error"
+            throw LoaderError.dlopenFailed(message)
+        }
+        frameworkHandle = handle
+        print("Loaded ffmpeg-kit on demand.")
+    }
+
+    private func configureLogLevelIfNeeded() throws {
+        lock.lock()
+        let needsConfigure = !didConfigureLogLevel
+        if needsConfigure {
+            didConfigureLogLevel = true
+        }
+        lock.unlock()
+
+        guard needsConfigure else { return }
+        guard let configClass = NSClassFromString("FFmpegKitConfig") else {
+            throw LoaderError.missingClass("FFmpegKitConfig")
+        }
+
+        let selector = NSSelectorFromString("setLogLevel:")
+        let implementation = try classImplementation(configClass, selector: selector)
+        typealias SetLogLevel = @convention(c) (AnyClass, Selector, Int32) -> Void
+        let setLogLevel = unsafeBitCast(implementation, to: SetLogLevel.self)
+        setLogLevel(configClass, selector, 16)
+    }
+
+    private func retainCompletionBlock(_ block: AnyObject, id: UUID) {
+        lock.lock()
+        activeCompletionBlocks[id] = block
+        lock.unlock()
+    }
+
+    private func releaseCompletionBlock(_ id: UUID) {
+        lock.lock()
+        activeCompletionBlocks.removeValue(forKey: id)
+        lock.unlock()
+    }
+
+    fileprivate static func classImplementation(_ cls: AnyClass, selector: Selector) throws -> IMP {
+        guard let method = class_getClassMethod(cls, selector) else {
+            throw LoaderError.missingSelector(NSStringFromSelector(selector))
+        }
+        return method_getImplementation(method)
+    }
+
+    fileprivate static func instanceImplementation(_ object: AnyObject, selector: Selector) throws -> IMP {
+        guard let cls = object_getClass(object),
+              let method = class_getInstanceMethod(cls, selector) else {
+            throw LoaderError.missingSelector(NSStringFromSelector(selector))
+        }
+        return method_getImplementation(method)
+    }
+
+    private func classImplementation(_ cls: AnyClass, selector: Selector) throws -> IMP {
+        try Self.classImplementation(cls, selector: selector)
+    }
+}
+
+struct DynamicFFmpegSession {
+    private let rawSession: AnyObject
+
+    init(rawSession: AnyObject) {
+        self.rawSession = rawSession
+    }
+
+    var returnCodeDescription: String {
+        guard let returnCode = returnCodeObject else { return "nil" }
+        return String(describing: returnCode)
+    }
+
+    var isSuccess: Bool {
+        guard let returnCode = returnCodeObject else { return false }
+        do {
+            let selector = NSSelectorFromString("isValueSuccess")
+            let implementation = try DynamicFFmpegKit.instanceImplementation(returnCode, selector: selector)
+            typealias IsValueSuccess = @convention(c) (AnyObject, Selector) -> Bool
+            let isValueSuccess = unsafeBitCast(implementation, to: IsValueSuccess.self)
+            return isValueSuccess(returnCode, selector)
+        } catch {
+            print("ERROR: [DynamicFFmpegKit] \(error)")
+            return false
+        }
+    }
+
+    var logMessages: [String] {
+        do {
+            let selector = NSSelectorFromString("getLogs")
+            let implementation = try DynamicFFmpegKit.instanceImplementation(rawSession, selector: selector)
+            typealias GetLogs = @convention(c) (AnyObject, Selector) -> NSArray?
+            let getLogs = unsafeBitCast(implementation, to: GetLogs.self)
+            guard let logs = getLogs(rawSession, selector) else { return [] }
+
+            return logs.compactMap { log in
+                guard let logObject = log as AnyObject? else { return nil }
+                let messageSelector = NSSelectorFromString("getMessage")
+                guard let messageImplementation = try? DynamicFFmpegKit.instanceImplementation(logObject, selector: messageSelector) else {
+                    return nil
+                }
+                typealias GetMessage = @convention(c) (AnyObject, Selector) -> NSString?
+                let getMessage = unsafeBitCast(messageImplementation, to: GetMessage.self)
+                return getMessage(logObject, messageSelector) as String?
+            }
+        } catch {
+            print("ERROR: [DynamicFFmpegKit] \(error)")
+            return []
+        }
+    }
+
+    private var returnCodeObject: AnyObject? {
+        do {
+            let selector = NSSelectorFromString("getReturnCode")
+            let implementation = try DynamicFFmpegKit.instanceImplementation(rawSession, selector: selector)
+            typealias GetReturnCode = @convention(c) (AnyObject, Selector) -> AnyObject?
+            let getReturnCode = unsafeBitCast(implementation, to: GetReturnCode.self)
+            return getReturnCode(rawSession, selector)
+        } catch {
+            print("ERROR: [DynamicFFmpegKit] \(error)")
+            return nil
+        }
     }
 }

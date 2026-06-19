@@ -114,4 +114,26 @@ post_install do |installer|
       end
     end
   end
+
+  # FFmpegKit is loaded explicitly through dlopen when conversion/probing is
+  # requested. Keep the frameworks copied into the app bundle, but remove them
+  # from the app target linker flags so app launch does not load FFmpeg.
+  ffmpeg_link_flags = [
+    '-framework "ffmpegkit"',
+    '-framework "libavcodec"',
+    '-framework "libavdevice"',
+    '-framework "libavfilter"',
+    '-framework "libavformat"',
+    '-framework "libavutil"',
+    '-framework "libswresample"',
+    '-framework "libswscale"'
+  ]
+
+  Dir.glob(File.join(installer.sandbox.root, 'Target Support Files', 'Pods-Tweet', 'Pods-Tweet.*.xcconfig')).each do |xcconfig|
+    contents = File.read(xcconfig)
+    ffmpeg_link_flags.each do |flag|
+      contents = contents.gsub(" #{flag}", '')
+    end
+    File.write(xcconfig, contents)
+  end
 end

@@ -1,6 +1,21 @@
 import SwiftUI
 import PhotosUI
 import AVFoundation
+import UniformTypeIdentifiers
+
+@available(iOS 16.0, *)
+struct PickedVideoFile: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in
+            let temporaryURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(UUID().uuidString)-\(received.file.lastPathComponent)")
+            try FileManager.default.copyItem(at: received.file, to: temporaryURL)
+            return PickedVideoFile(url: temporaryURL)
+        }
+    }
+}
 
 @available(iOS 16.0, *)
 struct MediaPicker: View {
@@ -76,27 +91,35 @@ struct MediaPicker: View {
         
         for item in items {
             do {
-                // Load file data to check size for all file types
-                if let data = try await item.loadTransferable(type: Data.self) {
-                    if data.count > maxFileSize {
-                        let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                        let fileType = getFileTypeDescription(from: typeIdentifier)
-                        let fileSizeMB = Double(data.count) / (1024 * 1024)
-                        let maxSizeMB = Double(maxFileSize) / (1024 * 1024)
-                        
-                        // Show error message
-                        let errorMessage = NSError(
-                            domain: "FileProcessing", 
-                            code: -1, 
-                            userInfo: [
-                                NSLocalizedDescriptionKey: String(format: NSLocalizedString("%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB.", comment: "File size error message"), fileType, fileSizeMB, maxSizeMB)
-                            ]
-                        )
-                        await MainActor.run {
-                            NotificationCenter.default.post(name: .errorOccurred, object: errorMessage)
-                        }
-                        continue // Skip this oversized file
+                let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                let isVideo = item.supportedContentTypes.contains { type in
+                    type.conforms(to: .movie) || type.conforms(to: .video)
+                }
+
+                // Videos are normalized before upload, so the original file size should not
+                // block selection or delay the editor preview.
+                if isVideo {
+                    validItems.append(item)
+                    continue
+                }
+
+                if let data = try await item.loadTransferable(type: Data.self), data.count > maxFileSize {
+                    let fileType = getFileTypeDescription(from: typeIdentifier)
+                    let fileSizeMB = Double(data.count) / (1024 * 1024)
+                    let maxSizeMB = Double(maxFileSize) / (1024 * 1024)
+
+                    // Show error message
+                    let errorMessage = NSError(
+                        domain: "FileProcessing",
+                        code: -1,
+                        userInfo: [
+                            NSLocalizedDescriptionKey: String(format: NSLocalizedString("%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB.", comment: "File size error message"), fileType, fileSizeMB, maxSizeMB)
+                        ]
+                    )
+                    await MainActor.run {
+                        NotificationCenter.default.post(name: .errorOccurred, object: errorMessage)
                     }
+                    continue // Skip this oversized file
                 }
                 
                 // Add valid items (all file types under size limit)

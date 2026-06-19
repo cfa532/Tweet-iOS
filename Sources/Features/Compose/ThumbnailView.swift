@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 import AVFoundation
 import UIKit
+import Photos
 
 @available(iOS 16.0, *)
 struct ThumbnailView: View {
@@ -127,24 +128,6 @@ struct ThumbnailView: View {
         // Generate a unique identifier for this item
         let itemId = item.itemIdentifier ?? UUID().uuidString
         print("DEBUG: [\(itemId)] Starting thumbnail generation")
-        
-        // CRITICAL: Check file size BEFORE generating thumbnail
-        // Thumbnail generation (especially for videos) can take a long time
-        // If file is too large, MediaPicker.filterOversizedFiles() will remove it from selection
-        // So we just skip thumbnail generation to save time - the view will disappear anyway
-        do {
-            if let data = try? await item.loadTransferable(type: Data.self) {
-                if data.count > Constants.MAX_FILE_SIZE {
-                    let fileSizeMB = Double(data.count) / (1024 * 1024)
-                    print("DEBUG: [\(itemId)] File too large (\(String(format: "%.1f", fileSizeMB))MB), skipping thumbnail generation (will be removed by MediaPicker)")
-                    await MainActor.run {
-                        self.isLoading = false
-                    }
-                    return
-                }
-                print("DEBUG: [\(itemId)] File size OK (\(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
-            }
-        }
         
         // First, detect the media type to create a proper cache key
         mediaType = detectMediaType()
@@ -376,22 +359,83 @@ struct ThumbnailView: View {
     }
     
     private func generateVideoThumbnail() async throws -> UIImage {
+        if let photosThumbnail = await generatePhotoLibraryVideoThumbnail() {
+            return photosThumbnail
+        }
+
+        if let videoFile = try await item.loadTransferable(type: PickedVideoFile.self) {
+            defer { try? FileManager.default.removeItem(at: videoFile.url) }
+            return try await generateVideoThumbnail(from: videoFile.url)
+        }
+
         guard let data = try await item.loadTransferable(type: Data.self) else {
             throw ThumbnailError.dataLoadingFailed
         }
-        
-        // Create temporary file for AVFoundation
+
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
         try data.write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
-        
+
+        return try await generateVideoThumbnail(from: tempURL)
+    }
+
+    private func generatePhotoLibraryVideoThumbnail() async -> UIImage? {
+        guard let itemIdentifier = item.itemIdentifier else { return nil }
+
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [itemIdentifier], options: nil)
+        guard let asset = result.firstObject, asset.mediaType == .video else { return nil }
+
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .fastFormat
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+
+        return await withCheckedContinuation { continuation in
+            var didResume = false
+            let requestID = PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 400, height: 400),
+                contentMode: .aspectFill,
+                options: options
+            ) { image, info in
+                guard !didResume else { return }
+
+                if let image {
+                    didResume = true
+                    continuation.resume(returning: image)
+                    return
+                }
+
+                let isDegraded = info?[PHImageResultIsDegradedKey] as? Bool ?? false
+                let wasCancelled = info?[PHImageCancelledKey] as? Bool ?? false
+                let hasError = info?[PHImageErrorKey] != nil
+                if !isDegraded || wasCancelled || hasError {
+                    didResume = true
+                    continuation.resume(returning: nil)
+                }
+            }
+
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if !didResume {
+                    didResume = true
+                    PHImageManager.default().cancelImageRequest(requestID)
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    private func generateVideoThumbnail(from tempURL: URL) async throws -> UIImage {
         let asset = AVURLAsset(url: tempURL)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = CGSize(width: 400, height: 400) // Higher resolution for better quality
+        imageGenerator.requestedTimeToleranceBefore = CMTime(seconds: 0.25, preferredTimescale: 600)
+        imageGenerator.requestedTimeToleranceAfter = CMTime(seconds: 0.25, preferredTimescale: 600)
         
         // Try different time positions for thumbnail
-        let timePositions: [Double] = [1.0, 0.5, 0.1, 0.0]
+        let timePositions: [Double] = [0.0, 0.1, 0.5, 1.0]
         
         for timePosition in timePositions {
             do {
