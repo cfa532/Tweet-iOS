@@ -2070,25 +2070,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
         }
         guard let player else { return true }
-        if shouldSuppressPrimarySpinnerBehindVisibleCover(for: player) {
-            return false
-        }
         return !isVideoAtEnd(player) && !isVisibleVideoFrameReady(player)
-    }
-
-    private func shouldSuppressPrimarySpinnerBehindVisibleCover(for player: AVPlayer) -> Bool {
-        guard imageView.image != nil,
-              !imageView.isHidden,
-              playerHasLoadedData(player),
-              let mid = attachment?.mid else {
-            return false
-        }
-
-        if isHoldingBackgroundVideoCover && backgroundVideoCoverMid == mid {
-            return true
-        }
-
-        return isSurfaceReturnHandoffPlayer(player, mid: mid)
     }
 
     private func shouldDebouncePrimarySpinner(for player: AVPlayer? = nil) -> Bool {
@@ -2782,17 +2764,19 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
 
         let now = Date()
-        let hasPlaybackHistory = hasEstablishedDecodedPlayback(for: player)
+        let hasDecodedPlaybackHistory = hasEstablishedDecodedPlayback(for: player)
             || lastActualPlaybackDate != .distantPast
             || lastPlaybackProgressDate != .distantPast
+            || lastDecodedPlaybackProgressDate != .distantPast
+        let hasPlaybackHistory = hasDecodedPlaybackHistory
             || hasPlaybackCoverForCurrentVideo
         let noRecentPlaybackProgress = lastPlaybackProgressDate == .distantPast
             || now.timeIntervalSince(lastPlaybackProgressDate) >= 20.0
         let noRecentDecodedProgress = !hasRecentDecodedPlayback(for: player, maxAge: 20.0)
-        let coldReadyStarved = !hasPlaybackHistory
+        let coldReadyStarved = !hasDecodedPlaybackHistory
             && lastPlaybackRequestDate != .distantPast
             && noRecentDecodedProgress
-        let coldReadyWaitSeconds: TimeInterval = 15.0
+        let coldReadyWaitSeconds: TimeInterval = attachment?.type == .video ? 6.0 : 15.0
         let hlsReadyStarved = attachment?.type == .hls_video
             && coldReadyStarved
             && !LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid)
@@ -3064,7 +3048,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             _ = reacquirePlayerForCurrentVideo(
                 reason: "coordinatorPlay.failedStateRetry",
                 clearCachedPlayer: true,
-                transitionState: imageView.image != nil ? .thumbnail : .noContent
+                transitionState: imageView.image != nil ? .playerLoading : .noContent
             )
             return
         }
@@ -3806,8 +3790,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                         print("\(self.logPrefix) ⚠️ Preserving disk cache after transient player failure: \(errorMsg)")
                     }
                     SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: deleteDiskCache)
-                    if !deleteDiskCache {
-                        self.scheduleAutomaticTransientRetryIfNeeded(errorMsg: errorMsg)
+                    if !deleteDiskCache,
+                       self.scheduleAutomaticTransientRetryIfNeeded(errorMsg: errorMsg) {
+                        self.cleanupFailedPlayerState()
+                        self.restoreCachedPosterForFailureIfNeeded()
+                        self.transitionTo(self.imageView.image != nil ? .playerLoading : .noContent)
+                        return
                     }
                     self.handleVideoLoadFailure(reason: "playerItem.status == .failed (\(errorMsg))")
                 }
@@ -4527,6 +4515,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if !isAutomatic {
             automaticTransientRetryTask?.cancel()
             automaticTransientRetryTask = nil
+            automaticTransientRetryCount = 0
         }
         let retryReason = isAutomatic ? "automaticTransientRetry" : "manualRetry"
         preserveReleaseCoverForCurrentVideo(reason: retryReason, showCover: isVisible)
@@ -5060,6 +5049,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard error.domain == NSURLErrorDomain else { return true }
 
         let transientNetworkCodes: Set<Int> = [
+            NSURLErrorUnknown,
             NSURLErrorTimedOut,
             NSURLErrorCannotFindHost,
             NSURLErrorCannotConnectToHost,
@@ -5073,31 +5063,37 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return !transientNetworkCodes.contains(error.code)
     }
 
-    private func scheduleAutomaticTransientRetryIfNeeded(errorMsg: String) {
+    @discardableResult
+    private func scheduleAutomaticTransientRetryIfNeeded(errorMsg: String) -> Bool {
         guard isVisible,
               isVideoAttachment,
               shouldLoadVideo,
               automaticTransientRetryTask == nil,
-              automaticTransientRetryCount < 2 else { return }
+              automaticTransientRetryCount < 1 else { return false }
 
         automaticTransientRetryCount += 1
         let attempt = automaticTransientRetryCount
-        let delaySeconds: UInt64 = attempt == 1 ? 2 : 5
-        print("\(logPrefix) 🔄 Scheduling automatic transient video retry #\(attempt) after \(delaySeconds)s (\(errorMsg))")
+        print("\(logPrefix) 🔄 Scheduling immediate automatic transient video retry #\(attempt) (\(errorMsg))")
 
         automaticTransientRetryTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
+            await Task.yield()
             guard let self else { return }
             defer { self.automaticTransientRetryTask = nil }
             guard !Task.isCancelled,
                   self.isVisible,
                   self.isVideoAttachment,
                   self.shouldLoadVideo,
-                  self.videoCellState == .failed else { return }
+                  [
+                    VideoCellState.failed,
+                    .playerLoading,
+                    .thumbnail,
+                    .noContent
+                  ].contains(self.videoCellState) else { return }
 
             print("\(self.logPrefix) 🔄 Automatic transient video retry #\(attempt)")
             self.retryVideoLoad(isAutomatic: true)
         }
+        return true
     }
 
     /// True when coordinator commanded play but the player/item is still being acquired or loaded.
