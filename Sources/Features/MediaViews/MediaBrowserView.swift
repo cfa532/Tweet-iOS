@@ -194,7 +194,18 @@ struct MediaBrowserView: View {
             
             // Animate transition: slide current video up and next video in from bottom
             Task { @MainActor in
-                guard !isTransitioning, !isCompletingVerticalAdvance else { return }
+                var waitAttempts = 0
+                while (isTransitioning || isCompletingVerticalAdvance) && waitAttempts < 10 {
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    waitAttempts += 1
+                }
+                if isTransitioning || isCompletingVerticalAdvance {
+                    isTransitioning = false
+                    isCompletingVerticalAdvance = false
+                    suppressTabPagingAnimation = false
+                    dragOffset = .zero
+                    transitionOffset = 0
+                }
                 guard let allNextAttachments = nextTweet.attachments,
                       videoIndex < allNextAttachments.count else {
                     return

@@ -101,7 +101,7 @@ private func fullscreenRequiredBufferAhead(for item: AVPlayerItem, player: AVPla
         return 2.0
     }
 
-    return item.isPlaybackLikelyToKeepUp ? 2.0 : 5.0
+    return item.isPlaybackLikelyToKeepUp ? 2.0 : 8.0
 }
 
 @discardableResult
@@ -459,23 +459,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
 
         // Capture a still frame from the singleton player so the feed cell has a
-        // thumbnail cover while its own player layer re-initialises on return.
-        if !releasedBrokenBorrowedPlayer,
-           let player = singletonPlayer,
-           let asset = player.currentItem?.asset,
-           let videoMid = currentVideoMid,
-           SharedAssetCache.shared.cachedThumbnail(for: videoMid) == nil {
-            let captureTime = player.currentTime()
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 720, height: 720)
-            generator.generateCGImageAsynchronously(for: captureTime) { cgImage, _, error in
-                guard let cgImage = cgImage, error == nil else { return }
-                let image = UIImage(cgImage: cgImage)
-                Task { @MainActor in
-                    SharedAssetCache.shared.updateCachedThumbnail(image, for: videoMid)
-                }
-            }
+        // poster while its separate AVPlayerLayer re-initialises on return.
+        if !releasedBrokenBorrowedPlayer {
+            captureTransitionPoster(from: singletonPlayer, mediaID: currentVideoMid)
         }
 
         if transferPlaybackToUnderlyingSurface && !releasedBrokenBorrowedPlayer {
@@ -888,7 +874,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         guard currentVideoMid == mid else {
             if loadingMid == mid {
-                return .loading(showPoster: hasPoster, showSpinner: !hasPlayableMediaContent)
+                return .loading(showPoster: hasPoster, showSpinner: true)
             }
             return .idle(showPoster: hasPoster)
         }
@@ -896,7 +882,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard let player = candidatePlayer,
               singletonPlayer === player,
               let item = player.currentItem else {
-            return .loading(showPoster: hasPoster, showSpinner: !hasPlayableMediaContent)
+            return .loading(showPoster: hasPoster, showSpinner: true)
         }
 
         let hasPlayableData = hasPlayableData(player: player, item: item)
@@ -906,12 +892,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             player: player
         )
 
-        if hasPlayableData {
+        if hasPlayableData,
+           layerReadyForDisplay,
+           player.timeControlStatus == .playing,
+           isItemReady,
+           !isBeforeFirstVisibleFrame(player) {
             return .playing(showPoster: showPoster)
         }
 
         return .loading(
-            showPoster: hasPoster,
+            showPoster: showPoster,
             showSpinner: !isFullscreenVideoAtEnd(player)
         )
     }
@@ -1012,9 +1002,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if let cached = SharedAssetCache.shared.cachedThumbnail(for: mediaID) {
             transitionPosterMediaID = mediaID
             transitionPoster = cached
-            return
+        } else {
+            transitionPosterMediaID = mediaID
         }
-        transitionPosterMediaID = mediaID
+
         guard let asset = player?.currentItem?.asset else { return }
         let captureTime = player?.currentTime() ?? .zero
         let generator = AVAssetImageGenerator(asset: asset)
@@ -1252,7 +1243,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     self.fullscreenLoadTask = nil
 
                     print("ERROR: [FullScreenVideoManager] Failed to load video: \(error)")
-                    self.failFullscreenVideoLoad(failedMid: mid, reason: "async player creation failed: \(error.localizedDescription)", deleteDiskCache: true)
+                    self.failFullscreenVideoLoad(failedMid: mid, reason: "async player creation failed: \(error.localizedDescription)", deleteDiskCache: true, advanceToNext: false)
                 }
             }
         }
@@ -1441,7 +1432,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 guard let self else { return }
                 print("🎬 [FullScreenVideoManager] itemStatus \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(player, item: playerItem))")
                 if playerItem.status == .failed {
-                    self.failFullscreenVideoLoad(reason: "item status failed", deleteDiskCache: true)
+                    self.failFullscreenVideoLoad(reason: "item status failed", deleteDiskCache: true, advanceToNext: false)
                     return
                 }
                 updateBufferingState()
@@ -1574,7 +1565,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
     }
 
-    private func failFullscreenVideoLoad(failedMid explicitFailedMid: String? = nil, reason: String, deleteDiskCache: Bool, advanceToNext: Bool = true) {
+    private func failFullscreenVideoLoad(failedMid explicitFailedMid: String? = nil, reason: String, deleteDiskCache: Bool, advanceToNext: Bool = false) {
         guard let failedMid = explicitFailedMid ?? currentVideoMid else { return }
         let nextVideo = advanceToNext ? resolveNextVideo(after: videoListIndex) : nil
 
@@ -1621,9 +1612,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         hasRestoredPosition = false
         resetPlaybackSurfaceState()
         fullscreenStallItemRebuildCount = 0
-        loadFailedVideoMid = failedMid
-
         if let nextVideo {
+            loadFailedVideoMid = nil
             videoListIndex = nextVideo.listIndex
             currentVideoMid = nil
             currentTweetId = nil
@@ -1631,6 +1621,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             currentVideoIndex = 0
             onNavigateToNextVideo?(nextVideo.tweet, nextVideo.videoIndex, nextVideo.cellTweetId)
         } else {
+            loadFailedVideoMid = failedMid
             currentVideoMid = nil
             currentTweetId = nil
             currentCellTweetId = nil
@@ -1672,7 +1663,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         print("🎬 [FullScreenVideoManager] retryCheck \(shortMID(currentVideoMid)): \(playerDiagnostic(player, item: playerItem))")
 
         if playerItem.status == .failed || player.error != nil || playerItem.error != nil {
-            failFullscreenVideoLoad(reason: "retry detected failed item", deleteDiskCache: true)
+            failFullscreenVideoLoad(reason: "retry detected failed item", deleteDiskCache: true, advanceToNext: false)
             return
         }
 
@@ -1778,6 +1769,15 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             if self.bufferObserver != nil,
                                self.singletonPlayer?.currentItem === item {
                                 print("🎬 [FullScreenVideoManager] retry buffer timeout \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(self.singletonPlayer, item: self.singletonPlayer?.currentItem))")
+                                let bufferedAhead = self.bufferedTimeAhead(for: item, player: player)
+                                let requiredBuffer = fullscreenRequiredBufferAhead(for: item, player: player)
+                                if item.status == .readyToPlay,
+                                   bufferedAhead > 0.25,
+                                   !item.isPlaybackBufferEmpty {
+                                    print("🎬 [FullScreenVideoManager] retry buffer still growing \(self.shortMID(self.currentVideoMid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)) - waiting")
+                                    self.startRetryMonitoring()
+                                    return
+                                }
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
                                 if let player = self.singletonPlayer,
@@ -1786,7 +1786,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                    self.fullscreenStallItemRebuildCount < 1 {
                                     self.rebuildFullscreenItemAfterStall(player: player, item: item, mid: mid)
                                 } else {
-                                    self.failFullscreenVideoLoad(reason: "retry buffer timeout after rebuild", deleteDiskCache: false)
+                                    self.failFullscreenVideoLoad(reason: "retry buffer timeout after rebuild", deleteDiskCache: false, advanceToNext: true)
                                 }
                             }
                         }
@@ -1900,7 +1900,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         self.itemStatusObserver = nil
                     } else if item.status == .failed {
                         print("❌ [FullScreenVideoManager] PlayerItem failed: \(item.error?.localizedDescription ?? "unknown")")
-                        self.failFullscreenVideoLoad(reason: "deferred item status failed", deleteDiskCache: true)
+                        self.failFullscreenVideoLoad(reason: "deferred item status failed", deleteDiskCache: true, advanceToNext: false)
                     }
                 }
             }
