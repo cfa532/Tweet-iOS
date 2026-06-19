@@ -1066,10 +1066,10 @@ class SharedAssetCache: ObservableObject {
         return stalePreloadMids.count
     }
 
-    /// Fullscreen owns the user's active video. Match Android's behavior: stop preload
-    /// work, release stale preloaded players, and pause other feed players without
+    /// A focused video surface owns the user's active video. Stop preload work,
+    /// release stale preloaded players, and pause other feed players without
     /// tearing down the tapped/protected playback path.
-    @MainActor func suspendFeedActivityForFullscreen(protecting protectedMediaID: String) {
+    @MainActor func suspendFeedActivityForFocusedPlayback(protecting protectedMediaID: String, owner: String) {
         let protected = Set([protectedMediaID])
         let stalePreloadedPlayers = Array(preloadedPlayerMids).filter { mediaID in
             !protected.contains(mediaID) &&
@@ -1107,7 +1107,12 @@ class SharedAssetCache: ObservableObject {
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         }
 
-        print("🎬 [SharedAssetCache] Suspended feed activity for fullscreen \(String(protectedMediaID.prefix(8))): cancelled \(preloadIDs.count) preload(s), released \(releasedPlayers) preloaded player(s)")
+        print("🎬 [SharedAssetCache] Suspended feed activity for \(owner) \(String(protectedMediaID.prefix(8))): cancelled \(preloadIDs.count) preload(s), released \(releasedPlayers) preloaded player(s)")
+    }
+
+    /// Fullscreen-specific compatibility wrapper.
+    @MainActor func suspendFeedActivityForFullscreen(protecting protectedMediaID: String) {
+        suspendFeedActivityForFocusedPlayback(protecting: protectedMediaID, owner: "fullscreen")
     }
 
     /// A focused video surface could not reuse a cached player for this media, so

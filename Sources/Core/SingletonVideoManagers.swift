@@ -723,7 +723,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         let isNearEnd = timeRemaining(for: item, player: player).map { $0 <= 0.5 } ?? false
         if isNearEnd { return false }
 
-        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
         let hasLoadedData = item.loadedTimeRanges.contains { value in
             let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
             return duration.isFinite && duration > 0
@@ -733,12 +732,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
            hasLoadedData {
             return true
         }
-
-        let isWaitingOrColdUnknown = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            || item.status == .unknown
-        return isWaitingOrColdUnknown
-            && bufferedAhead < 0.25
-            && !item.isPlaybackLikelyToKeepUp
+        return false
     }
 
     @discardableResult
@@ -1065,7 +1059,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         loadFailedVideoMid = nil
         LocalHTTPServer.shared.clearCancelledState(for: mid)
         LocalHTTPServer.shared.setPrimaryMediaID(mid)
-        SharedAssetCache.shared.suspendFeedActivityForFullscreen(protecting: mid)
+        SharedAssetCache.shared.suspendFeedActivityForFocusedPlayback(protecting: mid, owner: "fullscreen")
         refreshCachedMediaContent(for: mid)
 
         // If we already have the correct item loaded (e.g. re-entering fullscreen after dismiss
@@ -3069,6 +3063,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         // the feed's live AVPlayer.
         LocalHTTPServer.shared.clearCancelledState(for: mid)
         LocalHTTPServer.shared.setPrimaryMediaID(mid)
+        SharedAssetCache.shared.suspendFeedActivityForFocusedPlayback(protecting: mid, owner: "detail")
 
         // Save old video position before switching
         if let player = currentPlayer,
@@ -3466,7 +3461,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
         if isVideoAtEnd(player) { return false }
 
-        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
         let hasLoadedData = item.loadedTimeRanges.contains { value in
             let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
             return duration.isFinite && duration > 0
@@ -3476,12 +3470,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
            hasLoadedData {
             return true
         }
-
-        let isWaitingOrColdUnknown = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            || item.status == .unknown
-        return isWaitingOrColdUnknown
-            && bufferedAhead < 0.25
-            && !item.isPlaybackLikelyToKeepUp
+        return false
     }
 
     @discardableResult

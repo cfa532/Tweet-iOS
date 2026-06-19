@@ -150,8 +150,6 @@ class TweetTableViewController: UITableViewController {
     private let maxDirectionalImagePreloadsInFlight = FeedPlaybackTuning.maxDirectionalImagePreloadsInFlight
     private var activeDirectionalImagePreloadTasks: [String: Task<Void, Never>] = [:]
     private var didScheduleInitialVisibilityRefresh = false
-    private let mediaLoadVisibleMinHeight = FeedPlaybackTuning.mediaLoadVisibleMinHeight
-    private let mediaLoadVisibleMinRatio = FeedPlaybackTuning.mediaLoadVisibleMinRatio
 
     // Scroll state tracking to prevent direction detection jitter during deceleration
     private var isUserDragging: Bool = false
@@ -2851,13 +2849,11 @@ class TweetTableViewController: UITableViewController {
             let intersection = cellRect.intersection(visibleRect)
             let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
             let isRowOnScreen = intersection.height > 0
-            let isRowLoadVisible = isRowOnScreen &&
-                (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
             let isTweetVisible = ratio >= FeedPlaybackTuning.tweetVisibleRatio
 
-            // Loading uses a small threshold; autoplay still uses the stricter
+            // Loading uses any positive visibility; autoplay still uses the stricter
             // media-cell threshold returned as `playable`.
-            tweetCell.tweetContentView.setMediaVisible(isRowLoadVisible)
+            tweetCell.tweetContentView.setMediaVisible(isRowOnScreen)
             let mediaVisibility = tweetCell.tweetContentView.mediaVisibilityIdentifiers(
                 visibleRect: visibleRect,
                 coordinateSpace: tableView

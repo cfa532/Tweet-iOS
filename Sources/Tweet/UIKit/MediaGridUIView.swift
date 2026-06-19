@@ -38,8 +38,6 @@ class MediaGridUIView: UIView {
     /// Height last computed from actual bounds.width — drives intrinsicContentSize
     private var computedGridHeight: CGFloat = 0
     private let playbackContinueVisibilityThreshold = FeedPlaybackTuning.videoContinueVisibilityRatio
-    private let mediaLoadVisibleMinHeight = FeedPlaybackTuning.mediaLoadVisibleMinHeight
-    private let mediaLoadVisibleMinRatio = FeedPlaybackTuning.mediaLoadVisibleMinRatio
 
     var isGridVisible: Bool = false {
         didSet {
@@ -499,9 +497,7 @@ class MediaGridUIView: UIView {
             let visibleArea = max(0, intersection.width) * max(0, intersection.height)
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
-            let isLoadVisible = isGridVisible &&
-                visibleArea > 0 &&
-                (intersection.height >= mediaLoadVisibleMinHeight || ratio >= mediaLoadVisibleMinRatio)
+            let isLoadVisible = isGridVisible && visibleArea > 0
             cellView.setVisible(
                 isLoadVisible,
                 shouldAcquirePlayer: isLoadVisible && AppDelegate.isVideoInfrastructureReady
