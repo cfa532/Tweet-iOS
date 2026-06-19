@@ -33,6 +33,9 @@ struct FollowingsTweetView: View {
                     return serverTweets
                 }
             },
+            onForegroundRefresh: {
+                await viewModel.performForegroundFeedRefresh()
+            },
             showTitle: false,
             notifications: [
                 TweetListNotification(

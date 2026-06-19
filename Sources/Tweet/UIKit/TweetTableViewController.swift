@@ -586,11 +586,23 @@ class TweetTableViewController: UITableViewController {
         // Restore the scroll position after a brief delay to let layout settle
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self = self else { return }
-            // Set lastContentOffset before restoring so scrollViewDidScroll sees zero delta
-            // This prevents the restoration from triggering toolbar hiding
-            self.lastContentOffset = savedPosition
-            self.lastCallbackOffset = savedPosition
-            self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
+            let currentPosition = self.tableView.contentOffset.y
+            let topPosition = -self.tableView.adjustedContentInset.top
+            let savedPositionLooksTop = savedPosition <= topPosition + 10
+            let currentPositionIsAwayFromTop = currentPosition > topPosition + 20
+            let shouldSkipTopRestore = savedPositionLooksTop && currentPositionIsAwayFromTop
+
+            if shouldSkipTopRestore {
+                self.lastContentOffset = currentPosition
+                self.lastCallbackOffset = currentPosition
+                print("☀️ [FOREGROUND] Skipped stale top scroll restore; keeping current offset")
+            } else {
+                // Set lastContentOffset before restoring so scrollViewDidScroll sees zero delta
+                // This prevents the restoration from triggering toolbar hiding
+                self.lastContentOffset = savedPosition
+                self.lastCallbackOffset = savedPosition
+                self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
+            }
             self.scrollPositionBeforeBackground = nil
 
             // Restore visible video players and refresh directional preloads.
@@ -959,6 +971,11 @@ class TweetTableViewController: UITableViewController {
         !pendingPrependedTweets.isEmpty || pendingFullTweetsAfterPrepend != nil
     }
 
+    func isHoldingPendingNewTweets(matching currentTweets: [Tweet]) -> Bool {
+        guard let pendingFullTweetsAfterPrepend else { return false }
+        return pendingFullTweetsAfterPrepend.map(\.mid) == currentTweets.map(\.mid)
+    }
+
     func applyDirectTweetsAndClearPendingBanner(_ directTweets: [Tweet]) {
         let previousAllowNewTweetsBanner = allowNewTweetsBanner
         allowNewTweetsBanner = false
@@ -979,7 +996,7 @@ class TweetTableViewController: UITableViewController {
         } else {
             button = UIButton(type: .system)
             button.translatesAutoresizingMaskIntoConstraints = false
-            button.backgroundColor = XTheme.background.withAlphaComponent(0.82)
+            button.backgroundColor = XTheme.accent.withAlphaComponent(0.72)
             button.layer.cornerRadius = newTweetsBannerHeight / 2
             button.layer.borderWidth = 0
             button.layer.masksToBounds = false
@@ -1001,7 +1018,7 @@ class TweetTableViewController: UITableViewController {
                     withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
                 )
             )
-            arrowImageView.tintColor = XTheme.text
+            arrowImageView.tintColor = .white
             arrowImageView.contentMode = .scaleAspectFit
             arrowImageView.translatesAutoresizingMaskIntoConstraints = false
             arrowImageView.tag = 9101
@@ -1011,7 +1028,7 @@ class TweetTableViewController: UITableViewController {
             newTweetsAvatarCluster = avatarCluster
 
             let titleLabel = UILabel()
-            titleLabel.textColor = XTheme.text
+            titleLabel.textColor = .white
             titleLabel.font = .systemFont(ofSize: 17, weight: .regular)
             titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
             titleLabel.setContentHuggingPriority(.required, for: .horizontal)
@@ -1064,19 +1081,19 @@ class TweetTableViewController: UITableViewController {
             self?.autoHideNewTweetsButton()
         }
         newTweetsAutoHideWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0, execute: workItem)
     }
 
     private func updateNewTweetsButtonAppearance() {
         guard let button = newTweetsButton else { return }
-        button.backgroundColor = XTheme.background.withAlphaComponent(0.82)
+        button.backgroundColor = XTheme.accent.withAlphaComponent(0.72)
         button.layer.borderWidth = 0
         button.layer.shadowColor = UIColor.black.withAlphaComponent(isDarkModeEnabled ? 0.35 : 0.18).cgColor
-        newTweetsTitleLabel?.textColor = XTheme.text
+        newTweetsTitleLabel?.textColor = .white
         newTweetsContentStack?.arrangedSubviews
             .compactMap { $0 as? UIImageView }
             .first { $0.tag == 9101 }?
-            .tintColor = XTheme.text
+            .tintColor = .white
     }
 
     private func newTweetsButtonTitle(count: Int) -> String {
@@ -1205,14 +1222,14 @@ class TweetTableViewController: UITableViewController {
 
     @objc private func handleNewTweetsButtonTouchDown() {
         UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.newTweetsButton?.backgroundColor = XTheme.secondaryBackground.withAlphaComponent(0.82)
+            self.newTweetsButton?.backgroundColor = XTheme.accent.withAlphaComponent(0.58)
             self.newTweetsButton?.transform = CGAffineTransform(scaleX: 0.98, y: 0.98)
         }
     }
 
     @objc private func handleNewTweetsButtonTouchUp() {
         UIView.animate(withDuration: 0.16, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.newTweetsButton?.backgroundColor = XTheme.background.withAlphaComponent(0.82)
+            self.newTweetsButton?.backgroundColor = XTheme.accent.withAlphaComponent(0.72)
             self.newTweetsButton?.transform = .identity
         }
     }

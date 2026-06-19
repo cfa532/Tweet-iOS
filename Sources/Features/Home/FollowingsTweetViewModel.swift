@@ -95,23 +95,7 @@ class FollowingsTweetViewModel: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
-                await MainActor.run {
-                    self.isPeriodicFeedRefreshActive = true
-                }
-                defer {
-                    Task { @MainActor [weak self] in
-                        self?.isPeriodicFeedRefreshActive = false
-                    }
-                }
-
-                do {
-                    print("DEBUG: [FollowingsTweetViewModel] 5-minute foreground feed refresh")
-                    _ = try await self.fetchTweets(page: 0, pageSize: 10, isPeriodicRefresh: true)
-                    NotificationCenter.default.post(name: .mainFeedPeriodicRefreshCompleted, object: nil)
-                } catch {
-                    print("ERROR: [FollowingsTweetViewModel] Foreground feed refresh failed: \(error)")
-                }
-
+                await self.performPeriodicFeedRefresh(reason: "5-minute foreground feed refresh", pageSize: 10)
                 self.nextFeedRefreshAt = Date().addingTimeInterval(self.feedRefreshInterval)
             }
         }
@@ -120,6 +104,36 @@ class FollowingsTweetViewModel: ObservableObject {
     private func stopFeedRefreshTimer() {
         feedRefreshTask?.cancel()
         feedRefreshTask = nil
+    }
+
+    func performForegroundFeedRefresh() async {
+        await performPeriodicFeedRefresh(reason: "foreground feed refresh", pageSize: 10)
+        nextFeedRefreshAt = Date().addingTimeInterval(feedRefreshInterval)
+    }
+
+    private func performPeriodicFeedRefresh(reason: String, pageSize: UInt) async {
+        let didBegin = await MainActor.run {
+            guard !isPeriodicFeedRefreshActive else { return false }
+            isPeriodicFeedRefreshActive = true
+            return true
+        }
+        guard didBegin else {
+            print("DEBUG: [FollowingsTweetViewModel] Skipping duplicate \(reason)")
+            return
+        }
+        defer {
+            Task { @MainActor [weak self] in
+                self?.isPeriodicFeedRefreshActive = false
+            }
+        }
+
+        do {
+            print("DEBUG: [FollowingsTweetViewModel] \(reason)")
+            _ = try await fetchTweets(page: 0, pageSize: pageSize, isPeriodicRefresh: true)
+            NotificationCenter.default.post(name: .mainFeedPeriodicRefreshCompleted, object: nil)
+        } catch {
+            print("ERROR: [FollowingsTweetViewModel] \(reason) failed: \(error)")
+        }
     }
 
     private func beginPageZeroFetchIfNeeded(page: UInt, isPeriodicRefresh: Bool) async -> Bool {

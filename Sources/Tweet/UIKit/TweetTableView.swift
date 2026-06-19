@@ -17,6 +17,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     @Binding var hasMoreTweets: Bool
     let isLoading: Bool
     let isLoadingMore: Bool
+    let isDirectFeedRefreshActive: Bool
     let allowNewTweetsBanner: Bool
     let loadMoreTweets: (Bool) -> Void  // Parameter: forceLoad
     let onRefresh: (() async -> Void)?
@@ -90,9 +91,14 @@ struct TweetTableView: UIViewControllerRepresentable {
 
         // Only update tweets if they actually changed
         let currentTweetIds = tweets.map { $0.mid }
-        if !allowNewTweetsBanner && uiViewController.hasPendingNewTweetsBanner {
+        if isDirectFeedRefreshActive && uiViewController.hasPendingNewTweetsBanner {
             coordinator.lastTweetIds = currentTweetIds
             uiViewController.applyDirectTweetsAndClearPendingBanner(tweets)
+        } else if !allowNewTweetsBanner && uiViewController.hasPendingNewTweetsBanner {
+            coordinator.lastTweetIds = currentTweetIds
+            if !uiViewController.isHoldingPendingNewTweets(matching: tweets) {
+                uiViewController.applyDirectTweetsAndClearPendingBanner(tweets)
+            }
         } else if coordinator.lastTweetIds != currentTweetIds {
             coordinator.lastTweetIds = currentTweetIds
             uiViewController.updateTweets(tweets)

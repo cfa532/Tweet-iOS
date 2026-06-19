@@ -26,6 +26,7 @@ struct TweetListView: View {
     // MARK: - Properties
     let title: String
     let tweetFetcher: @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
+    let onForegroundRefresh: (() async -> Void)?
     let showTitle: Bool
     let header: (() -> AnyView)?
     let headerRefreshToken: Int
@@ -168,6 +169,7 @@ struct TweetListView: View {
         title: String,
         tweets: Binding<[Tweet]>,
         tweetFetcher: @escaping @Sendable (UInt, UInt, Bool) async throws -> [Tweet?],
+        onForegroundRefresh: (() async -> Void)? = nil,
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
         onScroll: ((CGFloat, CGFloat) -> Void)? = nil,
@@ -191,6 +193,7 @@ struct TweetListView: View {
         self.title = title
         self._tweets = tweets
         self.tweetFetcher = tweetFetcher
+        self.onForegroundRefresh = onForegroundRefresh
         self.showTitle = showTitle
         self.onScroll = onScroll
         self.leadingPadding = leadingPadding
@@ -247,7 +250,12 @@ struct TweetListView: View {
                     hasMoreTweets: $hasMoreTweets,
                     isLoading: isLoading,
                     isLoadingMore: isLoadingMore,
-                    allowNewTweetsBanner: allowNewTweetsBanner && initialLoadComplete && !isLoading && !isLoadingMore && !isDirectFeedRefreshActive,
+                    isDirectFeedRefreshActive: isDirectFeedRefreshActive,
+                    allowNewTweetsBanner: allowNewTweetsBanner
+                        && initialLoadComplete
+                        && !isLoading
+                        && !isLoadingMore
+                        && !isDirectFeedRefreshActive,
                     loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
                     onRefresh: {
                         await refreshTweets()
@@ -521,7 +529,7 @@ struct TweetListView: View {
     }
     
     /// Fetch new tweets when app comes to foreground
-    /// This refreshes the first page to show any new tweets that arrived while app was in background
+    /// This refreshes the first page and routes prepended tweets through the tap-to-load banner.
     private func fetchNewTweetsOnForeground() async {
         // Don't fetch if already loading or refreshing
         guard !isLoading && !isLoadingMore else {
@@ -530,6 +538,11 @@ struct TweetListView: View {
         }
         
         print("📱 [FOREGROUND] Fetching fresh tweets from server...")
+
+        if let onForegroundRefresh {
+            await onForegroundRefresh()
+            return
+        }
         
         do {
             // Fetch fresh tweets from server (page 0, no cache)

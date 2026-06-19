@@ -286,6 +286,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var statusUnknownFallbackTask: Task<Void, Never>?
     private var automaticTransientRetryTask: Task<Void, Never>?
     private var automaticTransientRetryCount = 0
+    private let primarySpinnerDebounceNanos: UInt64 = 500_000_000
     /// Defers the primary spinner for cached/covered videos so instant starts do
     /// not flash loading chrome over an already-present frame.
     private var delayedPrimarySpinnerTask: Task<Void, Never>?
@@ -456,7 +457,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if videoCellState == .failed || videoCellState == .noContent {
                 transitionTo(imageView.image != nil ? .thumbnail : .playerLoading)
             } else if coordinatorWantsToPlay && imageView.image == nil {
-                loadingSpinner.startAnimating()
+                showPrimarySpinnerAfterDebounce(for: player)
             }
         }
 
@@ -581,7 +582,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 videoPlayerView.isHidden = false  // black backdrop for spinner
             }
             if coordinatorWantsToPlay {
-                showPrimarySpinnerAfterDebounce()
+                showPrimarySpinnerAfterDebounce(for: player)
             } else if shouldShowVisibleVideoCoverSpinner(hasCover: false) {
                 loadingSpinner.startAnimating()
             } else {
@@ -593,7 +594,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // If this is the selected video, a newly captured cover frame should not
             // briefly dismiss loading feedback before AVPlayer is actually playing.
             if shouldShowBackgroundRecoverySpinner {
-                loadingSpinner.startAnimating()
+                showPrimarySpinnerAfterDebounce(for: player)
             } else if coordinatorWantsToPlay {
                 showPrimarySpinnerAfterDebounce()
             } else {
@@ -618,7 +619,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // Primary videos always show loading chrome. Visible non-primary videos
             // also show it until their cover frame arrives; off-screen preloads stay quiet.
             if shouldShowBackgroundRecoverySpinner {
-                loadingSpinner.startAnimating()
+                showPrimarySpinnerAfterDebounce(for: player)
             } else if coordinatorWantsToPlay {
                 showPrimarySpinnerAfterDebounce(for: player)
             } else if shouldShowVisibleVideoCoverSpinner(hasCover: hasLoadedData || hasVideoCoverForSpinner) {
@@ -2026,44 +2027,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func shouldDebouncePrimarySpinner(for player: AVPlayer? = nil) -> Bool {
-        if let player {
-            if player.timeControlStatus == .playing,
-               !isVideoAtEnd(player),
-               !isVisibleVideoFrameReady(player) {
-                return false
-            }
-
-            if lastPlaybackRequestDate != .distantPast,
-               !isVideoAtEnd(player),
-               !isVisibleVideoFrameReady(player) {
-                return false
-            }
-
-            let isEstablishedStall = lastActualPlaybackDate != .distantPast
-                && !isVideoAtEnd(player)
-                && !isVisibleVideoFrameReady(player)
-                && (bufferingWaitCount > 0
-                    || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                    || player.timeControlStatus == .paused)
-            if isEstablishedStall {
-                return false
-            }
-        }
-
-        if imageView.image != nil || hasRenderedFrameForCurrentPlayer || videoPlayerView.isLayerReadyForDisplay {
-            return true
-        }
+        // Primary feed spinners should always get one short grace window. AVPlayer can
+        // report a cached/ready player before the layer displays moving frames; the
+        // delayed re-check below prevents flicker without hiding genuine stalls.
+        guard coordinatorWantsToPlay else { return false }
 
         if let player {
-            if isActuallyPlayerReady(player) || bufferedTimeAhead(for: player) > 0.25 {
-                return true
-            }
-            return false
+            return !isVideoAtEnd(player)
         }
 
-        guard let mid = attachment?.mid else { return false }
-        return VideoStateCache.shared.getCachedState(for: mid) != nil
-            || SharedAssetCache.shared.getCachedPlayer(for: mid) != nil
+        return true
     }
 
     private func showPrimarySpinnerAfterDebounce(for player: AVPlayer? = nil) {
@@ -2090,7 +2063,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         cancelDelayedPrimarySpinner()
         loadingSpinner.stopAnimating()
         delayedPrimarySpinnerTask = Task { @MainActor [weak self, player] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(nanoseconds: self?.primarySpinnerDebounceNanos ?? 500_000_000)
             guard let self,
                   self.coordinatorWantsToPlay else {
                 self?.delayedPrimarySpinnerTask = nil
@@ -2507,8 +2480,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             restoreCachedPosterForFailureIfNeeded()
         }
         applyAVPlayerBufferDefaults(to: player)
-        cancelDelayedPrimarySpinner()
-        loadingSpinner.startAnimating()
+        showPrimarySpinnerAfterDebounce(for: player)
         lastSlowLoadingNudgeDate = now
 
         let currentSeconds = seconds(from: player.currentTime())
@@ -3387,14 +3359,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         videoCellState = .playing
         retryButton.isHidden = true
 
-        let removedDisplayableCover = removeVideoCoverIfLoadedAndDisplayable(player, reason: "actuallyStartPlayback")
+        _ = removeVideoCoverIfLoadedAndDisplayable(player, reason: "actuallyStartPlayback")
 
-        // Show loading feedback only if playback does not start quickly. Cached
-        // videos already have a poster/frame, so a 0.5s grace period avoids a
-        // distracting spinner flash on instant starts.
-        if !removedDisplayableCover {
-            showPrimarySpinnerAfterDebounce(for: player)
-        }
+        // Show loading feedback only if playback does not become visibly active
+        // within the debounce window. Cached videos can still need a short moment
+        // to attach/render after becoming primary, so schedule the same re-check.
+        showPrimarySpinnerAfterDebounce(for: player)
 
         // Primary playback must own network recovery. Preloaded players may be
         // paused with background-friendly settings, so restore AVPlayer's normal
@@ -4981,8 +4951,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if coordinatorWantsToPlay,
                !isVisibleVideoFrameReady(activePlayer),
                !isVideoAtEnd(activePlayer) {
-                cancelDelayedPrimarySpinner()
-                loadingSpinner.startAnimating()
+                showPrimarySpinnerAfterDebounce(for: activePlayer)
             }
             return
         }
