@@ -17,7 +17,6 @@
 //
 
 import SwiftUI
-import AVKit
 import AVFoundation
 import UIKit
 import CoreImage
@@ -1361,12 +1360,11 @@ struct SimpleVideoPlayer: View {
             // Entering full screen - force unmute
             player.isMuted = false
             
-            // CRITICAL: Force layer detachment and increment representableId
-            // This ensures the VideoPlayerRepresentable in MediaCell releases the layer
-            // before AVPlayerViewController tries to use it, preventing black screen
+            // Force the feed layer to refresh before handing playback to the
+            // fullscreen singleton path.
             self.representableId += 1
             
-            // Don't pause here - let AVPlayerViewController handle play/pause
+            // Don't pause here; fullscreen owns play/pause after handoff.
         } else if newMode == .mediaCell && oldMode == .mediaBrowser {
             // Exiting full screen to MediaCell - apply global mute state
             
@@ -3241,8 +3239,8 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleVideoLayerRefresh() {
-        // This is called when DetailVideoManager detects screen lock recovery
-        // Force view refresh for detail/fullscreen modes to reconnect AVPlayerViewController layer
+        // This is called when DetailVideoManager detects screen lock recovery.
+        // Force view refresh for historical detail/fullscreen mode instances.
         if mode == .tweetDetail || mode == .mediaBrowser {
             representableId += 1
             
@@ -3347,40 +3345,23 @@ struct SimpleVideoPlayer: View {
         
         if let player = player {
             ZStack {
-                // Main video player - only show if not detached
+                // Main feed video player - only show if not detached.
+                // Fullscreen and tweet detail playback now use their singleton views.
                 if !isPlayerDetached {
-                    if mode == .mediaBrowser || mode == .tweetDetail {
-                        // Use AVPlayerViewController for fullscreen and detail modes to get native controls and reliable autoplay
-                        // Don't add tap gesture in these modes - it interferes with native controls (especially progress bar)
-                        AVPlayerViewControllerRepresentable(
-                            player: player,
-                            isBuffering: $isBuffering,
-                            mediaType: mediaType,
-                            progressiveForwardBufferDuration: progressiveForwardBufferDuration,
-                            // Both fullscreen and detail auto-play inside AVPlayerViewController.
-                            // checkPlaybackConditions may call play() before the VC layer is attached,
-                            // so the VC must also auto-play once the layer is ready.
-                            shouldAutoPlay: mode == .mediaBrowser || mode == .tweetDetail
-                        )
-                            .id("\(mid)_\(representableId)") // Force recreation with representableId changes
-                            .onAppear {
-                            }
-                    } else {
-                        // MediaCell: Use custom AVPlayerLayer wrapper (no controls, respects mute state)
-                        // CRITICAL: Only show player layer when it has a valid item, OR when we've initialized
-                        // This prevents black screen flicker during fast scroll when player is still loading
-                        let hasValidItem = player.currentItem != nil
-                        let shouldShowLayer = hasValidItem || hasInitialized || loadingState.isLoaded
+                    // MediaCell: Use custom AVPlayerLayer wrapper (no controls, respects mute state)
+                    // CRITICAL: Only show player layer when it has a valid item, OR when we've initialized.
+                    // This prevents black screen flicker during fast scroll when player is still loading.
+                    let hasValidItem = player.currentItem != nil
+                    let shouldShowLayer = hasValidItem || hasInitialized || loadingState.isLoaded
 
-                        if shouldShowLayer {
-                            AVPlayerLayerView(player: player)
-                                .id(uniqueViewId) // Hash of tweet+video+state for unique identity
-                        } else {
-                            // Player is loading - show black placeholder while waiting
-                            // The last frame overlay below will cover this if available
-                            Rectangle()
-                                .fill(Color.black)
-                        }
+                    if shouldShowLayer {
+                        AVPlayerLayerView(player: player)
+                            .id(uniqueViewId) // Hash of tweet+video+state for unique identity
+                    } else {
+                        // Player is loading - show black placeholder while waiting.
+                        // The last frame overlay below will cover this if available.
+                        Rectangle()
+                            .fill(Color.black)
                     }
                 } else {
                     // Show placeholder when player is detached (background state)
@@ -3445,53 +3426,8 @@ struct SimpleVideoPlayer: View {
                     }
                 }
                 
-                // TweetDetail UX: last-frame placeholder prevents black flash during player setup.
-                // AVPlayerViewControllerRepresentable renders black until the first frame is decoded;
-                // cover it with the feed cell's last captured frame until playback actually starts.
-                if mode == .tweetDetail,
-                   let frame = cachedLastFrame ?? SharedAssetCache.shared.cachedThumbnail(for: mid) {
-                    let isWaitingForFirstFrame = loadingState.isLoading ||
-                        playbackState == .notStarted ||
-                        isBuffering ||
-                        (player.currentItem?.status != .readyToPlay)
-
-                    if isWaitingForFirstFrame {
-                        Image(uiImage: frame)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .background(Color.black)
-                            .allowsHitTesting(false)
-                    }
-                }
-
-                // Show buffering spinner when buffering (fullscreen only)
-                if isBuffering && mode == .mediaBrowser {
-                    ZStack {
-                        Color.black.opacity(0.15)
-                        ProgressView()
-                            .scaleEffect(1.5)
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .opacity(0.6)
-                    }
-                    .transition(.opacity)
-                }
-                
-                // Loading indicator - show until video actually starts playing
-                // Show spinner when: loading, OR player is buffering after play() was called,
-                // OR tweetDetail hasn't started playback yet (covers gap between player creation and first frame)
-                // NOTE: Do NOT check timeControlStatus for tweetDetail — SwiftUI cannot observe
-                // AVPlayer.timeControlStatus changes, so the spinner gets stuck on re-entry when
-                // a new AVPlayerItem buffers. AVPlayerViewController already shows its own buffering UI.
-                let showInitialLoadingSpinner = loadingState.isLoading ||
-                    (mode == .mediaBrowser &&
-                     player.rate == 0 &&
-                     (player.currentItem?.currentTime().seconds ?? 0) < 0.1) ||
-                    (mode == .mediaBrowser &&
-                     player.timeControlStatus == .waitingToPlayAtSpecifiedRate) ||
-                    (mode == .tweetDetail && playbackState == .notStarted) ||
-                    (mode == .tweetDetail && isBuffering)
-                
-                if showInitialLoadingSpinner {
+                // Loading indicator - show until feed video setup finishes.
+                if loadingState.isLoading {
                     ZStack {
                         Color.black.opacity(0.3)
                         ProgressView()
@@ -3510,10 +3446,10 @@ struct SimpleVideoPlayer: View {
                 // Tap-through cover: let MediaCell's overlay / parent tap gestures still work
                 // even while the player is being created.
                 Group {
-                    if (mode == .mediaCell || mode == .tweetDetail), let frame = cachedLastFrame {
+                    if mode == .mediaCell, let frame = cachedLastFrame {
                         Image(uiImage: frame)
                             .resizable()
-                            .aspectRatio(contentMode: mode == .tweetDetail ? .fit : .fill)
+                            .aspectRatio(contentMode: .fill)
                             .clipped()
                             .overlay(Color.black.opacity(0.10))
                     } else {
@@ -3776,7 +3712,7 @@ struct SimpleVideoPlayer: View {
             case .failed:
                 handleError(strategy: .loadFailure)
             case .unknown:
-                // Configure the player anyway - KVO in AVPlayerViewControllerRepresentable will trigger play when ready
+                // Configure the player anyway; KVO will trigger play when ready.
                 configurePlayer(player)
             @unknown default:
                 configurePlayer(player)
@@ -5377,9 +5313,8 @@ struct SimpleVideoPlayer: View {
                         }
                     }
                 } else {
-                    // For mediaBrowser (fullscreen), don't call play() here
-                    // Let AVPlayerViewController's updateUIViewController handle it after layer is ready
-                    // For mediaCell and tweetDetail, call play() immediately (they use VideoPlayer, not AVPlayerViewController)
+                    // For mediaBrowser (fullscreen), don't call play() here.
+                    // Fullscreen owns playback after handoff.
                     if mode == .mediaBrowser {
                         // Set playbackState but don't call play() yet
                         playbackState = .playing
@@ -5514,237 +5449,6 @@ struct SimpleVideoPlayer: View {
         player.pause()
     }
 }
-
-// MARK: - AVPlayerViewController Wrapper for Full Screen
-        struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
-            let player: AVPlayer?
-            @Binding var isBuffering: Bool
-            let mediaType: MediaType
-            let progressiveForwardBufferDuration: Double
-            let shouldAutoPlay: Bool
-            
-            func makeCoordinator() -> Coordinator {
-                Coordinator(isBuffering: $isBuffering)
-            }
-            
-            class Coordinator: NSObject {
-                var statusObserver: NSKeyValueObservation?
-                var timeControlObserver: NSKeyValueObservation?
-                @Binding var isBuffering: Bool
-                var bufferingDebounceTask: DispatchWorkItem?
-                var hasLoggedPlayingStart = false // Track if we've already logged "Video started playing"
-                
-                init(isBuffering: Binding<Bool>) {
-                    self._isBuffering = isBuffering
-                    super.init()
-                }
-                
-                deinit {
-                    statusObserver?.invalidate()
-                    timeControlObserver?.invalidate()
-                    bufferingDebounceTask?.cancel()
-                }
-            }
-            
-            private func applyAutomaticWaiting(for player: AVPlayer) {
-                // Let AVPlayer use its default buffer management
-            }
-            
-            func makeUIViewController(context: Context) -> AVPlayerViewController {
-                
-                let controller = AVPlayerViewController()
-                controller.showsPlaybackControls = true
-                controller.videoGravity = .resizeAspect
-                controller.view.backgroundColor = .black
-                
-                // Set player immediately to ensure it's attached from the start
-                controller.player = player
-                
-                if let player = player {
-                    
-                    // Reset logging flag for new player
-                    context.coordinator.hasLoggedPlayingStart = false
-                    
-                    // Setup timeControlStatus observer to track buffering
-                    // CRITICAL: No .initial option to prevent immediate firing and update loops
-                    context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
-                        DispatchQueue.main.async {
-                            let isWaitingToPlay = observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                            
-                            if isWaitingToPlay {
-                                // Cancel any pending hide task
-                                context.coordinator.bufferingDebounceTask?.cancel()
-                                
-                                // Debounce: Only show spinner if buffering lasts > 0.5 seconds
-                                // This prevents flashing spinner during brief buffering pauses
-                                let task = DispatchWorkItem {
-                                    context.coordinator.isBuffering = true
-                                }
-                                context.coordinator.bufferingDebounceTask = task
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
-                            } else if observedPlayer.timeControlStatus == .playing {
-                                // Cancel pending show task and hide spinner immediately
-                                context.coordinator.bufferingDebounceTask?.cancel()
-                                context.coordinator.isBuffering = false
-                                // Only log once per playback session
-                                if !context.coordinator.hasLoggedPlayingStart {
-                                    context.coordinator.hasLoggedPlayingStart = true
-                                    // Video started playing
-                                }
-                            } else {
-                                // Paused - cancel pending show task and hide spinner
-                                context.coordinator.bufferingDebounceTask?.cancel()
-                                context.coordinator.isBuffering = false
-                                // Reset flag when paused so we can log again on next play
-                                context.coordinator.hasLoggedPlayingStart = false
-                            }
-                        }
-                    }
-                    
-                    // Setup status observer to ensure playback starts when ready
-                    if let playerItem = player.currentItem {
-                        // Check if we have buffered data
-                        let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-                        
-                        if playerItem.status == .readyToPlay {
-                            
-                            if hasBufferedData {
-                                applyAutomaticWaiting(for: player)
-                            }
-                            
-                            // Use DispatchQueue to ensure this happens after view is fully set up
-                            DispatchQueue.main.async {
-                                // For fullscreen/detail modes (AVPlayerViewController), always unmute
-                                player.isMuted = false
-                                if shouldAutoPlay {
-                                    player.play()
-                                }
-                            }
-                        } else if playerItem.status == .unknown {
-                            // Set buffering state while waiting (defer to avoid state modification during view update)
-                            DispatchQueue.main.async {
-                                context.coordinator.isBuffering = true
-                            }
-                        } else {
-                            // Player item in failed state
-                        }
-                    } else {
-                        // Player has no current item
-                    }
-                } else {
-                    print("ERROR: AVPlayerViewController created with nil player!")
-                }
-                
-                return controller
-            }
-            
-            func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-                // CRITICAL: Detach player first, then re-attach
-                // This ensures the player's layer is not attached to any other view
-                
-                // Check if player instance changed before detaching
-                let playerChanged = uiViewController.player !== player
-                
-                // Detach and reattach to force fresh layer connection
-                uiViewController.player = nil
-                uiViewController.player = player
-                
-                // Reset logging flag if player changed
-                if playerChanged {
-                    context.coordinator.hasLoggedPlayingStart = false
-                }
-                
-                // Update timeControlStatus observer only if player changed
-                if let player = player, playerChanged {
-                    context.coordinator.timeControlObserver?.invalidate()
-                    context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
-                        DispatchQueue.main.async {
-                            let isWaitingToPlay = observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                            
-                            if isWaitingToPlay {
-                                context.coordinator.isBuffering = true
-                            } else if observedPlayer.timeControlStatus == .playing {
-                                context.coordinator.isBuffering = false
-                                // Only log once per playback session
-                                if !context.coordinator.hasLoggedPlayingStart {
-                                    context.coordinator.hasLoggedPlayingStart = true
-                                    // Video started playing in updateUIViewController
-                                }
-                            } else {
-                                context.coordinator.isBuffering = false
-                                // Reset flag when paused so we can log again on next play
-                                context.coordinator.hasLoggedPlayingStart = false
-                            }
-                        }
-                    }
-                }
-                
-                // CRITICAL: For fullscreen/detail, always trigger play() here after layer is attached
-                // This ensures the video layer is ready before playback starts
-                if let player = player, let playerItem = player.currentItem {
-                    // Always trigger play in update, regardless of status
-                    // AVPlayerViewController will handle the player once it's ready
-                    
-                    // Check if player has buffered data
-                    let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-                    
-                    if playerItem.status == .readyToPlay {
-                        
-                        if hasBufferedData {
-                            applyAutomaticWaiting(for: player)
-                            
-                            // Play immediately - for fullscreen/detail modes (AVPlayerViewController), always unmute
-                            player.isMuted = false
-                            if shouldAutoPlay {
-                                player.play()
-                            }
-                        } else {
-                            // No buffered data - need to load
-                            DispatchQueue.main.async {
-                                context.coordinator.isBuffering = true
-                            }
-                            player.preroll(atRate: 1.0) { success in
-                                DispatchQueue.main.async {
-                                    applyAutomaticWaiting(for: player)
-                                    if shouldAutoPlay {
-                                        player.play()
-                                    }
-                                    // Buffering state will be updated by timeControlStatus observer
-                                }
-                            }
-                        }
-                    } else if playerItem.status == .unknown {
-                        // Show buffering while waiting (defer to avoid state modification during view update)
-                        DispatchQueue.main.async {
-                            context.coordinator.isBuffering = true
-                        }
-                        // Invalidate old observer if any
-                        context.coordinator.statusObserver?.invalidate()
-                        
-                        // Simple one-shot observer with weak capture
-                        context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { [weak player] item, _ in
-                            guard let player = player else { return }
-                            DispatchQueue.main.async {
-                                if item.status == .readyToPlay {
-                                    applyAutomaticWaiting(for: player)
-                                    if shouldAutoPlay {
-                                        player.play()
-                                    }
-                                    context.coordinator.statusObserver?.invalidate()
-                                    context.coordinator.statusObserver = nil
-                                    // Buffering state will be updated by timeControlStatus observer
-                                }
-                            }
-                        }
-                    } else {
-                        // Player item in failed state
-                    }
-                } else if player != nil {
-                    // Player provided but has no current item
-                }
-                
-            }
-        }
 
 // MARK: - AVPlayerLayer Wrapper for MediaCell
 struct AVPlayerLayerView: UIViewRepresentable {
