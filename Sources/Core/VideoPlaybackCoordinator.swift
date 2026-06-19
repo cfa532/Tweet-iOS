@@ -1139,6 +1139,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         startPrimaryVideoPlayback()
     }
 
+    /// Clear the temporary finished gate when the same video is actively playing again.
+    func clearFinishedPlaybackState(identifier: String) {
+        VideoStateCache.shared.clearVideoFinished(identifier)
+        if finishedPrimaryIdentifier == identifier {
+            finishedPrimaryIdentifier = nil
+        }
+    }
+
     /// User-initiated replay for a video that previously reached the end.
     /// This clears the finished gate and makes the replayed video the active primary.
     @discardableResult

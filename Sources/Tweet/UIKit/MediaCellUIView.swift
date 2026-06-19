@@ -226,23 +226,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return label
     }()
 
-    /// Fullscreen loading overlay
-    private let fullscreenSpinner: UIActivityIndicatorView = {
-        let spinner = UIActivityIndicatorView(style: .large)
-        spinner.color = .white
-        spinner.hidesWhenStopped = true
-        spinner.isUserInteractionEnabled = false
-        return spinner
-    }()
-    private let fullscreenOverlay: UIView = {
-        let v = UIView()
-        v.backgroundColor = UIColor.black.withAlphaComponent(0.4)
-        v.clipsToBounds = true
-        v.isHidden = true
-        v.isUserInteractionEnabled = false
-        return v
-    }()
-
     // Audio hosting controller (hosts SimpleAudioPlayer — still SwiftUI)
     private var audioHostingController: UIHostingController<AnyView>?
 
@@ -489,8 +472,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         addSubview(loadingSpinner)
         addSubview(retryButton)
         addSubview(replayButton)
-        addSubview(fullscreenOverlay)
-        fullscreenOverlay.addSubview(fullscreenSpinner)
         addSubview(muteButton)
         addSubview(timerLabel)
 
@@ -531,9 +512,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         replayButton.frame = CGRect(x: 0, y: 0, width: 40, height: 40)
         replayButton.layer.cornerRadius = 20
         replayButton.center = CGPoint(x: b.midX, y: b.midY)
-        fullscreenOverlay.frame = b
-        fullscreenSpinner.center = CGPoint(x: b.midX, y: b.midY)
-
         // Mute button: 44pt touch area centered on 26pt visual circle, bottom-right
         let visualSize: CGFloat = 24
         let touchSize: CGFloat = 44
@@ -829,12 +807,53 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private var shouldShowReplayButton: Bool {
-        guard isVisible, isVideoAttachment, let id = videoIdentifier else { return false }
-        return VideoStateCache.shared.isVideoFinished(id)
+        guard isVisible,
+              isVideoAttachment,
+              let id = videoIdentifier,
+              VideoStateCache.shared.isVideoFinished(id) else {
+            return false
+        }
+
+        if let player, shouldSuppressReplayButtonForActivePlayback(player) {
+            return false
+        }
+
+        return true
     }
 
     private func updateReplayButtonVisibility() {
         replayButton.isHidden = !shouldShowReplayButton
+    }
+
+    private func reconcileReplayButtonWithPlaybackState(for player: AVPlayer?, reason: String) {
+        guard isVideoAttachment, let mid = attachment?.mid else { return }
+
+        if let player,
+           shouldSuppressReplayButtonForActivePlayback(player),
+           let id = videoIdentifier,
+           VideoStateCache.shared.isVideoFinished(id) {
+            isHandlingFinishEvent = false
+            VideoStateCache.shared.clearStoppedByCoordinator(mid)
+            (videoCoordinator ?? .shared).clearFinishedPlaybackState(identifier: id)
+            logVerbose("🔁 cleared stale finished replay state (\(reason))")
+        }
+
+        updateReplayButtonVisibility()
+    }
+
+    private func shouldSuppressReplayButtonForActivePlayback(_ player: AVPlayer) -> Bool {
+        guard player.currentItem != nil, !isVideoAtEnd(player) else { return false }
+
+        if isActuallyPlaying { return true }
+        if hasActivePlaybackIntent(player) { return true }
+        return videoCellState == .playing || videoCellState == .playerReady
+    }
+
+    private func hasActivePlaybackIntent(_ player: AVPlayer) -> Bool {
+        player.rate > 0 ||
+            player.timeControlStatus == .playing ||
+            player.timeControlStatus == .waitingToPlayAtSpecifiedRate ||
+            coordinatorWantsToPlay
     }
 
     // MARK: - Configure
@@ -1645,6 +1664,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         liveHandoffMid = mid
         liveHandoffSeekSuppressionUntil = Date().addingTimeInterval(4.0)
         VideoSurfaceHandoffRegistry.shared.extendTransfer(mediaID: mid, player: player)
+        reconcileReplayButtonWithPlaybackState(for: player, reason: reason)
 
         let hasRenderableHandoffFrame = isVisibleVideoFrameReady(player)
         if hasRenderableHandoffFrame {
@@ -1717,6 +1737,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             attachPlayerToLayer(player)
             refreshAfterSharedPlayerItemReplacement(player, reason: reason)
         } else if coordinatorWantsToPlay {
+            reconcileReplayButtonWithPlaybackState(for: player, reason: reason)
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             applyAVPlayerBufferDefaults(to: player)
             videoPlayerView.isHidden = false
@@ -3741,6 +3762,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 let canDrivePlayback = self.canDriveForegroundPlayback
+                self.reconcileReplayButtonWithPlaybackState(for: player, reason: "timeControl")
 
                 // Diagnostic logging for all timeControlStatus transitions
                 let statusName: String
@@ -4302,6 +4324,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 didLogFirstPlaybackProgress = true
                 print("\(logPrefix) ▶️ playback clock advancing: t=\(String(format: "%.1f", currentSeconds))s, itemStatus=\(player?.currentItem?.status.rawValue ?? -1), timeControl=\(player?.timeControlStatus.rawValue ?? -1)")
             }
+            if let player {
+                reconcileReplayButtonWithPlaybackState(for: player, reason: "playbackProgress")
+            }
             if let player, coordinatorWantsToPlay {
                 updateLoadingSpinnerForPlayback(player)
                 if isVisibleVideoFrameReady(player),
@@ -4652,10 +4677,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }) ?? 0
         FullScreenVideoManager.shared.setVideoList(fullscreenList, startIndex: startIndex)
 
-        // Show loading overlay
-        fullscreenOverlay.isHidden = false
-        fullscreenSpinner.startAnimating()
-
         // CRITICAL: Mark overlay BEFORE presenting the modal. The .fullScreen presentation
         // triggers didMoveToWindow(nil) → setVisible(false) on feed cells, which checks
         // isCovered to skip aggressive cleanup (delegate unregister, network cancel).
@@ -4664,8 +4685,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // find the video after dismiss → spinner stuck permanently.
         OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaCellUIView.handleVideoTap")
 
-        // Delay to allow spinner to render
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+        DispatchQueue.main.async { [weak self] in
             let browserView = MediaBrowserView(
                 tweet: parentTweet,
                 initialIndex: self?.attachmentIndex ?? 0,
@@ -4675,10 +4695,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             hostingVC.modalPresentationStyle = .fullScreen
             hostingVC.modalTransitionStyle = .crossDissolve
 
-            parentVC.present(hostingVC, animated: true) {
-                self?.fullscreenOverlay.isHidden = true
-                self?.fullscreenSpinner.stopAnimating()
-            }
+            parentVC.present(hostingVC, animated: true)
 
         }
     }
@@ -5528,9 +5545,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         muteButton.isHidden = true
         timerLabel.isHidden = true
         timerLabelVideoMid = nil
-        fullscreenOverlay.isHidden = true
-        fullscreenSpinner.stopAnimating()
-
         // Reset state
         pendingRecoverySeekTime = nil
         videoCellState = .noContent

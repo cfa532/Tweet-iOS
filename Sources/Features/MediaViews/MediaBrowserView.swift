@@ -1138,6 +1138,12 @@ struct SingletonVideoPlayerView: View {
                 // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
                 if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
                     let layerReadyForCurrentVideo = readyForDisplayMid == mid
+                    let visualState = manager.visualState(
+                        for: mid,
+                        hasPoster: currentPosterImage != nil,
+                        layerReadyForDisplay: layerReadyForCurrentVideo,
+                        player: player
+                    )
                     // Show player
                     FullscreenPlayerLayerView(
                         player: player,
@@ -1156,22 +1162,28 @@ struct SingletonVideoPlayerView: View {
                             }
                         )
 
-                    if shouldShowHandoffPoster(for: player, layerReadyForDisplay: layerReadyForCurrentVideo) {
+                    if visualState.showsPoster {
                         posterImage
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }
 
-                    if shouldShowAttachedItemSpinner(for: player) {
+                    if visualState.showsSpinner {
                         loadingSpinnerOverlay
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }
                 } else {
+                    let visualState = manager.visualState(
+                        for: mid,
+                        hasPoster: currentPosterImage != nil,
+                        layerReadyForDisplay: false,
+                        player: nil
+                    )
                     // No player, no item, or different video — show lastframe as placeholder.
                     // This covers the load-failed case (currentVideoMid set to nil, currentItem nil)
                     // and the initial loading state before the first item is attached.
-                    loadingPoster(showSpinner: !didThisVideoFailToLoad && !manager.hasPlayableMediaContent)
+                    loadingPoster(showSpinner: visualState.showsSpinner)
                 }
 
                 if didThisVideoFailToLoad {
@@ -1209,64 +1221,6 @@ struct SingletonVideoPlayerView: View {
     private func refreshHandoffThumbnail(for mediaID: String) {
         handoffThumbnailMid = mediaID
         handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mediaID)
-    }
-
-    private func shouldShowAttachedItemSpinner(for player: AVPlayer) -> Bool {
-        guard manager.currentVideoMid == mid,
-              let item = player.currentItem else {
-            return false
-        }
-
-        if manager.hasPlayableMediaContent {
-            return false
-        }
-
-        if player.timeControlStatus == .playing {
-            return manager.isPlaying && !isVideoAtEnd(player)
-        }
-
-        if manager.isBuffering {
-            return true
-        }
-
-        if item.status != .readyToPlay || player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
-            return true
-        }
-
-        if shouldAutoPlay && manager.isPlaying {
-            return true
-        }
-
-        return !manager.isItemReady
-    }
-
-    private func shouldShowHandoffPoster(for player: AVPlayer, layerReadyForDisplay: Bool) -> Bool {
-        guard manager.currentVideoMid == mid,
-              currentPosterImage != nil,
-              !isVideoAtEnd(player) else {
-            return false
-        }
-
-        return !layerReadyForDisplay
-            || player.timeControlStatus != .playing
-            || manager.isBuffering
-            || !manager.isItemReady
-            || isBeforeFirstVisibleFrame(player)
-    }
-
-    private func isBeforeFirstVisibleFrame(_ player: AVPlayer) -> Bool {
-        guard player.timeControlStatus == .playing else { return false }
-        let current = CMTimeGetSeconds(player.currentTime())
-        guard current.isFinite else { return true }
-        return current < 0.18
-    }
-
-    private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
-        guard let item = player.currentItem else { return false }
-        let duration = CMTimeGetSeconds(item.duration)
-        let current = CMTimeGetSeconds(player.currentTime())
-        guard duration.isFinite, current.isFinite, duration > 0 else { return false }
-        return duration - current < 0.5
     }
 
     private var loadingSpinnerOverlay: some View {
