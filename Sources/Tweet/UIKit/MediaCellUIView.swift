@@ -2466,6 +2466,19 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               let mid = attachment?.mid,
               LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) else { return false }
 
+        if LocalHTTPServer.shared.hasCachedActiveHLSSegment(for: mid) {
+            guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
+            hlsEmptyWaitingStartDate = .distantPast
+            preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
+            restoreCachedPosterForFailureIfNeeded()
+            print("\(logPrefix) 🔄 \(reason): HLS segment is cached but current item stayed empty — rebuilding feed player from proxy cache")
+            return rebuildCurrentFeedPlayerFromProxyCache(
+                mid: mid,
+                reacquireReason: "cachedActiveHLSSegmentRecovery",
+                transitionState: imageView.image != nil ? .thumbnail : .playerLoading
+            )
+        }
+
         let activeSegments = LocalHTTPServer.shared.activeHLSSegmentKeys(for: mid)
         let segmentLabel = activeSegments.isEmpty ? "segment" : activeSegments.joined(separator: ",")
         notePrimaryPlaybackIntentWhileWaiting(player)
@@ -2620,8 +2633,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 hlsBufferedUnknownStartDate = .distantPast
             }
 
+            let bufferedUnknownRebuildDelay: TimeInterval = bufferedAhead >= 6.0 ? 2.0 : 4.0
             let waitedForBufferedUnknown = hlsBufferedUnknownStartDate != .distantPast
-                && now.timeIntervalSince(hlsBufferedUnknownStartDate) >= 8.0
+                && now.timeIntervalSince(hlsBufferedUnknownStartDate) >= bufferedUnknownRebuildDelay
 
             if hasBufferedUnknownNoFrame,
                waitedForBufferedUnknown {
@@ -2651,7 +2665,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             resetPlaybackProgressTracking(to: player.currentTime())
             player.play()
             updateLoadingSpinnerForPlayback(player)
-            print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — keeping existing player")
+            print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — waiting briefly before rebuild")
             return true
         }
 

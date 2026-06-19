@@ -448,27 +448,8 @@ class MediaGridUIView: UIView {
     // MARK: - Visibility Management
 
     private func handleBecameVisible() {
-        guard let parentTweet else { return }
-
         if hasInitialized { return }
         hasInitialized = true
-
-        // Register tweet with video loading manager
-        let hasVideos = attachments.contains { $0.type == .video || $0.type == .hls_video }
-        let hasAudio = attachments.contains { $0.type == .audio }
-
-        if hasVideos || hasAudio {
-            Task.detached(priority: .background) {
-                await VideoLoadingManager.shared.registerTweetWithVideos(parentTweet.mid)
-            }
-
-            if !shouldLoadVideo {
-                let shouldLoad = VideoLoadingManager.shared.shouldLoadVideos(for: parentTweet.mid)
-                if shouldLoad {
-                    shouldLoadVideo = true
-                }
-            }
-        }
     }
 
     private func handleBecameInvisible() {

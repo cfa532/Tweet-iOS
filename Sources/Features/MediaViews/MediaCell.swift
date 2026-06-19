@@ -319,7 +319,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
 
             // Restore video state when app becomes active
             if isVideoAttachment {
-                // Note: shouldLoadVideo is controlled by VideoLoadingManager, not overridden here
+                // Note: shouldLoadVideo is controlled by the owning grid, not overridden here.
                 // Grid-level debouncing handles video preloading
                 // Individual cells just track visibility for playback
             }

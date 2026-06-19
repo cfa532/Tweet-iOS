@@ -94,10 +94,8 @@ struct TweetListView: View {
     
     // MARK: - Helper Methods
     
-    /// Update VideoLoadingManager with current tweet list
-    /// Centralized method to avoid code duplication
-    /// Debounced to prevent excessive updates during rapid scrolling
-    private func updateVideoLoadingManager(delay: TimeInterval = 0) {
+    /// Debounced memory maintenance for large feeds.
+    private func scheduleMemoryMaintenance(delay: TimeInterval = 0) {
         // Cancel any pending update task
         videoManagerUpdateTask?.cancel()
         
@@ -110,9 +108,6 @@ struct TweetListView: View {
             // Check if task was cancelled
             guard !Task.isCancelled else { return }
             
-            let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
-            await self.videoLoadingManager.updateTweetList(tweetIds)
-
             // Throttle cleanup to prevent excessive calls
             let shouldCleanup = await MainActor.run {
                 let timeSinceLastCleanup = Date().timeIntervalSince(self.lastCleanupTime)
@@ -128,7 +123,7 @@ struct TweetListView: View {
                 await self.trimTweetsIfNeeded()
                 
                 // Also cleanup old tweet instances to prevent memory growth
-                let activeTweetIds = Set(tweetIds)
+                let activeTweetIds = await MainActor.run { Set(self.tweets.map { $0.mid }) }
                 Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
             }
         }
@@ -313,7 +308,6 @@ struct TweetListView: View {
             }
             }  // Close ZStack
             .task {
-                videoLoadingManager.configureForFeed(identifier: feedIdentifier)
                 // Only load if tweets are empty and we haven't completed initial load
                 if tweets.isEmpty && !initialLoadComplete {
                     await performInitialLoad()
@@ -359,7 +353,6 @@ struct TweetListView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            videoLoadingManager.configureForFeed(identifier: feedIdentifier)
             videoCoordinator.directionalPlayerPreloadCount = FeedPlaybackTuning.directionalVideoPreloadCount
 
             // Set up foreground observer to fetch new tweets when app returns
@@ -562,7 +555,7 @@ struct TweetListView: View {
                     hasMoreTweets = freshTweets.count >= pageSize
 
                     // Update video manager with debouncing
-                    updateVideoLoadingManager(delay: 0.2)
+                    scheduleMemoryMaintenance(delay: 0.2)
 
                     print("📱 [FOREGROUND] ✅ Merged \(validTweets.count) fresh tweets")
                 } else {
@@ -598,8 +591,8 @@ struct TweetListView: View {
 
                     hasMoreTweets = true  // Server may have more
 
-                    // Update VideoLoadingManager quickly for the first visible cache page.
-                    updateVideoLoadingManager(delay: 0.2)
+                    // Schedule memory maintenance for the first visible cache page.
+                    scheduleMemoryMaintenance(delay: 0.2)
 
                     // Don't mark as loaded yet - wait for server fetch to complete
                     // This prevents "No tweet yet" from showing prematurely if cached tweets
@@ -763,8 +756,8 @@ struct TweetListView: View {
                             hasMoreTweets = true
                         }
 
-                        // Update VideoLoadingManager with debouncing
-                        updateVideoLoadingManager(delay: 0.2)
+                        // Schedule memory maintenance with debouncing.
+                        scheduleMemoryMaintenance(delay: 0.2)
                     }
                     print("✅ [PAGINATION] Loaded \(tweetsFromCache.count) tweets from cache for page \(page)")
                 }
@@ -879,7 +872,7 @@ struct TweetListView: View {
                 } else if let lastResponseSize, lastResponseSize < pageSize {
                     if tweets.isEmpty || emptyStateText != nil {
                         tweets = []
-                        updateVideoLoadingManager()
+                        scheduleMemoryMaintenance()
                         didConfirmEmptyFromServer = true
                     } else {
                         didConfirmEmptyFromServer = false
@@ -964,8 +957,8 @@ struct TweetListView: View {
                 }
             }
 
-            // Update VideoLoadingManager with debouncing
-            updateVideoLoadingManager(delay: 0.2)
+            // Schedule memory maintenance with debouncing.
+            scheduleMemoryMaintenance(delay: 0.2)
 
             currentPage = page
 
@@ -999,7 +992,7 @@ struct TweetListView: View {
                 // Server confirmed an empty first page. Profile lists opt into
                 // clearing stale cached rows so the empty state can be shown.
                 tweets = []
-                updateVideoLoadingManager()
+                scheduleMemoryMaintenance()
                 isLoading = false
                 initialLoadComplete = true
                 didConfirmEmptyFromServer = true

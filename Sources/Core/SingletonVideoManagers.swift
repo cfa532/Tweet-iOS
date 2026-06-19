@@ -1804,6 +1804,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
               singletonPlayer === player,
               player.currentItem === item,
               currentVideoMid == mid else { return }
+        guard let request = lastRequestedFullscreenVideo,
+              request.mid == mid else {
+            failFullscreenVideoLoad(failedMid: mid, reason: "retry rebuild missing request context", deleteDiskCache: false, advanceToNext: true)
+            return
+        }
 
         fullscreenStallItemRebuildCount += 1
         let resumeTime = player.currentTime()
@@ -1821,15 +1826,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         LocalHTTPServer.shared.clearCancelledState(for: mid)
         LocalHTTPServer.shared.setPrimaryMediaID(mid)
 
-        let replacementItem = AVPlayerItem(asset: item.asset)
-        replacementItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        player.replaceCurrentItem(with: replacementItem)
-        NotificationCenter.default.post(
-            name: .videoPlayerItemReplaced,
-            object: nil,
-            userInfo: ["mediaID": mid]
-        )
-
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        bufferObserver?.invalidate()
+        bufferObserver = nil
         hasRestoredPosition = false
         isSeekingToRestoredPosition = false
         resetPlaybackSurfaceState()
@@ -1838,10 +1838,60 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         isPlaying = true
         wasPlayingBeforeWaiting = true
 
-        setupVideoCompletionObserver(replacementItem)
-        setupTimeControlStatusObserver()
-        startPlaybackWithSeekIfNeeded(playerItem: replacementItem, mid: mid)
-        startRetryMonitoring()
+        loadGeneration += 1
+        let generation = loadGeneration
+        loadingMid = mid
+        loadingStartedAt = Date()
+        fullscreenLoadTask?.cancel()
+        fullscreenLoadTask = Task.detached(priority: .userInitiated) {
+            do {
+                let replacementItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
+                    for: request.url,
+                    mediaID: mid,
+                    mediaType: request.mediaType
+                )
+                guard !Task.isCancelled else { return }
+
+                await MainActor.run {
+                    guard self.isActive,
+                          self.loadGeneration == generation,
+                          self.loadingMid == mid,
+                          self.singletonPlayer === player,
+                          player.currentItem === item,
+                          self.currentVideoMid == mid else { return }
+
+                    self.loadingMid = nil
+                    self.loadingStartedAt = nil
+                    self.fullscreenLoadTask = nil
+                    replacementItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                    player.replaceCurrentItem(with: replacementItem)
+                    NotificationCenter.default.post(
+                        name: .videoPlayerItemReplaced,
+                        object: nil,
+                        userInfo: ["mediaID": mid]
+                    )
+
+                    self.setupVideoCompletionObserver(replacementItem)
+                    self.setupTimeControlStatusObserver()
+                    self.startPlaybackWithSeekIfNeeded(playerItem: replacementItem, mid: mid)
+                    self.startRetryMonitoring()
+                }
+            } catch {
+                if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
+                    return
+                }
+                await MainActor.run {
+                    guard self.isActive,
+                          self.loadGeneration == generation,
+                          self.loadingMid == mid,
+                          self.currentVideoMid == mid else { return }
+                    self.loadingMid = nil
+                    self.loadingStartedAt = nil
+                    self.fullscreenLoadTask = nil
+                    self.failFullscreenVideoLoad(failedMid: mid, reason: "retry rebuild player item failed: \(error.localizedDescription)", deleteDiskCache: false, advanceToNext: true)
+                }
+            }
+        }
     }
     
     /// Resolve the next playable video in the list, scanning forward from the given index.

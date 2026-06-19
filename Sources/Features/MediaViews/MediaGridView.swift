@@ -27,7 +27,6 @@ struct MediaGridView: View, Equatable {
     @State private var shouldLoadVideo: Bool
     @State private var isVisible = false
     @State private var hasInitialized = false // Track if we've done initial setup
-    @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
@@ -61,33 +60,9 @@ struct MediaGridView: View, Equatable {
 
             hasInitialized = true
             isVisible = true
-
-            let hasVideos = attachments.contains(where: { $0.type == .video || $0.type == .hls_video })
-            let hasAudio = attachments.contains(where: { $0.type == .audio })
-
-            if hasVideos || hasAudio {
-                Task.detached(priority: .background) {
-                    await videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
-                }
-
-                if !shouldLoadVideo, videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
-                    shouldLoadVideo = true
-                }
-            }
         }
         .onDisappear {
             isVisible = false
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
-            guard let tweetId = notification.userInfo?["tweetId"] as? String,
-                  tweetId == parentTweet.mid,
-                  !isVisible else { return }
-            shouldLoadVideo = false
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
-            guard let tweetId = notification.userInfo?["tweetId"] as? String,
-                  tweetId == parentTweet.mid else { return }
-            shouldLoadVideo = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
             shouldLoadVideo = false

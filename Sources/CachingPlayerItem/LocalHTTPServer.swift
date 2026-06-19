@@ -1043,6 +1043,23 @@ public class LocalHTTPServer: @unchecked Sendable {
         }.sorted() ?? []
     }
 
+    /// Returns true when a segment that AVPlayer is still waiting on has already
+    /// landed in the disk cache. In that state the existing AVPlayerItem can stay
+    /// wedged on its old request, while a fresh item will read the cached segment.
+    func hasCachedActiveHLSSegment(for mediaID: String) -> Bool {
+        hlsDataTasksLock.lock()
+        let tasks: [URLSessionTask] = hlsDataTasks[mediaID].map { Array($0.values) } ?? []
+        hlsDataTasksLock.unlock()
+
+        return tasks.contains { task in
+            guard relativeHLSSegmentPath(for: task, mediaID: mediaID) != nil,
+                  let url = task.currentRequest?.url ?? task.originalRequest?.url else {
+                return false
+            }
+            return isUsableCachedFile(atPath: getCachePath(for: url, mediaID: mediaID))
+        }
+    }
+
     /// Set the current primary mediaID so its segment requests bypass the concurrent download limit.
     /// Called immediately when the coordinator selects a primary (before the 1s cancel-others debounce).
     public func setPrimaryMediaID(_ mediaID: String?) {

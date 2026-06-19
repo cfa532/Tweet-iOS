@@ -667,19 +667,6 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    /// Trigger video preloading for a tweet
-    /// This works by posting a notification that MediaGridView listens to
-    /// MediaGridView will then set shouldLoadVideo=true, causing MediaCell to load the video
-    @MainActor func triggerVideoPreloadingForTweet(_ tweetId: String) {
-        // Post notification for MediaGridView to handle
-        // MediaGridView will enable video loading for this tweet
-        NotificationCenter.default.post(
-            name: .triggerVideoPreloading,
-            object: nil,
-            userInfo: ["tweetId": tweetId]
-        )
-    }
-    
     /// Extract mediaID from URL
     func extractMediaID(from url: URL) -> String? {
         let urlString = url.absoluteString        
@@ -978,11 +965,6 @@ class SharedAssetCache: ObservableObject {
         protected.formUnion(preloadTasks.keys)
         // Protect players still being created — evicting mid-flight causes stuck spinner
         protected.formUnion(inFlightPlayerCreations.keys)
-        // Also protect media belonging to tweets in the VideoLoadingManager visible window
-        for tweetId in VideoLoadingManager.shared.visibleTweetIds {
-            let mediaIDs = getMediaIDsForTweet(tweetId)
-            protected.formUnion(mediaIDs)
-        }
         return protected
     }
 
