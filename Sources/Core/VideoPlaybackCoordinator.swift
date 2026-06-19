@@ -1274,6 +1274,63 @@ class VideoPlaybackCoordinator: ObservableObject {
         recoverVisiblePlaybackAfterInterruption(reason: "feedResume", isForegroundRecovery: false)
     }
 
+    /// Foreground recovery can restore the visible player/layer before playback has
+    /// actually resumed. Re-send the coordinator-owned play command without waiting
+    /// for a scroll event to trigger the normal stall path.
+    func requestForegroundAutoplayRetry(reason: String) {
+        guard AppDelegate.isVideoInfrastructureReady else {
+            print("🎬 [COORD] foreground autoplay retry \(reason): video infrastructure not ready")
+            return
+        }
+        guard !isPlaybackSuppressedByOverlay, isFeedVisible else { return }
+
+        clearFinishedAutoplayGateForForeground()
+
+        guard !visibleVideos.isEmpty else {
+            phase = .idle
+            primaryVideoId = nil
+            currentlyPlayingVideoIds.removeAll()
+            return
+        }
+
+        if phase == .primaryPlaying,
+           let primaryId = primaryVideoId,
+           let primary = visibleVideos.first(where: { $0.identifier == primaryId }) {
+            guard onScreenMediaCells.isEmpty || onScreenMediaCells.contains(primary.identifier) else {
+                phase = .idle
+                primaryVideoId = nil
+                currentlyPlayingVideoIds.removeAll()
+                startPrimaryVideoPlayback()
+                return
+            }
+
+            guard let delegate = delegate(forIdentifier: primary.identifier) else {
+                phase = .idle
+                primaryVideoId = nil
+                currentlyPlayingVideoIds.removeAll()
+                startPrimaryVideoPlayback()
+                return
+            }
+
+            if delegate.isActuallyPlaying {
+                refreshDirectionalPreloads(reason: "foreground autoplay healthy", throttle: true)
+                return
+            }
+
+            print("🎬 [COORD] foreground autoplay retry \(reason): reissuing play for \(shortMID(primary.videoMid))")
+            lastPrimarySwitchTime = Date()
+            LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
+            delegate.shouldPlayVideo(withMid: primary.videoMid)
+            refreshDirectionalPreloads(reason: "foreground autoplay retry \(reason)", throttle: false)
+            return
+        }
+
+        phase = .idle
+        primaryVideoId = nil
+        currentlyPlayingVideoIds.removeAll()
+        startPrimaryVideoPlayback()
+    }
+
     // MARK: - Background/Foreground Video Memory Management
 
     /// Release all video players when entering background to free memory

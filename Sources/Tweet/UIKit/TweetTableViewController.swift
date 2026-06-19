@@ -617,6 +617,7 @@ class TweetTableViewController: UITableViewController {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
             tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
         }
+        scheduleForegroundAutoplayRetry(reason: "didBecomeActiveLayerRefresh")
     }
 
     @MainActor
@@ -634,6 +635,7 @@ class TweetTableViewController: UITableViewController {
             reason: "tableReloadVisibleVideosOnly",
             isForegroundRecovery: true
         )
+        scheduleForegroundAutoplayRetry(reason: "reloadVisibleVideosOnly")
     }
 
     /// End the background task and invalidate the identifier
@@ -682,8 +684,24 @@ class TweetTableViewController: UITableViewController {
             reason: "tableForegroundRestore",
             isForegroundRecovery: true
         )
+        scheduleForegroundAutoplayRetry(reason: "tableForegroundRestore")
 
         print("✅ [VIDEO RESTORE] Video restoration complete - healthy players retained, broken ones will be recreated")
+    }
+
+    @MainActor
+    private func scheduleForegroundAutoplayRetry(reason: String) {
+        guard isReadyForFeedVideoResume, !isTableViewUpdating else { return }
+
+        videoCoordinator.requestForegroundAutoplayRetry(reason: "\(reason)-immediate")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            guard let self = self else { return }
+            guard self.isReadyForFeedVideoResume, !self.isTableViewUpdating else { return }
+            self.forceLayoutVisibleCellsForVisibilityPass()
+            self.updateVisibleTweetsForVideoPlayback()
+            self.videoCoordinator.requestForegroundAutoplayRetry(reason: "\(reason)-settled")
+        }
     }
 
     func scrollToTop() {
