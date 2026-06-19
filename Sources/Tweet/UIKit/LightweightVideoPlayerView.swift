@@ -117,6 +117,10 @@ class LightweightVideoPlayerView: UIView {
         playerLayer?.isReadyForDisplay ?? false
     }
 
+    var hasAttachedPlayer: Bool {
+        player != nil
+    }
+
     func isShowingPlayer(_ player: AVPlayer) -> Bool {
         self.player === player
     }

@@ -660,11 +660,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             } else {
                 loadingSpinner.stopAnimating()
             }
-            // Keep thumbnail as cover only until the player has data. After that,
-            // the AVPlayer surface owns the visual handoff so playback does not
-            // flash through a stale poster at start.
+            // Keep thumbnail as cover until the player layer has a displayable
+            // frame. Buffered data alone can still show a black AVPlayerLayer.
             if player != nil,
-               currentPlayerHasLoadedData {
+               currentPlayerCanReplaceCover {
                 hideImageViewImmediately()
                 imageView.image = nil
             } else if imageView.image == nil {
@@ -1193,7 +1192,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard !isInvalidVideoCover(image) else { return }
         if coordinatorWantsToPlay,
            player != nil,
-           videoCellState == .playerLoading || videoCellState == .playerReady || videoCellState == .playing {
+           (videoCellState == .playerLoading || videoCellState == .playerReady || videoCellState == .playing),
+           currentPlayerCanReplaceCover {
             return
         }
         imageView.image = image
@@ -1213,8 +1213,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func requestFallbackVideoThumbnailIfNeeded(for mediaID: String) {
         guard requestedFallbackThumbnailMid != mediaID,
+              imageView.image == nil,
+              player == nil,
+              setupPlayerTask == nil,
+              playerAcquireDebounceTask == nil,
+              !videoPlayerView.hasAttachedPlayer,
+              !videoPlayerView.isLayerReadyForDisplay,
+              !hasRenderedFrameForCurrentPlayer,
               SharedAssetCache.shared.cachedThumbnail(for: mediaID) == nil else { return }
         requestedFallbackThumbnailMid = mediaID
+        SharedAssetCache.shared.generatePreloadedThumbnailIfNeeded(for: mediaID)
         SharedAssetCache.shared.generateThumbnailIfNeeded(for: mediaID) { [weak self] image in
             guard let self,
                   self.attachment?.mid == mediaID else { return }
@@ -5265,9 +5273,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private var canShowCachedCoverForCurrentVideo: Bool {
-        if let player,
-           playerHasLoadedData(player),
-           (coordinatorWantsToPlay || currentPlayerCanReplaceCover) {
+        if player != nil,
+           currentPlayerCanReplaceCover {
             return false
         }
         if videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer {

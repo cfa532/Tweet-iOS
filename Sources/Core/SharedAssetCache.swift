@@ -2347,6 +2347,14 @@ class SharedAssetCache: ObservableObject {
         preloadTasks[mediaID] = task
     }
 
+    /// Request a poster frame from an already-preloaded player. This is used by
+    /// visible cells that have a warm player but no displayable AVPlayerLayer yet.
+    func generatePreloadedThumbnailIfNeeded(for mediaID: String) {
+        guard cachedThumbnail(for: mediaID) == nil,
+              let player = playerCache[mediaID] else { return }
+        startPreloadThumbnailTask(for: player, mediaID: mediaID)
+    }
+
     private func warmPreloadedPlayer(_ player: AVPlayer, mediaID: String, mediaType: MediaType?) async -> Bool {
         guard let item = player.currentItem else { return false }
         let isHLSVideo = mediaType == .hls_video || item is CachingPlayerItem
@@ -2397,10 +2405,15 @@ class SharedAssetCache: ObservableObject {
         item.add(output)
         defer { item.remove(output) }
 
+        let wasPlaying = player.rate > 0
         player.isMuted = true
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         defer {
-            player.pause()
+            if wasPlaying {
+                player.play()
+            } else {
+                player.pause()
+            }
             if !visibleVideoMids.contains(mediaID) {
                 item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             }
@@ -2415,21 +2428,27 @@ class SharedAssetCache: ObservableObject {
             _ = await seek(player, to: .zero)
         }
 
-        _ = await preroll(player, atRate: 0.1)
+        if !wasPlaying {
+            _ = await preroll(player, atRate: 0.1)
+        }
 
         for _ in 0..<20 {
             if Task.isCancelled { return false }
             if let image = copyPreloadFrame(from: output, player: player),
-               !VideoFrameExtractor.isMostlyBlack(image),
+                !VideoFrameExtractor.isMostlyBlack(image),
                !VideoFrameExtractor.isMostlyWhite(image) {
                 storeCachedThumbnail(image, for: mediaID, source: "preload")
-                player.pause()
+                if !wasPlaying {
+                    player.pause()
+                }
                 return true
             }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
 
-        player.pause()
+        if !wasPlaying {
+            player.pause()
+        }
         return false
     }
 
