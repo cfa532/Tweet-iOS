@@ -726,17 +726,18 @@ private struct DetailSingletonVideoPlayerView: View {
     }
 
     private var shouldShowLoadingSpinner: Bool {
-        if manager.currentVideoMid == mid,
-           manager.hasPlayableMediaContent {
-            return false
+        guard !didThisVideoFailToLoad,
+              !didThisVideoFinishPlayback else { return false }
+
+        if shouldLoad && !isThisVideoLoaded {
+            return true
         }
 
-        return (shouldLoad && !isThisVideoLoaded && !didThisVideoFailToLoad)
-            || isThisVideoPreparing
-            || (manager.currentVideoMid == mid
-                && (manager.isBuffering || !manager.isPlaybackRendering)
-                && !didThisVideoFinishPlayback
-                && !didThisVideoFailToLoad)
+        guard manager.currentVideoMid == mid else { return false }
+
+        return isThisVideoPreparing
+            || manager.isBuffering
+            || !manager.isPlaybackRendering
     }
 
     private var shouldShowPlaceholder: Bool {

@@ -75,6 +75,7 @@ class TweetBodyUIView: UIView {
     private(set) var isExpanded: Bool = false
     private var currentFullContent: String?
     private var currentTweetId: String?
+    private var currentCellTweetId: String?
     private var currentIsEmbedded: Bool = false
     private weak var parentViewController: UIViewController?
     private weak var contentLabelTapGesture: UITapGestureRecognizer?
@@ -287,12 +288,19 @@ class TweetBodyUIView: UIView {
     func configure(tweet: Tweet, isEmbedded: Bool, cellTweetId: String?,
                    parentViewController: UIViewController) {
         self.parentViewController = parentViewController
-        self.currentIsEmbedded = isEmbedded
         bindTweetContentUpdates(tweet)
 
-        // Skip if same tweet
-        if currentTweetId == tweet.mid { return }
+        // Pure retweets render the original tweet's media inside the retweet cell.
+        // The media owner tweet can be unchanged while the visible cell context changes,
+        // so include cellTweetId/isEmbedded in the reuse guard to keep video identifiers fresh.
+        if currentTweetId == tweet.mid,
+           currentCellTweetId == cellTweetId,
+           currentIsEmbedded == isEmbedded {
+            return
+        }
         currentTweetId = tweet.mid
+        currentCellTweetId = cellTweetId
+        currentIsEmbedded = isEmbedded
 
         // Reset expansion state for new tweet
         isExpanded = false
@@ -418,6 +426,7 @@ class TweetBodyUIView: UIView {
 
     func prepareForReuse() {
         currentTweetId = nil
+        currentCellTweetId = nil
         contentLabel.attributedText = nil
         contentLabel.numberOfLines = Self.maxContentLines
         contentLabel.lineBreakMode = .byTruncatingTail

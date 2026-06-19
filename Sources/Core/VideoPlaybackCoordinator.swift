@@ -770,8 +770,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 // PURE RETWEET: Get attachments from original tweet, use retweet's ID for positioning
                 // Only use cached tweets (non-blocking) - will be added later when fetched by TweetItemView
                 if let originalTweetId = tweet.originalTweetId {
-                    // Try singleton cache only (fast, non-blocking)
-                    let originalTweet = Tweet.getInstance(for: originalTweetId)
+                    let originalTweet = resolveMediaTweet(originalTweetId)
 
                     if let originalTweet = originalTweet,
                        let originalAttachments = originalTweet.attachments {
@@ -811,7 +810,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 }
                 
                 if isQuotedTweet, let originalTweetId = tweet.originalTweetId {
-                    let embeddedTweet = Tweet.getInstance(for: originalTweetId)
+                    let embeddedTweet = resolveMediaTweet(originalTweetId)
 
                     if let embeddedTweet = embeddedTweet,
                        let embeddedAttachments = embeddedTweet.attachments {
@@ -1312,7 +1311,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Resolve the video URL, media ID, and tweet ID for a VideoPlaybackInfo entry.
     private func resolveVideoURL(_ video: VideoPlaybackInfo) -> (url: URL, mediaID: String, tweetId: String, mediaType: MediaType)? {
-        guard let tweet = currentTweets.first(where: { $0.mid == video.mediaTweetId }) ?? Tweet.getInstance(for: video.mediaTweetId),
+        guard let tweet = resolveMediaTweet(video.mediaTweetId),
               let attachments = tweet.attachments,
               video.attachmentIndex < attachments.count else {
             return nil
@@ -1330,6 +1329,12 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         guard let url = videoURL else { return nil }
         return (url, attachment.mid, tweet.mid, attachment.type)
+    }
+
+    private func resolveMediaTweet(_ tweetId: String) -> Tweet? {
+        currentTweets.first(where: { $0.mid == tweetId })
+            ?? TweetCacheManager.shared.fetchTweetSync(mid: tweetId)
+            ?? Tweet.getInstance(for: tweetId)
     }
 
     /// Preload video asset without starting playback

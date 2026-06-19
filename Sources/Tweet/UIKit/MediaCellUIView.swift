@@ -587,8 +587,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         case .playerLoading:
             let hasLoadedData = currentPlayerHasLoadedData
             let canRevealLoadedPlayer = currentPlayerCanReplaceCover
-            let hasThumbnail = imageView.image != nil && (!hasLoadedData || !canRevealLoadedPlayer)
-            if hasThumbnail {
+            let shouldShowThumbnail = imageView.image != nil && (!hasLoadedData || !canRevealLoadedPlayer)
+            if shouldShowThumbnail {
                 showImageView()
             } else {
                 hideImageViewImmediately()
@@ -600,7 +600,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // a frame yet so it would show black on top of the thumbnail. The layer
             // still decodes in the background; onReadyForDisplay → .playerReady will
             // show it once the first frame is available.
-            videoPlayerView.isHidden = hasThumbnail && !coordinatorWantsToPlay
+            videoPlayerView.isHidden = shouldShowThumbnail && !coordinatorWantsToPlay
             // Primary videos always show loading chrome. Visible non-primary videos
             // also show it until their cover frame arrives; off-screen preloads stay quiet.
             if shouldShowBackgroundRecoverySpinner {
@@ -615,11 +615,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         case .playerReady:
             let hasLoadedData = currentPlayerHasLoadedData
             let canRevealLoadedPlayer = currentPlayerCanReplaceCover
-            let hasThumbnail = imageView.image != nil && (!hasLoadedData || !canRevealLoadedPlayer)
+            let shouldShowThumbnail = imageView.image != nil && (!hasLoadedData || !canRevealLoadedPlayer)
             let hasDisplayableCover = hasLoadedData || hasVideoCoverForSpinner
             // Keep a thumbnail only until the player has buffered data. Removing it
             // before play() avoids a visible cover handoff right as playback starts.
-            if hasThumbnail {
+            if shouldShowThumbnail {
                 showImageView()
             } else {
                 hideImageViewImmediately()
@@ -627,7 +627,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     imageView.image = nil
                 }
             }
-            if hasThumbnail && !coordinatorWantsToPlay {
+            if shouldShowThumbnail && !coordinatorWantsToPlay {
                 // Non-primary video: hide player layer (no need to decode yet)
                     videoPlayerView.isHidden = true
             } else {
@@ -660,9 +660,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // Keep thumbnail as cover only until the player has data. After that,
             // the AVPlayer surface owns the visual handoff so playback does not
             // flash through a stale poster at start.
-            if let player = self.player,
-               currentPlayerHasLoadedData,
-               isVisibleVideoFrameReady(player) {
+            if player != nil,
+               currentPlayerHasLoadedData {
                 hideImageViewImmediately()
                 imageView.image = nil
             } else if imageView.image == nil {
@@ -757,11 +756,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               self.player === player,
               imageView.image != nil else { return false }
         guard playerHasLoadedData(player) else { return false }
-        if coordinatorWantsToPlay {
-            guard isVisibleVideoFrameReady(player) else { return false }
-        } else {
-            guard videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer else { return false }
-        }
 
         videoPlayerView.isHidden = false
         hideImageViewImmediately()
@@ -1523,7 +1517,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if coordinatorWantsToPlay {
             return isVisibleVideoFrameReady(player)
         }
-        return videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer
+        return playerHasLoadedData(player)
+            || videoPlayerView.isLayerReadyForDisplay
+            || hasRenderedFrameForCurrentPlayer
     }
 
     private func softResetFeedPlayerIfEmpty(_ player: AVPlayer, mid: String) {
@@ -3937,24 +3933,15 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // Pause immediately
         player.pause()
         player.isMuted = MuteState.shared.isMuted
-        // Sync capture with skipImageView: imageView may hold a stale first-frame thumbnail,
-        // so we go directly to video output to capture the actual last rendered frame.
-        let preservedFinalFrame = preserveFrameToCache(skipImageView: true)
+        // Cache a final frame for later release/offscreen recovery, but do not put it
+        // over the still-attached player. Finished videos should show the AVPlayerLayer's
+        // last frame until the player is actually released.
+        _ = preserveFrameToCache(skipImageView: true)
         clearFeedResumeState(for: mid)
         VideoStateCache.shared.clearCache(for: mid, force: true)
 
-        if !preservedFinalFrame {
-            restoreCachedPosterForFailureIfNeeded()
-        }
-        if imageView.image != nil {
-            showImageView()
-            videoPlayerView.isHidden = true
-        } else {
-            hideImageViewImmediately()
-            videoPlayerView.isHidden = false
-        }
-
-        detachFinishedPlayer(for: mid)
+        hideImageViewImmediately()
+        videoPlayerView.isHidden = false
         videoCellState = .paused
 
         // Notify coordinator to advance to next video (include full identifier: tweet id + video id + index)
@@ -5193,15 +5180,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private var canShowCachedCoverForCurrentVideo: Bool {
         if let player,
-           playerHasLoadedData(player),
-           isVisibleVideoFrameReady(player) {
+           playerHasLoadedData(player) {
+            return false
+        }
+        if videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer {
             return false
         }
         if hasPlaybackCoverForCurrentVideo { return true }
         guard let mid = attachment?.mid else { return false }
         if SharedAssetCache.shared.hasPreloadedThumbnail(for: mid) { return true }
         guard SharedAssetCache.shared.cachedThumbnail(for: mid) != nil else { return false }
-        if let player, isVisibleVideoFrameReady(player) { return false }
 
         switch videoCellState {
         case .noContent, .thumbnail, .playerLoading, .playerReady, .playing, .paused, .failed:

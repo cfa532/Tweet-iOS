@@ -2594,7 +2594,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 if self.currentVideoMid == videoMid,
                    let player = self.currentPlayer,
                    let item = player.currentItem {
-                    if player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate || player.rate > 0 {
+                    if self.isPlaybackRendering,
+                       (player.timeControlStatus == .playing || player.rate > 0) {
                         print("📱 [DetailVideoManager] Coordinator play ignored (already active): \(videoMid)")
                         return
                     }
@@ -3776,7 +3777,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         guard let item else { return true }
 
         updateDetailBufferedData(for: item)
-        if hasPlayableMediaContent { return false }
         if isSeekingToStartupPosition { return true }
         if player.timeControlStatus == .waitingToPlayAtSpecifiedRate { return true }
         if isPlaying && player.timeControlStatus != .playing { return true }
@@ -3796,9 +3796,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             return duration.isFinite && duration > 0
         }
         hasPlayableMediaContent = hasBufferedData || isPlaybackRendering
-        if hasBufferedData {
-            isBuffering = false
-        }
     }
 
     private func isPlaybackAtBufferEdge(player: AVPlayer, item: AVPlayerItem) -> Bool {
