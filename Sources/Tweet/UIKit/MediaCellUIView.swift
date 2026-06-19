@@ -420,6 +420,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         UIApplication.shared.applicationState == .active && AppDelegate.isVideoInfrastructureReady
     }
 
+    private var fullscreenOverlayOwnsCurrentVideo: Bool {
+        guard let mid = attachment?.mid else { return false }
+        return OverlayVisibilityCoordinator.shared.isCovered
+            && FullScreenVideoManager.shared.currentVideoMid == mid
+    }
+
     @discardableResult
     private func deferVideoWorkUntilInfrastructureReady(reason: String, wantsPlayback: Bool? = nil) -> Bool {
         guard !AppDelegate.isVideoInfrastructureReady else { return false }
@@ -2082,7 +2088,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         cancelDelayedPrimarySpinner()
-        loadingSpinner.stopAnimating()
         delayedPrimarySpinnerTask = Task { @MainActor [weak self, player] in
             try? await Task.sleep(nanoseconds: self?.primarySpinnerDebounceNanos ?? 500_000_000)
             guard let self,
@@ -2264,12 +2269,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                   self.canDriveForegroundPlayback,
                   self.videoCellState == .playing,
                   self.lastPlaybackRequestDate == requestDate,
-                  !self.isVideoAtEnd(player),
-                  let mid = self.attachment?.mid else { return }
+                  !self.isVideoAtEnd(player) else { return }
 
-            let fullscreenOwnsMid = OverlayVisibilityCoordinator.shared.isCovered
-                && FullScreenVideoManager.shared.currentVideoMid == mid
-            guard !fullscreenOwnsMid else { return }
+            guard !self.fullscreenOverlayOwnsCurrentVideo else { return }
 
             if self.isVisibleVideoFrameReady(player) {
                 self.updateLoadingSpinnerForPlayback(player)
@@ -3295,6 +3297,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                           let player = self.player,
                           self.coordinatorWantsToPlay,
                           self.canDriveForegroundPlayback,
+                          !self.fullscreenOverlayOwnsCurrentVideo,
                           player.currentItem?.status == .unknown else { return }
                     if self.waitForActiveHLSDownloadsIfNeeded(
                         player,
@@ -3365,6 +3368,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard canDriveForegroundPlayback else {
             _ = deferVideoWorkUntilInfrastructureReady(reason: "actuallyStartPlayback", wantsPlayback: true)
             logVerbose("⏸️ actuallyStartPlayback skipped, app/infrastructure not ready")
+            return
+        }
+        guard !fullscreenOverlayOwnsCurrentVideo else {
+            logVerbose("⏸️ actuallyStartPlayback skipped, fullscreen owns current video")
             return
         }
 
@@ -3735,22 +3742,20 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     let nsError = item.error.map { $0 as NSError }
                     let errorMsg = nsError.map { "\($0.domain) \($0.code)" } ?? "Unknown error"
                     print("\(self.logPrefix) ❌ Player failed: \(errorMsg)")
-                    // Release the failed player from SharedAssetCache. Guard: don't clear
-                    // if fullscreen player owns this video (would kill its streaming).
-                    if let mid = self.attachment?.mid {
-                        let fullscreenOwnsMid = OverlayVisibilityCoordinator.shared.isCovered
-                            && FullScreenVideoManager.shared.currentVideoMid == mid
-                        if !fullscreenOwnsMid {
-                            self.preserveReleaseCoverForCurrentVideo(reason: "playerItem.failed", showCover: self.isVisible)
-                            let deleteDiskCache = self.shouldDeleteDiskCacheAfterPlayerFailure(nsError)
-                            if !deleteDiskCache {
-                                print("\(self.logPrefix) ⚠️ Preserving disk cache after transient player failure: \(errorMsg)")
-                            }
-                            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: deleteDiskCache)
-                            if !deleteDiskCache {
-                                self.scheduleAutomaticTransientRetryIfNeeded(errorMsg: errorMsg)
-                            }
-                        }
+                    if self.fullscreenOverlayOwnsCurrentVideo {
+                        self.logVerbose("Ignoring feed player failure while fullscreen owns \(mid)")
+                        return
+                    }
+
+                    // Release the failed player from SharedAssetCache.
+                    self.preserveReleaseCoverForCurrentVideo(reason: "playerItem.failed", showCover: self.isVisible)
+                    let deleteDiskCache = self.shouldDeleteDiskCacheAfterPlayerFailure(nsError)
+                    if !deleteDiskCache {
+                        print("\(self.logPrefix) ⚠️ Preserving disk cache after transient player failure: \(errorMsg)")
+                    }
+                    SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: deleteDiskCache)
+                    if !deleteDiskCache {
+                        self.scheduleAutomaticTransientRetryIfNeeded(errorMsg: errorMsg)
                     }
                     self.handleVideoLoadFailure(reason: "playerItem.status == .failed (\(errorMsg))")
                 }
@@ -4594,9 +4599,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let failedMid = attachment?.mid
         cleanupFailedPlayerState()
         if let failedMid {
-            let fullscreenOwnsMid = OverlayVisibilityCoordinator.shared.isCovered
-                && FullScreenVideoManager.shared.currentVideoMid == failedMid
-            if !fullscreenOwnsMid {
+            if !fullscreenOverlayOwnsCurrentVideo {
                 VideoStateCache.shared.clearCachedState(for: failedMid)
                 SharedAssetCache.shared.clearPlayerForMediaID(failedMid, deleteDiskCache: false)
             }

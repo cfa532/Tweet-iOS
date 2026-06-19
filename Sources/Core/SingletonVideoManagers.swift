@@ -444,7 +444,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
         }
-        isBuffering = false
         hasBufferedData = false
         hasCachedMediaContent = false
         hasPlayableMediaContent = false
@@ -650,7 +649,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         singletonPlayer?.replaceCurrentItem(with: nil)
         singletonPlayer = nil
         isItemReady = false
-        isBuffering = false
         hasBufferedData = false
         hasCachedMediaContent = false
         hasPlayableMediaContent = false
@@ -778,7 +776,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     @Published var currentCellTweetId: String? // The visible cell's tweet ID in feed (retweet ID for retweets, quoting tweet ID for quotes)
     @Published var currentVideoIndex: Int = 0 // Track current video index within tweet
     @Published var isPlaying = false
-    @Published var isBuffering = false // Track buffering state for spinner
     @Published private(set) var hasPlayableMediaContent = false
     /// True once the current item has status .readyToPlay (i.e. first frame decoded).
     /// Used by SingletonVideoPlayerView to show a thumbnail cover while the item loads.
@@ -833,8 +830,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var playbackSurfaceReadyMid: String?
     private var pendingSurfacePlayback: (player: AVPlayer, item: AVPlayerItem, log: String)?
     
-    // Debouncing for buffering state to prevent rapid spinner blinking during seeks
-    private var bufferingDebounceTask: DispatchWorkItem?
     private var nearEndAdvanceTask: DispatchWorkItem?
     private var startupAudioMuteUntil: Date = .distantPast
     private var startupAudioUnmuteTask: Task<Void, Never>?
@@ -879,9 +874,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         hasCachedMediaContent = SharedAssetCache.shared.hasCachedContent(for: mid)
         hasPlayableMediaContent = hasBufferedData
-        if hasPlayableMediaContent {
-            isBuffering = false
-        }
     }
 
     func visualState(
@@ -940,7 +932,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         hasBufferedData = true
         hasPlayableMediaContent = true
-        isBuffering = false
     }
 
     private func hasPlayableData(
@@ -1103,7 +1094,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                player.currentItem === currentItem,
                player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate || player.rate > 0 {
                 isPlaying = true
-                isBuffering = !hasPlayableMediaContent && player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 return
             }
             if currentItem.status != .readyToPlay {
@@ -1191,7 +1181,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         // Clean up timeControlStatus observers
         cleanupObservers()
-        isBuffering = !hasPlayableMediaContent
 
         if !hasCachedMediaContent {
             SharedAssetCache.shared.prepareUncachedFullscreenLoad(for: mid)
@@ -1216,7 +1205,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     guard let player = self.singletonPlayer else {
                         self.loadingMid = nil
                         self.loadingStartedAt = nil
-                        self.isBuffering = false
                         self.isPlaying = false
                         return
                     }
@@ -1314,9 +1302,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         fullscreenProgressObserverPlayer = nil
         wasPlayingBeforeWaiting = false
         
-        // Cancel any pending buffering debounce task
-        bufferingDebounceTask?.cancel()
-        bufferingDebounceTask = nil
         nearEndAdvanceTask?.cancel()
         nearEndAdvanceTask = nil
         prewarmedNextVideoMid = nil
@@ -1365,38 +1350,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 self.scheduleNearEndAutoAdvance(for: item)
             }
             
-            // Show spinner if:
-            // 1. Buffer is explicitly empty AND we don't have significant buffered data (work around AVPlayer bug), OR
-            // 2. Player is explicitly waiting, OR
-            // 3. Item is ready but buffer is empty or very small (< 0.5s) and not likely to keep up
-            // IMPORTANT: Don't trust isPlaybackBufferEmpty alone - it can be stuck at true after backgrounding
-            // even when we have plenty of buffered data. Only show spinner if buffer is truly insufficient.
             let wantsPlayback = wasPlaying || self.wasPlayingBeforeWaiting || self.isPlaying
-            let shouldShowSpinner = !hasBufferedData && !isActivelyRendering && wantsPlayback && (
+            let isWaitingForPlayableData = !hasBufferedData && !isActivelyRendering && wantsPlayback && (
                 isWaiting
                     || isBufferEmpty
                     || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
             )
-            
-            if shouldShowSpinner {
-                // Video is waiting for data - track if it was playing
+
+            if isWaitingForPlayableData {
                 if !self.wasPlayingBeforeWaiting && wasPlaying {
                     self.wasPlayingBeforeWaiting = true
-                }
-                
-                // Debounce: Only show spinner if buffering lasts > 0.5 seconds
-                // This prevents flashing spinner during brief buffering pauses (e.g., during seeking)
-                if !self.isBuffering {
-                    // Cancel any pending hide task
-                    self.bufferingDebounceTask?.cancel()
-                    
-                    let task = DispatchWorkItem { [weak self] in
-                        guard let self = self else { return }
-                        guard !self.hasPlayableMediaContent else { return }
-                        self.isBuffering = true
-                    }
-                    self.bufferingDebounceTask = task
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
                 }
             } else {
                 if isActivelyRendering && !player.automaticallyWaitsToMinimizeStalling {
@@ -1406,14 +1369,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     self.transitionPosterMediaID = nil
                     self.transitionPoster = nil
                 }
-                // Player has enough data - hide spinner immediately (no debounce for hiding)
-                // Cancel any pending show task
-                self.bufferingDebounceTask?.cancel()
-                
-                if self.isBuffering {
-                    self.isBuffering = false
-                }
-                
                 // Autoplay logic: check multiple conditions to ensure we resume when data is ready
                 // 2.0s minimum prevents play/pause flickering when buffer is too thin to sustain playback
                 let hasEnoughBuffer = hasBufferedData && bufferedDuration >= 2.0
@@ -1657,7 +1612,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         singletonPlayer = nil
         isPlaying = false
         wasPlayingBeforeWaiting = false
-        isBuffering = false
         hasBufferedData = false
         hasCachedMediaContent = false
         hasPlayableMediaContent = false
@@ -1751,7 +1705,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             player.automaticallyWaitsToMinimizeStalling = false
             print("🎬 [FullScreenVideoManager] retry buffer nudge \(shortMID(currentVideoMid)): buffered=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), keepUp=\(keepUp), \(playerDiagnostic(player, item: playerItem))")
             startFullscreenPlayback(player: player, item: playerItem, log: "retry buffer nudge")
-            isBuffering = false
             wasPlayingBeforeWaiting = false
             startRetryMonitoring()
             return
@@ -1809,7 +1762,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
                                 print("🎬 [FullScreenVideoManager] retry buffer ready \(self.shortMID(self.currentVideoMid)): bufferedAhead=\(String(format: "%.2f", bufferedAhead)), required=\(String(format: "%.2f", requiredBuffer)), \(self.playerDiagnostic(player, item: observedItem))")
                                 self.startFullscreenPlayback(player: player, item: observedItem, log: "retry buffer ready")
-                                self.isBuffering = false
                                 self.wasPlayingBeforeWaiting = false
 
                                 // Continue monitoring for future stalls
@@ -1883,7 +1835,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         resetPlaybackSurfaceState()
         isItemReady = false
         refreshCachedMediaContent(for: mid)
-        isBuffering = !hasPlayableMediaContent
         isPlaying = true
         wasPlayingBeforeWaiting = true
 
@@ -2013,7 +1964,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 return
             }
             isSeekingToRestoredPosition = true
-            isBuffering = !hasPlayableMediaContent
             print("🎬 [FullScreenVideoManager] Seeking \(shortMID(mid)) to \(String(format: "%.2f", target.seconds))s before play")
             self.singletonPlayer?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 guard let self = self else { return }
@@ -2046,7 +1996,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             player.pause()
             pendingSurfacePlayback = (player: player, item: item, log: log)
             isPlaying = true
-            isBuffering = !hasPlayableMediaContent
             print("🎬 [FullScreenVideoManager] deferring play(\(log)) until fullscreen surface is ready \(shortMID(currentVideoMid)): \(playerDiagnostic(player, item: item))")
             return
         }
@@ -2062,7 +2011,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         print("🎬 [FullScreenVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(playerDiagnostic(player, item: item))")
         player.play()
         isPlaying = true
-        isBuffering = !hasPlayableMediaContent && player.timeControlStatus != .playing
     }
 
     private func isNear(_ lhs: CMTime, _ rhs: CMTime, tolerance: Double) -> Bool {
@@ -2241,7 +2189,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         // Clean up timeControlStatus observers
         cleanupObservers()
-        isBuffering = false
         hasCachedMediaContent = false
         hasBufferedData = false
         hasPlayableMediaContent = false
@@ -2933,12 +2880,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             return
         }
 
-        let hasCache = SharedAssetCache.shared.hasCachedContent(for: mid)
-        hasCachedMediaContent = hasCache
-        hasPlayableMediaContent = hasCache || hasBufferedData || isPlaybackRendering
-        if hasCache {
-            isBuffering = false
-        }
+        hasCachedMediaContent = SharedAssetCache.shared.hasCachedContent(for: mid)
+        hasPlayableMediaContent = hasBufferedData || isPlaybackRendering
     }
 
     private func detailDiagnostic(_ player: AVPlayer?, item: AVPlayerItem?) -> String {
@@ -3795,14 +3738,14 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private func updateDetailBufferedData(for item: AVPlayerItem?) {
         guard let item else {
             hasBufferedData = false
-            hasPlayableMediaContent = hasCachedMediaContent || isPlaybackRendering
+            hasPlayableMediaContent = isPlaybackRendering
             return
         }
         hasBufferedData = item.loadedTimeRanges.contains { value in
             let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
             return duration.isFinite && duration > 0
         }
-        hasPlayableMediaContent = hasCachedMediaContent || hasBufferedData || isPlaybackRendering
+        hasPlayableMediaContent = hasBufferedData || isPlaybackRendering
         if hasBufferedData {
             isBuffering = false
         }
