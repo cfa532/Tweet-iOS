@@ -379,17 +379,27 @@ enum VideoFrameExtractor {
     /// Heuristic guard: treat near-black frames as invalid placeholders.
     /// This prevents overwriting a good cached last frame with a black capture that can happen during app transitions.
     static func isMostlyBlack(_ image: UIImage, luminanceThreshold: Float = 0.05) -> Bool {
+        guard let luminance = averageLuminance(of: image) else { return false }
+        return luminance < luminanceThreshold
+    }
+
+    static func isMostlyWhite(_ image: UIImage, luminanceThreshold: Float = 0.96) -> Bool {
+        guard let luminance = averageLuminance(of: image) else { return false }
+        return luminance > luminanceThreshold
+    }
+
+    private static func averageLuminance(of image: UIImage) -> Float? {
         // If we can't analyze, don't block caching.
-        guard let cgImage = image.cgImage else { return false }
+        guard let cgImage = image.cgImage else { return nil }
 
         let ciImage = CIImage(cgImage: cgImage)
         let extent = ciImage.extent
-        guard extent.width.isFinite, extent.height.isFinite, extent.width > 0, extent.height > 0 else { return false }
-        guard let filter = CIFilter(name: "CIAreaAverage") else { return false }
+        guard extent.width.isFinite, extent.height.isFinite, extent.width > 0, extent.height > 0 else { return nil }
+        guard let filter = CIFilter(name: "CIAreaAverage") else { return nil }
 
         filter.setValue(ciImage, forKey: kCIInputImageKey)
         filter.setValue(CIVector(cgRect: extent), forKey: kCIInputExtentKey)
-        guard let outputImage = filter.outputImage else { return false }
+        guard let outputImage = filter.outputImage else { return nil }
 
         var pixel: [UInt8] = [0, 0, 0, 0] // RGBA
         ciContext.render(
@@ -402,13 +412,12 @@ enum VideoFrameExtractor {
         )
 
         let a = Float(pixel[3]) / 255.0
-        if a < 0.1 { return false }
+        if a < 0.1 { return nil }
 
         let r = Float(pixel[0]) / 255.0
         let g = Float(pixel[1]) / 255.0
         let b = Float(pixel[2]) / 255.0
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return luminance < luminanceThreshold
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
     }
 }
 

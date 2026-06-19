@@ -60,6 +60,26 @@ protocol MediaCellDelegate {
     var isRecentlyPlaying: Bool { get }
 }
 
+private final class MediaCellDelegateStorage {
+    private weak var weakObject: AnyObject?
+    private var strongValue: MediaCellDelegate?
+
+    init(_ delegate: MediaCellDelegate) {
+        if Mirror(reflecting: delegate).displayStyle == .class {
+            self.weakObject = delegate as AnyObject
+        } else {
+            self.strongValue = delegate
+        }
+    }
+
+    var delegate: MediaCellDelegate? {
+        if let weakObject {
+            return weakObject as? MediaCellDelegate
+        }
+        return strongValue
+    }
+}
+
 /// Video state during orchestration
 private enum VideoPlaybackPhase {
     case idle                    // No playback
@@ -223,7 +243,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Registered MediaCell delegates for direct communication (keyed by video identifier:
     /// outerTweetId_mediaTweetId_videoMid_attachmentIndex). This allows the same videoMid to have separate
     /// delegates when it appears in both a tweet and its retweet.
-    private var mediaCellDelegates: [String: MediaCellDelegate] = [:]
+    private var mediaCellDelegates: [String: MediaCellDelegateStorage] = [:]
 
     /// When true, the feed is covered by an overlay (fullscreen cover/sheet/login/etc).
     /// The coordinator must not emit play commands while covered, otherwise videos can start "invisibly".
@@ -484,7 +504,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Register a MediaCell delegate for video control (keyed by video identifier)
     func registerDelegate(_ delegate: MediaCellDelegate, forIdentifier identifier: String) {
-        mediaCellDelegates[identifier] = delegate
+        mediaCellDelegates[identifier] = MediaCellDelegateStorage(delegate)
 
         // Do NOT insert into onScreenMediaCells here. didMoveToWindow fires for cells that
         // UITableView prefetches below the viewport — they are in the window but NOT visible.
@@ -502,6 +522,29 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Unregister a MediaCell delegate (keyed by video identifier)
     func unregisterDelegate(forIdentifier identifier: String) {
         mediaCellDelegates.removeValue(forKey: identifier)
+    }
+
+    private func delegate(forIdentifier identifier: String) -> MediaCellDelegate? {
+        guard let wrapper = mediaCellDelegates[identifier] else { return nil }
+        guard let delegate = wrapper.delegate else {
+            mediaCellDelegates.removeValue(forKey: identifier)
+            return nil
+        }
+        return delegate
+    }
+
+    private var liveDelegateCount: Int {
+        pruneReleasedDelegates()
+        return mediaCellDelegates.count
+    }
+
+    private func liveDelegates() -> [MediaCellDelegate] {
+        pruneReleasedDelegates()
+        return mediaCellDelegates.compactMap { $0.value.delegate }
+    }
+
+    private func pruneReleasedDelegates() {
+        mediaCellDelegates = mediaCellDelegates.filter { $0.value.delegate != nil }
     }
 
     // MARK: - Public API
@@ -966,7 +1009,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             if phase == .primaryPlaying, let primaryId = primaryVideoId {
                 // Stop the primary so audio doesn't leak off-screen.
                 if let primary = allVideos.first(where: { $0.identifier == primaryId }) {
-                    if let delegate = mediaCellDelegates[primary.identifier] {
+                    if let delegate = delegate(forIdentifier: primary.identifier) {
                         delegate.shouldStopVideo(withMid: primary.videoMid)
                     } else {
                         SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
@@ -1013,7 +1056,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                     guard let video = allVideos.first(where: { $0.identifier == identifier }) else { continue }
 
                     if !stillVisibleMids.contains(video.videoMid) {
-                        if let delegate = mediaCellDelegates[video.identifier] {
+                        if let delegate = delegate(forIdentifier: video.identifier) {
                             delegate.shouldStopVideo(withMid: video.videoMid)
                         } else {
                             SharedAssetCache.shared.getCachedPlayer(for: video.videoMid)?.pause()
@@ -1030,7 +1073,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                let primaryId = primaryVideoId,
                continuePlaybackMediaCells.contains(primaryId) {
                 // Primary still visible — health check delegate only, no switching
-                if mediaCellDelegates[primaryId] == nil {
+                if delegate(forIdentifier: primaryId) == nil {
                     phase = .idle
                     currentlyPlayingVideoIds.removeAll()
                     primaryVideoId = nil
@@ -1067,7 +1110,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     private func stopPrimaryVideo(identifier: String) {
         guard let primary = allVideos.first(where: { $0.identifier == identifier }) else { return }
-        if let delegate = mediaCellDelegates[primary.identifier] {
+        if let delegate = delegate(forIdentifier: primary.identifier) {
             delegate.shouldStopVideo(withMid: primary.videoMid)
         } else {
             SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
@@ -1103,7 +1146,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         previousVisibleIdentifiers.removeAll()
 
         // Direct delegate calls to stop all registered cells in this coordinator
-        for (_, delegate) in mediaCellDelegates {
+        for delegate in liveDelegates() {
             delegate.shouldStopAllVideos()
         }
     }
@@ -1152,7 +1195,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     @discardableResult
     func replayFinishedVideo(identifier: String) -> Bool {
         guard let video = allVideos.first(where: { $0.identifier == identifier }),
-              let delegate = mediaCellDelegates[identifier] else {
+              let delegate = delegate(forIdentifier: identifier) else {
             return false
         }
 
@@ -1188,7 +1231,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
-        guard let delegate = mediaCellDelegates[primaryId] else {
+        guard let delegate = delegate(forIdentifier: primaryId) else {
             // Delegate gone — reset and restart
             print("🎬 [COORD] stallCheck: delegate gone for \(shortIdent(primaryId)), restarting")
             phase = .idle
@@ -1455,7 +1498,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         guard phase == .primaryPlaying,
               let primaryId = primaryVideoId,
-              let delegate = mediaCellDelegates[primaryId] else {
+              let delegate = delegate(forIdentifier: primaryId) else {
             return false
         }
 
@@ -1617,7 +1660,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         let onScreenCount = onScreenMediaCells.count
         let visibleCount = visibleVideos.count
-        let delegateCount = mediaCellDelegates.count
+        let delegateCount = liveDelegateCount
 
         guard let primary = identifyPrimaryVideo() else {
             print("🎬 [COORD] startPrimary: no candidate (onScreen=\(onScreenCount), visible=\(visibleCount), delegates=\(delegateCount))")
@@ -1640,7 +1683,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Validate delegate exists before committing to primaryPlaying.
         // If the cell was reused or visibility changed, the delegate may be gone.
         // Stay idle so next updateVisibleTweets will retry.
-        guard let delegate = mediaCellDelegates[primary.identifier] else {
+        guard let delegate = delegate(forIdentifier: primary.identifier) else {
             print("🎬 [COORD] startPrimary: \(shortMID(primary.videoMid)) has no delegate")
             return
         }
@@ -1649,7 +1692,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Stop the previous primary video if different
         if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier {
-            if let prevDelegate = mediaCellDelegates[previousPrimaryId],
+            if let prevDelegate = self.delegate(forIdentifier: previousPrimaryId),
                let previousPrimary = allVideos.first(where: { $0.identifier == previousPrimaryId }) {
                 prevDelegate.shouldStopVideo(withMid: previousPrimary.videoMid)
             }
@@ -1693,7 +1736,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate.
         // Skip failedPrimaryIdentifier and finishedPrimaryIdentifier to avoid re-selecting.
         for video in candidates {
-            guard mediaCellDelegates[video.identifier] != nil else { continue }
+            guard delegate(forIdentifier: video.identifier) != nil else { continue }
             if video.identifier == failedPrimaryIdentifier { continue }
             if video.identifier == finishedPrimaryIdentifier { continue }
             if VideoStateCache.shared.isVideoFinished(video.identifier) { continue }
@@ -1710,7 +1753,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoIds.remove(videoId)
 
         // Direct delegate call — no broadcast notification
-        if let delegate = mediaCellDelegates[video.identifier] {
+        if let delegate = delegate(forIdentifier: video.identifier) {
             delegate.shouldPauseVideo(withMid: video.videoMid)
         }
     }
@@ -1728,7 +1771,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Pause the finished primary's coordinatorWantsToPlay flag
         if let primaryId = primaryVideoId,
            let video = allVideos.first(where: { $0.identifier == primaryId }),
-           let delegate = mediaCellDelegates[primaryId] {
+           let delegate = delegate(forIdentifier: primaryId) {
             delegate.shouldPauseVideo(withMid: video.videoMid)
         }
 
@@ -1808,7 +1851,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         let currentVideo = visibleVideos[currentIndex]
 
         // CRITICAL: Clear coordinatorWantsToPlay flag for finished video
-        if let delegate = mediaCellDelegates[currentVideo.identifier] {
+        if let delegate = delegate(forIdentifier: currentVideo.identifier) {
             delegate.shouldPauseVideo(withMid: currentVideo.videoMid)
         }
 
@@ -1820,7 +1863,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         LocalHTTPServer.shared.setPrimaryMediaID(nextVideo.videoMid)
 
         // Direct delegate call — no broadcast notification
-        if let delegate = mediaCellDelegates[nextVideo.identifier] {
+        if let delegate = delegate(forIdentifier: nextVideo.identifier) {
             delegate.shouldPlayVideo(withMid: nextVideo.videoMid)
         }
     }
@@ -1908,7 +1951,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
-        guard let delegate = mediaCellDelegates[target.identifier] else {
+        guard let delegate = delegate(forIdentifier: target.identifier) else {
             phase = .idle
             primaryVideoId = nil
             currentlyPlayingVideoIds.removeAll()

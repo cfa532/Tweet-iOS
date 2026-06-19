@@ -899,7 +899,8 @@ class TweetCellContentView: UIView {
 
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
         let bodyResult = bodyView.mediaGridView.mediaVisibilityIdentifiers(
-            visibleRect: visibleRect, coordinateSpace: coordinateSpace
+            visibleRect: visibleRect,
+            coordinateSpace: coordinateSpace
         )
         var loadVisible = bodyResult.loadVisible
         var continuePlayback = bodyResult.continuePlayback

@@ -956,6 +956,13 @@ class SharedAssetCache: ObservableObject {
         if let item = playerCache[mediaID]?.currentItem {
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         }
+        if playerCache[mediaID]?.currentItem != nil {
+            NotificationCenter.default.post(
+                name: .videoPlayerPreloaded,
+                object: self,
+                userInfo: ["mediaID": mediaID]
+            )
+        }
         LocalHTTPServer.shared.resumeVisibleDownloads(for: mediaID)
     }
     
@@ -2413,7 +2420,8 @@ class SharedAssetCache: ObservableObject {
         for _ in 0..<20 {
             if Task.isCancelled { return false }
             if let image = copyPreloadFrame(from: output, player: player),
-               !VideoFrameExtractor.isMostlyBlack(image) {
+               !VideoFrameExtractor.isMostlyBlack(image),
+               !VideoFrameExtractor.isMostlyWhite(image) {
                 storeCachedThumbnail(image, for: mediaID, source: "preload")
                 player.pause()
                 return true
@@ -2534,7 +2542,13 @@ class SharedAssetCache: ObservableObject {
     /// Read a cached thumbnail for mediaID. Filters/clears dark frames so callers
     /// never treat black snapshots as valid poster images.
     func cachedThumbnail(for mediaID: String) -> UIImage? {
-        return VideoLastFrameCache.shared.image(for: mediaID)
+        guard let image = VideoLastFrameCache.shared.image(for: mediaID) else { return nil }
+        if VideoFrameExtractor.isMostlyBlack(image) || VideoFrameExtractor.isMostlyWhite(image) {
+            VideoLastFrameCache.shared.clear(for: mediaID)
+            preloadedThumbnailMids.remove(mediaID)
+            return nil
+        }
+        return image
     }
 
     func hasPreloadedThumbnail(for mediaID: String) -> Bool {
@@ -2581,7 +2595,8 @@ class SharedAssetCache: ObservableObject {
     }
 
     private func storeCachedThumbnail(_ image: UIImage, for mediaID: String, source: String) {
-        guard !VideoFrameExtractor.isMostlyBlack(image) else { return }
+        guard !VideoFrameExtractor.isMostlyBlack(image),
+              !VideoFrameExtractor.isMostlyWhite(image) else { return }
         VideoLastFrameCache.shared.set(image, for: mediaID)
         if source == "preload" {
             preloadedThumbnailMids.insert(mediaID)

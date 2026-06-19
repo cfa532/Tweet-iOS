@@ -318,7 +318,8 @@ class EmbeddedTweetUIView: UIView {
 
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
         bodyView.mediaGridView.mediaVisibilityIdentifiers(
-            visibleRect: visibleRect, coordinateSpace: coordinateSpace
+            visibleRect: visibleRect,
+            coordinateSpace: coordinateSpace
         )
     }
 
