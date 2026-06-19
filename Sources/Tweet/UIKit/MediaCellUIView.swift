@@ -2798,22 +2798,21 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard waitedForColdStart
             || waitedLongWithCover else { return false }
 
-        if let resumeTime = trustedRecoverySeekTime(for: player),
-           resumeTime.isValid,
-           resumeTime.seconds.isFinite {
-            pendingRecoverySeekTime = resumeTime
+        notePrimaryPlaybackIntentWhileWaiting(player)
+        applyAVPlayerBufferDefaults(to: player)
+        updateLoadingSpinnerForPlayback(player)
+        if player.rate == 0 {
+            player.play()
         }
-
-        guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-
-        preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
-        restoreCachedPosterForFailureIfNeeded()
-        print("\(logPrefix) 🔄 \(reason): ready item starved with \(String(format: "%.1f", bufferedAhead))s buffered, cover=\(hasPlaybackHistory) — rebuilding feed player")
-        return rebuildCurrentFeedPlayerFromProxyCache(
-            mid: mid,
-            reacquireReason: "readyItemStarvedRecovery",
-            transitionState: imageView.image != nil ? .thumbnail : .playerLoading
+        if now.timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
+            print("\(logPrefix) ⏳ \(reason): ready item starved with \(String(format: "%.1f", bufferedAhead))s buffered, cover=\(hasPlaybackHistory) — keeping existing player")
+            lastSlowLoadWaitLogDate = now
+        }
+        scheduleStartupRecoveryAfterCurrentTask(
+            for: player,
+            reason: normalizedRecoveryReason(prefix: "readyStarvedWait-", reason: reason)
         )
+        return true
     }
 
     @discardableResult
