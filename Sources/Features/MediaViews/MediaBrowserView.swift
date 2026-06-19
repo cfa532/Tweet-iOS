@@ -445,6 +445,7 @@ struct MediaBrowserView: View {
                                 onShareVisibilityChange(isVisible)
                             }
                         )
+                        .environmentObject(HproseInstance.shared)
                         .environment(\.colorScheme, .dark)
                         .tint(.white)
                     }
@@ -1155,23 +1156,19 @@ struct SingletonVideoPlayerView: View {
                         layerReadyForDisplay: layerReadyForCurrentVideo,
                         player: player
                     )
-                    // Show player
-                    FullscreenPlayerLayerView(
+                    // Use AVPlayerViewController in fullscreen so native playback
+                    // controls are available when the video is tapped.
+                    SimplerAVPlayerViewController(
                         player: player,
                         mid: mid,
-                        onReadyForDisplay: {
-                            DispatchQueue.main.async {
-                                readyForDisplayMid = mid
-                            }
-                        }
+                        onUserInteraction: onUserInteraction
                     )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                        .simultaneousGesture(
-                            TapGesture().onEnded {
-                                onUserInteraction()
-                            }
-                        )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onAppear {
+                        DispatchQueue.main.async {
+                            readyForDisplayMid = mid
+                        }
+                    }
 
                     if visualState.showsPoster {
                         posterImage
@@ -1301,18 +1298,34 @@ struct SingletonVideoPlayerView: View {
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     let player: AVPlayer
     let mid: String
+    let onUserInteraction: () -> Void
     
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onUserInteraction: onUserInteraction)
     }
     
-    class Coordinator: NSObject {
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var statusObserver: NSKeyValueObservation?
         var currentItemObserver: NSKeyValueObservation?
+        var onUserInteraction: () -> Void
+
+        init(onUserInteraction: @escaping () -> Void) {
+            self.onUserInteraction = onUserInteraction
+        }
         
         deinit {
             statusObserver?.invalidate()
             currentItemObserver?.invalidate()
+        }
+
+        @objc func handlePlayerTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            onUserInteraction()
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
         }
     }
 
@@ -1343,6 +1356,18 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
                 FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
             }
         }
+
+        // Let AVPlayerViewController keep its native tap handling while the app
+        // overlay is also revealed for fullscreen actions such as bookmarking.
+        let tapRecognizer = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePlayerTap(_:))
+        )
+        tapRecognizer.cancelsTouchesInView = false
+        tapRecognizer.delaysTouchesBegan = false
+        tapRecognizer.delaysTouchesEnded = false
+        tapRecognizer.delegate = context.coordinator
+        controller.view.addGestureRecognizer(tapRecognizer)
         
         // Setup observer to auto-play when ready
         setupPlayerItemObserver(player: player, context: context)
@@ -1378,6 +1403,8 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        context.coordinator.onUserInteraction = onUserInteraction
+
         if let controller = uiViewController as? SurfaceAwarePlayerViewController {
             controller.onSurfaceReady = {
                 Task { @MainActor in
