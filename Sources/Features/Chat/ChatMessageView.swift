@@ -754,6 +754,8 @@ struct ChatVideoContainer: View {
     // MARK: - Helper Functions
 
     private func openFullscreen() {
+        saveVideoPositionForFullscreen()
+
         if let player {
             wasPlayingBeforeFullscreen = isPlaying ||
                 player.rate > 0 ||
@@ -767,6 +769,81 @@ struct ChatVideoContainer: View {
             wasPlayingBeforeFullscreen = false
         }
         showFullScreen = true
+    }
+
+    private func saveVideoPositionForFullscreen() {
+        let sourcePlayer = player ?? SharedAssetCache.shared.getCachedPlayer(for: attachment.mid)
+
+        if let sourcePlayer, sourcePlayer.currentItem != nil {
+            let currentTime = handoffTime(for: sourcePlayer)
+            let wasPlaying = isPlaying ||
+                sourcePlayer.rate > 0 ||
+                sourcePlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            saveHandoffState(currentTime: currentTime, wasPlaying: wasPlaying, duration: sourcePlayer.currentItem?.duration)
+            return
+        }
+
+        if let playbackInfo = VideoStateCache.shared.getCachedPlaybackInfo(for: attachment.mid) {
+            saveHandoffState(currentTime: playbackInfo.time, wasPlaying: playbackInfo.wasPlaying, duration: nil)
+        }
+    }
+
+    private func handoffTime(for player: AVPlayer) -> CMTime {
+        guard let item = player.currentItem else {
+            return player.currentTime()
+        }
+
+        let duration = item.duration
+        guard duration.isValid,
+              !duration.isIndefinite,
+              duration.seconds.isFinite,
+              duration.seconds > 0 else {
+            return player.currentTime()
+        }
+
+        let currentTime = player.currentTime()
+        guard currentTime.isValid,
+              currentTime.seconds.isFinite else {
+            return currentTime
+        }
+
+        return duration.seconds - currentTime.seconds <= 3.0 ? .zero : currentTime
+    }
+
+    private func saveHandoffState(currentTime: CMTime, wasPlaying: Bool, duration: CMTime?) {
+        if let duration,
+           duration.isValid,
+           !duration.isIndefinite,
+           duration.seconds.isFinite,
+           duration.seconds > 0 {
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .mediaCell,
+                duration: duration
+            )
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .fullScreen,
+                duration: duration
+            )
+        } else {
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .mediaCell
+            )
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .fullScreen
+            )
+        }
     }
 
     private func isPlayerBroken(_ player: AVPlayer?) -> Bool {
