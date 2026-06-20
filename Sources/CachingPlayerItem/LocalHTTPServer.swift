@@ -2101,6 +2101,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             defer { try? handle.close() }
             
             let chunkSize = 256 * 1024
+            let sparseBlockSize = 4 * 1024
             var contiguous: Int64 = 0
             while contiguous < cappedSize {
                 let remaining = cappedSize - contiguous
@@ -2122,6 +2123,17 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if chunk.allSatisfy({ $0 == 0 }) {
                     break
                 }
+
+                var blockOffset = 0
+                while blockOffset < chunk.count {
+                    let blockLength = min(sparseBlockSize, chunk.count - blockOffset)
+                    let blockEnd = blockOffset + blockLength
+                    let block = chunk[blockOffset..<blockEnd]
+                    if block.allSatisfy({ $0 == 0 }) {
+                        return contiguous + Int64(blockOffset)
+                    }
+                    blockOffset = blockEnd
+                }
                 
                 contiguous += Int64(chunk.count)
                 
@@ -2130,12 +2142,38 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
             }
             
-            if contiguous > 0 {
-            }
             return contiguous
         } catch {
             print("⚠️ [PROGRESSIVE CACHE] Failed to infer contiguous size for \(mediaID): \(error.localizedDescription)")
             return nil
+        }
+    }
+
+    private func repairProgressiveCacheAfterZeroRange(mediaID: String, cacheFileURL: URL, failingStart: Int64) {
+        let repairedSize = max(0, min(failingStart, progressiveDiskCacheLimit))
+
+        // Stop older streams that may still believe the previous contiguous size is valid.
+        cancelDownloads(for: mediaID)
+
+        do {
+            let directory = cacheFileURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: cacheFileURL.path) {
+                FileManager.default.createFile(atPath: cacheFileURL.path, contents: nil)
+            }
+
+            let handle = try FileHandle(forUpdating: cacheFileURL)
+            defer { try? handle.close() }
+            if #available(iOS 13.0, *) {
+                try handle.truncate(atOffset: UInt64(repairedSize))
+            } else {
+                handle.truncateFile(atOffset: UInt64(repairedSize))
+            }
+            storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: repairedSize)
+            print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) repaired sparse cache at \(failingStart), contiguous=\(repairedSize)")
+        } catch {
+            storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: repairedSize)
+            print("⚠️ [PROGRESSIVE CACHE] Failed to truncate sparse cache for \(mediaID): \(error.localizedDescription)")
         }
     }
     
@@ -2356,6 +2394,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 hasRealData = probeData.contains { $0 != 0 }
             }
             if !hasRealData {
+                repairProgressiveCacheAfterZeroRange(mediaID: mediaID, cacheFileURL: cacheFileURL, failingStart: start)
                 logProgressiveCacheDecision(
                     mediaID: mediaID,
                     rangeHeader: rangeHeader,
