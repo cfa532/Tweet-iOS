@@ -42,6 +42,8 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     private var cachedBytesCount: Int64
     private let maxCacheSize: Int64 = 50 * 1024 * 1024  // 50MB safety cap
     private let writeLock = NSLock()
+    private let connectionStateLock = NSLock()
+    private var clientConnectionDead = false
     private var lastPersistedContiguousSize: Int64
     private let persistInterval: Int64 = 512 * 1024
 
@@ -71,6 +73,32 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         self.onTotalSizeKnown = onTotalSizeKnown
         self.sendsResponseHeaders = sendsResponseHeaders
         self.lastPersistedContiguousSize = initialCachedSize
+    }
+
+    private func markClientConnectionDead() {
+        var release: (() -> Void)?
+        connectionStateLock.lock()
+        if !clientConnectionDead {
+            clientConnectionDead = true
+            release = onConnectionDead
+            onConnectionDead = nil
+        }
+        connectionStateLock.unlock()
+        release?()
+    }
+
+    private func shouldSendToClient() -> Bool {
+        connectionStateLock.lock()
+        let dead = clientConnectionDead
+        connectionStateLock.unlock()
+        guard !dead else { return false }
+        switch connection.state {
+        case .cancelled, .failed:
+            markClientConnectionDead()
+            return false
+        default:
+            return true
+        }
     }
 
     // Forward IPFS response headers to AVPlayer, fixing only Content-Type.
@@ -123,22 +151,22 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 
             let writeOffset = cacheStart + sentBytesCount
 
-            // Stream chunk to AVPlayer immediately; on send failure the connection is dead —
-            // release the pool slot so primary video is no longer blocked.
-            switch connection.state {
-            case .cancelled, .failed:
-                let release = self.onConnectionDead
-                self.onConnectionDead = nil
-                release?()
+            // Stream to AVPlayer while the local socket is alive. If AVPlayer closes
+            // the socket, keep cache-writer downloads running so partial MP4 cache
+            // can continue growing for the next attempt.
+            let canSendToClient = shouldSendToClient()
+            let canStillGrowContiguousCache = cacheFileHandle != nil &&
+                cachedBytesCount < maxCacheSize &&
+                writeOffset <= cachedBytesCount
+            if canSendToClient {
+                connection.send(content: data, completion: .contentProcessed { [weak self] error in
+                    guard let self, error != nil else { return }
+                    self.markClientConnectionDead()
+                })
+            } else if !canStillGrowContiguousCache {
+                dataTask.cancel()
                 return
-            default: break
             }
-            connection.send(content: data, completion: .contentProcessed { [weak self] error in
-                guard let self = self, error != nil else { return }
-                let release = self.onConnectionDead
-                self.onConnectionDead = nil
-                release?()
-            })
             sentBytesCount += chunkLength
 
             // Write chunk to disk cache (only if a cache file handle was provided)
@@ -2688,6 +2716,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             })
         } catch {
             print("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
+            completion?()
         }
     }
     
