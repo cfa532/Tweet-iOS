@@ -4748,6 +4748,10 @@ class ChatVideoManager: ObservableObject {
     // Track which messageIds belong to which chat session (receiptId)
     private var chatSessionMessages: [String: Set<String>] = [:] // Key: receiptId, Value: Set of messageIds
 
+    private var chatMessageVideoMids: [String: String] = [:] // Key: messageId, Value: attachment mid
+    private var chatPlayerAccessTimes: [String: Date] = [:] // Key: messageId, Value: last access time
+    private let maxChatPlayerCacheSize = Constants.MAX_PLAYER_CACHE_SIZE
+
     /// State for a specific chat session's videos
     struct ChatSessionVideoState {
         var playingVideos: Set<String> = [] // mids of videos currently playing
@@ -4765,6 +4769,8 @@ class ChatVideoManager: ObservableObject {
             player.replaceCurrentItem(with: nil)
         }
         chatVideoPlayers.removeAll()
+        chatMessageVideoMids.removeAll()
+        chatPlayerAccessTimes.removeAll()
         print("DEBUG: [ChatVideoManager] Released \(count) chat video players for background")
     }
 
@@ -4782,18 +4788,17 @@ class ChatVideoManager: ObservableObject {
 
     /// Unregister a chat session (cleanup when leaving chat)
     func unregisterChatSession(receiptId: String) {
+        visibleVideos.removeValue(forKey: receiptId)
+
         // Pause and remove all AVPlayers for this session
         if let messageIds = chatSessionMessages[receiptId] {
             for messageId in messageIds {
-                if let player = chatVideoPlayers.removeValue(forKey: messageId) {
-                    player.pause()
-                }
+                releaseChatPlayer(messageId: messageId, releaseSharedCache: true)
             }
             print("DEBUG: [ChatVideoManager] Removed \(messageIds.count) players for session: \(receiptId)")
         }
 
         activeChatSessions.removeValue(forKey: receiptId)
-        visibleVideos.removeValue(forKey: receiptId)
         chatSessionMessages.removeValue(forKey: receiptId)
         print("DEBUG: [ChatVideoManager] Unregistered chat session: \(receiptId)")
     }
@@ -4854,6 +4859,8 @@ class ChatVideoManager: ObservableObject {
             }
         }
 
+        manageChatPlayerCacheSize()
+
         print("DEBUG: [ChatVideoManager] Updated visibility for \(receiptId): +\(newlyVisible.count) visible, -\(newlyInvisible.count) invisible")
     }
 
@@ -4888,10 +4895,14 @@ class ChatVideoManager: ObservableObject {
     ) async -> AVPlayer? {
         if let existingPlayer = chatVideoPlayers[messageId],
            !isPlayerBroken(existingPlayer) {
+            chatMessageVideoMids[messageId] = attachment.mid
+            chatPlayerAccessTimes[messageId] = Date()
             return existingPlayer
         } else if let existingPlayer = chatVideoPlayers.removeValue(forKey: messageId) {
             existingPlayer.pause()
             existingPlayer.replaceCurrentItem(with: nil)
+            chatMessageVideoMids.removeValue(forKey: messageId)
+            chatPlayerAccessTimes.removeValue(forKey: messageId)
         }
 
         // Get the base URL for the video
@@ -4911,7 +4922,10 @@ class ChatVideoManager: ObservableObject {
         do {
             let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: attachment.mid, mediaType: attachment.type)
             chatVideoPlayers[messageId] = player
+            chatMessageVideoMids[messageId] = attachment.mid
+            chatPlayerAccessTimes[messageId] = Date()
             chatSessionMessages[receiptId, default: Set<String>()].insert(messageId)
+            manageChatPlayerCacheSize()
             return player
         } catch {
             print("DEBUG: [ChatVideoManager] Failed to create player for \(messageId): \(error)")
@@ -4921,18 +4935,16 @@ class ChatVideoManager: ObservableObject {
 
     /// Remove a video player for a message
     func removeVideoPlayer(messageId: String) {
-        if let player = chatVideoPlayers.removeValue(forKey: messageId) {
-            player.pause()
-        }
+        releaseChatPlayer(messageId: messageId, releaseSharedCache: true)
     }
 
     /// Clean up all video players for a chat session
     func cleanupChatSession(receiptId: String) {
         guard let messageIds = chatSessionMessages[receiptId] else { return }
+        visibleVideos.removeValue(forKey: receiptId)
+
         for messageId in messageIds {
-            if let player = chatVideoPlayers.removeValue(forKey: messageId) {
-                player.pause()
-            }
+            releaseChatPlayer(messageId: messageId, releaseSharedCache: true)
         }
         chatSessionMessages.removeValue(forKey: receiptId)
         print("DEBUG: [ChatVideoManager] Cleaned up \(messageIds.count) players for session: \(receiptId)")
@@ -4947,6 +4959,54 @@ class ChatVideoManager: ObservableObject {
         }
         let seconds = player.currentTime().seconds
         return seconds.isNaN || seconds == .infinity || seconds == -.infinity
+    }
+
+    private func currentVisibleChatVideoMids() -> Set<String> {
+        var protectedMids = Set<String>()
+        for (receiptId, sessionState) in activeChatSessions where sessionState.isChatVisible {
+            protectedMids.formUnion(visibleVideos[receiptId] ?? [])
+        }
+        return protectedMids
+    }
+
+    private func releaseChatPlayer(messageId: String, releaseSharedCache: Bool) {
+        let mediaID = chatMessageVideoMids[messageId]
+        if let player = chatVideoPlayers.removeValue(forKey: messageId) {
+            player.pause()
+        }
+        chatMessageVideoMids.removeValue(forKey: messageId)
+        chatPlayerAccessTimes.removeValue(forKey: messageId)
+
+        if releaseSharedCache,
+           let mediaID,
+           !chatMessageVideoMids.values.contains(mediaID),
+           !currentVisibleChatVideoMids().contains(mediaID) {
+            SharedAssetCache.shared.releasePlayerImmediately(for: mediaID)
+        }
+    }
+
+    private func manageChatPlayerCacheSize() {
+        guard chatVideoPlayers.count > maxChatPlayerCacheSize else { return }
+
+        let protectedMids = currentVisibleChatVideoMids()
+        let candidates = chatPlayerAccessTimes
+            .filter { messageId, _ in
+                guard let mediaID = chatMessageVideoMids[messageId] else { return true }
+                return !protectedMids.contains(mediaID)
+            }
+            .sorted { $0.value < $1.value }
+            .map { $0.key }
+
+        let targetRemovalCount = chatVideoPlayers.count - maxChatPlayerCacheSize
+        var removedCount = 0
+        for messageId in candidates.prefix(targetRemovalCount) {
+            releaseChatPlayer(messageId: messageId, releaseSharedCache: true)
+            removedCount += 1
+        }
+
+        if removedCount > 0 {
+            print("DEBUG: [ChatVideoManager] Trimmed \(removedCount) cached chat video player(s); remaining: \(chatVideoPlayers.count)")
+        }
     }
 
     private func recoverVisibleVideosAfterInfrastructureReady(reason: String) {
