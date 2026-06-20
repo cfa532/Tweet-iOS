@@ -153,7 +153,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// Pure UIKit video player (AVPlayerLayer) — replaces UIHostingController<SimpleVideoPlayer>
     private let videoPlayerView: LightweightVideoPlayerView = {
         let v = LightweightVideoPlayerView()
-        v.backgroundColor = .black
+        v.backgroundColor = UIColor.systemGray5
         v.clipsToBounds = true
         v.isHidden = true
         // Fill container (clip overflow) — matches SimpleVideoPlayer's .resizeAspectFill for feed cells
@@ -1019,6 +1019,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         // 2. Disk cache (background) → network (default gray color for light image background)
         loadingSpinner.color = nil  // reset to system default (gray, visible on .systemGray6)
+        loadingSpinner.transform = .identity
+        loadingSpinner.backgroundColor = .clear
+        loadingSpinner.layer.cornerRadius = 0
         loadingSpinner.startAnimating()
         let attachmentCopy = attachment
         let baseUrlCopy = effectiveBaseUrl
@@ -1089,8 +1092,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             SharedAssetCache.shared.protectBackgroundPoster(for: attachment.mid)
         }
 
-        // Set spinner color for video (white on dark background)
-        loadingSpinner.color = .white.withAlphaComponent(0.7)
+        // Keep the video loading indicator visible against both light placeholders and varied thumbnails.
+        loadingSpinner.color = UIColor.label.withAlphaComponent(0.9)
+        loadingSpinner.transform = CGAffineTransform(scaleX: 1.2, y: 1.2)
+        loadingSpinner.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.65)
+        loadingSpinner.layer.cornerRadius = 10
 
         // Start with a dark loading state, then apply/generate any cached poster
         // immediately. If AVPlayer stalls before first render, a poster is much

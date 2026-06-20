@@ -512,8 +512,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // manage onScreenMediaCells. Otherwise off-screen cells get selected as primary.
         //
         // At app start, cells register AFTER the initial updateVisibleTweetsForVideoPlayback().
-        // Use scheduleStartPrimary (0.3s debounce) to give updateOnScreenMediaCells time to
-        // populate the correct visible set before we attempt primary selection.
+        // Use scheduleStartPrimary so active scrolling still debounces, while idle feeds can
+        // start as soon as the visible delegate is available.
         if phase == .idle {
             scheduleStartPrimary()
         }
@@ -1542,12 +1542,15 @@ class VideoPlaybackCoordinator: ObservableObject {
     func performPreloadOnScrollStop() {
         onScrollStopped()
         promoteForegroundVisibleMedia(reason: "scroll stop")
+        if phase == .idle && !visibleVideos.isEmpty {
+            scheduleStartPrimary()
+        }
         refreshDirectionalPreloads(reason: "scroll stop", throttle: false)
     }
 
     func canRunDirectionalPreloads() -> Bool {
         guard AppDelegate.isVideoInfrastructureReady,
-              isScrollStoppedForDirectionalPreload,
+              isTableViewScrollIdle,
               !isPlaybackSuppressedByOverlay,
               isFeedVisible else { return false }
 
@@ -1562,15 +1565,19 @@ class VideoPlaybackCoordinator: ObservableObject {
         return delegate.isActuallyPlaying || delegate.isRecentlyPlaying
     }
 
-    private var isScrollStoppedForDirectionalPreload: Bool {
+    private var isTableViewScrollIdle: Bool {
         guard !isScrolling else { return false }
         guard let tableView else { return true }
         return !tableView.isTracking && !tableView.isDragging && !tableView.isDecelerating
     }
 
+    var isFeedScrollIdle: Bool {
+        isTableViewScrollIdle
+    }
+
     private func refreshDirectionalPreloads(reason: String, throttle: Bool) {
         guard AppDelegate.isVideoInfrastructureReady else { return }
-        guard isScrollStoppedForDirectionalPreload else { return }
+        guard isTableViewScrollIdle else { return }
         promoteForegroundVisibleMedia(reason: reason)
 
         guard canRunDirectionalPreloads() else {
@@ -1647,15 +1654,29 @@ class VideoPlaybackCoordinator: ObservableObject {
         print("🎬 [COORD] \(reason): cancelled \(staleMids.count) stale preloads")
     }
 
-    /// Schedule primary video playback after a short debounce (0.3s).
-    /// Fast path: if the top candidate has a cached ready player, play immediately (no debounce).
-    /// Slow path: start 0.3s timer. Per-candidate: the timer is NOT reset as long as the same
-    /// video remains the top candidate. Only resets when the candidate changes.
+    /// Schedule primary video playback.
+    /// Fast paths: idle table or cached-ready player → play immediately.
+    /// Scroll path for cold players: start 0.3s timer but only promote if the table is idle when it fires.
+    /// Per-candidate: the timer is NOT reset as long as the same video remains the top
+    /// candidate. Only resets when the candidate changes.
     private func scheduleStartPrimary() {
         guard let candidate = identifyPrimaryVideo() else { return }
         let topCandidate = candidate.identifier
 
-        // Fast path: cached ready player → play immediately, skip debounce.
+        // If the table is not moving, there is no visibility churn to absorb.
+        // Start immediately so scroll-stop autoplay feels responsive.
+        if isTableViewScrollIdle {
+            playbackDebounceTimer?.invalidate()
+            playbackDebounceTimer = nil
+            pendingPrimaryCandidate = nil
+            if phase == .idle {
+                startPrimaryVideoPlayback()
+            }
+            return
+        }
+
+        // Preserve old UX for already-warmed videos: they can start immediately
+        // without showing a blank poster while the user scrolls slowly.
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: candidate.videoMid),
            cachedPlayer.currentItem?.status == .readyToPlay {
             playbackDebounceTimer?.invalidate()
@@ -1680,7 +1701,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 guard let self else { return }
                 self.playbackDebounceTimer = nil
                 self.pendingPrimaryCandidate = nil
-                if self.phase == .idle && !self.visibleVideos.isEmpty {
+                if self.phase == .idle && !self.visibleVideos.isEmpty && self.isTableViewScrollIdle {
                     self.startPrimaryVideoPlayback()
                 }
             }
