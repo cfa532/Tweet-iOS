@@ -101,6 +101,12 @@ class TweetCellContentView: UIView {
 
     /// Per-feed video coordinator (set by TweetTableViewCell)
     weak var videoCoordinator: VideoPlaybackCoordinator?
+    var cellHorizontalPadding: CGFloat = 16 {
+        didSet {
+            bodyView.cellHorizontalPadding = cellHorizontalPadding
+            embeddedTweetView.cellHorizontalPadding = cellHorizontalPadding
+        }
+    }
 
     // Callbacks (set by cell / controller)
     var onAvatarTap: ((User) -> Void)?

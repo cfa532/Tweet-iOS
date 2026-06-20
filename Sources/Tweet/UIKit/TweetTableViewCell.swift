@@ -181,6 +181,7 @@ class TweetTableViewCell: UITableViewCell {
         // Apply list-level padding to the cell content
         leadingConstraint.constant = leadingPadding
         trailingConstraint.constant = -trailingPadding
+        tweetContentView.cellHorizontalPadding = leadingPadding + trailingPadding
 
         tweetContentView.videoCoordinator = videoCoordinator
         tweetContentView.onAvatarTap = onAvatarTap

@@ -87,7 +87,21 @@ final class TweetCacheManager: @unchecked Sendable {
     var context: NSManagedObjectContext { coreDataManager.context }
     
     // MARK: - Media Cleanup
-    
+
+    private func clearHeightCache(for tweetId: String) {
+        if let tweet = Tweet.getInstance(for: tweetId) {
+            tweet.cachedHeight = nil
+            tweet.cachedHeightWidth = 0
+        }
+        TweetHeightCache.shared.removeHeight(for: tweetId)
+    }
+
+    private func clearHeightCache(for tweet: Tweet) {
+        tweet.cachedHeight = nil
+        tweet.cachedHeightWidth = 0
+        clearHeightCache(for: tweet.mid)
+    }
+
     /// Delete media files associated with a tweet
     private func deleteMediaForTweet(_ tweet: Tweet) {
         // Collect all media IDs from attachments
@@ -154,6 +168,7 @@ final class TweetCacheManager: @unchecked Sendable {
         tweetAccessTimes.removeAll()
         saveAccessTimes()
         print("DEBUG: [TweetCacheManager] Access times cleared")
+        TweetHeightCache.shared.clearAll()
 
         // Final sweep: clear any remaining caches that might not be tweet-associated
         Task { @MainActor in
@@ -503,6 +518,9 @@ extension TweetCacheManager {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .millisecondsSince1970
             if let tweetData = try? encoder.encode(tweet) {
+                if let existingTweetData = cdTweet.tweetData, existingTweetData != tweetData {
+                    clearHeightCache(for: tweet)
+                }
                 cdTweet.tweetData = tweetData
             }
                         
@@ -586,6 +604,7 @@ extension TweetCacheManager {
                         
                         // Remove from access times
                         tweetAccessTimes.removeValue(forKey: tweetId)
+                        clearHeightCache(for: tweetId)
                         
                         // Delete tweet from CoreData
                         context.delete(cdTweet)
@@ -611,6 +630,9 @@ extension TweetCacheManager {
             if let invalidTweets = try? context.fetch(request) {
                 print("ERROR: [TweetCacheManager] Found \(invalidTweets.count) tweets with invalid timestamps, deleting them")
                 for tweet in invalidTweets {
+                    if let tweetId = tweet.tid {
+                        clearHeightCache(for: tweetId)
+                    }
                     context.delete(tweet)
                 }
                 try? context.save()
@@ -625,6 +647,9 @@ extension TweetCacheManager {
             // Delete ALL instances of this tweet (might be in multiple caches)
             if let cdTweets = try? context.fetch(request) {
                 for cdTweet in cdTweets {
+                    if let tweetId = cdTweet.tid {
+                        clearHeightCache(for: tweetId)
+                    }
                     context.delete(cdTweet)
                 }
                 if !cdTweets.isEmpty {
@@ -649,6 +674,7 @@ extension TweetCacheManager {
                     if let tweet = try? Tweet.from(cdTweet: cdTweet), tweet.authorId == userId {
                         // Remove from access times
                         tweetAccessTimes.removeValue(forKey: tweet.mid)
+                        clearHeightCache(for: tweet.mid)
                         context.delete(cdTweet)
                         deletedCount += 1
                     }
@@ -672,6 +698,7 @@ extension TweetCacheManager {
                 try? context.save()
             }
         }
+        TweetHeightCache.shared.clearAll()
         
         // Also clear all users for soft restart
         clearAllUsers()
@@ -699,6 +726,9 @@ extension TweetCacheManager {
                 let tweetsToRemove = Array(allTweets.prefix(countToRemove))
                 
                 for tweet in tweetsToRemove {
+                    if let tweetId = tweet.tid {
+                        clearHeightCache(for: tweetId)
+                    }
                     context.delete(tweet)
                 }
                 
@@ -713,6 +743,9 @@ extension TweetCacheManager {
             request.predicate = NSPredicate(format: "uid == %@", userId)
             if let userTweets = try? context.fetch(request) {
                 for tweet in userTweets {
+                    if let tweetId = tweet.tid {
+                        clearHeightCache(for: tweetId)
+                    }
                     context.delete(tweet)
                 }
                 try? context.save()

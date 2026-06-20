@@ -67,6 +67,11 @@ class TweetBodyUIView: UIView {
     var onContentExpanded: (() -> Void)?
     /// Per-feed video coordinator (set by TweetCellContentView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
+    var cellHorizontalPadding: CGFloat = 16 {
+        didSet {
+            mediaGridView.cellHorizontalPadding = cellHorizontalPadding
+        }
+    }
     /// Whether the video caption label is currently visible (for single-video tweets with title)
     private(set) var isCaptionVisible: Bool = false
     /// Whether the content is truncated with a "More..." suffix
@@ -223,16 +228,21 @@ class TweetBodyUIView: UIView {
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Compute available text width (must match deterministic height calculator)
             let screenWidth = UIScreen.main.bounds.width
+            let regularContentWidth = (
+                screenWidth
+                - cellHorizontalPadding
+                - 3 // mainStack leading
+                - 42 // avatar
+                - 4 // avatar/content spacing
+            )
             let textWidth: CGFloat
             if isEmbedded {
                 // bodyView is below headerRow (full contentStack width, NOT beside embedded avatar)
-                // screenWidth - cellPad(16) - mainLeading(3) - mainAvatar(42) - mainSpacing(4)
-                //             - embViewLeadingOffset(-4) - embContentStackPad(8+8)
-                // = screenWidth - 77
-                textWidth = screenWidth - 77
+                // regular content width + embedded wrapper extension (4)
+                // - embedded content stack padding (8 + 8)
+                textWidth = regularContentWidth + 4 - 16
             } else {
-                // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4)
-                textWidth = screenWidth - 65
+                textWidth = regularContentWidth
             }
             if let cached = tweet.cachedContentAttributedString,
                tweet.cachedContentWidth == textWidth {

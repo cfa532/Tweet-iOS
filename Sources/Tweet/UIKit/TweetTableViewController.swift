@@ -2018,7 +2018,10 @@ class TweetTableViewController: UITableViewController {
         // Use deterministic calculation as estimate.
         // willDisplay caches the actual Auto Layout height for future use,
         // so subsequent calls will hit the cachedHeight path above.
-        return Self.calculateTweetHeight(for: tweet)
+        return Self.calculateTweetHeight(
+            for: tweet,
+            cellHorizontalPadding: leadingPadding + trailingPadding
+        )
     }
 
     /// Shared UILabel for text height measurement — matches UILabel's exact rendering.
@@ -2033,7 +2036,10 @@ class TweetTableViewController: UITableViewController {
     }()
 
     /// Deterministic height calculation matching TweetCellContentView's Auto Layout.
-    static func calculateTweetHeight(for tweet: Tweet) -> CGFloat {
+    static func calculateTweetHeight(
+        for tweet: Tweet,
+        cellHorizontalPadding: CGFloat = 16
+    ) -> CGFloat {
         // Determine if this is a pure retweet (show original content) or regular/quoted
         let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil
         let hasOwnContent = (tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
@@ -2067,10 +2073,14 @@ class TweetTableViewController: UITableViewController {
         // spacing after header: 0
         // Body: text + media
         // TweetBodyUIView layout: contentStack.top = bodyView.top + 2 (always)
-        // contentLabel → media: customSpacing = 4 when text visible, 0 when hidden
-        // Account for cell-level padding (leadingPadding + trailingPadding, default 8+8)
-        let cellPadding: CGFloat = 16 // leadingPadding(8) + trailingPadding(8) default
-        let contentWidth = (UIScreen.main.bounds.width - cellPadding - 3 /* leading */ - 42 /* avatar */ - 4 /* stack spacing */)
+        // contentLabel → media: customSpacing = 8 when text visible
+        let contentWidth = (
+            UIScreen.main.bounds.width
+            - cellHorizontalPadding
+            - 3 /* leading */
+            - 42 /* avatar */
+            - 4 /* stack spacing */
+        )
 
         // bodyHeight mirrors TweetBodyUIView's contentStack Auto Layout
         var bodyHeight: CGFloat = 2 // contentStack.top offset (always present)
@@ -2100,9 +2110,13 @@ class TweetTableViewController: UITableViewController {
         let mediaAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
         var hasCaptionLabel = false
         if !mediaAttachments.isEmpty {
-            let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, isEmbedded: false)
+            let mediaHeight = MediaGridViewModel.calculateHeight(
+                for: mediaAttachments,
+                isEmbedded: false,
+                cellHorizontalPadding: cellHorizontalPadding
+            )
             if hasTextContent {
-                bodyHeight += 4 // customSpacing(after: contentLabel) when text visible
+                bodyHeight += 8 // customSpacing(after: contentLabel) when text visible
             }
             bodyHeight += mediaHeight
 
@@ -2158,11 +2172,11 @@ class TweetTableViewController: UITableViewController {
                 //   8pt top padding
                 //   contentStack = max(40, textStack)
                 //     textStack = headerView(24) + bodyView
-                //   bottomPadding = (hasMedia && !hasCaptionInBody) ? 0 : 8
+                //   bottomPadding = 8
                 //
                 // TweetBodyUIView (embedded) layout:
                 //   2pt contentStack top
-                //   contentLabel (if text) + 4pt spacing (to mediaContainer)
+                //   contentLabel (if text) + 8pt spacing (to mediaContainer)
                 //   mediaContainer (mediaH) + 2pt spacing (if caption visible) + caption(17)
 
                 let embeddedMedia = embeddedTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
@@ -2189,8 +2203,8 @@ class TweetTableViewController: UITableViewController {
                 var embeddedBodyH: CGFloat = 2 // contentStack top padding
 
                 if hasEmbeddedText {
-                    // bodyView spans full EmbeddedTweetUIView contentStack width (NOT beside avatar)
-                    // contentStack.width = screenWidth - 77 = contentWidth - 12
+                    // bodyView spans full EmbeddedTweetUIView contentStack width (NOT beside avatar).
+                    // Embedded wrapper extends 4pt left, then embedded content adds 8pt side insets.
                     let embeddedWidth = contentWidth - 12
                     // Build (or retrieve cached) attributed string for embedded tweet
                     let attrString: NSAttributedString
@@ -2211,24 +2225,31 @@ class TweetTableViewController: UITableViewController {
 
                 if !embeddedMedia.isEmpty {
                     if hasEmbeddedText {
-                        embeddedBodyH += 4 // customSpacing(after: contentLabel) only when text+media both present
+                        embeddedBodyH += 8 // customSpacing(after: contentLabel) only when text+media both present
                     }
-                    embeddedBodyH += MediaGridViewModel.calculateHeight(for: embeddedMedia, isEmbedded: true)
+                    embeddedBodyH += MediaGridViewModel.calculateHeight(
+                        for: embeddedMedia,
+                        isEmbedded: true,
+                        cellHorizontalPadding: cellHorizontalPadding
+                    )
                     if hasEmbeddedCaption {
                         embeddedBodyH += 2 + 17 // spacing + caption label
                     }
                 }
 
                 // EmbeddedTweetUIView.contentStack (spacing=4):
-                //   headerRow height = max(32pt avatar, ~21pt header text) = 32pt
+                //   headerRow height = max(32pt avatar, measured two-line header)
                 //   bodyView height = embeddedBodyH
-                // Total: 32 + 4 + embeddedBodyH = 36 + embeddedBodyH
-                // Bottom padding: 0 when media present without caption, 8 otherwise
-                let hasMedia = !embeddedMedia.isEmpty
-                let reduceBottom = hasMedia && !hasEmbeddedCaption
-                let bottomPadding: CGFloat = reduceBottom ? 0 : 8
-
-                let embeddedHeight: CGFloat = 8 + 36 + embeddedBodyH + bottomPadding
+                let embeddedContentWidth = contentWidth - 12
+                let embeddedHeaderWidth = embeddedContentWidth - 32 - 6
+                let embeddedHeaderHeight = max(
+                    CGFloat(32),
+                    TweetHeaderUIView.measuredHeaderHeight(
+                        for: embeddedTweet,
+                        availableWidth: embeddedHeaderWidth
+                    )
+                )
+                let embeddedHeight: CGFloat = 8 + embeddedHeaderHeight + 4 + embeddedBodyH + 8
                 height += embeddedHeight
             } else {
                 // Not loaded: show placeholder (60pt)
@@ -2279,11 +2300,21 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
+        // Use persisted measured height before falling back to deterministic calculation.
+        // estimatedHeightForRowAt uses the same value; keeping both paths aligned avoids
+        // a visible grow-after-render pass for previously measured tweets.
+        if let persistedHeight = TweetHeightCache.shared.getHeight(for: tweet.mid, width: layoutWidth) {
+            return persistedHeight
+        }
+
         // Use deterministic calculation instead of Auto Layout.
         // This matches estimatedHeightForRowAt's fallback, so estimate == actual → no scroll jumps.
         // The cell still uses Auto Layout internally for content positioning;
         // only the cell height is pre-determined.
-        return Self.calculateTweetHeight(for: tweet)
+        return Self.calculateTweetHeight(
+            for: tweet,
+            cellHorizontalPadding: leadingPadding + trailingPadding
+        )
     }
 
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
@@ -2316,7 +2347,10 @@ class TweetTableViewController: UITableViewController {
                 // Sanity check: if the actual height is much smaller than expected,
                 // the cell likely hasn't finished rendering (async content pending).
                 // Don't cache — let Auto Layout re-determine on next display.
-                let expectedHeight = Self.calculateTweetHeight(for: tweet)
+                let expectedHeight = Self.calculateTweetHeight(
+                    for: tweet,
+                    cellHorizontalPadding: self.leadingPadding + self.trailingPadding
+                )
                 let isReasonable = cell.frame.height >= expectedHeight - 20
 
                 if isReasonable {

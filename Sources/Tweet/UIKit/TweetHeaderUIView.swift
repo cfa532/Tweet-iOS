@@ -177,6 +177,27 @@ class TweetHeaderUIView: UIView {
         return text
     }
 
+    static func measuredHeaderHeight(for tweet: Tweet, availableWidth: CGFloat) -> CGFloat {
+        let displayName = tweet.author?.name?.isEmpty == false ? tweet.author!.name! : "No one"
+        let usernameText = tweet.author?.username?.isEmpty == false
+            ? tweet.author!.username!
+            : NSLocalizedString("username", comment: "Default username")
+        let attrText = makeHeaderText(
+            name: displayName,
+            username: usernameText,
+            timestamp: timeDifference(from: tweet.timestamp)
+        )
+        let label = UILabel()
+        label.numberOfLines = 2
+        label.lineBreakMode = .byTruncatingTail
+        label.attributedText = attrText
+        // TweetHeaderUIView always reserves the hidden menu button's 44pt width
+        // plus the 4pt label-to-menu gap because hiding the button does not remove
+        // its Auto Layout constraints.
+        let labelWidth = max(10, availableWidth - 48)
+        return ceil(label.sizeThatFits(CGSize(width: labelWidth, height: .greatestFiniteMagnitude)).height)
+    }
+
     func prepareForReuse() {
         tweetCancellables.removeAll()
         userCancellables.removeAll()

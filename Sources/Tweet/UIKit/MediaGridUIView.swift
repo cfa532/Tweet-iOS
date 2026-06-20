@@ -10,6 +10,7 @@ import UIKit
 import Combine
 
 class MediaGridUIView: UIView {
+    private static let containerTrailingInset: CGFloat = 2
 
     // MARK: - State
 
@@ -25,6 +26,7 @@ class MediaGridUIView: UIView {
     private var cellTweetId: String?
     private var shouldLoadVideo: Bool = true
     private weak var parentViewController: UIViewController?
+    var cellHorizontalPadding: CGFloat = 16
 
     /// Per-feed video coordinator (set by TweetBodyUIView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
@@ -228,7 +230,14 @@ class MediaGridUIView: UIView {
     private func seedIntrinsicHeightIfNeeded(for attachments: [MimeiFileType], isEmbedded: Bool) {
         guard !attachments.isEmpty else { return }
 
-        let knownWidth = bounds.width > 0 ? bounds.width : superview?.bounds.width ?? 0
+        let knownWidth: CGFloat
+        if bounds.width > 0 {
+            knownWidth = bounds.width
+        } else if let containerWidth = superview?.bounds.width, containerWidth > 0 {
+            knownWidth = max(10, containerWidth - Self.containerTrailingInset)
+        } else {
+            knownWidth = 0
+        }
         let estimatedWidth = knownWidth > 0 ? knownWidth : estimatedGridWidth(isEmbedded: isEmbedded)
         let estimatedHeight = ceil(MediaGridViewModel.calculateHeight(for: attachments, gridWidth: estimatedWidth))
         guard estimatedHeight > 0, abs(estimatedHeight - computedGridHeight) > 1.0 else { return }
@@ -238,12 +247,10 @@ class MediaGridUIView: UIView {
     }
 
     private func estimatedGridWidth(isEmbedded: Bool) -> CGFloat {
-        let screenWidth = UIScreen.main.bounds.width
-        let containerWidth = isEmbedded
-            ? max(10, screenWidth - 79)
-            : max(10, screenWidth - 32 - 34)
-        // TweetBodyUIView pins the grid 2pt inside its media container.
-        return max(10, containerWidth - 2)
+        MediaGridViewModel.defaultGridWidth(
+            isEmbedded: isEmbedded,
+            cellHorizontalPadding: cellHorizontalPadding
+        )
     }
 
     // MARK: - Frame Calculations

@@ -88,6 +88,11 @@ class EmbeddedTweetUIView: UIView {
 
     /// Per-feed video coordinator (set by TweetCellContentView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
+    var cellHorizontalPadding: CGFloat = 16 {
+        didSet {
+            bodyView.cellHorizontalPadding = cellHorizontalPadding
+        }
+    }
 
     var onTap: ((Tweet) -> Void)?
 
@@ -213,11 +218,8 @@ class EmbeddedTweetUIView: UIView {
             self.onTap?(tweet)
         }
 
-        // Reduce bottom padding when media is present but no caption
-        // (image attachments have no caption, so the gap looks excessive)
-        let hasMedia = tweet.attachments?.contains(where: { TweetBodyUIView.isMediaType($0.type) }) ?? false
-        let reduceBottom = hasMedia && !bodyView.isCaptionVisible
-        contentStackBottomConstraint.constant = reduceBottom ? 0 : -8
+        // Keep a real inset below embedded media so rounded borders do not clip the content.
+        contentStackBottomConstraint.constant = -8
 
         // Mark as accessed for cache management
         TweetCacheManager.shared.markTweetAccessed(tweet.mid)
