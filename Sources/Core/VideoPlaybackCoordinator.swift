@@ -1562,7 +1562,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             return false
         }
 
-        return delegate.isActuallyPlaying || delegate.isRecentlyPlaying
+        return delegate.isActuallyPlaying
     }
 
     private var isTableViewScrollIdle: Bool {

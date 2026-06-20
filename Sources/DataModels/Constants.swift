@@ -35,7 +35,7 @@ enum Constants {
 
 enum FeedPlaybackTuning {
     // Directional preloading
-    static let directionalVideoPreloadCount = 2
+    static let directionalVideoPreloadCount = 1
     static let directionalImagePreloadRowCount = 2
     static let oppositeStopImagePreloadRowCount = 1
     static let maxDirectionalImagePreloadsInFlight = 4

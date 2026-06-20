@@ -73,7 +73,7 @@ enum PlaybackState {
 // MARK: - Video Player State Manager
 class VideoStateCache {
     static let shared = VideoStateCache()
-    private var cache: [String: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool, timestamp: Date)] = [:]
+    private var cache: [String: (player: AVPlayer?, time: CMTime, wasPlaying: Bool, originalMuteState: Bool, timestamp: Date)] = [:]
     private let cacheExpirationInterval: TimeInterval = 600 // 10 minutes
     private let maxCacheSize = 15 // Maximum number of cached states (reduced for better performance)
 
@@ -135,23 +135,31 @@ class VideoStateCache {
     
     func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
         cache[mid] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState, timestamp: Date())
+        trimCacheIfNeeded()
+    }
+
+    func cachePlaybackInfo(for mid: String, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
+        cache[mid] = (player: nil, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState, timestamp: Date())
+        trimCacheIfNeeded()
+    }
+
+    private func trimCacheIfNeeded() {
+        guard cache.count > maxCacheSize else { return }
         
         // Manage cache size with LRU eviction
-        if cache.count > maxCacheSize {
-            // Sort by timestamp (oldest first) and remove oldest entries
-            // CRITICAL: Never evict visible videos
-            let sortedKeys = cache
-                .filter { !visibleVideoMids.contains($0.key) } // Skip visible videos
-                .sorted { $0.value.timestamp < $1.value.timestamp }
-                .map { $0.key }
-            let keysToRemove = sortedKeys.prefix(cache.count - maxCacheSize)
-            
-            for key in keysToRemove {
-                if let oldPlayer = cache[key]?.player {
-                    oldPlayer.pause()
-                }
-                cache.removeValue(forKey: key)
+        // Sort by timestamp (oldest first) and remove oldest entries
+        // CRITICAL: Never evict visible videos
+        let sortedKeys = cache
+            .filter { !visibleVideoMids.contains($0.key) } // Skip visible videos
+            .sorted { $0.value.timestamp < $1.value.timestamp }
+            .map { $0.key }
+        let keysToRemove = sortedKeys.prefix(cache.count - maxCacheSize)
+        
+        for key in keysToRemove {
+            if let oldPlayer = cache[key]?.player {
+                oldPlayer.pause()
             }
+            cache.removeValue(forKey: key)
         }
     }
     
@@ -171,11 +179,15 @@ class VideoStateCache {
         //
         // IMPORTANT: AppDelegate background recovery may clear `currentItem` to force recreation.
         // In that case, we MUST keep the cached playback time so we can resume after recreating the player.
-        if cachedState.player.currentItem == nil || cachedState.player.currentItem?.status == .failed {
+        guard let player = cachedState.player else {
+            return nil
+        }
+
+        if player.currentItem == nil || player.currentItem?.status == .failed {
             return nil
         }
         
-        return (player: cachedState.player, time: cachedState.time, wasPlaying: cachedState.wasPlaying, originalMuteState: cachedState.originalMuteState)
+        return (player: player, time: cachedState.time, wasPlaying: cachedState.wasPlaying, originalMuteState: cachedState.originalMuteState)
     }
 
     /// Returns cached playback info even if the cached player is no longer valid.

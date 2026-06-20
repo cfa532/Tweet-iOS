@@ -37,9 +37,8 @@ enum FeedVideoResumeStore {
               currentTime.seconds > 0.25 else { return }
         guard !isNearEnd(time: currentTime, duration: item.duration, tolerance: 5.0) else { return }
 
-        VideoStateCache.shared.cacheVideoState(
+        VideoStateCache.shared.cachePlaybackInfo(
             for: mid,
-            player: player,
             time: currentTime,
             wasPlaying: wasPlaying,
             originalMuteState: player.isMuted
@@ -130,9 +129,73 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private static var feedPlayerRebuildHistory: [String: [Date]] = [:]
     private static let maxFeedPlayerRebuildsPerWindow = 2
     private static let feedPlayerRebuildWindow: TimeInterval = 90
+    private static let maxIndependentFeedPlayers = Constants.MAX_PLAYER_CACHE_SIZE
     private static let slowLoadingNudgeInterval: TimeInterval = 5
     private static let slowLoadingNudgeIntervalNanos: UInt64 = 5_000_000_000
+    private static let activeHLSSegmentStartupTimeout: TimeInterval = 75
     private static let foregroundFeedResumeSuppressionDuration: TimeInterval = 30
+
+    private final class IndependentFeedPlayerEntry {
+        weak var owner: MediaCellUIView?
+        weak var player: AVPlayer?
+        let mediaID: String
+        var lastAccess: Date
+
+        init(owner: MediaCellUIView, player: AVPlayer, mediaID: String) {
+            self.owner = owner
+            self.player = player
+            self.mediaID = mediaID
+            self.lastAccess = Date()
+        }
+    }
+
+    private static var independentFeedPlayerEntries: [ObjectIdentifier: IndependentFeedPlayerEntry] = [:]
+
+    private static func registerIndependentFeedPlayer(_ player: AVPlayer, owner: MediaCellUIView, mediaID: String) {
+        let ownerID = ObjectIdentifier(owner)
+        independentFeedPlayerEntries[ownerID] = IndependentFeedPlayerEntry(owner: owner, player: player, mediaID: mediaID)
+        enforceIndependentFeedPlayerLimit(excluding: owner)
+    }
+
+    private static func unregisterIndependentFeedPlayer(owner: MediaCellUIView) {
+        independentFeedPlayerEntries.removeValue(forKey: ObjectIdentifier(owner))
+    }
+
+    private static func enforceIndependentFeedPlayerLimit(excluding protectedOwner: MediaCellUIView? = nil) {
+        independentFeedPlayerEntries = independentFeedPlayerEntries.filter { _, entry in
+            entry.owner != nil && entry.player != nil
+        }
+
+        var liveEntries = Array(independentFeedPlayerEntries.values)
+        guard liveEntries.count > maxIndependentFeedPlayers else { return }
+
+        liveEntries.sort { lhs, rhs in
+            let lhsVisible = lhs.owner?.isVisible == true
+            let rhsVisible = rhs.owner?.isVisible == true
+            if lhsVisible != rhsVisible { return !lhsVisible && rhsVisible }
+
+            let lhsPrimary = lhs.owner?.coordinatorWantsToPlay == true
+            let rhsPrimary = rhs.owner?.coordinatorWantsToPlay == true
+            if lhsPrimary != rhsPrimary { return !lhsPrimary && rhsPrimary }
+
+            return lhs.lastAccess < rhs.lastAccess
+        }
+
+        for entry in liveEntries where independentFeedPlayerEntries.count > maxIndependentFeedPlayers {
+            guard let owner = entry.owner,
+                  owner !== protectedOwner,
+                  let player = entry.player else {
+                continue
+            }
+
+            guard !owner.coordinatorWantsToPlay else { continue }
+            owner.releaseCurrentIndependentPlayer(
+                reason: "independentFeedPlayerLimit",
+                showCover: owner.isVisible,
+                expectedPlayer: player
+            )
+        }
+    }
 
 #if DEBUG && VERBOSE_VIDEO_LOGS
     private static let verboseLogsEnabled = true
@@ -316,6 +379,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastPlaybackRequestPositionSeconds: Double = 0
     private var hlsBufferedUnknownStartDate: Date = .distantPast
     private var hlsEmptyWaitingStartDate: Date = .distantPast
+    private var hlsActiveSegmentWaitStartDate: Date = .distantPast
+    private var hlsActiveSegmentWaitMediaID: String?
     /// True after the current AVPlayerLayer has rendered a frame for this player.
     /// This lets visible non-primary videos stop their spinner once they have
     /// something real to show, even if frame capture did not produce a poster.
@@ -392,7 +457,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private var usesIndependentPlayerInstance: Bool {
-        isEmbeddedMedia
+        true
     }
 
     private var imageLoadTask: Task<Void, Never>?
@@ -1265,6 +1330,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     @discardableResult
     private func attachCachedPlayerIfAvailable(reason: String) -> Bool {
+        guard !usesIndependentPlayerInstance else {
+            return false
+        }
+
         guard isVisible,
               isVideoAttachment,
               shouldLoadVideo,
@@ -1420,20 +1489,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func acquireIndependentPlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
         guard shouldLoadVideo else { return }
-
-        let mid = attachment.mid
-
-        if let cachedPlayer = VideoStateCache.shared.getCachedState(for: mid)?.player ?? SharedAssetCache.shared.getCachedPlayer(for: mid),
-           let cachedItem = cachedPlayer.currentItem,
-           cachedItem.status != .failed {
-            let playerItem = AVPlayerItem(asset: cachedItem.asset)
-            playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = isVisible || coordinatorWantsToPlay
-            let newPlayer = AVPlayer(playerItem: playerItem)
-            newPlayer.isMuted = MuteState.shared.isMuted
-            configurePlayer(newPlayer)
-            return
-        }
-
         acquireIndependentPlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
     }
 
@@ -1462,9 +1517,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 await MainActor.run { [weak self] in
                     guard !Task.isCancelled, let self else { return }
                     guard self.attachment?.mid == expectedMid,
-                          self.usesIndependentPlayerInstance,
                           self.isVisible else {
                         print("\(self.logPrefix) ⚠️ Independent player for \(expectedMid) arrived after cell reuse — discarding")
+                        self.releaseDetachedPlayer(newPlayer)
                         return
                     }
 
@@ -1853,6 +1908,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     /// Pause, mute, assign player, transition to .playerLoading.
     private func preparePlayerForConfiguration(_ newPlayer: AVPlayer) {
+        let previousPlayer = player
         if newPlayer.rate > 0 { newPlayer.pause() }
         newPlayer.isMuted = MuteState.shared.isMuted
         if isVisible {
@@ -1863,7 +1919,17 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         didLogFirstPlaybackProgress = false
         resetPlaybackProgressTracking(to: newPlayer.currentTime())
         removePlayerObservers()
+        if usesIndependentPlayerInstance, let previousPlayer, previousPlayer !== newPlayer {
+            removePlayerTimeObserver()
+        }
         self.player = newPlayer
+        if usesIndependentPlayerInstance, let previousPlayer, previousPlayer !== newPlayer {
+            Self.unregisterIndependentFeedPlayer(owner: self)
+            releaseDetachedPlayer(previousPlayer)
+        }
+        if usesIndependentPlayerInstance, let mid = attachment?.mid {
+            Self.registerIndependentFeedPlayer(newPlayer, owner: self, mediaID: mid)
+        }
         // Notify other feed cells that may hold the same player (tweet + retweet case)
         // to release their KVO observers. Must post after self.player = newPlayer so that
         // when the notification fires synchronously, this cell is already the owner.
@@ -2538,6 +2604,28 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let segmentLabel = activeSegments.isEmpty ? "segment" : activeSegments.joined(separator: ",")
         notePrimaryPlaybackIntentWhileWaiting(player)
         hlsEmptyWaitingStartDate = .distantPast
+        let now = Date()
+        if hlsActiveSegmentWaitMediaID != mid || hlsActiveSegmentWaitStartDate == .distantPast {
+            hlsActiveSegmentWaitMediaID = mid
+            hlsActiveSegmentWaitStartDate = now
+        }
+        let activeWaitSeconds = now.timeIntervalSince(hlsActiveSegmentWaitStartDate)
+
+        if activeWaitSeconds >= Self.activeHLSSegmentStartupTimeout {
+            guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
+            hlsActiveSegmentWaitStartDate = .distantPast
+            hlsActiveSegmentWaitMediaID = nil
+            preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
+            restoreCachedPosterForFailureIfNeeded()
+            LocalHTTPServer.shared.resumeVisibleDownloads(for: mid)
+            print("\(logPrefix) 🔄 \(reason): HLS active segment download still pending after \(String(format: "%.1f", activeWaitSeconds))s (\(segmentLabel)) — rebuilding feed player while preserving downloads")
+            return rebuildCurrentFeedPlayerFromProxyCache(
+                mid: mid,
+                reacquireReason: "activeHLSSegmentTimeoutRecovery",
+                transitionState: imageView.image != nil ? .thumbnail : .playerLoading
+            )
+        }
+
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.currentItem?.preferredForwardBufferDuration = 0
         player.automaticallyWaitsToMinimizeStalling = true
@@ -3794,6 +3882,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
                 if item.status == .readyToPlay {
                     self.hlsEmptyWaitingStartDate = .distantPast
+                    self.hlsActiveSegmentWaitStartDate = .distantPast
+                    self.hlsActiveSegmentWaitMediaID = nil
                     // Cancel the fallback task — statusKVO arrived before the timeout.
                     self.statusUnknownFallbackTask?.cancel()
                     self.statusUnknownFallbackTask = nil
@@ -3948,6 +4038,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
                 if player.timeControlStatus == .playing {
                     self.hlsEmptyWaitingStartDate = .distantPast
+                    self.hlsActiveSegmentWaitStartDate = .distantPast
+                    self.hlsActiveSegmentWaitMediaID = nil
                     self.foregroundRecoveryLoadingDeadline = nil
                     self.playbackStartupRecoveryTask?.cancel()
                     self.playbackStartupRecoveryTask = nil
@@ -5110,6 +5202,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     player.isMuted = MuteState.shared.isMuted
 
                 }
+                releaseCurrentIndependentPlayer(reason: "becameInvisible", showCover: true)
                 coordinatorWantsToPlay = false
             }
         }
@@ -5574,6 +5667,61 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     // MARK: - Cleanup
 
+    private func releaseDetachedPlayer(_ player: AVPlayer) {
+        player.pause()
+        player.rate = 0
+
+        if let item = player.currentItem {
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            item.asset.cancelLoading()
+            NotificationCenter.default.removeObserver(item)
+        }
+
+        player.replaceCurrentItem(with: nil)
+    }
+
+    private func releaseCurrentIndependentPlayer(
+        reason: String,
+        showCover: Bool,
+        expectedPlayer: AVPlayer? = nil
+    ) {
+        guard usesIndependentPlayerInstance,
+              let currentPlayer = player else { return }
+        if let expectedPlayer, currentPlayer !== expectedPlayer {
+            return
+        }
+
+        if isVideoAttachment {
+            preserveReleaseCoverForCurrentVideo(reason: reason, showCover: showCover)
+        }
+
+        removePlayerObservers()
+        removePlayerTimeObserver()
+
+        if let item = videoOutputAttachedItem, let output = videoOutput {
+            item.remove(output)
+        }
+        videoOutput = nil
+        videoOutputAttachedItem = nil
+
+        videoPlayerView.onReadyForDisplay = nil
+        videoPlayerView.setPlayer(nil)
+        hasRenderedFrameForCurrentPlayer = false
+        player = nil
+        Self.unregisterIndependentFeedPlayer(owner: self)
+
+        releaseDetachedPlayer(currentPlayer)
+
+        if showCover {
+            if imageView.image != nil {
+                transitionTo(.thumbnail)
+            } else {
+                transitionTo(.noContent)
+                loadingSpinner.stopAnimating()
+            }
+        }
+    }
+
     private func cleanupVideoPlayer(reason: String, preserveBackgroundCover: Bool = false) {
         if isVideoAttachment {
             preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
@@ -5669,7 +5817,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         videoPlayerView.isHidden = true
         videoPlayerView.gestureRecognizers?.forEach { videoPlayerView.removeGestureRecognizer($0) }
         imageView.gestureRecognizers?.forEach { imageView.removeGestureRecognizer($0) }
+        let detachedPlayer = player
         player = nil
+        Self.unregisterIndependentFeedPlayer(owner: self)
+        if usesIndependentPlayerInstance, let detachedPlayer {
+            releaseDetachedPlayer(detachedPlayer)
+        }
     }
 
     /// Reset all video-related flags and counters to initial values.
@@ -5698,6 +5851,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         startupBufferReleaseUntil = .distantPast
         hlsBufferedUnknownStartDate = .distantPast
         hlsEmptyWaitingStartDate = .distantPast
+        hlsActiveSegmentWaitStartDate = .distantPast
+        hlsActiveSegmentWaitMediaID = nil
         if !preserveBackgroundCover {
             clearBackgroundVideoCoverHold()
         }

@@ -1049,6 +1049,35 @@ class SharedAssetCache: ObservableObject {
         print("🔮 [PLAYER PRELOAD] Released \(kind) preload for \(shortMID(mediaID)) (\(reason)) - \(cacheNote)")
     }
 
+    @MainActor
+    private func discardCachedPreloadPlayerAfterWarm(for mediaID: String, player: AVPlayer) {
+        guard playerCache[mediaID] === player,
+              !visibleVideoMids.contains(mediaID) else { return }
+
+        playerCache.removeValue(forKey: mediaID)
+        cacheTimestamps.removeValue(forKey: mediaID)
+        preloadedPlayerMids.remove(mediaID)
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+        cachingPlayerItems.removeValue(forKey: mediaID)
+        cachingPlayerDelegates.removeValue(forKey: mediaID)
+        resourceLoaderDelegates.removeValue(forKey: mediaID)
+        releasePlayer(player)
+
+        NotificationCenter.default.post(
+            name: .videoPlayerItemReplaced,
+            object: nil,
+            userInfo: ["mediaID": mediaID, "released": true]
+        )
+        print("🔮 [PLAYER PRELOAD] Discarded warmed feed player for \(shortMID(mediaID)); disk/proxy cache preserved")
+    }
+
+    @MainActor
+    private func discardCachedPreloadPlayerIfUnused(for mediaID: String, player: AVPlayer) {
+        guard !visibleVideoMids.contains(mediaID) else { return }
+        discardCachedPreloadPlayerAfterWarm(for: mediaID, player: player)
+    }
+
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
     /// Called by VideoPlaybackCoordinator when the directional preload set changes and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
@@ -2257,8 +2286,7 @@ class SharedAssetCache: ObservableObject {
                 )
                 if playerCache[mediaID] != nil { return }
             } else {
-                preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-                preloadedPlayerMids.insert(mediaID)
+                discardCachedPreloadPlayerIfUnused(for: mediaID, player: player)
                 NotificationCenter.default.post(
                     name: .videoPlayerPreloaded,
                     object: self,
@@ -2312,8 +2340,7 @@ class SharedAssetCache: ObservableObject {
                         player.pause()
                         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                     }
-                    self.preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-                    self.preloadedPlayerMids.insert(mediaID)
+                    self.discardCachedPreloadPlayerAfterWarm(for: mediaID, player: player)
                     NotificationCenter.default.post(
                         name: .videoPlayerPreloaded,
                         object: self,

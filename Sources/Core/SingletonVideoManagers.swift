@@ -809,6 +809,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var prewarmedNextVideoMid: String?
     private var playbackSurfaceReadyMid: String?
     private var pendingSurfacePlayback: (player: AVPlayer, item: AVPlayerItem, log: String)?
+    private var playbackSurfaceFallbackTask: Task<Void, Never>?
     
     private var nearEndAdvanceTask: DispatchWorkItem?
     private var startupAudioMuteUntil: Date = .distantPast
@@ -835,6 +836,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     }
 
     private func resetPlaybackSurfaceState() {
+        playbackSurfaceFallbackTask?.cancel()
+        playbackSurfaceFallbackTask = nil
         playbackSurfaceReadyMid = nil
         pendingSurfacePlayback = nil
     }
@@ -2037,13 +2040,24 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
 
         guard playbackSurfaceReadyMid == currentVideoMid else {
+            if let pending = pendingSurfacePlayback,
+               pending.player === player,
+               pending.item === item {
+                isPlaying = true
+                schedulePlaybackSurfaceFallbackIfNeeded(player: player, item: item)
+                return
+            }
+
             player.pause()
             pendingSurfacePlayback = (player: player, item: item, log: log)
             isPlaying = true
+            schedulePlaybackSurfaceFallbackIfNeeded(player: player, item: item)
             print("🎬 [FullScreenVideoManager] deferring play(\(log)) until fullscreen surface is ready \(shortMID(currentVideoMid)): \(playerDiagnostic(player, item: item))")
             return
         }
 
+        playbackSurfaceFallbackTask?.cancel()
+        playbackSurfaceFallbackTask = nil
         pendingSurfacePlayback = nil
         let bufferPolicy = applyFullscreenPrePlayBuffering(to: player, item: item)
         markPlayableMediaContentIfBuffered(
@@ -2055,6 +2069,40 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         print("🎬 [FullScreenVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(playerDiagnostic(player, item: item))")
         player.play()
         isPlaying = true
+    }
+
+    private func schedulePlaybackSurfaceFallbackIfNeeded(player: AVPlayer, item: AVPlayerItem) {
+        guard playbackSurfaceFallbackTask == nil,
+              let mid = currentVideoMid else { return }
+
+        playbackSurfaceFallbackTask = Task { @MainActor [weak self, weak player, weak item] in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard let self else { return }
+            self.playbackSurfaceFallbackTask = nil
+
+            guard !Task.isCancelled,
+                  self.isActive,
+                  self.currentVideoMid == mid,
+                  self.playbackSurfaceReadyMid != mid,
+                  let player,
+                  let item,
+                  self.singletonPlayer === player,
+                  player.currentItem === item else {
+                return
+            }
+
+            self.playbackSurfaceReadyMid = mid
+            print("🎬 [FullScreenVideoManager] playback surface ready fallback \(self.shortMID(mid)): \(self.playerDiagnostic(player, item: item))")
+
+            guard let pending = self.pendingSurfacePlayback,
+                  pending.player === player,
+                  pending.item === item else {
+                return
+            }
+
+            self.pendingSurfacePlayback = nil
+            self.startFullscreenPlayback(player: player, item: item, log: "\(pending.log), surface fallback")
+        }
     }
 
     private func isNear(_ lhs: CMTime, _ rhs: CMTime, tolerance: Double) -> Bool {
@@ -2268,6 +2316,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
 
         playbackSurfaceReadyMid = mid
+        playbackSurfaceFallbackTask?.cancel()
+        playbackSurfaceFallbackTask = nil
         if let item = player.currentItem {
             markPlayableMediaContentIfBuffered(player: player, item: item)
         }
