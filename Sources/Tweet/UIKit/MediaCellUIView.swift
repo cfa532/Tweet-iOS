@@ -281,6 +281,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var playbackStartupRecoveryTask: Task<Void, Never>?
     private var playbackStartupRecoveryRequestDate: Date?
     private var playbackStartupRecoveryDelay: UInt64?
+    private var playbackProgressWatchdogTask: Task<Void, Never>?
     /// True after app backgrounding captured a visible feed frame. While active,
     /// keep that frame over the player so foreground proxy/player recovery never
     /// exposes a black AVPlayerLayer.
@@ -2086,6 +2087,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         playbackStartupRecoveryDelay = nil
         slowLoadingRecoveryTask?.cancel()
         slowLoadingRecoveryTask = nil
+        playbackProgressWatchdogTask?.cancel()
+        playbackProgressWatchdogTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
         removePlayerTimeObserver()
@@ -2883,21 +2886,43 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard waitedForColdStart
             || waitedLongWithCover else { return false }
 
-        notePrimaryPlaybackIntentWhileWaiting(player)
-        applyAVPlayerBufferDefaults(to: player)
-        updateLoadingSpinnerForPlayback(player)
-        if player.rate == 0 {
-            player.play()
+        if waitedForColdStart,
+           !hasDecodedPlaybackHistory {
+            if let resumeTime = trustedRecoverySeekTime(for: player),
+               resumeTime.isValid,
+               resumeTime.seconds.isFinite {
+                pendingRecoverySeekTime = resumeTime
+            }
+
+            guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
+
+            print("\(logPrefix) 🔄 \(reason): ready item stayed starved with \(String(format: "%.1f", bufferedAhead))s buffered before decoded playback — rebuilding feed player from proxy cache")
+            return rebuildCurrentFeedPlayerFromProxyCache(
+                mid: mid,
+                reacquireReason: "readyStarvedStartupRecovery",
+                transitionState: imageView.image != nil ? .thumbnail : .playerLoading
+            )
         }
-        if now.timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
-            print("\(logPrefix) ⏳ \(reason): ready item starved with \(String(format: "%.1f", bufferedAhead))s buffered, cover=\(hasPlaybackHistory) — keeping existing player")
-            lastSlowLoadWaitLogDate = now
+
+        if waitedLongWithCover {
+            let currentTime = player.currentTime()
+            if let resumeTime = trustedRecoverySeekTime(for: player) ?? (currentTime.seconds.isFinite && currentTime.seconds > 0.25 ? currentTime : nil),
+               resumeTime.isValid,
+               resumeTime.seconds.isFinite {
+                pendingRecoverySeekTime = resumeTime
+            }
+
+            guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
+
+            print("\(logPrefix) 🔄 \(reason): ready item stalled at \(String(format: "%.1f", seconds(from: player.currentTime())))s with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player from proxy cache")
+            return rebuildCurrentFeedPlayerFromProxyCache(
+                mid: mid,
+                reacquireReason: "readyStarvedPlaybackRecovery",
+                transitionState: imageView.image != nil ? .thumbnail : .playerLoading
+            )
         }
-        scheduleStartupRecoveryAfterCurrentTask(
-            for: player,
-            reason: normalizedRecoveryReason(prefix: "readyStarvedWait-", reason: reason)
-        )
-        return true
+
+        return false
     }
 
     @discardableResult
@@ -3513,6 +3538,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             guard !isLiveHandoff else { return }
             self.scheduleStartupRecovery(for: player, reason: "actuallyStartPlayback")
             self.scheduleStillFrameRecovery(for: player, reason: "actuallyStartPlayback")
+            self.schedulePlaybackProgressWatchdog(for: player, reason: "actuallyStartPlayback")
         }
 
         // Show timer when playback starts
@@ -4447,7 +4473,69 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                         fadeOutVideoCoverForPlayback()
                     }
                 }
+                schedulePlaybackProgressWatchdog(for: player, reason: "playbackProgress")
             }
+        }
+    }
+
+    private func schedulePlaybackProgressWatchdog(for player: AVPlayer, reason: String) {
+        playbackProgressWatchdogTask?.cancel()
+        playbackProgressWatchdogTask = Task { @MainActor [weak self, weak player] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self,
+                  let player,
+                  self.player === player,
+                  self.coordinatorWantsToPlay,
+                  self.canDriveForegroundPlayback,
+                  self.videoCellState == .playing,
+                  !self.fullscreenOverlayOwnsCurrentVideo,
+                  !self.isVideoAtEnd(player) else { return }
+
+            self.playbackProgressWatchdogTask = nil
+
+            let now = Date()
+            let noRecentClockProgress = self.lastPlaybackProgressDate == .distantPast
+                || now.timeIntervalSince(self.lastPlaybackProgressDate) >= 4.0
+            let noRecentDecodedProgress = !self.hasRecentDecodedPlayback(for: player, maxAge: 4.0)
+            guard noRecentClockProgress && noRecentDecodedProgress else {
+                self.schedulePlaybackProgressWatchdog(for: player, reason: "progressWatchdog-\(reason)")
+                return
+            }
+
+            let bufferedAhead = self.bufferedTimeAhead(for: player)
+            let position = self.seconds(from: player.currentTime())
+            let status = player.currentItem?.status.rawValue ?? -1
+            if now.timeIntervalSince(self.lastSlowLoadWaitLogDate) >= 5.0 {
+                print("\(self.logPrefix) ⏳ progress watchdog (\(reason)): no playback progress, pos=\(String(format: "%.1f", position))s, buffered=\(String(format: "%.1f", bufferedAhead))s, itemStatus=\(status), timeControl=\(player.timeControlStatus.rawValue)")
+                self.lastSlowLoadWaitLogDate = now
+            }
+
+            guard player.currentItem?.status == .readyToPlay,
+                  player.timeControlStatus != .playing,
+                  bufferedAhead < 0.5,
+                  let mid = self.attachment?.mid,
+                  !self.shouldSuppressPositionRestore(for: player, mid: mid) else {
+                self.applyAVPlayerBufferDefaults(to: player)
+                player.play()
+                self.updateLoadingSpinnerForPlayback(player)
+                self.schedulePlaybackProgressWatchdog(for: player, reason: "progressWatchdog-\(reason)")
+                return
+            }
+
+            let currentTime = player.currentTime()
+            if let resumeTime = self.trustedRecoverySeekTime(for: player) ?? (currentTime.seconds.isFinite && currentTime.seconds > 0.25 ? currentTime : nil),
+               resumeTime.isValid,
+               resumeTime.seconds.isFinite {
+                self.pendingRecoverySeekTime = resumeTime
+            }
+
+            guard self.reserveFeedPlayerRebuild(player: player, mid: mid, reason: "progressWatchdog-\(reason)") else { return }
+            print("\(self.logPrefix) 🔄 progress watchdog (\(reason)): ready player stalled with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player from proxy cache")
+            _ = self.rebuildCurrentFeedPlayerFromProxyCache(
+                mid: mid,
+                reacquireReason: "progressWatchdogRecovery",
+                transitionState: self.imageView.image != nil ? .thumbnail : .playerLoading
+            )
         }
     }
 
@@ -5497,6 +5585,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             setupPlayerTask != nil ||
             slowLoadingRecoveryTask != nil ||
             playbackStartupRecoveryTask != nil ||
+            playbackProgressWatchdogTask != nil ||
             videoOutput != nil ||
             videoOutputAttachedItem != nil ||
             timeObserverToken != nil ||
@@ -5538,6 +5627,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         playbackStartupRecoveryTask = nil
         playbackStartupRecoveryRequestDate = nil
         playbackStartupRecoveryDelay = nil
+        playbackProgressWatchdogTask?.cancel()
+        playbackProgressWatchdogTask = nil
 
         videoPlayerView.onReadyForDisplay = nil
 
