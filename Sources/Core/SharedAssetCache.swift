@@ -1321,6 +1321,15 @@ class SharedAssetCache: ObservableObject {
     @MainActor func clearPlayerForMediaID(_ mediaID: String, deleteDiskCache: Bool = true) {
         var releasedPlayer: AVPlayer?
 
+        // Cancel same-media async work before releasing the player so no stale
+        // loader/preload task keeps the wedged item alive during recovery.
+        cancelAssetLoadTask(for: mediaID)
+        cancelPreloadTaskEntry(for: mediaID)
+        cancelPlayerCreationTasks(for: mediaID)
+        preloadedPlayerMids.remove(mediaID)
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+
         // CRITICAL: Properly release player to free memory (not just pause!)
         if let player = playerCache.removeValue(forKey: mediaID) {
             releasedPlayer = player
@@ -1343,11 +1352,6 @@ class SharedAssetCache: ObservableObject {
             // completed playlist/segment files instead of treating the video as cold.
             diskCacheStatus.removeValue(forKey: mediaID)
         }
-
-        // Cancel any pending loading tasks
-        cancelAssetLoadTask(for: mediaID)
-        cancelPreloadTaskEntry(for: mediaID)
-        cancelPlayerCreationTasks(for: mediaID)
 
         if deleteDiskCache {
             // Cancel active LocalHTTPServer downloads BEFORE deleting disk cache.

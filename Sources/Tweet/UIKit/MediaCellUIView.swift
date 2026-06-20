@@ -4483,15 +4483,17 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         playbackProgressWatchdogTask = Task { @MainActor [weak self, weak player] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard let self,
-                  let player,
+                  let player else { return }
+
+            self.playbackProgressWatchdogTask = nil
+
+            guard
                   self.player === player,
                   self.coordinatorWantsToPlay,
                   self.canDriveForegroundPlayback,
                   self.videoCellState == .playing,
                   !self.fullscreenOverlayOwnsCurrentVideo,
                   !self.isVideoAtEnd(player) else { return }
-
-            self.playbackProgressWatchdogTask = nil
 
             let now = Date()
             let noRecentClockProgress = self.lastPlaybackProgressDate == .distantPast
