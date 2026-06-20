@@ -6,7 +6,7 @@ import UIKit
 final class TweetHeightCache: NSObject {
     static let shared = TweetHeightCache()
 
-    private let userDefaultsKey = "TweetHeightCache"
+    private let userDefaultsKey = "TweetHeightCache.v2"
     private let maxEntries = 2000
     private var heights: [String: CGFloat] = [:]
     private let lock = NSLock()

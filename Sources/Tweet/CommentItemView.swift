@@ -85,9 +85,6 @@ struct CommentItemView: View {
         .padding(.vertical)
         .padding(.horizontal, 16)
         .background(backgroundColor)
-        .if(backgroundColor != XTheme.backgroundColor) { view in
-            view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
-        }
         .if(linkToComment) { view in
             view.contentShape(Rectangle())
                 .onTapGesture {

@@ -2172,7 +2172,7 @@ class TweetTableViewController: UITableViewController {
                 //   8pt top padding
                 //   contentStack = max(40, textStack)
                 //     textStack = headerView(24) + bodyView
-                //   bottomPadding = 8
+                //   bottomPadding = EmbeddedTweetUIView.contentBottomPadding
                 //
                 // TweetBodyUIView (embedded) layout:
                 //   2pt contentStack top
@@ -2249,7 +2249,7 @@ class TweetTableViewController: UITableViewController {
                         availableWidth: embeddedHeaderWidth
                     )
                 )
-                let embeddedHeight: CGFloat = 8 + embeddedHeaderHeight + 4 + embeddedBodyH + 8
+                let embeddedHeight: CGFloat = 8 + embeddedHeaderHeight + 4 + embeddedBodyH + EmbeddedTweetUIView.contentBottomPadding
                 height += embeddedHeight
             } else {
                 // Not loaded: show placeholder (60pt)

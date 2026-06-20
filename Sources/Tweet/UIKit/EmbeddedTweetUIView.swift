@@ -10,6 +10,8 @@ import SwiftUI
 import Combine
 
 class EmbeddedTweetUIView: UIView {
+    static let contentBottomPadding: CGFloat = 4
+
     private let avatarView = AvatarUIView()
     private let headerView = TweetHeaderUIView()
     private let bodyView = TweetBodyUIView()
@@ -144,7 +146,7 @@ class EmbeddedTweetUIView: UIView {
         ])
 
         // Mutually exclusive constraints — only one group active at a time
-        contentStackBottomConstraint = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        contentStackBottomConstraint = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.contentBottomPadding)
         placeholderBottomConstraint = placeholderView.bottomAnchor.constraint(equalTo: bottomAnchor)
         placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: 60)
         // Lower priority so parent's height=0 constraint wins when hidden in stack view
@@ -219,7 +221,7 @@ class EmbeddedTweetUIView: UIView {
         }
 
         // Keep a real inset below embedded media so rounded borders do not clip the content.
-        contentStackBottomConstraint.constant = -8
+        contentStackBottomConstraint.constant = -Self.contentBottomPadding
 
         // Mark as accessed for cache management
         TweetCacheManager.shared.markTweetAccessed(tweet.mid)
@@ -359,7 +361,7 @@ class EmbeddedTweetUIView: UIView {
         // Reset to placeholder state — swap constraint groups
         contentStack.isHidden = true
         placeholderView.isHidden = false
-        contentStackBottomConstraint.constant = -8  // Reset to default
+        contentStackBottomConstraint.constant = -Self.contentBottomPadding  // Reset to default
         contentStackBottomConstraint.isActive = false
         placeholderBottomConstraint.isActive = true
         placeholderHeightConstraint.isActive = true

@@ -349,16 +349,15 @@ struct CommentListContentView<RowView: View>: View {
                 .padding()
             } else {
                 // Show comments
+                commentDivider
+
                 ForEach(Array(comments.enumerated()), id: \.element.mid) { index, comment in
                     VStack(spacing: 0) {
                         rowView(comment)
 
                         // Add divider under each comment except the last one
                         if index < comments.count - 1 {
-                            Rectangle()
-                                .padding(.horizontal, 4)
-                                .frame(height: 0.5)
-                                .foregroundColor(Color(.systemGray).opacity(0.4))
+                            commentDivider
                         }
                     }
                     // Trigger from the last row directly — more reliable than a sentinel
@@ -391,5 +390,12 @@ struct CommentListContentView<RowView: View>: View {
                 }
             }
         }
+    }
+
+    private var commentDivider: some View {
+        Rectangle()
+            .padding(.horizontal, 4)
+            .frame(height: 0.5)
+            .foregroundColor(Color(.systemGray).opacity(0.4))
     }
 }

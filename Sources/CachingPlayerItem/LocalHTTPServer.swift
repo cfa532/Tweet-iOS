@@ -2180,8 +2180,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         reason: String
     ) {
         // AVPlayer may request cached progressive data in many tiny ranges.
-        // Logging every cached subrange hides the state-machine logs we need.
-        if decision == "HIT", reason == "cached-range", start > 0 {
+        // Logging every routine subrange hides the state-machine logs we need.
+        let isRoutineCachedRange = decision == "HIT" && reason == "cached-range"
+        let isRoutineMiss = decision == "MISS" && (reason == "range-beyond-cache" || reason == "partial-explicit-range")
+        if isRoutineCachedRange || isRoutineMiss {
             return
         }
 
