@@ -54,6 +54,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     
     @State private var image: UIImage?
     @State private var isLoading = false
+    @State private var imageLoadFailed = false
     @State private var showFullScreen = false
     @State private var isVisible = false
     @State private var isOpeningFullScreen = false
@@ -464,14 +465,18 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         guard let url = attachment.getUrl(effectiveBaseUrl) else {
             // If no URL, ensure isLoading is false
             isLoading = false
+            imageLoadFailed = true
             return
         }
+
+        imageLoadFailed = false
 
         // First, try to get cached image from memory only (fastest, no I/O)
         if let cachedImage = imageCache.getCompressedImageFromMemory(for: attachment) {
             print("DEBUG: [MediaCell] Found image in memory cache for \(attachment.mid)")
             self.image = cachedImage
             self.isLoading = false
+            self.imageLoadFailed = false
             return
         }
 
@@ -502,6 +507,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 if let cachedImage = cachedImage {
                     self.image = cachedImage
                     self.isLoading = false
+                    self.imageLoadFailed = false
                 } else {
                     print("DEBUG: [MediaCell] No cached image found, starting network load for \(attachmentCopy.mid)")
                     // If no cached image at all, visible cells outrank preload/background image work.
@@ -515,10 +521,22 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                               self.attachment.mid == attachmentCopy.mid else { return }
                         self.image = loadedImage
                         self.isLoading = false
+                        self.imageLoadFailed = loadedImage == nil
                     }
                 }
             }
         }
+    }
+
+    private func retryImageLoad() {
+        guard attachment.type == .image else { return }
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        image = nil
+        imageLoadFailed = false
+        isLoading = true
+        GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
+        loadImage()
     }
     
     
@@ -538,14 +556,35 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         } else if isLoading {
             // Loading - show placeholder with spinner
             ZStack {
-                Color.gray.opacity(0.2)
+                Color(.systemGray6)
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle())
             }
             .frame(width: width, height: height, alignment: .center)
+        } else if imageLoadFailed {
+            ZStack {
+                Color(.systemGray6)
+                Button {
+                    retryImageLoad()
+                } label: {
+                    Image(systemName: "arrow.clockwise.circle")
+                        .font(.system(size: 30, weight: .medium))
+                        .foregroundColor(Color(.label).opacity(0.72))
+                        .frame(width: 52, height: 52)
+                        .background(Color(.systemBackground).opacity(0.86))
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle().stroke(Color(.separator), lineWidth: 1)
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Retry image"))
+            }
+            .frame(width: width, height: height, alignment: .center)
         } else {
             // No image and not loading - just show placeholder
-            Color.gray.opacity(0.2)
+            Color(.systemGray6)
                 .frame(width: width, height: height, alignment: .center)
         }
     }

@@ -209,7 +209,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let iv = UIImageView()
         iv.contentMode = .scaleAspectFill
         iv.clipsToBounds = true
-        iv.backgroundColor = .clear
+        iv.backgroundColor = UIColor.systemGray6
         return iv
     }()
 
@@ -236,8 +236,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let btn = UIButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 28, weight: .medium)
         btn.setImage(UIImage(systemName: "arrow.clockwise.circle", withConfiguration: config), for: .normal)
-        btn.tintColor = .white.withAlphaComponent(0.7)
+        btn.tintColor = UIColor.label.withAlphaComponent(0.72)
+        btn.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.86)
+        btn.layer.cornerRadius = 22
+        btn.layer.borderWidth = 1
+        btn.layer.borderColor = UIColor.separator.cgColor
         btn.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
+        btn.accessibilityLabel = "Retry media"
         btn.isHidden = true
         return btn
     }()
