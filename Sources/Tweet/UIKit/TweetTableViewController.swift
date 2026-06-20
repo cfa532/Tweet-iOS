@@ -544,6 +544,7 @@ class TweetTableViewController: UITableViewController {
 
         // Save the current scroll position before backgrounding
         scrollPositionBeforeBackground = tableView.contentOffset.y
+        saveScrollPositionIfNeeded()
 
         // Directional image preloads are useful only while actively scrolling the feed.
         // AppDelegate/MemoryCapManager clears global media caches on background; cancel
@@ -579,30 +580,16 @@ class TweetTableViewController: UITableViewController {
         endBackgroundTask()
         needsVideoLayerRefresh = true
 
-        guard let savedPosition = scrollPositionBeforeBackground else { return }
+        scrollPositionBeforeBackground = nil
+        let currentPosition = tableView.contentOffset.y
+        lastContentOffset = currentPosition
+        lastCallbackOffset = currentPosition
 
-        // Restore the scroll position after a brief delay to let layout settle
+        // UIKit preserves the live table view's contentOffset across app backgrounding.
+        // Reapplying an absolute saved y-offset here races foreground safe-area/layout
+        // recalculation and can jump the feed to top in optimized builds.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self = self else { return }
-            let currentPosition = self.tableView.contentOffset.y
-            let topPosition = -self.tableView.adjustedContentInset.top
-            let savedPositionLooksTop = savedPosition <= topPosition + 10
-            let currentPositionIsAwayFromTop = currentPosition > topPosition + 20
-            let shouldSkipTopRestore = savedPositionLooksTop && currentPositionIsAwayFromTop
-
-            if shouldSkipTopRestore {
-                self.lastContentOffset = currentPosition
-                self.lastCallbackOffset = currentPosition
-                print("☀️ [FOREGROUND] Skipped stale top scroll restore; keeping current offset")
-            } else {
-                // Set lastContentOffset before restoring so scrollViewDidScroll sees zero delta
-                // This prevents the restoration from triggering toolbar hiding
-                self.lastContentOffset = savedPosition
-                self.lastCallbackOffset = savedPosition
-                self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
-            }
-            self.scrollPositionBeforeBackground = nil
-
             // Restore visible video players and refresh directional preloads.
             self.restoreVideoPlayersAfterForeground()
         }
@@ -693,11 +680,21 @@ class TweetTableViewController: UITableViewController {
     private func scheduleForegroundAutoplayRetry(reason: String) {
         guard isReadyForFeedVideoResume, !isTableViewUpdating else { return }
 
+        lastVisibleTweetIds = []
+        lastLoadVisibleVideoIds = []
+        lastContinuePlaybackVideoIds = []
+        lastOnScreenVideoIds = []
+        forceLayoutVisibleCellsForVisibilityPass()
+        updateVisibleTweetsForVideoPlayback()
         videoCoordinator.requestForegroundAutoplayRetry(reason: "\(reason)-immediate")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
             guard let self = self else { return }
             guard self.isReadyForFeedVideoResume, !self.isTableViewUpdating else { return }
+            self.lastVisibleTweetIds = []
+            self.lastLoadVisibleVideoIds = []
+            self.lastContinuePlaybackVideoIds = []
+            self.lastOnScreenVideoIds = []
             self.forceLayoutVisibleCellsForVisibilityPass()
             self.updateVisibleTweetsForVideoPlayback()
             self.videoCoordinator.requestForegroundAutoplayRetry(reason: "\(reason)-settled")
