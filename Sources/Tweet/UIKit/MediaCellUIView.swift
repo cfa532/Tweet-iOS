@@ -2526,7 +2526,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let isStalledResume = lastActualPlaybackDate != .distantPast && hasNoRecentProgress
         let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
         let requiredBuffer: Double
-        if keepUp {
+        if attachment?.type == .video {
+            requiredBuffer = keepUp ? 0.5 : 0.75
+        } else if keepUp {
             requiredBuffer = 0.75
         } else if isStartup {
             requiredBuffer = 2.0
@@ -2643,6 +2645,15 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return prefix + reason
     }
 
+    private func progressWatchdogReason(after reason: String) -> String {
+        let prefix = "progressWatchdog-"
+        var base = reason
+        while base.hasPrefix(prefix) {
+            base.removeFirst(prefix.count)
+        }
+        return prefix + base
+    }
+
     private func notePrimaryPlaybackIntentWhileWaiting(_ player: AVPlayer) {
         guard coordinatorWantsToPlay,
               canDriveForegroundPlayback,
@@ -2727,6 +2738,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
         print("\(logPrefix) ⏳ \(reason): slow-loading nudge, keeping player, cover=\(hasSomethingWorthKeeping), pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, itemStatus=\(item.status.rawValue), timeControl=\(player.timeControlStatus.rawValue)")
 
+        if attachment?.type == .video {
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            player.automaticallyWaitsToMinimizeStalling = true
+            if player.rate == 0 {
+                player.play()
+            }
+            updateLoadingSpinnerForPlayback(player)
+            return true
+        }
+
         player.pause()
         slowLoadingRecoveryTask?.cancel()
         slowLoadingRecoveryTask = Task { @MainActor [weak self, weak player] in
@@ -2809,6 +2830,25 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             player.play()
             updateLoadingSpinnerForPlayback(player)
             print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — waiting briefly before rebuild")
+            return true
+        }
+
+        if attachment?.type == .video {
+            notePrimaryPlaybackIntentWhileWaiting(player)
+            applyAVPlayerBufferDefaults(to: player)
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            if player.rate == 0 {
+                player.play()
+            }
+            updateLoadingSpinnerForPlayback(player)
+            if Date().timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
+                print("\(logPrefix) ⏳ \(reason): progressive item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — keeping existing AVPlayer")
+                lastSlowLoadWaitLogDate = Date()
+            }
+            scheduleStartupRecoveryAfterCurrentTask(
+                for: player,
+                reason: normalizedRecoveryReason(prefix: "progressiveUnknownWait-", reason: reason)
+            )
             return true
         }
 
@@ -2974,6 +3014,25 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard waitedForColdStart
             || waitedLongWithCover else { return false }
 
+        if attachment?.type == .video {
+            notePrimaryPlaybackIntentWhileWaiting(player)
+            applyAVPlayerBufferDefaults(to: player)
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            if player.rate == 0 {
+                player.play()
+            }
+            updateLoadingSpinnerForPlayback(player)
+            if now.timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
+                print("\(logPrefix) ⏳ \(reason): progressive ready item is starved; keeping existing AVPlayer")
+                lastSlowLoadWaitLogDate = now
+            }
+            scheduleStartupRecoveryAfterCurrentTask(
+                for: player,
+                reason: normalizedRecoveryReason(prefix: "readyProgressiveWait-", reason: reason)
+            )
+            return true
+        }
+
         if waitedForColdStart,
            !hasDecodedPlaybackHistory {
             if let resumeTime = trustedRecoverySeekTime(for: player),
@@ -3030,6 +3089,25 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
            let mid = attachment?.mid,
            LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) {
             waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: reason)
+            return true
+        }
+
+        if attachment?.type == .video {
+            notePrimaryPlaybackIntentWhileWaiting(player)
+            applyAVPlayerBufferDefaults(to: player)
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            if player.rate == 0 {
+                player.play()
+            }
+            updateLoadingSpinnerForPlayback(player)
+            if Date().timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
+                print("\(logPrefix) ⏳ \(reason): progressive item still .unknown with no buffered data — keeping existing AVPlayer")
+                lastSlowLoadWaitLogDate = Date()
+            }
+            scheduleStartupRecoveryAfterCurrentTask(
+                for: player,
+                reason: normalizedRecoveryReason(prefix: "progressiveUnknownWait-", reason: reason)
+            )
             return true
         }
 
@@ -4591,14 +4669,20 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             let noRecentClockProgress = self.lastPlaybackProgressDate == .distantPast
                 || now.timeIntervalSince(self.lastPlaybackProgressDate) >= 4.0
             let noRecentDecodedProgress = !self.hasRecentDecodedPlayback(for: player, maxAge: 4.0)
+            let nextReason = self.progressWatchdogReason(after: reason)
             guard noRecentClockProgress && noRecentDecodedProgress else {
-                self.schedulePlaybackProgressWatchdog(for: player, reason: "progressWatchdog-\(reason)")
+                self.schedulePlaybackProgressWatchdog(for: player, reason: nextReason)
                 return
             }
 
             let bufferedAhead = self.bufferedTimeAhead(for: player)
             let position = self.seconds(from: player.currentTime())
             let status = player.currentItem?.status.rawValue ?? -1
+
+            if self.releaseStartupBufferIfReady(player, bufferedAhead: bufferedAhead, reason: nextReason) {
+                return
+            }
+
             if now.timeIntervalSince(self.lastSlowLoadWaitLogDate) >= 5.0 {
                 print("\(self.logPrefix) ⏳ progress watchdog (\(reason)): no playback progress, pos=\(String(format: "%.1f", position))s, buffered=\(String(format: "%.1f", bufferedAhead))s, itemStatus=\(status), timeControl=\(player.timeControlStatus.rawValue)")
                 self.lastSlowLoadWaitLogDate = now
@@ -4612,7 +4696,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 self.applyAVPlayerBufferDefaults(to: player)
                 player.play()
                 self.updateLoadingSpinnerForPlayback(player)
-                self.schedulePlaybackProgressWatchdog(for: player, reason: "progressWatchdog-\(reason)")
+                self.schedulePlaybackProgressWatchdog(for: player, reason: nextReason)
+                return
+            }
+
+            if self.attachment?.type == .video {
+                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                self.applyAVPlayerBufferDefaults(to: player)
+                player.play()
+                self.updateLoadingSpinnerForPlayback(player)
+                self.schedulePlaybackProgressWatchdog(for: player, reason: nextReason)
                 return
             }
 
@@ -4623,7 +4716,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 self.pendingRecoverySeekTime = resumeTime
             }
 
-            guard self.reserveFeedPlayerRebuild(player: player, mid: mid, reason: "progressWatchdog-\(reason)") else { return }
+            guard self.reserveFeedPlayerRebuild(player: player, mid: mid, reason: nextReason) else { return }
             print("\(self.logPrefix) 🔄 progress watchdog (\(reason)): ready player stalled with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player from proxy cache")
             _ = self.rebuildCurrentFeedPlayerFromProxyCache(
                 mid: mid,

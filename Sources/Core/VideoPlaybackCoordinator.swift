@@ -1220,11 +1220,16 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// If coordinator thinks primary is playing but it's actually stuck, resets and restarts.
     func requestStartPlaybackIfStalled() {
         if phase == .idle {
-            print("🎬 [COORD] stallCheck: phase is idle, starting primary")
-            startPrimaryVideoPlayback()
+            print("🎬 [COORD] stallCheck: phase is idle, scheduling primary")
+            scheduleStartPrimary()
             return
         }
         guard phase == .primaryPlaying, let primaryId = primaryVideoId else { return }
+
+        guard onScreenMediaCells.contains(primaryId),
+              continuePlaybackMediaCells.contains(primaryId) else {
+            return
+        }
 
         // Grace period: don't consider primary stuck if recently selected — it may still be loading
         if let switchTime = lastPrimarySwitchTime, Date().timeIntervalSince(switchTime) < 3.0 {
@@ -1656,7 +1661,8 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Schedule primary video playback.
     /// Fast paths: idle table or cached-ready player → play immediately.
-    /// Scroll path for cold players: start 0.3s timer but only promote if the table is idle when it fires.
+    /// Scroll path for cold players: start a 0.3s timer, then promote the current
+    /// visible candidate even if the table is still moving.
     /// Per-candidate: the timer is NOT reset as long as the same video remains the top
     /// candidate. Only resets when the candidate changes.
     private func scheduleStartPrimary() {
@@ -1701,7 +1707,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 guard let self else { return }
                 self.playbackDebounceTimer = nil
                 self.pendingPrimaryCandidate = nil
-                if self.phase == .idle && !self.visibleVideos.isEmpty && self.isTableViewScrollIdle {
+                if self.phase == .idle && !self.visibleVideos.isEmpty {
                     self.startPrimaryVideoPlayback()
                 }
             }
