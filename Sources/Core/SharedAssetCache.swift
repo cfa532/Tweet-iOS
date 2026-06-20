@@ -1196,8 +1196,14 @@ class SharedAssetCache: ObservableObject {
     /// MEMORY FIX: Immediately release player and all video data when video goes out of sight
     /// This is called when MediaCell disappears to free memory immediately (not wait for 30-60s timer)
     @MainActor func releasePlayerImmediately(for mediaID: String) {
+        releaseCachedPlayer(for: mediaID, force: false)
+    }
+
+    /// Release one cached inline player by media ID. Feed and chat inline videos share
+    /// this cache; callers should force only for explicit recovery or URL changes.
+    @MainActor func releaseCachedPlayer(for mediaID: String, force: Bool = false) {
         // Don't release visible or near-visible videos while in foreground
-        guard !foregroundProtectedMids.contains(mediaID) else {
+        guard force || !foregroundProtectedMids.contains(mediaID) else {
             print("⚠️ [IMMEDIATE RELEASE] Refusing to release protected video \(mediaID)")
             return
         }

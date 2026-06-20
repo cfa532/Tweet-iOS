@@ -711,7 +711,7 @@ struct ChatVideoContainer: View {
             isLoading = true
             oldPlayer?.pause()
             cancellables.removeAll()
-            ChatVideoManager.shared.removeVideoPlayer(messageId: messageId)
+            ChatVideoManager.shared.removeVideoPlayer(mediaID: attachment.mid)
             loadVideoPlayer(reason: "baseUrlChanged")
         }
         .onReceive(NotificationCenter.default.publisher(for: .chatVideoShouldRecover)) { notification in
@@ -848,7 +848,7 @@ struct ChatVideoContainer: View {
         isLoading = true
         cancellables.removeAll()
         removeVideoCompletionObserver()
-        ChatVideoManager.shared.removeVideoPlayer(messageId: messageId)
+        ChatVideoManager.shared.removeVideoPlayer(mediaID: attachment.mid)
         loadVideoPlayer(reason: reason)
     }
 

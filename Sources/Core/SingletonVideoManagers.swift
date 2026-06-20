@@ -4742,16 +4742,6 @@ class ChatVideoManager: ObservableObject {
     // Current visible videos per chat session
     private var visibleVideos: [String: Set<String>] = [:] // Key: receiptId, Value: Set of video mids
 
-    // Global video player storage for chat videos - store AVPlayer directly
-    private var chatVideoPlayers: [String: AVPlayer] = [:] // Key: messageId, Value: AVPlayer instance
-
-    // Track which messageIds belong to which chat session (receiptId)
-    private var chatSessionMessages: [String: Set<String>] = [:] // Key: receiptId, Value: Set of messageIds
-
-    private var chatMessageVideoMids: [String: String] = [:] // Key: messageId, Value: attachment mid
-    private var chatPlayerAccessTimes: [String: Date] = [:] // Key: messageId, Value: last access time
-    private let maxChatPlayerCacheSize = Constants.MAX_PLAYER_CACHE_SIZE
-
     /// State for a specific chat session's videos
     struct ChatSessionVideoState {
         var playingVideos: Set<String> = [] // mids of videos currently playing
@@ -4759,19 +4749,12 @@ class ChatVideoManager: ObservableObject {
         var isChatVisible: Bool = true // whether the chat screen is currently visible
     }
 
-    /// Release video memory when app enters background: pause, detach items, and clear player refs.
-    /// When user returns to chat, getOrCreatePlayerForMessage will create fresh players with items.
+    /// Chat inline players are owned by SharedAssetCache. Background memory release
+    /// happens through the shared inline video path; chat only clears playback intent.
     private func releaseChatVideoMemoryForBackground() {
-        guard !chatVideoPlayers.isEmpty else { return }
-        let count = chatVideoPlayers.count
-        for (_, player) in chatVideoPlayers {
-            player.pause()
-            player.replaceCurrentItem(with: nil)
+        for receiptId in activeChatSessions.keys {
+            pauseAllVideosInSession(receiptId: receiptId)
         }
-        chatVideoPlayers.removeAll()
-        chatMessageVideoMids.removeAll()
-        chatPlayerAccessTimes.removeAll()
-        print("DEBUG: [ChatVideoManager] Released \(count) chat video players for background")
     }
 
     /// Register a chat session for video management
@@ -4779,27 +4762,19 @@ class ChatVideoManager: ObservableObject {
         if activeChatSessions[receiptId] == nil {
             activeChatSessions[receiptId] = ChatSessionVideoState()
             visibleVideos[receiptId] = Set<String>()
-            chatSessionMessages[receiptId] = Set<String>()
-            // Release ALL feed players to free decode sessions for chat videos
-            SharedAssetCache.shared.releaseAllFeedPlayers()
             print("DEBUG: [ChatVideoManager] Registered chat session: \(receiptId)")
         }
     }
 
     /// Unregister a chat session (cleanup when leaving chat)
     func unregisterChatSession(receiptId: String) {
-        visibleVideos.removeValue(forKey: receiptId)
-
-        // Pause and remove all AVPlayers for this session
-        if let messageIds = chatSessionMessages[receiptId] {
-            for messageId in messageIds {
-                releaseChatPlayer(messageId: messageId, releaseSharedCache: true)
+        if let mids = visibleVideos.removeValue(forKey: receiptId) {
+            for mid in mids {
+                SharedAssetCache.shared.markAsNotVisible(mid)
             }
-            print("DEBUG: [ChatVideoManager] Removed \(messageIds.count) players for session: \(receiptId)")
         }
 
         activeChatSessions.removeValue(forKey: receiptId)
-        chatSessionMessages.removeValue(forKey: receiptId)
         print("DEBUG: [ChatVideoManager] Unregistered chat session: \(receiptId)")
     }
 
@@ -4848,6 +4823,7 @@ class ChatVideoManager: ObservableObject {
         // Handle newly visible videos
         if sessionState.isChatVisible && !newlyVisible.isEmpty {
             for videoMid in newlyVisible {
+                SharedAssetCache.shared.markAsVisible(videoMid)
                 startVideo(mid: videoMid, receiptId: receiptId)
             }
         }
@@ -4855,11 +4831,10 @@ class ChatVideoManager: ObservableObject {
         // Handle newly invisible videos
         if !newlyInvisible.isEmpty {
             for videoMid in newlyInvisible {
+                SharedAssetCache.shared.markAsNotVisible(videoMid)
                 pauseVideo(mid: videoMid, receiptId: receiptId)
             }
         }
-
-        manageChatPlayerCacheSize()
 
         print("DEBUG: [ChatVideoManager] Updated visibility for \(receiptId): +\(newlyVisible.count) visible, -\(newlyInvisible.count) invisible")
     }
@@ -4893,16 +4868,9 @@ class ChatVideoManager: ObservableObject {
         isChatScreenVisible: Bool,
         receiptId: String
     ) async -> AVPlayer? {
-        if let existingPlayer = chatVideoPlayers[messageId],
+        if let existingPlayer = SharedAssetCache.shared.getCachedPlayer(for: attachment.mid),
            !isPlayerBroken(existingPlayer) {
-            chatMessageVideoMids[messageId] = attachment.mid
-            chatPlayerAccessTimes[messageId] = Date()
             return existingPlayer
-        } else if let existingPlayer = chatVideoPlayers.removeValue(forKey: messageId) {
-            existingPlayer.pause()
-            existingPlayer.replaceCurrentItem(with: nil)
-            chatMessageVideoMids.removeValue(forKey: messageId)
-            chatPlayerAccessTimes.removeValue(forKey: messageId)
         }
 
         // Get the base URL for the video
@@ -4920,34 +4888,27 @@ class ChatVideoManager: ObservableObject {
         }
 
         do {
-            let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: attachment.mid, mediaType: attachment.type)
-            chatVideoPlayers[messageId] = player
-            chatMessageVideoMids[messageId] = attachment.mid
-            chatPlayerAccessTimes[messageId] = Date()
-            chatSessionMessages[receiptId, default: Set<String>()].insert(messageId)
-            manageChatPlayerCacheSize()
-            return player
+            return try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: attachment.mid, mediaType: attachment.type)
         } catch {
             print("DEBUG: [ChatVideoManager] Failed to create player for \(messageId): \(error)")
             return nil
         }
     }
 
-    /// Remove a video player for a message
-    func removeVideoPlayer(messageId: String) {
-        releaseChatPlayer(messageId: messageId, releaseSharedCache: true)
+    /// Remove a shared inline player when a chat video needs a fresh URL/item.
+    func removeVideoPlayer(mediaID: String) {
+        SharedAssetCache.shared.releaseCachedPlayer(for: mediaID, force: true)
     }
 
     /// Clean up all video players for a chat session
     func cleanupChatSession(receiptId: String) {
-        guard let messageIds = chatSessionMessages[receiptId] else { return }
-        visibleVideos.removeValue(forKey: receiptId)
-
-        for messageId in messageIds {
-            releaseChatPlayer(messageId: messageId, releaseSharedCache: true)
+        if let mids = visibleVideos.removeValue(forKey: receiptId) {
+            for mid in mids {
+                SharedAssetCache.shared.markAsNotVisible(mid)
+                SharedAssetCache.shared.releaseCachedPlayer(for: mid, force: false)
+            }
         }
-        chatSessionMessages.removeValue(forKey: receiptId)
-        print("DEBUG: [ChatVideoManager] Cleaned up \(messageIds.count) players for session: \(receiptId)")
+        print("DEBUG: [ChatVideoManager] Cleaned up chat session: \(receiptId)")
     }
 
     // MARK: - Private Methods
@@ -4959,54 +4920,6 @@ class ChatVideoManager: ObservableObject {
         }
         let seconds = player.currentTime().seconds
         return seconds.isNaN || seconds == .infinity || seconds == -.infinity
-    }
-
-    private func currentVisibleChatVideoMids() -> Set<String> {
-        var protectedMids = Set<String>()
-        for (receiptId, sessionState) in activeChatSessions where sessionState.isChatVisible {
-            protectedMids.formUnion(visibleVideos[receiptId] ?? [])
-        }
-        return protectedMids
-    }
-
-    private func releaseChatPlayer(messageId: String, releaseSharedCache: Bool) {
-        let mediaID = chatMessageVideoMids[messageId]
-        if let player = chatVideoPlayers.removeValue(forKey: messageId) {
-            player.pause()
-        }
-        chatMessageVideoMids.removeValue(forKey: messageId)
-        chatPlayerAccessTimes.removeValue(forKey: messageId)
-
-        if releaseSharedCache,
-           let mediaID,
-           !chatMessageVideoMids.values.contains(mediaID),
-           !currentVisibleChatVideoMids().contains(mediaID) {
-            SharedAssetCache.shared.releasePlayerImmediately(for: mediaID)
-        }
-    }
-
-    private func manageChatPlayerCacheSize() {
-        guard chatVideoPlayers.count > maxChatPlayerCacheSize else { return }
-
-        let protectedMids = currentVisibleChatVideoMids()
-        let candidates = chatPlayerAccessTimes
-            .filter { messageId, _ in
-                guard let mediaID = chatMessageVideoMids[messageId] else { return true }
-                return !protectedMids.contains(mediaID)
-            }
-            .sorted { $0.value < $1.value }
-            .map { $0.key }
-
-        let targetRemovalCount = chatVideoPlayers.count - maxChatPlayerCacheSize
-        var removedCount = 0
-        for messageId in candidates.prefix(targetRemovalCount) {
-            releaseChatPlayer(messageId: messageId, releaseSharedCache: true)
-            removedCount += 1
-        }
-
-        if removedCount > 0 {
-            print("DEBUG: [ChatVideoManager] Trimmed \(removedCount) cached chat video player(s); remaining: \(chatVideoPlayers.count)")
-        }
     }
 
     private func recoverVisibleVideosAfterInfrastructureReady(reason: String) {
@@ -5120,10 +5033,10 @@ class ChatVideoManager: ObservableObject {
         sessionState.pausedVideos.formUnion(videosToPause)
         activeChatSessions[receiptId] = sessionState
 
-        // Directly pause all AVPlayers for this session
-        if let messageIds = chatSessionMessages[receiptId] {
-            for messageId in messageIds {
-                chatVideoPlayers[messageId]?.pause()
+        // Directly pause cached shared players for this session.
+        if let mids = visibleVideos[receiptId] {
+            for mid in mids {
+                SharedAssetCache.shared.getCachedPlayer(for: mid)?.pause()
             }
         }
 
