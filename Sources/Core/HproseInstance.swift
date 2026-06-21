@@ -1493,10 +1493,10 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    /// If @baseUrl is an empty string, the function will ignore the cache and try to find a provider's IP for this user
-    /// and update cache with the new user.
-    /// If @baseUrl is omitted, the user's cached route, NodePool fast path, or provider lookup is used.
-    /// Otherwise, user object will be retrieved from the node of the given baseUrl after the route is validated.
+    /// If @baseUrl is an empty string, cached user data is bypassed, but NodePool
+    /// still wins route selection when it has an entry for the user's access node.
+    /// If NodePool has no entry, the user's cached baseUrl or provider lookup is used.
+    /// Otherwise, the supplied baseUrl is used as the fallback route after NodePool.
     ///
     /// - Parameters:
     ///   - userId: The user ID to fetch
@@ -1552,6 +1552,7 @@ final class HproseInstance: ObservableObject {
                 // Return cached user if it's still valid and the caller did
                 // not explicitly ask us to re-resolve the provider route.
                 if !hasExpired && !forceFreshIPResolution {
+                    _ = await applyNodePoolBaseUrlIfAvailable(for: cachedUser, reason: "fresh cache NodePool")
                     await MainActor.run {
                         cachedUser.cacheStatus = .fresh
                     }
@@ -1560,9 +1561,10 @@ final class HproseInstance: ObservableObject {
                     await MainActor.run {
                         cachedUser.cacheStatus = .stale
                     }
-                    // User data has expired
-                    // If baseUrl is empty (forcing fresh IP resolution), don't return stale data
-                    // This is critical during login to ensure we get a healthy IP
+                    // User data has expired.
+                    // If baseUrl is empty, don't return stale data; route selection
+                    // below still checks NodePool before falling back to cached baseUrl
+                    // or provider discovery.
                     if forceFreshIPResolution {
                         print("DEBUG: [fetchUser] Cache expired and baseUrl empty (forcing IP resolution), fetching fresh data")
                         forceFreshIPResolution = true
@@ -1788,6 +1790,23 @@ final class HproseInstance: ObservableObject {
             invalidateIPCache(for: host)
         }
     }
+
+    private func applyNodePoolBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
+        guard let poolIP = NodePool.shared.getIPFromNode(for: user) else {
+            return nil
+        }
+
+        guard let url = URL(string: ensureHttpPrefix(poolIP)) else {
+            print("DEBUG: [NodePool] Ignoring invalid pooled IP for userId: \(user.mid): \(poolIP)")
+            if let hostIds = user.hostIds, hostIds.count > 1 {
+                NodePool.shared.removeIPFromNode(nodeMid: hostIds[1], ip: poolIP)
+            }
+            return nil
+        }
+
+        await applyBaseUrlIfNeeded(user, url: url, reason: reason)
+        return url
+    }
     
     /// Ensures URL has http:// prefix
     private func ensureHttpPrefix(_ url: String) -> String {
@@ -1817,9 +1836,8 @@ final class HproseInstance: ObservableObject {
         let trimmedRouteHint = routeHint?.trimmingCharacters(in: .whitespacesAndNewlines)
         let originalBaseUrl = (trimmedRouteHint?.isEmpty == false) ? trimmedRouteHint : user.baseUrl?.absoluteString
         let hasExpired = await user.hasExpired()
-        // Only explicit fresh-resolution paths skip NodePool. Expired cache still
-        // gets the one-shot NodePool fast path, then falls through to getProviderIP
-        // immediately if that address fails.
+        // NodePool is checked before every network attempt. If it has no route,
+        // the user's baseUrl is used once before falling back to provider discovery.
         let shouldForceFreshIP = forceFreshIP || trimmedRouteHint == "" || originalBaseUrl == nil || originalBaseUrl?.isEmpty == true
         
         var lastError: Error?
@@ -1838,6 +1856,7 @@ final class HproseInstance: ObservableObject {
                     v4Only: v4Only
                 )
                 attemptedBaseUrl = candidateBaseUrl.absoluteString
+                let previousAccessNodeMid = user.hostIds.flatMap { $0.count > 1 ? $0[1] : nil }
                 
                 // Prepare server request
                 let entry = "get_user"
@@ -1874,7 +1893,8 @@ final class HproseInstance: ObservableObject {
                     user: user,
                     response: response as Any,
                     skipRetryAndBlacklist: skipRetryAndBlacklist,
-                    confirmedBaseUrl: candidateBaseUrl
+                    confirmedBaseUrl: candidateBaseUrl,
+                    previousAccessNodeMid: previousAccessNodeMid
                 )
                 
                 if success {
@@ -1960,7 +1980,8 @@ final class HproseInstance: ObservableObject {
         user: User,
         response: Any,
         skipRetryAndBlacklist: Bool,
-        confirmedBaseUrl: URL?
+        confirmedBaseUrl: URL?,
+        previousAccessNodeMid: String?
     ) async throws -> Bool {
         // Handle dictionary response (user data)
         if let userDict = response as? [String: Any] {
@@ -1979,10 +2000,30 @@ final class HproseInstance: ObservableObject {
 
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false, confirmedBaseUrl: confirmedBaseUrl)
 
-            // Update NodePool with successful access (replace IP list with working IP)
-            // Only update access node (hostIds[1]) since that's what we resolved during fetchUser
-            if let baseUrlString = confirmedBaseUrl?.absoluteString,
-               let hostIds = User.getInstance(mid: user.mid).hostIds, hostIds.count > 1 {
+            // NodePool is authoritative for the access node. After a confirmed
+            // fetch, replace the pool entry only when the user's route differs
+            // from what the pool already knows.
+            let fetchedUser = User.getInstance(mid: user.mid)
+            let currentAccessNodeMid = fetchedUser.hostIds.flatMap { $0.count > 1 ? $0[1] : nil }
+            if let previousAccessNodeMid,
+               let currentAccessNodeMid,
+               previousAccessNodeMid != currentAccessNodeMid {
+                print("DEBUG: [processUserDataResponse] Access node changed for \(user.mid): \(previousAccessNodeMid) -> \(currentAccessNodeMid); resolving new node before updating NodePool")
+
+                if let accessIP = await getHostIP(currentAccessNodeMid, v4Only: true),
+                   let accessUrl = URL(string: ensureHttpPrefix(accessIP)) {
+                    await applyBaseUrlIfNeeded(fetchedUser, url: accessUrl, reason: "access node changed")
+                    NodePool.shared.updateNodeIP(nodeMid: currentAccessNodeMid, newIP: accessUrl.absoluteString)
+                    print("DEBUG: [processUserDataResponse] ✅ Updated pool for changed access node \(currentAccessNodeMid)")
+                } else {
+                    print("DEBUG: [processUserDataResponse] Could not resolve changed access node \(currentAccessNodeMid); leaving NodePool unchanged")
+                }
+                return true
+            }
+
+            if let baseUrlString = fetchedUser.baseUrl?.absoluteString,
+               let hostIds = fetchedUser.hostIds, hostIds.count > 1,
+               !NodePool.shared.isUserIPValid(for: fetchedUser) {
                 let accessNodeMid = hostIds[1]
                 NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString)
                 print("DEBUG: [processUserDataResponse] ✅ Updated pool: access node \(accessNodeMid) now has working IP")
@@ -2012,28 +2053,21 @@ final class HproseInstance: ObservableObject {
         originalBaseUrl: String?,
         v4Only: Bool = false
     ) async throws -> URL {
-        // NodePool is the performance fast-path, but only for the first attempt.
-        // If it fails, performUserUpdate removes the IP and retries through
-        // getProviderIP immediately.
-        if attempt == 1, !forceFreshIP, let poolIP = NodePool.shared.getIPFromNode(for: user) {
-            if let url = URL(string: ensureHttpPrefix(poolIP)) {
-                print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using trusted NodePool IP once: \(poolIP) for userId: \(user.mid)")
-                return url
-            }
-            print("DEBUG: [resolveAndUpdateBaseUrl] Ignoring invalid NodePool IP for userId: \(user.mid): \(poolIP)")
+        if let url = await applyNodePoolBaseUrlIfAvailable(for: user, reason: "NodePool route") {
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using NodePool IP: \(url.absoluteString) for userId: \(user.mid)")
+            return url
         }
 
-        if attempt == 1, !forceFreshIP, let originalBaseUrl, !originalBaseUrl.isEmpty {
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using cached baseUrl once: \(originalBaseUrl) for userId: \(user.mid)")
+        if attempt == 1, let originalBaseUrl, !originalBaseUrl.isEmpty {
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - No NodePool entry; using user baseUrl once: \(originalBaseUrl) for userId: \(user.mid)")
             guard let url = URL(string: ensureHttpPrefix(originalBaseUrl)) else {
                 throw HproseError.userNotFound(userId: user.mid, reason: "Invalid cached baseUrl: \(originalBaseUrl)")
             }
             return url
         }
 
-        // getProviderIP is the source of truth after the one allowed cached
-        // route attempt. A failed cached route is removed from the local
-        // fast-paths, so retries come here immediately instead of reusing it.
+        // Direct read-node discovery is the strongest fallback for known users:
+        // baseUrl may be stale, while hostIds[1] identifies the node that serves reads.
         let reason: String
         if attempt > 1 {
             reason = "retry after failure"
@@ -2047,6 +2081,15 @@ final class HproseInstance: ObservableObject {
             reason = "provider discovery"
         }
         
+        if let accessNodeMid = user.hostIds.flatMap({ $0.count > 1 ? $0[1] : nil }) {
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving read node \(accessNodeMid) for userId: \(user.mid), reason: \(reason)")
+            if let accessIP = await getHostIP(accessNodeMid, v4Only: v4Only),
+               let url = URL(string: ensureHttpPrefix(accessIP)) {
+                return url
+            }
+            print("WARNING: [resolveAndUpdateBaseUrl] getHostIP returned nil for read node \(accessNodeMid), falling back to provider IP for userId: \(user.mid)")
+        }
+
         print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid), reason: \(reason)")
         
         do {
