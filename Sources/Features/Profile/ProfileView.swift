@@ -711,14 +711,7 @@ struct ProfileView: View {
                     }
                     print("DEBUG: [ProfileView] User route changed from \(cachedRoute.isEmpty ? "nil" : cachedRoute) to \(refreshedRoute.isEmpty ? "nil" : refreshedRoute); reloading profile tweets")
                 }
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                if let jsonData = try? encoder.encode(userData),
-                   let jsonString = String(data: jsonData, encoding: .utf8) {
-                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server\n\(jsonString)")
-                } else {
-                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - \(userData)")
-                }
+                print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - username: \(userData.username ?? "nil"), baseUrl: \(userData.baseUrl?.absoluteString ?? "nil"), tweetCount: \(userData.tweetCount), followersCount: \(userData.followersCount), followingCount: \(userData.followingCount)")
                 TweetCacheManager.shared.saveUser(userData)
                 print("DEBUG: [ProfileView] Saved fetched user to cache")
             } else {

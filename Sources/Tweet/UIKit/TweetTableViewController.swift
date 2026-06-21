@@ -622,8 +622,12 @@ class TweetTableViewController: UITableViewController {
 
     @MainActor
     private func handleAppDidBecomeActive() {
-        guard needsVideoLayerRefresh, !isTableViewUpdating else { return }
+        guard needsVideoLayerRefresh else { return }
         guard videoCoordinator.isFeedVisible else { return }
+        guard isReadyForFeedVideoResume, !isTableViewUpdating else {
+            scheduleForegroundAutoplayRetry(reason: "didBecomeActiveLayerRefreshDeferred")
+            return
+        }
         needsVideoLayerRefresh = false
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
@@ -635,7 +639,10 @@ class TweetTableViewController: UITableViewController {
     @MainActor
     private func handleReloadVisibleVideosOnly() {
         guard videoCoordinator.isFeedVisible else { return }
-        guard isReadyForFeedVideoResume, !isTableViewUpdating else { return }
+        guard isReadyForFeedVideoResume, !isTableViewUpdating else {
+            scheduleForegroundAutoplayRetry(reason: "reloadVisibleVideosOnlyDeferred")
+            return
+        }
 
         forceLayoutVisibleCellsForVisibilityPass()
         lastVisibleTweetIds = []
@@ -702,8 +709,36 @@ class TweetTableViewController: UITableViewController {
     }
 
     @MainActor
-    private func scheduleForegroundAutoplayRetry(reason: String) {
-        guard isReadyForFeedVideoResume, !isTableViewUpdating else { return }
+    private func scheduleForegroundAutoplayRetry(reason: String, attempt: Int = 0) {
+        func retryLater(_ deferredReason: String) {
+            guard attempt < 6 else {
+                pendingFeedPlaybackResumeReason = deferredReason
+                return
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self,
+                      self.videoCoordinator.isFeedVisible else { return }
+                self.scheduleForegroundAutoplayRetry(
+                    reason: deferredReason,
+                    attempt: attempt + 1
+                )
+            }
+        }
+
+        guard AppDelegate.isVideoInfrastructureReady else {
+            retryLater("\(reason)-infrastructureNotReady")
+            return
+        }
+        guard isReadyForFeedVideoResume else {
+            pendingFeedPlaybackResumeReason = reason
+            retryLater("\(reason)-viewNotReady")
+            return
+        }
+        guard !isTableViewUpdating else {
+            retryLater("\(reason)-tableUpdating")
+            return
+        }
 
         lastVisibleTweetIds = []
         lastLoadVisibleVideoIds = []
@@ -715,7 +750,15 @@ class TweetTableViewController: UITableViewController {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
             guard let self = self else { return }
-            guard self.isReadyForFeedVideoResume, !self.isTableViewUpdating else { return }
+            guard AppDelegate.isVideoInfrastructureReady,
+                  self.isReadyForFeedVideoResume,
+                  !self.isTableViewUpdating else {
+                self.scheduleForegroundAutoplayRetry(
+                    reason: "\(reason)-settledDeferred",
+                    attempt: attempt + 1
+                )
+                return
+            }
             self.lastVisibleTweetIds = []
             self.lastLoadVisibleVideoIds = []
             self.lastContinuePlaybackVideoIds = []
@@ -958,12 +1001,14 @@ class TweetTableViewController: UITableViewController {
         view.backgroundColor = XTheme.background
         customRefreshControl?.tintColor = XTheme.accent
         initialLoadingSpinner?.color = XTheme.secondaryText
-        tableView.visibleCells.forEach { cell in
-            if let tweetCell = cell as? TweetTableViewCell {
-                tweetCell.applyTheme()
-            } else {
-                cell.backgroundColor = XTheme.background
-                cell.contentView.backgroundColor = XTheme.background
+        if tableView.window != nil {
+            tableView.visibleCells.forEach { cell in
+                if let tweetCell = cell as? TweetTableViewCell {
+                    tweetCell.applyTheme()
+                } else {
+                    cell.backgroundColor = XTheme.background
+                    cell.contentView.backgroundColor = XTheme.background
+                }
             }
         }
         updateNewTweetsButtonAppearance()
