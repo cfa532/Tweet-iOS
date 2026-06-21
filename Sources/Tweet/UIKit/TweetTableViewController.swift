@@ -1089,7 +1089,7 @@ class TweetTableViewController: UITableViewController {
         } else {
             button = UIButton(type: .system)
             button.translatesAutoresizingMaskIntoConstraints = false
-            button.backgroundColor = XTheme.accent.withAlphaComponent(0.72)
+            button.backgroundColor = XTheme.accent.withAlphaComponent(0.86)
             button.layer.cornerRadius = newTweetsBannerHeight / 2
             button.layer.borderWidth = 0
             button.layer.masksToBounds = false
@@ -1179,7 +1179,7 @@ class TweetTableViewController: UITableViewController {
 
     private func updateNewTweetsButtonAppearance() {
         guard let button = newTweetsButton else { return }
-        button.backgroundColor = XTheme.accent.withAlphaComponent(0.72)
+        button.backgroundColor = XTheme.accent.withAlphaComponent(0.86)
         button.layer.borderWidth = 0
         button.layer.shadowColor = UIColor.black.withAlphaComponent(isDarkModeEnabled ? 0.35 : 0.18).cgColor
         newTweetsTitleLabel?.textColor = .white
@@ -1206,8 +1206,8 @@ class TweetTableViewController: UITableViewController {
             subview.removeFromSuperview()
         }
 
-        let avatarSize: CGFloat = 28
-        let overlap: CGFloat = 12
+        let avatarSize: CGFloat = 32
+        let overlap: CGFloat = 14
         let authors = pendingPrependedTweets
             .compactMap(\.author)
             .reduce(into: [User]()) { result, author in
@@ -1243,8 +1243,8 @@ class TweetTableViewController: UITableViewController {
             let avatarView = AvatarUIView()
             avatarView.translatesAutoresizingMaskIntoConstraints = false
             avatarView.layer.cornerRadius = avatarSize / 2
-            avatarView.layer.borderWidth = 2
-            avatarView.layer.borderColor = XTheme.background.cgColor
+            avatarView.layer.borderWidth = 0
+            avatarView.layer.borderColor = nil
             avatarView.clipsToBounds = true
             avatarView.configure(user: author, size: avatarSize)
             avatarCluster.addSubview(avatarView)
@@ -1262,8 +1262,8 @@ class TweetTableViewController: UITableViewController {
         container.translatesAutoresizingMaskIntoConstraints = false
         container.backgroundColor = XTheme.secondaryBackground
         container.layer.cornerRadius = size / 2
-        container.layer.borderWidth = 2
-        container.layer.borderColor = XTheme.background.cgColor
+        container.layer.borderWidth = 0
+        container.layer.borderColor = nil
         container.clipsToBounds = true
 
         let imageView = UIImageView(
@@ -1315,14 +1315,14 @@ class TweetTableViewController: UITableViewController {
 
     @objc private func handleNewTweetsButtonTouchDown() {
         UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.newTweetsButton?.backgroundColor = XTheme.accent.withAlphaComponent(0.58)
+            self.newTweetsButton?.backgroundColor = XTheme.accent.withAlphaComponent(0.74)
             self.newTweetsButton?.transform = CGAffineTransform(scaleX: 0.98, y: 0.98)
         }
     }
 
     @objc private func handleNewTweetsButtonTouchUp() {
         UIView.animate(withDuration: 0.16, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.newTweetsButton?.backgroundColor = XTheme.accent.withAlphaComponent(0.72)
+            self.newTweetsButton?.backgroundColor = XTheme.accent.withAlphaComponent(0.86)
             self.newTweetsButton?.transform = .identity
         }
     }
