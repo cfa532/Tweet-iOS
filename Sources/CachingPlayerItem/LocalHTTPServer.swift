@@ -1057,6 +1057,14 @@ public class LocalHTTPServer: @unchecked Sendable {
         } ?? false
     }
 
+    private func hasActiveHLSDownload(for mediaID: String, relativePath: String) -> Bool {
+        hlsDataTasksLock.lock()
+        defer { hlsDataTasksLock.unlock() }
+        return hlsDataTasks[mediaID]?.values.contains { task in
+            relativeHLSPath(from: task.currentRequest?.url ?? task.originalRequest?.url, mediaID: mediaID) == relativePath
+        } ?? false
+    }
+
     private func hasActiveProgressiveCacheWriter(for mediaID: String) -> Bool {
         progressiveCacheWritersLock.lock()
         defer { progressiveCacheWritersLock.unlock() }
@@ -1569,7 +1577,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // Check if this is a playlist (.m3u8), segment (.ts), or progressive video
         if relativePath.hasSuffix(".m3u8") {
-            handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
+            await handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
         } else if relativePath.hasSuffix(".ts") {
             await handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
@@ -1581,29 +1589,37 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
 
-    private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
+    private func serveCachedPlaylistIfAvailable(cachePath: String, mediaID: String, baseURL: URL, logPath: String, connection: NWConnection) -> Bool {
+        guard isUsableCachedFile(atPath: cachePath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: cachePath)),
+              let playlistString = String(data: data, encoding: .utf8) else {
+            return false
+        }
+
+        let modifiedPlaylist = rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: baseURL)
+        guard let modifiedData = modifiedPlaylist.data(using: .utf8) else {
+            return false
+        }
+
+        let headers: [String: String] = [
+            "Content-Type": "application/vnd.apple.mpegurl",
+            "Content-Length": "\(modifiedData.count)",
+            "Accept-Ranges": "bytes"
+        ]
+        print("📄 [HLS LOCAL] \(shortMID(mediaID)) served cached \(logPath) (\(modifiedData.count) bytes)")
+        sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
+        return true
+    }
+
+    private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
         let isCached = isUsableCachedFile(atPath: cachePath)
         let logPath = hlsLogPath(for: fullRealURL, mediaID: mediaID)
 
         // Check cache first
         if isCached {
-            // Removed repetitive cache hit log
-            
-            // Read, rewrite URLs, and serve
-            if let data = try? Data(contentsOf: URL(fileURLWithPath: cachePath)),
-               let playlistString = String(data: data, encoding: .utf8) {
-                let modifiedPlaylist = rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: fullRealURL)
-                if let modifiedData = modifiedPlaylist.data(using: .utf8) {
-                    let headers: [String: String] = [
-                        "Content-Type": "application/vnd.apple.mpegurl",
-                        "Content-Length": "\(modifiedData.count)",
-                        "Accept-Ranges": "bytes"
-                    ]
-                    print("📄 [HLS LOCAL] \(shortMID(mediaID)) served cached \(logPath) (\(modifiedData.count) bytes)")
-                    sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
-                    return
-                }
+            if serveCachedPlaylistIfAvailable(cachePath: cachePath, mediaID: mediaID, baseURL: fullRealURL, logPath: logPath, connection: connection) {
+                return
             }
             
             // Fallback: cache file is unreadable (corrupted or filesystem error).
@@ -1611,6 +1627,19 @@ public class LocalHTTPServer: @unchecked Sendable {
             try? FileManager.default.removeItem(atPath: cachePath)
             fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
             return
+        }
+
+        if hasActiveHLSDownload(for: mediaID, relativePath: logPath) {
+            for _ in 0..<40 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                switch connection.state { case .cancelled, .failed: return; default: break }
+                if serveCachedPlaylistIfAvailable(cachePath: cachePath, mediaID: mediaID, baseURL: fullRealURL, logPath: logPath, connection: connection) {
+                    return
+                }
+                if !hasActiveHLSDownload(for: mediaID, relativePath: logPath) {
+                    break
+                }
+            }
         }
         
         // Not cached - fetch from real server.
