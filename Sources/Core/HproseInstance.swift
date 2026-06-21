@@ -1503,8 +1503,9 @@ final class HproseInstance: ObservableObject {
     /// Fetches user data with caching, blacklist checking, and concurrent update management
     /// - Parameters:
     ///   - userId: The user ID to fetch
-    ///   - baseUrl: Explicit route for this user. Pass nil to use this user's
-    ///     cached route/NodePool/provider lookup, or "" to force provider lookup.
+    ///   - baseUrl: Explicit fallback route for this user. Pass nil to use this
+    ///     user's cached route/NodePool/provider lookup, or "" to bypass the
+    ///     cached user return while still letting NodePool win route selection.
     ///   - maxRetries: Maximum number of retry attempts (default: 2)
     ///   - forceRefresh: If true, bypasses cache and fetches fresh data
     ///   - skipRetryAndBlacklist: If true, skips retry logic and blacklist management (for internal use)
@@ -1791,6 +1792,90 @@ final class HproseInstance: ObservableObject {
         }
     }
 
+    private func hasTimeoutCause(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        var depth = 0
+
+        while let nsError = current, depth < 8 {
+            if nsError.code == NSURLErrorTimedOut {
+                return true
+            }
+
+            let description = nsError.localizedDescription.lowercased()
+            if description.contains("timeout") || description.contains("timed out") {
+                return true
+            }
+
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                current = underlying
+            } else if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                current = underlying as NSError
+            } else {
+                current = nil
+            }
+            depth += 1
+        }
+
+        return false
+    }
+
+    private func hasCancellationCause(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        var current: NSError? = error as NSError
+        var depth = 0
+
+        while let nsError = current, depth < 8 {
+            if nsError.code == NSURLErrorCancelled {
+                return true
+            }
+
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                current = underlying
+            } else if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                current = underlying as NSError
+            } else {
+                current = nil
+            }
+            depth += 1
+        }
+
+        return false
+    }
+
+    private func evictNodeRouteAfterFailure(
+        user: User,
+        attemptedBaseUrl: String?,
+        error: Error,
+        logPrefix: String
+    ) async {
+        guard let baseUrlString = attemptedBaseUrl,
+              let hostIds = user.hostIds,
+              hostIds.count > 1,
+              !hasCancellationCause(error) else {
+            return
+        }
+
+        let accessNodeMid = hostIds[1]
+
+        if hasTimeoutCause(error) {
+            print("DEBUG: [\(logPrefix)] Removing timed-out node \(accessNodeMid) from pool")
+            NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+            return
+        }
+
+        let routeHostPort = normalizeHostPort(baseUrlString)
+        let routeStillHealthy = await isServerHealthyWithTimeout(routeHostPort, timeout: 5.0, useCache: false)
+        if !routeStillHealthy {
+            print("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failed route health check")
+            NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+        } else {
+            print("DEBUG: [\(logPrefix)] Keeping node \(accessNodeMid) in pool; route health check still passes after failure")
+        }
+    }
+
     func applyNodePoolBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
         guard let poolIP = NodePool.shared.getIPFromNode(for: user) else {
             return nil
@@ -1921,17 +2006,10 @@ final class HproseInstance: ObservableObject {
                     return user
                 }
                 
-                // If we get here, response was null - clear baseUrl and let retry loop handle it
+                // If we get here, response was null. This can mean the user was
+                // invalidated even when the node route is healthy, so do not
+                // evict the shared NodePool entry from this signal alone.
                 print("DEBUG: [\(logPrefix)] NULL RESPONSE for userId: \(user.mid) on attempt \(attempt)/\(maxRetries)")
-                
-                // Remove unhealthy node from pool (null response indicates node issue)
-                invalidateIPCacheForBaseUrl(attemptedBaseUrl)
-                if let baseUrlString = attemptedBaseUrl,
-                   let hostIds = user.hostIds, hostIds.count > 1 {
-                    let accessNodeMid = hostIds[1]
-                    print("DEBUG: [\(logPrefix)] Removing node \(accessNodeMid) from pool after null response")
-                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
-                }
 
                 // If this was the last attempt, fail
                 if attempt >= maxRetries {
@@ -1943,7 +2021,7 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 // Otherwise, continue to next attempt - resolveAndUpdateBaseUrl will get fresh IP
-                print("DEBUG: [\(logPrefix)] Will retry with fresh providerIP on next attempt")
+                print("DEBUG: [\(logPrefix)] Will retry route repair on next attempt")
                 lastError = HproseError.userNotFound(userId: user.mid, reason: "Null response")
                 continue
             } catch {
@@ -1961,17 +2039,17 @@ final class HproseInstance: ObservableObject {
                 // return stale "healthy" for the failed IP
                 invalidateIPCacheForBaseUrl(attemptedBaseUrl)
 
-                // This address failed for this user flow. Remove it from NodePool
-                // so the next attempt resolves through getProviderIP instead of
-                // trusting the same failed fast-path again.
-                let nsCode = (error as NSError).code
-                if nsCode != NSURLErrorCancelled,
-                   let baseUrlString = attemptedBaseUrl,
-                   let hostIds = user.hostIds, hostIds.count > 1 {
-                    let accessNodeMid = hostIds[1]
-                    print("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failure")
-                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
-                }
+                // Timeout means the current route did not respond in time and should
+                // be evicted. For other failures, remove the shared node route only
+                // after a direct health check confirms this route is unreachable.
+                // User-level failures or malformed user data do not prove the node
+                // IP is stale.
+                await evictNodeRouteAfterFailure(
+                    user: user,
+                    attemptedBaseUrl: attemptedBaseUrl,
+                    error: error,
+                    logPrefix: logPrefix
+                )
                 
                 if skipRetryAndBlacklist {
                     throw error
@@ -2747,11 +2825,13 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid
         ]
         
+        var attemptedBaseUrl: String?
         do {
             guard let client = user.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             
+            attemptedBaseUrl = user.baseUrl?.absoluteString
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             
             // Unwrap v2 response
@@ -2777,6 +2857,12 @@ final class HproseInstance: ObservableObject {
             NodePool.shared.updateFromUser(user)
             return sorted.compactMap { $0["field"] as? String }
         } catch {
+            await evictNodeRouteAfterFailure(
+                user: user,
+                attemptedBaseUrl: attemptedBaseUrl,
+                error: error,
+                logPrefix: "getFollowings"
+            )
             print("DEBUG: [HproseInstance] getFollowings error: \(error)")
             return Gadget.getAlphaIds()
         }
@@ -2840,11 +2926,13 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid
         ]
         
+        var attemptedBaseUrl: String?
         do {
             guard let client = user.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             
+            attemptedBaseUrl = user.baseUrl?.absoluteString
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
@@ -2868,6 +2956,12 @@ final class HproseInstance: ObservableObject {
             NodePool.shared.updateFromUser(user)
             return sorted.compactMap { $0["field"] as? String }
         } catch {
+            await evictNodeRouteAfterFailure(
+                user: user,
+                attemptedBaseUrl: attemptedBaseUrl,
+                error: error,
+                logPrefix: "getFans"
+            )
             print("DEBUG: [HproseInstance] getFans error: \(error)")
             return nil
         }

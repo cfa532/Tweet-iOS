@@ -184,7 +184,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     @Published var hostIds: [MimeiId]? // hostIds[0]=writable host, hostIds[1]=best access node
-    /// For read RPCs: prefer hostIds[1] (best access node from provider resolution), fall back to hostIds[0].
+    /// For read RPCs, hostIds[1] is the access node. Single-host users store the
+    /// same node in hostIds[0] and hostIds[1].
     var accessHostId: MimeiId? { hostIds.flatMap { $0.count > 1 ? $0[1] : $0.first } }
     @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
     @Published var publicKey: String?
