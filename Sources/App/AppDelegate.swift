@@ -1,5 +1,4 @@
 import UIKit
-import SwiftUI
 import BackgroundTasks
 import UserNotifications
 import AVFoundation
@@ -10,9 +9,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// During long background recovery we restart LocalHTTPServer + clear players asynchronously; attempting
     /// to recover/play while this is in-flight causes "zombie" players (nil currentItem / NaN time).
     static var isVideoInfrastructureReady = true
-    
-    // Loading overlay window for server restart
-    private var loadingWindow: UIWindow?
     
     // Track if app has finished launching to distinguish startup from background recovery
     private var hasFinishedLaunching = false
@@ -274,7 +270,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// **Screen Lock Recovery:**
     /// - Long screen lock (>5 min): Full server restart
     ///   - Clears video players
-    ///   - Shows loading overlay during restart
     ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     /// - Short screen lock (<5 min): Lightweight refresh
     ///   - Keeps players intact when possible
@@ -381,7 +376,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// **Video Infrastructure Recovery:**
     /// - Long background (>5 min): Full server restart required
     ///   - Clears all video players to release old URLs
-    ///   - Shows loading overlay during restart
     ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     /// - Short background (<5 min): Lightweight recovery
     ///   - Clears players for predictable clean state
@@ -553,7 +547,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("⚠️ [AppDelegate] Proxy health failed after \(reason) - restarting video infrastructure")
         await MainActor.run {
             AppDelegate.isVideoInfrastructureReady = false
-            showLoadingOverlay()
         }
 
         print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
@@ -563,7 +556,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         let didRestart = await restartVideoInfrastructureAsync()
 
         await MainActor.run {
-            hideLoadingOverlay()
             AppDelegate.isVideoInfrastructureReady = didRestart
             if didRestart {
                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
@@ -757,42 +749,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
     
-    // MARK: - Loading Overlay
-    
-    private func showLoadingOverlay() {
-        guard loadingWindow == nil else { return }
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
-            return
-        }
-        
-        // Create loading view
-        let loadingView = LoadingOverlayView()
-        let hostingController = UIHostingController(rootView: loadingView)
-        hostingController.view.backgroundColor = .clear
-        hostingController.view.isUserInteractionEnabled = false
-        
-        // Create a non-key, pass-through status window. Foreground video recovery
-        // can take a few seconds after a long background stay, but the feed should
-        // remain scrollable/tappable while that work completes.
-        let window = PassthroughLoadingWindow(windowScene: windowScene)
-        window.rootViewController = hostingController
-        window.windowLevel = .alert + 1
-        window.backgroundColor = .clear
-        window.isUserInteractionEnabled = false
-        window.isHidden = false
-        
-        loadingWindow = window
-    }
-    
-    private func hideLoadingOverlay() {
-        UIView.animate(withDuration: 0.2, animations: {
-            self.loadingWindow?.alpha = 0
-        }) { _ in
-            self.loadingWindow?.isHidden = true
-            self.loadingWindow = nil
-        }
-    }
-    
     // MARK: - App URLs Initialization
     
     /// Fetch app URLs from entry MimeiId provider and save to preferences
@@ -972,29 +928,3 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         return false
     }
 }
-
-// MARK: - Loading Overlay View
-
-private final class PassthroughLoadingWindow: UIWindow {
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        false
-    }
-}
-
-private struct LoadingOverlayView: View {
-    var body: some View {
-        ZStack {
-            Color.clear
-                .edgesIgnoringSafeArea(.all)
-            
-            // Visual recovery status only. Touches pass through the overlay window.
-            ProgressView()
-                .scaleEffect(1.5)
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                .padding(18)
-                .background(Color.black.opacity(0.35))
-                .clipShape(Circle())
-        }
-        .allowsHitTesting(false)
-    }
-} 
