@@ -1057,6 +1057,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         } ?? false
     }
 
+    private func hasActiveProgressiveCacheWriter(for mediaID: String) -> Bool {
+        progressiveCacheWritersLock.lock()
+        defer { progressiveCacheWritersLock.unlock() }
+        return progressiveCacheWriters.contains(mediaID)
+    }
+
     /// Returns the relative paths of all in-flight HLS segments for a mediaID (e.g. ["480p/segment001.ts"]).
     /// Used by the duration-mismatch timer to log exactly which segment is blocking playback.
     func activeHLSSegmentKeys(for mediaID: String) -> [String] {
@@ -1648,6 +1654,30 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         var isPrimary = isCurrentPrimary(mediaID)
 
+        if !isPrimary,
+           hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
+            for _ in 0..<40 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                switch connection.state { case .cancelled, .failed: return; default: break }
+                if isUsableCachedFile(atPath: cachePath) {
+                    print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(logPath) after waiting for duplicate non-primary fetch")
+                    autoreleasepool {
+                        serveFile(path: cachePath, connection: connection, method: method)
+                    }
+                    return
+                }
+                if !hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
+                    break
+                }
+            }
+
+            if hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
+                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) deduplicated \(logPath) while non-primary fetch is still active")
+                connection.cancel()
+                return
+            }
+        }
+
         // Acquire a slot in the per-node connection pool before starting the IPFS download.
         // Primary bypasses the preload cap, but still honors its own segment cap.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
@@ -1802,12 +1832,56 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
 
+        var isPrimary = isCurrentPrimary(mediaID)
+        if !isPrimary,
+           hasActiveProgressiveCacheWriter(for: mediaID) {
+            for _ in 0..<40 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                switch connection.state { case .cancelled, .failed: return; default: break }
+
+                if serveProgressiveCacheIfAvailable(
+                    mediaID: mediaID,
+                    start: effectiveStart,
+                    end: effectiveEnd,
+                    rangeHeader: rangeHeader,
+                    method: method,
+                    connection: connection
+                ) {
+                    return
+                }
+
+                isPrimary = isCurrentPrimary(mediaID)
+                if isPrimary || !hasActiveProgressiveCacheWriter(for: mediaID) {
+                    break
+                }
+            }
+
+            if !isPrimary,
+               hasActiveProgressiveCacheWriter(for: mediaID) {
+                print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) deduplicated duplicate non-primary range \(rangeHeader ?? "full") while cache writer is active")
+                connection.cancel()
+                return
+            }
+
+            if await serveProgressiveCachedPrefixAndFetchMissing(
+                mediaID: mediaID,
+                fullRealURL: fullRealURL,
+                start: effectiveStart,
+                end: effectiveEnd,
+                rangeHeader: rangeHeader,
+                method: method,
+                connection: connection
+            ) {
+                return
+            }
+        }
+
         // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
         // Primary bypasses the preload cap, but still honors its own range cap.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         // Progressive video can use 2 parallel range requests; HLS segments are sequential (cap=1).
-        var isPrimary = isCurrentPrimary(mediaID)
+        isPrimary = isCurrentPrimary(mediaID)
         var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
         if !slotAcquired {
             for _ in 0..<20 {

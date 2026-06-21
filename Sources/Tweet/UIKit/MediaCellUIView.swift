@@ -4150,7 +4150,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     }
                 } else if canDrivePlayback,
                           player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-                          self.videoCellState == .playing || self.videoCellState == .playerReady {
+                          self.videoCellState == .playing || self.videoCellState == .playerReady || self.videoCellState == .playerLoading {
                     guard !self.isVideoAtEnd(player) else { return }
                     self.noteBufferingWaitIfNeeded(for: player, reason: "waiting")
                     self.updateLoadingSpinnerForPlayback(player)
@@ -4158,7 +4158,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 } else if canDrivePlayback,
                             player.timeControlStatus == .paused
                             && self.coordinatorWantsToPlay
-                            && self.videoCellState == .playing
+                            && (self.videoCellState == .playing || self.videoCellState == .playerLoading)
                             && !self.isVideoAtEnd(player) {
                     self.noteBufferingWaitIfNeeded(for: player, reason: "paused")
                     self.updateLoadingSpinnerForPlayback(player)
