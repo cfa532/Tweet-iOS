@@ -133,6 +133,7 @@ class TweetTableViewController: UITableViewController {
     private var feedViewDidAppearObserver: NSObjectProtocol?
     private var overlayCoverageObserver: NSObjectProtocol?
     private var feedPlaybackResumeGeneration: Int = 0
+    private var foregroundAutoplayRetryGeneration: Int = 0
     private var pendingFeedPlaybackResumeReason: String?
     private var videoVisibilityRefreshGeneration: Int = 0
 
@@ -170,7 +171,7 @@ class TweetTableViewController: UITableViewController {
     private weak var newTweetsTitleLabel: UILabel?
     private var newTweetsAutoHideWorkItem: DispatchWorkItem?
     private var didAutoHideNewTweetsBanner = false
-    private let newTweetsBannerHeight: CGFloat = 44
+    private let newTweetsBannerHeight: CGFloat = 38
 
     private var isReadyForFeedVideoResume: Bool {
         isViewLoaded && view.window != nil && tableView.window != nil
@@ -644,16 +645,16 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
+        // The coordinator observes .reloadVisibleVideosOnly directly and calls
+        // recoverVisiblePlaybackAfterInterruption itself — calling it here too
+        // caused a duplicate startPrimary. Only do the layout/visibility pass
+        // and queue the settled-state retry.
         forceLayoutVisibleCellsForVisibilityPass()
         lastVisibleTweetIds = []
         lastLoadVisibleVideoIds = []
         lastContinuePlaybackVideoIds = []
         lastOnScreenVideoIds = []
         updateVisibleTweetsForVideoPlayback()
-        videoCoordinator.recoverVisiblePlaybackAfterInterruption(
-            reason: "tableReloadVisibleVideosOnly",
-            isForegroundRecovery: true
-        )
         scheduleForegroundAutoplayRetry(reason: "reloadVisibleVideosOnly")
     }
 
@@ -710,6 +711,13 @@ class TweetTableViewController: UITableViewController {
 
     @MainActor
     private func scheduleForegroundAutoplayRetry(reason: String, attempt: Int = 0) {
+        // Each new top-level call advances the generation; deferred retries carry
+        // the generation they were spawned under and are silently dropped when a
+        // newer trigger (e.g. reloadVisibleVideosOnly superseding tableForegroundRestore)
+        // has already taken ownership.
+        if attempt == 0 { foregroundAutoplayRetryGeneration += 1 }
+        let gen = foregroundAutoplayRetryGeneration
+
         func retryLater(_ deferredReason: String) {
             guard attempt < 6 else {
                 pendingFeedPlaybackResumeReason = deferredReason
@@ -718,7 +726,8 @@ class TweetTableViewController: UITableViewController {
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                 guard let self = self,
-                      self.videoCoordinator.isFeedVisible else { return }
+                      self.videoCoordinator.isFeedVisible,
+                      gen == self.foregroundAutoplayRetryGeneration else { return }
                 self.scheduleForegroundAutoplayRetry(
                     reason: deferredReason,
                     attempt: attempt + 1
@@ -749,7 +758,8 @@ class TweetTableViewController: UITableViewController {
         videoCoordinator.requestForegroundAutoplayRetry(reason: "\(reason)-immediate")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-            guard let self = self else { return }
+            guard let self = self,
+                  gen == self.foregroundAutoplayRetryGeneration else { return }
             guard AppDelegate.isVideoInfrastructureReady,
                   self.isReadyForFeedVideoResume,
                   !self.isTableViewUpdating else {
@@ -1098,7 +1108,7 @@ class TweetTableViewController: UITableViewController {
             let arrowImageView = UIImageView(
                 image: UIImage(
                     systemName: "arrow.up",
-                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
                 )
             )
             arrowImageView.tintColor = .white
@@ -1112,7 +1122,7 @@ class TweetTableViewController: UITableViewController {
 
             let titleLabel = UILabel()
             titleLabel.textColor = .white
-            titleLabel.font = .systemFont(ofSize: 17, weight: .regular)
+            titleLabel.font = .systemFont(ofSize: 15, weight: .regular)
             titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
             titleLabel.setContentHuggingPriority(.required, for: .horizontal)
             titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -1121,7 +1131,7 @@ class TweetTableViewController: UITableViewController {
             let contentStack = UIStackView(arrangedSubviews: [arrowImageView, avatarCluster, titleLabel])
             contentStack.axis = .horizontal
             contentStack.alignment = .center
-            contentStack.spacing = 8
+            contentStack.spacing = 7
             contentStack.isUserInteractionEnabled = false
             contentStack.translatesAutoresizingMaskIntoConstraints = false
             button.addSubview(contentStack)
@@ -1132,11 +1142,11 @@ class TweetTableViewController: UITableViewController {
                 button.centerXAnchor.constraint(equalTo: view.centerXAnchor),
                 button.heightAnchor.constraint(equalToConstant: newTweetsBannerHeight),
                 button.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
-                contentStack.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 14),
-                contentStack.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -16),
+                contentStack.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
+                contentStack.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -14),
                 contentStack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                arrowImageView.widthAnchor.constraint(equalToConstant: 14),
-                arrowImageView.heightAnchor.constraint(equalToConstant: 18)
+                arrowImageView.widthAnchor.constraint(equalToConstant: 13),
+                arrowImageView.heightAnchor.constraint(equalToConstant: 16)
             ])
             newTweetsButton = button
         }
@@ -1196,8 +1206,8 @@ class TweetTableViewController: UITableViewController {
             subview.removeFromSuperview()
         }
 
-        let avatarSize: CGFloat = 32
-        let overlap: CGFloat = 14
+        let avatarSize: CGFloat = 28
+        let overlap: CGFloat = 12
         let authors = pendingPrependedTweets
             .compactMap(\.author)
             .reduce(into: [User]()) { result, author in
@@ -1259,7 +1269,7 @@ class TweetTableViewController: UITableViewController {
         let imageView = UIImageView(
             image: UIImage(
                 systemName: "person.fill",
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
             )
         )
         imageView.translatesAutoresizingMaskIntoConstraints = false
@@ -1335,7 +1345,13 @@ class TweetTableViewController: UITableViewController {
         if tableView.numberOfRows(inSection: 0) == expectedRowsBeforeUpdate {
             tableView.insertRows(at: insertIndexPaths, with: .automatic)
         } else {
+            // Row count mismatch (concurrent update). Reload but preserve the scroll position so
+            // the feed does not silently jump to the top. UIKit reloadData() resets contentOffset;
+            // capture it first and restore it immediately after layout.
+            let savedOffset = tableView.contentOffset
             tableView.reloadData()
+            tableView.layoutIfNeeded()
+            tableView.setContentOffset(savedOffset, animated: false)
         }
         isTableViewUpdating = false
 

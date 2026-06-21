@@ -711,7 +711,7 @@ struct ProfileView: View {
                     }
                     print("DEBUG: [ProfileView] User route changed from \(cachedRoute.isEmpty ? "nil" : cachedRoute) to \(refreshedRoute.isEmpty ? "nil" : refreshedRoute); reloading profile tweets")
                 }
-                print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - username: \(userData.username ?? "nil"), baseUrl: \(userData.baseUrl?.absoluteString ?? "nil"), tweetCount: \(userData.tweetCount), followersCount: \(userData.followersCount), followingCount: \(userData.followingCount)")
+                print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - username: \(userData.username ?? "nil"), baseUrl: \(userData.baseUrl?.absoluteString ?? "nil"), tweetCount: \(userData.tweetCount ?? 0), followersCount: \(userData.followersCount ?? 0), followingCount: \(userData.followingCount ?? 0)")
                 TweetCacheManager.shared.saveUser(userData)
                 print("DEBUG: [ProfileView] Saved fetched user to cache")
             } else {

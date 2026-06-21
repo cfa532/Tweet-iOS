@@ -529,7 +529,20 @@ struct TweetListView: View {
             print("📱 [FOREGROUND] Skipping - already loading")
             return
         }
-        
+
+        // After a long background the video proxy needs to restart before this fetch triggers
+        // rebuildVideoListAndRefreshVisibility. Racing the two paths causes the coordinator to
+        // rebuild allVideos mid-recovery, which can leave the primary video stuck unplayed.
+        // Wait up to 2s for video infrastructure to be ready before issuing the network call.
+        if !AppDelegate.isVideoInfrastructureReady {
+            var waited = 0
+            while !AppDelegate.isVideoInfrastructureReady && waited < 20 {
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                waited += 1
+            }
+            print("📱 [FOREGROUND] Infrastructure wait: \(waited * 100)ms (\(AppDelegate.isVideoInfrastructureReady ? "ready" : "timed out"))")
+        }
+
         print("📱 [FOREGROUND] Fetching fresh tweets from server...")
 
         if let onForegroundRefresh {

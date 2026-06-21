@@ -733,8 +733,11 @@ class VideoPlaybackCoordinator: ObservableObject {
                 // This allows caller to update visibleTweetIds first
                 completion?()
 
-                // Trigger playback update after video list is rebuilt if in idle phase and videos are visible
+                // Trigger playback update after video list is rebuilt if in idle phase and videos are visible.
+                // Clear finished/skipped gates first so a video that played to completion before backgrounding
+                // is not permanently excluded from autoplay selection when the feed returns to foreground.
                 if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
+                    self.clearFinishedAutoplayGateForForeground()
                     self.startPrimaryVideoPlayback()
                 }
 
