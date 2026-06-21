@@ -171,8 +171,7 @@ class MediaGridUIView: UIView {
               !cellViews.isEmpty else { return }
 
         let gridWidth = bounds.width
-        let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-        let gridHeight = ceil(max(10, gridWidth / gridAspectRatio))
+        let gridHeight = calculatedGridHeight(forWidth: gridWidth)
 
         // Notify Auto Layout of the new height so the parent container self-sizes correctly.
         // This is the UIKit equivalent of Compose's fillMaxWidth() — no hardcoded offsets needed.
@@ -227,6 +226,48 @@ class MediaGridUIView: UIView {
                height: computedGridHeight > 0 ? computedGridHeight : UIView.noIntrinsicMetric)
     }
 
+    override func systemLayoutSizeFitting(
+        _ targetSize: CGSize,
+        withHorizontalFittingPriority horizontalFittingPriority: UILayoutPriority,
+        verticalFittingPriority: UILayoutPriority
+    ) -> CGSize {
+        guard !attachments.isEmpty else {
+            return super.systemLayoutSizeFitting(
+                targetSize,
+                withHorizontalFittingPriority: horizontalFittingPriority,
+                verticalFittingPriority: verticalFittingPriority
+            )
+        }
+
+        let fittingWidth: CGFloat
+        if targetSize.width.isFinite, targetSize.width > 0 {
+            fittingWidth = targetSize.width
+        } else if bounds.width > 0 {
+            fittingWidth = bounds.width
+        } else {
+            fittingWidth = estimatedGridWidth(isEmbedded: isEmbedded)
+        }
+
+        let fittingHeight = calculatedGridHeight(forWidth: fittingWidth)
+        if computedGridHeight <= 0 || abs(fittingHeight - computedGridHeight) > 0.5 {
+            computedGridHeight = fittingHeight
+        }
+
+        return CGSize(width: fittingWidth, height: fittingHeight)
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        guard !attachments.isEmpty else { return .zero }
+        let fittingWidth = size.width.isFinite && size.width > 0
+            ? size.width
+            : (bounds.width > 0 ? bounds.width : estimatedGridWidth(isEmbedded: isEmbedded))
+        return CGSize(width: fittingWidth, height: calculatedGridHeight(forWidth: fittingWidth))
+    }
+
+    private func calculatedGridHeight(forWidth width: CGFloat) -> CGFloat {
+        ceil(MediaGridViewModel.calculateHeight(for: attachments, gridWidth: max(10, width)))
+    }
+
     private func seedIntrinsicHeightIfNeeded(for attachments: [MimeiFileType], isEmbedded: Bool) {
         guard !attachments.isEmpty else { return }
 
@@ -239,7 +280,7 @@ class MediaGridUIView: UIView {
             knownWidth = 0
         }
         let estimatedWidth = knownWidth > 0 ? knownWidth : estimatedGridWidth(isEmbedded: isEmbedded)
-        let estimatedHeight = ceil(MediaGridViewModel.calculateHeight(for: attachments, gridWidth: estimatedWidth))
+        let estimatedHeight = calculatedGridHeight(forWidth: estimatedWidth)
         guard estimatedHeight > 0, abs(estimatedHeight - computedGridHeight) > 1.0 else { return }
 
         computedGridHeight = estimatedHeight

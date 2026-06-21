@@ -2020,6 +2020,7 @@ class TweetTableViewController: UITableViewController {
         // so subsequent calls will hit the cachedHeight path above.
         return Self.calculateTweetHeight(
             for: tweet,
+            rowWidth: layoutWidth,
             cellHorizontalPadding: leadingPadding + trailingPadding
         )
     }
@@ -2038,6 +2039,7 @@ class TweetTableViewController: UITableViewController {
     /// Deterministic height calculation matching TweetCellContentView's Auto Layout.
     static func calculateTweetHeight(
         for tweet: Tweet,
+        rowWidth: CGFloat? = nil,
         cellHorizontalPadding: CGFloat = 16
     ) -> CGFloat {
         // Determine if this is a pure retweet (show original content) or regular/quoted
@@ -2074,8 +2076,9 @@ class TweetTableViewController: UITableViewController {
         // Body: text + media
         // TweetBodyUIView layout: contentStack.top = bodyView.top + 2 (always)
         // contentLabel → media: customSpacing = 8 when text visible
+        let effectiveRowWidth = (rowWidth ?? UIScreen.main.bounds.width)
         let contentWidth = (
-            UIScreen.main.bounds.width
+            effectiveRowWidth
             - cellHorizontalPadding
             - 3 /* leading */
             - 42 /* avatar */
@@ -2110,13 +2113,15 @@ class TweetTableViewController: UITableViewController {
         let mediaAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
         var hasCaptionLabel = false
         if !mediaAttachments.isEmpty {
+            let mediaGridWidth = max(10, contentWidth - 2) // mediaGridView.trailing = mediaContainer - 2
             let mediaHeight = MediaGridViewModel.calculateHeight(
                 for: mediaAttachments,
-                isEmbedded: false,
-                cellHorizontalPadding: cellHorizontalPadding
+                gridWidth: mediaGridWidth
             )
             if hasTextContent {
                 bodyHeight += 8 // customSpacing(after: contentLabel) when text visible
+            } else {
+                bodyHeight += 4 // customSpacing(after: hidden contentLabel) for media-only tweets
             }
             bodyHeight += mediaHeight
 
@@ -2224,13 +2229,15 @@ class TweetTableViewController: UITableViewController {
                 }
 
                 if !embeddedMedia.isEmpty {
+                    let embeddedMediaGridWidth = max(10, contentWidth - 14)
                     if hasEmbeddedText {
-                        embeddedBodyH += 8 // customSpacing(after: contentLabel) only when text+media both present
+                        embeddedBodyH += 8 // customSpacing(after: contentLabel) when text+media both present
+                    } else {
+                        embeddedBodyH += 4 // media-only embedded body keeps the same top media gap
                     }
                     embeddedBodyH += MediaGridViewModel.calculateHeight(
                         for: embeddedMedia,
-                        isEmbedded: true,
-                        cellHorizontalPadding: cellHorizontalPadding
+                        gridWidth: embeddedMediaGridWidth
                     )
                     if hasEmbeddedCaption {
                         embeddedBodyH += 2 + 17 // spacing + caption label
@@ -2313,6 +2320,7 @@ class TweetTableViewController: UITableViewController {
         // only the cell height is pre-determined.
         return Self.calculateTweetHeight(
             for: tweet,
+            rowWidth: layoutWidth,
             cellHorizontalPadding: leadingPadding + trailingPadding
         )
     }
@@ -2349,6 +2357,7 @@ class TweetTableViewController: UITableViewController {
                 // Don't cache — let Auto Layout re-determine on next display.
                 let expectedHeight = Self.calculateTweetHeight(
                     for: tweet,
+                    rowWidth: cell.bounds.width > 0 ? cell.bounds.width : self.currentRowLayoutWidth,
                     cellHorizontalPadding: self.leadingPadding + self.trailingPadding
                 )
                 let isReasonable = cell.frame.height >= expectedHeight - 20
