@@ -122,6 +122,7 @@ class TweetTableViewController: UITableViewController {
     // Foreground/background observer to prevent white space issue
     private var foregroundObserver: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
+    private var prepareVisibleVideosForBackgroundObserver: NSObjectProtocol?
     private var didBecomeActiveObserver: NSObjectProtocol?
     private var reloadVisibleVideosObserver: NSObjectProtocol?
     private var mainFeedPeriodicRefreshObserver: NSObjectProtocol?
@@ -297,6 +298,10 @@ class TweetTableViewController: UITableViewController {
         }
 
         if let observer = backgroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = prepareVisibleVideosForBackgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }
 
@@ -491,6 +496,14 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
+        prepareVisibleVideosForBackgroundObserver = NotificationCenter.default.addObserver(
+            forName: .prepareVisibleVideosForBackground,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.prepareVisibleVideosForBackground(reason: "preGlobalMemoryRelease")
+        }
+
         // Restore scroll position and video players when app returns to foreground
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
@@ -549,16 +562,7 @@ class TweetTableViewController: UITableViewController {
         // Directional image preloads are useful only while actively scrolling the feed.
         // AppDelegate/MemoryCapManager clears global media caches on background; cancel
         // these direct warmup tasks here so they do not keep network work alive.
-        cancelDirectionalImagePreloads()
-
-        // Save/pause visible videos before backgrounding. Keep a captured cover frame
-        // on screen so foreground recovery can rebuild the proxy/player underneath it.
-        if !isTableViewUpdating {
-            for cell in tableView.visibleCells {
-                guard let tweetCell = cell as? TweetTableViewCell else { continue }
-                tweetCell.tweetContentView.prepareVideosForBackground()
-            }
-        }
+        prepareVisibleVideosForBackground(reason: "didEnterBackground")
 
         // End background task after a short delay to allow cleanup to complete
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -567,6 +571,27 @@ class TweetTableViewController: UITableViewController {
 
             // End background task when done
             self.endBackgroundTask()
+        }
+    }
+
+    private func prepareVisibleVideosForBackground(reason: String) {
+        guard videoCoordinator.isFeedVisible else { return }
+
+        cancelDirectionalImagePreloads()
+
+        // Save/pause visible videos before global memory release. Keep a captured
+        // cover frame on screen so foreground recovery can rebuild underneath it.
+        guard !isTableViewUpdating else { return }
+
+        var preparedCount = 0
+        for cell in tableView.visibleCells {
+            guard let tweetCell = cell as? TweetTableViewCell else { continue }
+            tweetCell.tweetContentView.prepareVideosForBackground()
+            preparedCount += 1
+        }
+
+        if preparedCount > 0 {
+            print("🌙 [BACKGROUND] Prepared \(preparedCount) visible tweet cell(s) for background (\(reason))")
         }
     }
 

@@ -127,6 +127,9 @@ extension Notification.Name {
     // MARK: - App Lifecycle
     /// Posted when the app becomes active (returns from background)
     static let appDidBecomeActive = Notification.Name("AppDidBecomeActive")
+    /// Posted synchronously before global background memory release so visible cells
+    /// can detach their players and leave thumbnail covers for the app switcher.
+    static let prepareVisibleVideosForBackground = Notification.Name("PrepareVisibleVideosForBackground")
     /// Posted when the app startup phase has ended and deferred operations can proceed
     static let startupPhaseEnded = Notification.Name("StartupPhaseEnded")
     

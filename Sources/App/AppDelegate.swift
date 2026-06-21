@@ -332,6 +332,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         AppDelegate.didPerformAggressiveCleanup = false
         AppDelegate.isVideoInfrastructureReady = false
 
+        NotificationCenter.default.post(name: .prepareVisibleVideosForBackground, object: nil)
+
         if backgroundCleanupTask == .invalid {
             backgroundCleanupTask = UIApplication.shared.beginBackgroundTask(withName: "BackgroundMemoryRelease") { [weak self] in
                 print("⚠️ [AppDelegate] Background memory release time expired")

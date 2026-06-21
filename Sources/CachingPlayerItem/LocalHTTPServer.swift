@@ -855,12 +855,14 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// Stop the server during app backgrounding without leaving cleanup queued behind
     /// suspended media work. Use this only from lifecycle cleanup, not normal playback paths.
     public func stopImmediatelyForBackground() {
+        resetAllConnectionsImmediately()
+        clearPrimaryRestriction()
+
         // Preserve mediaID -> real URL registrations across background suspension.
         // Existing AVPlayerItems may still hold localhost URLs when the app resumes;
         // if this map is cleared, those requests return 404 before the player has a
         // chance to recreate/register itself.
         stopInternal(clearMediaRegistration: false)
-        NodePoolRegistry.shared.resetAllPools()
         isStopping = false
     }
     
@@ -900,10 +902,26 @@ public class LocalHTTPServer: @unchecked Sendable {
         streamingSessionLastProgress.removeAll()
         streamingSessionsLock.unlock()
 
-        // 3. Fire-and-forget: cancel tracked active downloads
+        // 3. Cancel tracked HLS segment tasks and drop strong task references.
+        hlsDataTasksLock.lock()
+        let hlsTasks = hlsDataTasks.values.flatMap { $0.values }
+        hlsDataTasks.removeAll()
+        hlsDataTasksLock.unlock()
+        hlsTasks.forEach { $0.cancel() }
+
+        // 4. Release progressive cache writer bookkeeping and log coalescing state.
+        progressiveCacheWritersLock.lock()
+        progressiveCacheWriters.removeAll()
+        progressiveCacheWritersLock.unlock()
+
+        progressiveCacheLogLock.lock()
+        recentProgressiveCacheLogs.removeAll()
+        progressiveCacheLogLock.unlock()
+
+        // 5. Fire-and-forget: cancel tracked active downloads
         Task { await activeDownloadsActor.cancelAllTasks() }
 
-        // 4. Reset per-node connection pools: clears stale slot counts and resumes
+        // 6. Reset per-node connection pools: clears stale slot counts and resumes
         //    any suspended preload continuations so they are not permanently leaked.
         NodePoolRegistry.shared.resetAllPools()
     }

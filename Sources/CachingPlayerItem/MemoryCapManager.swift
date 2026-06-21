@@ -287,6 +287,7 @@ class MemoryCapManager {
 
         GlobalImageLoadManager.shared.prepareForBackground()
         SharedAssetCache.shared.releaseForBackground()
+        LocalHTTPServer.shared.stopImmediatelyForBackground()
         ImageCacheManager.shared.clearMemoryCache()
         SDImageCache.shared.clearMemory()
         TweetCacheManager.shared.clearMemoryCache()
