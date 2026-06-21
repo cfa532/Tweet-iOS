@@ -1791,7 +1791,7 @@ final class HproseInstance: ObservableObject {
         }
     }
 
-    private func applyNodePoolBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
+    func applyNodePoolBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
         guard let poolIP = NodePool.shared.getIPFromNode(for: user) else {
             return nil
         }
@@ -1801,6 +1801,26 @@ final class HproseInstance: ObservableObject {
             if let hostIds = user.hostIds, hostIds.count > 1 {
                 NodePool.shared.removeIPFromNode(nodeMid: hostIds[1], ip: poolIP)
             }
+            return nil
+        }
+
+        await applyBaseUrlIfNeeded(user, url: url, reason: reason)
+        return url
+    }
+
+    func applyReadNodeBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
+        if let pooledUrl = await applyNodePoolBaseUrlIfAvailable(for: user, reason: reason) {
+            return pooledUrl
+        }
+
+        guard let accessNodeMid = user.hostIds.flatMap({ $0.count > 1 ? $0[1] : nil }) else {
+            return nil
+        }
+
+        print("DEBUG: [read route] Resolving read node \(accessNodeMid) for userId: \(user.mid), reason: \(reason)")
+        guard let accessIP = await getHostIP(accessNodeMid),
+              let url = URL(string: ensureHttpPrefix(accessIP)) else {
+            print("DEBUG: [read route] Could not resolve read node \(accessNodeMid) for userId: \(user.mid)")
             return nil
         }
 

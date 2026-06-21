@@ -357,6 +357,27 @@ struct UserRowView: View {
                         self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
                         self.isLoading = false
                     }
+
+                    _ = await hproseInstance.applyReadNodeBaseUrlIfAvailable(for: cachedUser, reason: "user row cached route")
+                    guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
+
+                    do {
+                        _ = try await UserRowLoadGate.shared.withPermit {
+                            guard !Task.isCancelled else {
+                                throw CancellationError()
+                            }
+                            print("DEBUG: [UserRowView] Refreshing cached user with ID: \(userId)")
+                            return try await hproseInstance.fetchUser(
+                                userId,
+                                forceRefresh: true,
+                                refreshExpiredCacheInBackground: false
+                            )
+                        }
+                    } catch is CancellationError {
+                        print("DEBUG: [UserRowView] Cached refresh cancelled for user \(userId)")
+                    } catch {
+                        print("DEBUG: [UserRowView] Cached refresh failed for user \(userId), keeping cached row: \(error)")
+                    }
                     return
                 }
                 

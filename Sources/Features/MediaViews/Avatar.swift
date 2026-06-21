@@ -20,10 +20,36 @@ struct Avatar: View {
         self.user = user
         self.size = size
     }
+
+    private var routedAvatarUrl: String? {
+        guard let avatar = user.avatar else { return nil }
+        if let baseUrl = nodePoolBaseUrl {
+            return avatarUrl(for: avatar, baseUrl: baseUrl)
+        }
+        return user.avatarUrl
+    }
+
+    private var nodePoolBaseUrl: URL? {
+        guard let poolIP = NodePool.shared.getIPFromNode(for: user) else {
+            return nil
+        }
+        let urlString = poolIP.hasPrefix("http://") || poolIP.hasPrefix("https://") ? poolIP : "http://\(poolIP)"
+        return URL(string: urlString)
+    }
+
+    private func avatarUrl(for avatar: String, baseUrl: URL) -> String {
+        avatar.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(avatar)" : "\(baseUrl)/mm/\(avatar)"
+    }
+
+    private func applyNodePoolRouteIfNeeded(reason: String) {
+        Task {
+            _ = await HproseInstance.shared.applyNodePoolBaseUrlIfAvailable(for: user, reason: reason)
+        }
+    }
     
     var body: some View {
         Group {
-            if let avatarUrl = user.avatarUrl {
+            if let avatarUrl = routedAvatarUrl {
                 Group {
                     if let cachedImage = cachedImage {
                         Image(uiImage: cachedImage)
@@ -52,6 +78,7 @@ struct Avatar: View {
                 .frame(width: size, height: size)
                 .clipShape(Circle())
                 .onAppear {
+                    applyNodePoolRouteIfNeeded(reason: "avatar route")
                     // Try to load from cache first when view appears
                     // Always check cache even if loadFailed is true, as the avatar might have been loaded elsewhere
                     if cachedImage == nil {
@@ -83,7 +110,7 @@ struct Avatar: View {
                     displayedAvatarId = nil
                     loadFailed = false
                     
-                    if let avatarUrl = user.avatarUrl {
+                    if let avatarUrl = routedAvatarUrl {
                         loadAvatar(from: avatarUrl)
                     }
                 }
@@ -101,7 +128,7 @@ struct Avatar: View {
             // avatars are keyed by avatar id and should survive baseUrl changes.
             guard let userId = notification.userInfo?["userId"] as? String,
                   userId == user.mid,
-                  let avatarUrl = user.avatarUrl,
+                  let avatarUrl = routedAvatarUrl,
                   cachedImage == nil else { return }
 
             // Cancel in-flight request (may be stuck on stale IP timeout)
@@ -113,7 +140,7 @@ struct Avatar: View {
         }
         .onChange(of: user.avatar) { _, avatarId in
             guard avatarId != displayedAvatarId,
-                  let avatarUrl = user.avatarUrl else { return }
+                  let avatarUrl = routedAvatarUrl else { return }
             loadTask?.cancel()
             loadTask = nil
             cachedImage = nil
@@ -126,7 +153,7 @@ struct Avatar: View {
             // When app user is ready (baseUrl resolved), reload avatar if it wasn't loaded before
             guard user.mid == HproseInstance.shared.appUser.mid,
                   !isLoading,
-                  let avatarUrl = user.avatarUrl,
+                  let avatarUrl = routedAvatarUrl,
                   cachedImage == nil else { return }
             
             // baseUrl was resolved, avatarUrl is now available - start loading
@@ -215,6 +242,14 @@ struct Avatar: View {
                     displayedAvatarId = expectedAvatarId
                     loadFailed = false
                 } else {
+                    if let retryUrl = routedAvatarUrl, retryUrl != urlString {
+                        print("👤 [AVATAR.loadAvatar] Retrying with updated route: \(retryUrl)")
+                        isLoading = false
+                        loadFailed = false
+                        loadAvatar(from: retryUrl)
+                        return
+                    }
+
                     // Load failure - mark as failed to show default avatar
                     print("👤 [AVATAR.loadAvatar] ❌ Network load FAILED")
                     loadFailed = true
