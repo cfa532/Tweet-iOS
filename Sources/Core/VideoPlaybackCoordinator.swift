@@ -377,18 +377,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         notificationObservers.append(videoFinishedObserver)
 
-        // Listen for foreground recovery and intelligently decide whether to preserve state
-        let foregroundRecoveryObserver = NotificationCenter.default.addObserver(
-            forName: .reloadVisibleVideosOnly,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            Task { @MainActor in
-                self?.handleForegroundRecovery(notification)
-            }
-        }
-        notificationObservers.append(foregroundRecoveryObserver)
-        
+        // NOTE: .reloadVisibleVideosOnly is intentionally NOT observed here.
+        // The owning TweetTableViewController observes it, refreshes viewport
+        // visibility first, and then calls recoverVisiblePlaybackAfterInterruption.
+        // Subscribing here too made the coordinator recover off stale visibility
+        // (its observer ran before the controller's visibility refresh), racing
+        // the foreground feed refresh and leaving the on-screen video unplayed.
+
         // Listen for overlay coverage changes (fullscreen cover / sheet / login / share).
         // While covered, we must stop and suppress playback decisions for the feed.
         let overlayCoverageObserver = NotificationCenter.default.addObserver(
@@ -1980,18 +1975,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
-    /// Handle foreground recovery after the local video infrastructure is ready.
-    /// The feed may return from detail/fullscreen with unchanged visibility but a
-    /// destroyed AVPlayer, so recovery must re-issue play even when phase says the
-    /// old primary is already playing.
-    @objc private func handleForegroundRecovery(_ notification: Notification) {
-        shouldPreserveStateOnForeground = false
-        recoverVisiblePlaybackAfterInterruption(
-            reason: "reloadVisibleVideosOnly",
-            isForegroundRecovery: true
-        )
-    }
-
+    /// Recover visible playback after an interruption (foreground return, overlay
+    /// dismiss, programmatic list change). The feed may return from detail/fullscreen
+    /// with unchanged visibility but a destroyed AVPlayer, so recovery must re-issue
+    /// play even when phase says the old primary is already playing.
+    ///
+    /// For foreground return this is driven by the owning TweetTableViewController
+    /// AFTER it refreshes viewport visibility, so the target selection below sees a
+    /// fresh visibleVideos / onScreenMediaCells snapshot.
     func recoverVisiblePlaybackAfterInterruption(reason: String, isForegroundRecovery: Bool) {
         guard !isForegroundRecovery || AppDelegate.isVideoInfrastructureReady else {
             print("🎬 [COORD] foreground recovery \(reason): video infrastructure not ready")

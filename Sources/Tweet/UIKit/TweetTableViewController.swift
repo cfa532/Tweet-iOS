@@ -645,16 +645,23 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
-        // The coordinator observes .reloadVisibleVideosOnly directly and calls
-        // recoverVisiblePlaybackAfterInterruption itself — calling it here too
-        // caused a duplicate startPrimary. Only do the layout/visibility pass
-        // and queue the settled-state retry.
+        // The coordinator no longer observes .reloadVisibleVideosOnly itself, so this
+        // controller is the single driver: refresh viewport visibility FIRST, then
+        // recover playback against that fresh snapshot. Ordering is the whole point —
+        // when the coordinator self-recovered it ran before this visibility pass and
+        // picked a stale primary, leaving the on-screen video unplayed after a long
+        // background. The settled-state retry afterward re-issues play if the player
+        // is still loading by then.
         forceLayoutVisibleCellsForVisibilityPass()
         lastVisibleTweetIds = []
         lastLoadVisibleVideoIds = []
         lastContinuePlaybackVideoIds = []
         lastOnScreenVideoIds = []
         updateVisibleTweetsForVideoPlayback()
+        videoCoordinator.recoverVisiblePlaybackAfterInterruption(
+            reason: "reloadVisibleVideosOnly",
+            isForegroundRecovery: true
+        )
         scheduleForegroundAutoplayRetry(reason: "reloadVisibleVideosOnly")
     }
 
