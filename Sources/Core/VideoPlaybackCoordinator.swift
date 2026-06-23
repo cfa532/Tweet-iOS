@@ -1334,6 +1334,26 @@ class VideoPlaybackCoordinator: ObservableObject {
         startPrimaryVideoPlayback()
     }
 
+    /// Outcome query for the foreground-recovery watchdog in TweetTableViewController.
+    /// Measures the *actual* result of recovery (is a visible video really playing?), not
+    /// whether a play command was merely issued. This is what makes the watchdog robust
+    /// against the long-background races that command-only retries can't detect.
+    enum ForegroundRecoveryStatus {
+        case playing      // a visible on-screen video is actually playing — recovery done
+        case loading      // play commanded and still loading / recently played — be patient
+        case needsRetry   // on-screen but not playing/loading — genuinely stuck, needs a nudge
+        case noCandidates // no on-screen videos (geometry likely stale after a long background)
+    }
+
+    func foregroundRecoveryStatus() -> ForegroundRecoveryStatus {
+        guard !visibleVideos.isEmpty else { return .noCandidates }
+        guard let primaryId = primaryVideoId,
+              let activeDelegate = delegate(forIdentifier: primaryId) else { return .needsRetry }
+        if activeDelegate.isActuallyPlaying { return .playing }
+        if activeDelegate.isLoadingForCoordinator || activeDelegate.isRecentlyPlaying { return .loading }
+        return .needsRetry
+    }
+
     // MARK: - Background/Foreground Video Memory Management
 
     /// Release all video players when entering background to free memory

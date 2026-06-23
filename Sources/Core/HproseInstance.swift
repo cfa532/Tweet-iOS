@@ -2840,7 +2840,7 @@ final class HproseInstance: ObservableObject {
             NodePool.shared.updateFromUser(user)
             return sorted.compactMap { $0["field"] as? String }
         } catch {
-            print("DEBUG: [HproseInstance] getFollowings error: \(error)")
+            print("DEBUG: [HproseInstance] getFollowings error: \(error) (baseUrl: \(attemptedBaseUrl ?? "nil"))")
             return Gadget.getAlphaIds()
         }
     }
@@ -2933,7 +2933,7 @@ final class HproseInstance: ObservableObject {
             NodePool.shared.updateFromUser(user)
             return sorted.compactMap { $0["field"] as? String }
         } catch {
-            print("DEBUG: [HproseInstance] getFans error: \(error)")
+            print("DEBUG: [HproseInstance] getFans error: \(error) (baseUrl: \(attemptedBaseUrl ?? "nil"))")
             return nil
         }
     }

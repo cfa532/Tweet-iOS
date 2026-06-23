@@ -525,16 +525,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         let isProxyHealthy = await LocalHTTPServer.shared.isHealthyAsync()
         if isProxyHealthy {
-            if shouldRefreshAppUserBeforeForegroundVideoReload(reason: reason) {
-                print("[AppDelegate] 🔄 Refreshing appUser IP before foreground video reload...")
-                await refreshAppUserIP()
-                print("[AppDelegate] ✅ AppUser IP refresh complete")
-            }
             await MainActor.run {
                 AppDelegate.isVideoInfrastructureReady = true
                 SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                 print("✅ [AppDelegate] Proxy health OK after \(reason) - posted reloadVisibleVideosOnly")
+            }
+            // Refresh the upstream IP for IPFS cache misses AFTER the proxy is up and video
+            // has resumed. Previously this blocked reloadVisibleVideosOnly behind a
+            // failing/retrying fetchUser (~2s) before playback could restart. Non-fatal.
+            if shouldRefreshAppUserBeforeForegroundVideoReload(reason: reason) {
+                print("[AppDelegate] 🔄 Refreshing appUser IP after foreground video reload...")
+                await refreshAppUserIP()
+                print("[AppDelegate] ✅ AppUser IP refresh complete")
             }
             return
         }
@@ -549,10 +552,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             AppDelegate.isVideoInfrastructureReady = false
         }
 
-        print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
-        await refreshAppUserIP()
-        print("[AppDelegate] ✅ AppUser IP refresh complete")
-
+        // Restart the proxy FIRST so cached HLS serves immediately and video can resume.
+        // The appUser IP refresh is only needed for IPFS cache misses (lazy upstream URL
+        // resolution), so it runs AFTER the restart instead of before. Previously a
+        // failing/retrying fetchUser blocked the restart + reload for ~2s.
         let didRestart = await restartVideoInfrastructureAsync()
 
         await MainActor.run {
@@ -564,6 +567,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 print("❌ [AppDelegate] Proxy restart failed after \(reason) - visible videos will wait for next retry")
             }
         }
+
+        print("[AppDelegate] 🔄 Refreshing appUser IP after video recovery...")
+        await refreshAppUserIP()
+        print("[AppDelegate] ✅ AppUser IP refresh complete")
     }
 
     private func shouldRefreshAppUserBeforeForegroundVideoReload(reason: String) -> Bool {
