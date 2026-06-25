@@ -78,6 +78,9 @@ class TweetTableViewController: UITableViewController {
     var onShowToast: ((String, Bool) -> Void)?
     var allowDeleteAll: Bool = false
     var allowNewTweetsBanner: Bool = false
+    /// True on the main feed: prepended tweets must not move the scroll position.
+    /// False elsewhere (profile/list/bookmarks): prepended tweets scroll to the top.
+    var preservesScrollPositionOnPrepend: Bool = false
     
     // Header hosting controller
     private var headerHostingController: UIHostingController<AnyView>?
@@ -127,7 +130,6 @@ class TweetTableViewController: UITableViewController {
     private var reloadVisibleVideosObserver: NSObjectProtocol?
     private var mainFeedPeriodicRefreshObserver: NSObjectProtocol?
     private var needsVideoLayerRefresh = false
-    private var scrollPositionBeforeBackground: CGFloat?
 
     // Observer for feed view appearance (to restart video playback after navigation)
     private var feedViewDidAppearObserver: NSObjectProtocol?
@@ -135,9 +137,13 @@ class TweetTableViewController: UITableViewController {
     private var feedPlaybackResumeGeneration: Int = 0
     private var foregroundAutoplayRetryGeneration: Int = 0
     private var pendingFeedPlaybackResumeReason: String?
+    /// Pending coalesced foreground-recovery pass. While non-nil, new triggers fold
+    /// into the already-scheduled pass instead of each starting its own visibility scan.
+    private var pendingForegroundRecoveryWork: DispatchWorkItem?
+
 
     /// Outcome-driven backstop for foreground video autoplay recovery. After a long
-    /// background the bounded/generation-based retry in scheduleForegroundAutoplayRetry
+    /// background the bounded/generation-based retry in runForegroundRecoveryPass
     /// can exhaust before proxy restart + HLS resolution completes, leaving the on-screen
     /// video silent until the user scrolls. This watchdog re-runs the same visibility +
     /// autoplay pass a scroll triggers, but keeps going until a visible video is *actually*
@@ -581,7 +587,6 @@ class TweetTableViewController: UITableViewController {
         print("🌙 [BACKGROUND] App entering background - starting aggressive memory cleanup")
 
         // Save the current scroll position before backgrounding
-        scrollPositionBeforeBackground = tableView.contentOffset.y
         saveScrollPositionIfNeeded()
 
         // Directional image preloads are useful only while actively scrolling the feed.
@@ -634,7 +639,6 @@ class TweetTableViewController: UITableViewController {
         endBackgroundTask()
         needsVideoLayerRefresh = true
 
-        scrollPositionBeforeBackground = nil
         let currentPosition = tableView.contentOffset.y
         lastContentOffset = currentPosition
         lastCallbackOffset = currentPosition
@@ -654,43 +658,29 @@ class TweetTableViewController: UITableViewController {
         guard needsVideoLayerRefresh else { return }
         guard videoCoordinator.isFeedVisible else { return }
         guard isReadyForFeedVideoResume, !isTableViewUpdating else {
-            scheduleForegroundAutoplayRetry(reason: "didBecomeActiveLayerRefreshDeferred")
+            requestForegroundRecovery(reason: "didBecomeActiveLayerRefreshDeferred")
             return
         }
         needsVideoLayerRefresh = false
+        // Refresh the AVPlayerLayer surface for visible cells (distinct from visibility
+        // recompute — handled by the recovery pass). Autoplay routes through the single
+        // driver so it coalesces with the other foreground triggers.
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
             tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
         }
-        scheduleForegroundAutoplayRetry(reason: "didBecomeActiveLayerRefresh")
+        requestForegroundRecovery(reason: "didBecomeActiveLayerRefresh")
     }
 
     @MainActor
     private func handleReloadVisibleVideosOnly() {
         guard videoCoordinator.isFeedVisible else { return }
-        guard isReadyForFeedVideoResume, !isTableViewUpdating else {
-            scheduleForegroundAutoplayRetry(reason: "reloadVisibleVideosOnlyDeferred")
-            return
-        }
-
-        // The coordinator no longer observes .reloadVisibleVideosOnly itself, so this
-        // controller is the single driver: refresh viewport visibility FIRST, then
-        // recover playback against that fresh snapshot. Ordering is the whole point —
-        // when the coordinator self-recovered it ran before this visibility pass and
-        // picked a stale primary, leaving the on-screen video unplayed after a long
-        // background. The settled-state retry afterward re-issues play if the player
-        // is still loading by then.
-        forceLayoutVisibleCellsForVisibilityPass()
-        lastVisibleTweetIds = []
-        lastLoadVisibleVideoIds = []
-        lastContinuePlaybackVideoIds = []
-        lastOnScreenVideoIds = []
-        updateVisibleTweetsForVideoPlayback()
-        videoCoordinator.recoverVisiblePlaybackAfterInterruption(
-            reason: "reloadVisibleVideosOnly",
-            isForegroundRecovery: true
-        )
-        scheduleForegroundAutoplayRetry(reason: "reloadVisibleVideosOnly")
+        // Routes through the single foreground-recovery driver, which coalesces this
+        // with any other in-flight foreground trigger and runs visibility BEFORE
+        // coordinator recovery (see runForegroundRecoveryPass). That ordering matters:
+        // recovering against a stale viewport picks the wrong primary and leaves the
+        // on-screen video unplayed after a long background.
+        requestForegroundRecovery(reason: "reloadVisibleVideosOnly")
     }
 
     /// End the background task and invalidate the identifier
@@ -717,100 +707,102 @@ class TweetTableViewController: UITableViewController {
         return 0
     }
 
-    /// Restore visible video players after returning from background
-    /// With health checks in place, we simply validate cached players and update visibility
-    /// Broken players will be auto-detected and recreated on-demand
+    /// Restore visible video players after returning from background.
+    /// With health checks in place, we validate cached players and route the
+    /// visibility + autoplay recovery through the single foreground-recovery driver
+    /// (which coalesces with the other foreground triggers). Broken players are
+    /// auto-detected and recreated on-demand.
     private func restoreVideoPlayersAfterForeground() {
-        print("☀️ [VIDEO RESTORE] Restoring video playback")
-
-        // Step 1: Validate all cached players and remove any that are broken
-        // This proactively cleans up players that were invalidated during backgrounding
+        // Proactively drop any cached players that were invalidated while backgrounded.
         videoCoordinator.validatePlayersAfterBackground()
-
-        // Step 2: Recompute full viewport media geometry, not just tweet rows.
-        // Autoplay is driven by media-cell visibility; using tweet IDs alone can
-        // leave visibleVideos stale after foreground/detail transitions.
-        lastVisibleTweetIds = []
-        lastLoadVisibleVideoIds = []
-        lastContinuePlaybackVideoIds = []
-        lastOnScreenVideoIds = []
-        updateVisibleTweetsForVideoPlayback()
-        videoCoordinator.recoverVisiblePlaybackAfterInterruption(
-            reason: "tableForegroundRestore",
-            isForegroundRecovery: true
-        )
-        scheduleForegroundAutoplayRetry(reason: "tableForegroundRestore")
-
-        print("✅ [VIDEO RESTORE] Video restoration complete - healthy players retained, broken ones will be recreated")
+        requestForegroundRecovery(reason: "tableForegroundRestore")
     }
 
+    /// Single entry point for foreground visibility + autoplay recovery.
+    ///
+    /// Foreground posts several near-simultaneous triggers (willEnterForeground's
+    /// deferred restore, didBecomeActive's layer refresh, reloadVisibleVideosOnly once
+    /// the proxy is ready). Previously each ran its OWN full visibility scan +
+    /// coordinator recovery + retry chain, which is why logs showed the same cells
+    /// "Triggering player acquisition" then "Guard blocked" half a dozen times before
+    /// the debounce finally acquired. This coalesces every trigger that lands in the
+    /// same run-loop turn into one pass; later triggers in a later turn start a fresh pass.
     @MainActor
-    private func scheduleForegroundAutoplayRetry(reason: String, attempt: Int = 0) {
-        // Each new top-level call advances the generation; deferred retries carry
-        // the generation they were spawned under and are silently dropped when a
-        // newer trigger (e.g. reloadVisibleVideosOnly superseding tableForegroundRestore)
-        // has already taken ownership.
-        if attempt == 0 { foregroundAutoplayRetryGeneration += 1 }
+    private func requestForegroundRecovery(reason: String) {
+        // A pass is already pending on the next run-loop turn — fold this trigger in.
+        if pendingForegroundRecoveryWork != nil { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.runForegroundRecoveryPass(reason: reason, attempt: 0)
+        }
+        pendingForegroundRecoveryWork = work
+        DispatchQueue.main.async(execute: work)
+    }
+
+    /// The one foreground recovery pass. Re-selects the primary against a freshly
+    /// computed viewport, then nudges play again once layout settles.
+    @MainActor
+    private func runForegroundRecoveryPass(reason: String, attempt: Int) {
+        pendingForegroundRecoveryWork = nil
+        // Each pass owns a generation; deferred callbacks drop themselves if a newer
+        // pass (or a new foreground cycle) has superseded them.
+        foregroundAutoplayRetryGeneration += 1
         let gen = foregroundAutoplayRetryGeneration
 
-        func retryLater(_ deferredReason: String) {
-            guard attempt < 6 else {
-                pendingFeedPlaybackResumeReason = deferredReason
-                return
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                guard let self = self,
-                      self.videoCoordinator.isFeedVisible,
-                      gen == self.foregroundAutoplayRetryGeneration else { return }
-                self.scheduleForegroundAutoplayRetry(
-                    reason: deferredReason,
-                    attempt: attempt + 1
-                )
-            }
-        }
-
         guard AppDelegate.isVideoInfrastructureReady else {
-            retryLater("\(reason)-infrastructureNotReady")
+            scheduleRecoveryRetry(reason: "\(reason)-infraNotReady", gen: gen, attempt: attempt)
             return
         }
         guard isReadyForFeedVideoResume else {
             pendingFeedPlaybackResumeReason = reason
-            retryLater("\(reason)-viewNotReady")
+            scheduleRecoveryRetry(reason: "\(reason)-viewNotReady", gen: gen, attempt: attempt)
             return
         }
         guard !isTableViewUpdating else {
-            retryLater("\(reason)-tableUpdating")
+            scheduleRecoveryRetry(reason: "\(reason)-tableUpdating", gen: gen, attempt: attempt)
             return
         }
 
+        // Order matters: refresh viewport geometry FIRST so the coordinator picks the
+        // correct on-screen primary, then recover playback against that snapshot.
         lastVisibleTweetIds = []
         lastLoadVisibleVideoIds = []
         lastContinuePlaybackVideoIds = []
         lastOnScreenVideoIds = []
         forceLayoutVisibleCellsForVisibilityPass()
         updateVisibleTweetsForVideoPlayback()
-        videoCoordinator.requestForegroundAutoplayRetry(reason: "\(reason)-immediate")
+        videoCoordinator.recoverVisiblePlaybackAfterInterruption(
+            reason: "fg-\(reason)",
+            isForegroundRecovery: true
+        )
 
+        // Settled nudge: if the primary was selected but is still loading once layout
+        // settles, reissue play. Idempotent — the coordinator no-ops if already playing.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
             guard let self = self,
-                  gen == self.foregroundAutoplayRetryGeneration else { return }
-            guard AppDelegate.isVideoInfrastructureReady,
+                  gen == self.foregroundAutoplayRetryGeneration,
+                  AppDelegate.isVideoInfrastructureReady,
                   self.isReadyForFeedVideoResume,
-                  !self.isTableViewUpdating else {
-                self.scheduleForegroundAutoplayRetry(
-                    reason: "\(reason)-settledDeferred",
-                    attempt: attempt + 1
-                )
-                return
-            }
-            self.lastVisibleTweetIds = []
-            self.lastLoadVisibleVideoIds = []
-            self.lastContinuePlaybackVideoIds = []
-            self.lastOnScreenVideoIds = []
-            self.forceLayoutVisibleCellsForVisibilityPass()
-            self.updateVisibleTweetsForVideoPlayback()
-            self.videoCoordinator.requestForegroundAutoplayRetry(reason: "\(reason)-settled")
+                  !self.isTableViewUpdating else { return }
+            self.videoCoordinator.requestForegroundAutoplayRetry(reason: "fgSettled-\(reason)")
+        }
+    }
+
+    /// Retry the pass after a short backoff when it couldn't run yet (proxy still
+    /// restarting, table mid-update). Stays within the same generation so a newer
+    /// pass supersedes it. The foreground-recovery watchdog is the unbounded backstop.
+    @MainActor
+    private func scheduleRecoveryRetry(reason: String, gen: Int, attempt: Int) {
+        guard attempt < 6 else {
+            // Exhausted bounded retries while blocked — remember so a later window-ready
+            // (viewDidAppear) can retrigger. The foreground-recovery watchdog is the
+            // unbounded backstop that normally closes this gap.
+            pendingFeedPlaybackResumeReason = reason
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self = self,
+                  gen == self.foregroundAutoplayRetryGeneration else { return }
+            self.runForegroundRecoveryPass(reason: reason, attempt: attempt + 1)
         }
     }
 
@@ -1572,8 +1564,23 @@ class TweetTableViewController: UITableViewController {
         // Reload table to reflect new pinned tweets
         isTableViewUpdating = true
         if oldCount != tweets.count {
-            // Number of rows changed, do a full reload
+            // Pinned row count changed (e.g. pinned tweets loaded after a restored
+            // scroll position on re-open). reloadData preserves contentOffset in points,
+            // but the added/removed pinned rows shift the regular content, so a restored
+            // offset lands ~one row off. When scrolled down, restore the offset by the
+            // height delta so the same content stays visible; at the very top, keep the
+            // top so a fresh open still shows pinned + first regular.
+            let scrolledDown = tableView.contentOffset.y > tableView.adjustedContentInset.top + 10
+            let contentHeightBefore = tableView.contentSize.height
+            let offsetBefore = tableView.contentOffset.y
             tableView.reloadData()
+            tableView.layoutIfNeeded()
+            if scrolledDown {
+                let heightDelta = tableView.contentSize.height - contentHeightBefore
+                if abs(heightDelta) > 0.5 {
+                    tableView.setContentOffset(CGPoint(x: 0, y: offsetBefore + heightDelta), animated: false)
+                }
+            }
         } else if oldCount > 0 {
             // Different tweets in same positions, update the content
             let indexPaths = (0..<oldCount).map { IndexPath(row: $0, section: 0) }
@@ -1679,12 +1686,55 @@ class TweetTableViewController: UITableViewController {
         if newTweets.count > oldCount {
             let potentialPrependCount = newTweets.count - oldCount
             let afterNewOnes = Array(getNewIds().dropFirst(potentialPrependCount))
-            
+
             if afterNewOnes == getOldIds() {
                 isTableViewUpdating = true
                 let indexPaths = (0..<potentialPrependCount).map { regularTweetIndexPath($0) }
-                tableView.insertRows(at: indexPaths, with: .automatic)
+                if preservesScrollPositionOnPrepend {
+                    // Main feed. At the very top (e.g. app open) the new tweets should
+                    // surface — leave the offset so they show at the top. Only when the
+                    // user is scrolled down (e.g. a push-notification tweet arriving while
+                    // reading) do we preserve their position: insertRows above the viewport
+                    // shifts content down without UIKit adjusting the offset, so we restore
+                    // it by the inserted height to keep the same rows on screen.
+                    let scrolledDown = tableView.contentOffset.y > tableView.adjustedContentInset.top + 10
+                    if scrolledDown {
+                        let contentHeightBefore = tableView.contentSize.height
+                        let contentOffsetBefore = tableView.contentOffset.y
+                        tableView.insertRows(at: indexPaths, with: .none)
+                        let heightDelta = tableView.contentSize.height - contentHeightBefore
+                        if heightDelta > 0.5 {
+                            tableView.setContentOffset(
+                                CGPoint(x: 0, y: contentOffsetBefore + heightDelta),
+                                animated: false
+                            )
+                        }
+                    } else {
+                        tableView.insertRows(at: indexPaths, with: .none)
+                    }
+                } else {
+                    // Bounded feed (profile/list/bookmarks): surface the freshly prepended
+                    // tweets. Pinned tweets sit above the regular list, so the first new
+                    // tweet lands at row pinnedTweets.count — scroll there. Defer one
+                    // runloop, then force layout so the new cell is configured and its real
+                    // frame is known BEFORE scrolling — otherwise scrollToRow targets an
+                    // estimated position and the view drifts once the cell renders.
+                    tableView.insertRows(at: indexPaths, with: .none)
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.tableView.layoutIfNeeded()
+                        let topRow = self.pinnedTweets.count
+                        if topRow < self.tableView.numberOfRows(inSection: 0) {
+                            self.tableView.scrollToRow(
+                                at: IndexPath(row: topRow, section: 0),
+                                at: .top,
+                                animated: false
+                            )
+                        }
+                    }
+                }
                 isTableViewUpdating = false
+
                 rebuildVideoListAndRefreshVisibility(reason: "tweetsPrependedVideoList")
                 scheduleVideoVisibilityRefresh(reason: "tweetsPrepended")
                 return

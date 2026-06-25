@@ -68,6 +68,7 @@ struct FollowingsTweetView: View {
             },
             allowDeleteAll: true,
             allowNewTweetsBanner: viewModel.isPeriodicFeedRefreshActive,
+            preservesScrollPositionOnPrepend: true,
             onAvatarTap: { user in onAvatarTap(user) },
             onTweetTap: { tweet in onTweetTap(tweet) },
             onShowLogin: onShowLogin,

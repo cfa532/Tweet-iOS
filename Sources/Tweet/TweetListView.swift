@@ -39,6 +39,9 @@ struct TweetListView: View {
     let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
     let allowDeleteAll: Bool  // If true, appUser can delete any tweet (main feed); otherwise only own tweets
     let allowNewTweetsBanner: Bool
+    /// True on the main feed: prepended tweets must not move scroll position. False on
+    /// bounded feeds (profile/list/bookmarks) where new tweets should scroll to the top.
+    let preservesScrollPositionOnPrepend: Bool
     /// External signal used by profile route recovery to reload page 0 while preserving currently visible tweets.
     let externalRefreshToken: Int
     let emptyStateText: LocalizedStringKey?
@@ -175,6 +178,7 @@ struct TweetListView: View {
         preserveOrder: Bool = false,
         allowDeleteAll: Bool = false,
         allowNewTweetsBanner: Bool = false,
+        preservesScrollPositionOnPrepend: Bool = false,
         externalRefreshToken: Int = 0,
         emptyStateText: LocalizedStringKey? = nil,
         header: (() -> AnyView)? = nil,
@@ -198,6 +202,7 @@ struct TweetListView: View {
         self.preserveOrder = preserveOrder
         self.allowDeleteAll = allowDeleteAll
         self.allowNewTweetsBanner = allowNewTweetsBanner
+        self.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
         self.externalRefreshToken = externalRefreshToken
         self.emptyStateText = emptyStateText
         self.header = header
@@ -231,48 +236,56 @@ struct TweetListView: View {
     }
 
     // MARK: - Body
+
+    /// Extracted so the body stays simple enough for the SwiftUI type-checker
+    /// (the TweetTableView initializer has many parameters).
+    private var feedTableView: TweetTableView {
+        TweetTableView(
+            tweets: $tweets,
+            colorScheme: colorScheme,
+            isDarkMode: themeManager.isDarkMode,
+            header: header,
+            headerRefreshToken: headerRefreshToken,
+            hproseInstance: hproseInstance,
+            hasMoreTweets: $hasMoreTweets,
+            isLoading: isLoading,
+            isLoadingMore: isLoadingMore,
+            isDirectFeedRefreshActive: isDirectFeedRefreshActive,
+            allowNewTweetsBanner: allowNewTweetsBanner
+                && initialLoadComplete
+                && !isLoading
+                && !isLoadingMore
+                && !isDirectFeedRefreshActive,
+            preservesScrollPositionOnPrepend: preservesScrollPositionOnPrepend,
+            loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
+            onRefresh: {
+                await refreshTweets()
+                await onRefreshExtra?()
+            },
+            onScroll: onScroll,
+            leadingPadding: leadingPadding,
+            trailingPadding: trailingPadding,
+            pinnedTweets: pinnedTweets,
+            feedIdentifier: feedIdentifier,
+            videoCoordinator: videoCoordinator,
+            onAvatarTap: onAvatarTap,
+            onTweetTap: onTweetTap,
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast,
+            allowDeleteAll: allowDeleteAll
+        )
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 // UIKit TABLE VIEW — pure UIKit cells, no UIHostingController per cell
-                TweetTableView(
-                    tweets: $tweets,
-                    colorScheme: colorScheme,
-                    isDarkMode: themeManager.isDarkMode,
-                    header: header,
-                    headerRefreshToken: headerRefreshToken,
-                    hproseInstance: hproseInstance,
-                    hasMoreTweets: $hasMoreTweets,
-                    isLoading: isLoading,
-                    isLoadingMore: isLoadingMore,
-                    isDirectFeedRefreshActive: isDirectFeedRefreshActive,
-                    allowNewTweetsBanner: allowNewTweetsBanner
-                        && initialLoadComplete
-                        && !isLoading
-                        && !isLoadingMore
-                        && !isDirectFeedRefreshActive,
-                    loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
-                    onRefresh: {
-                        await refreshTweets()
-                        await onRefreshExtra?()
-                    },
-                    onScroll: onScroll,
-                    leadingPadding: leadingPadding,
-                    trailingPadding: trailingPadding,
-                    pinnedTweets: pinnedTweets,
-                    feedIdentifier: feedIdentifier,
-                    videoCoordinator: videoCoordinator,
-                    onAvatarTap: onAvatarTap,
-                    onTweetTap: onTweetTap,
-                    onShowLogin: onShowLogin,
-                    onShowToast: onShowToast,
-                    allowDeleteAll: allowDeleteAll
-                )
+                feedTableView
                 .onAppear {
                     screenHeight = geometry.size.height
                 }
                 .background(XTheme.backgroundColor)
-            
+
             if isLoading && tweets.isEmpty {
                 ProgressView()
                     .scaleEffect(2.0)

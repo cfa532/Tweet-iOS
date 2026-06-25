@@ -19,6 +19,11 @@ struct TweetTableView: UIViewControllerRepresentable {
     let isLoadingMore: Bool
     let isDirectFeedRefreshActive: Bool
     let allowNewTweetsBanner: Bool
+    /// True for the long-lived main feed, where new tweets must NOT move the user's
+    /// scroll position (they surface behind the new-tweet banner). False for bounded
+    /// feeds (profile/list/bookmarks) where freshly prepended tweets should be brought
+    /// to the top so the user sees them.
+    let preservesScrollPositionOnPrepend: Bool
     let loadMoreTweets: (Bool) -> Void  // Parameter: forceLoad
     let onRefresh: (() async -> Void)?
     let onScroll: ((CGFloat, CGFloat) -> Void)?
@@ -75,6 +80,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.onShowToast = onShowToast
         controller.allowDeleteAll = allowDeleteAll
         controller.allowNewTweetsBanner = allowNewTweetsBanner
+        controller.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
 
         controller.updateHeader()
         context.coordinator.lastHeaderWasPresent = header != nil
@@ -87,6 +93,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         let coordinator = context.coordinator
         uiViewController.isDarkModeEnabled = isDarkMode
         uiViewController.allowNewTweetsBanner = allowNewTweetsBanner
+        uiViewController.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
         uiViewController.applyTheme()
 
         // Only update tweets if they actually changed
