@@ -77,7 +77,6 @@ class TweetTableViewController: UITableViewController {
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)?
     var allowDeleteAll: Bool = false
-    var allowNewTweetsBanner: Bool = false
     /// True on the main feed: prepended tweets must not move the scroll position.
     /// False elsewhere (profile/list/bookmarks): prepended tweets scroll to the top.
     var preservesScrollPositionOnPrepend: Bool = false
@@ -128,7 +127,6 @@ class TweetTableViewController: UITableViewController {
     private var prepareVisibleVideosForBackgroundObserver: NSObjectProtocol?
     private var didBecomeActiveObserver: NSObjectProtocol?
     private var reloadVisibleVideosObserver: NSObjectProtocol?
-    private var mainFeedPeriodicRefreshObserver: NSObjectProtocol?
     private var needsVideoLayerRefresh = false
 
     // Observer for feed view appearance (to restart video playback after navigation)
@@ -187,15 +185,6 @@ class TweetTableViewController: UITableViewController {
     /// the cell at full expanded height instead of using the cached truncated height.
     private var expandedTweetIds = Set<String>()
     private var embeddedTweetPrefetchInFlight = Set<String>()
-    private var pendingPrependedTweets: [Tweet] = []
-    private var pendingFullTweetsAfterPrepend: [Tweet]?
-    private weak var newTweetsButton: UIButton?
-    private weak var newTweetsContentStack: UIStackView?
-    private weak var newTweetsAvatarCluster: UIView?
-    private weak var newTweetsTitleLabel: UILabel?
-    private var newTweetsAutoHideWorkItem: DispatchWorkItem?
-    private var didAutoHideNewTweetsBanner = false
-    private let newTweetsBannerHeight: CGFloat = 38
 
     private var isReadyForFeedVideoResume: Bool {
         isViewLoaded && view.window != nil && tableView.window != nil
@@ -299,7 +288,6 @@ class TweetTableViewController: UITableViewController {
         setupForegroundBackgroundObservers()
         setupFeedViewDidAppearObserver()
         setupOverlayCoverageObserver()
-        setupMainFeedPeriodicRefreshObserver()
 
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
@@ -340,10 +328,6 @@ class TweetTableViewController: UITableViewController {
         }
 
         if let observer = reloadVisibleVideosObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        if let observer = mainFeedPeriodicRefreshObserver {
             NotificationCenter.default.removeObserver(observer)
         }
 
@@ -406,17 +390,6 @@ class TweetTableViewController: UITableViewController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
                 self?.remeasureVisibleRowsAfterOverlayDismiss()
             }
-        }
-    }
-
-    private func setupMainFeedPeriodicRefreshObserver() {
-        mainFeedPeriodicRefreshObserver = NotificationCenter.default.addObserver(
-            forName: .mainFeedPeriodicRefreshCompleted,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self, self.feedIdentifier == "mainFeed" else { return }
-            self.refreshHiddenPendingTweetsBannerIfNeeded(currentTweets: self.pendingFullTweetsAfterPrepend ?? [])
         }
     }
 
@@ -1132,354 +1105,10 @@ class TweetTableViewController: UITableViewController {
                 }
             }
         }
-        updateNewTweetsButtonAppearance()
     }
 
     private func regularTweetIndexPath(_ regularIndex: Int) -> IndexPath {
         IndexPath(row: pinnedTweets.count + regularIndex, section: 0)
-    }
-
-    private func deferPrependedTweetsIfNeeded(_ newTweets: [Tweet], oldTweets: [Tweet]) -> Bool {
-        guard allowNewTweetsBanner else { return false }
-        guard !oldTweets.isEmpty, newTweets.count > oldTweets.count else { return false }
-
-        let potentialPrependCount = newTweets.count - oldTweets.count
-        let oldIds = oldTweets.map { $0.mid }
-        let newIds = newTweets.map { $0.mid }
-        let afterNewOnes = Array(newIds.dropFirst(potentialPrependCount))
-        guard afterNewOnes == oldIds else { return false }
-
-        pendingPrependedTweets = Array(newTweets.prefix(potentialPrependCount))
-        pendingFullTweetsAfterPrepend = newTweets
-        showNewTweetsButton(count: potentialPrependCount)
-        print("🆕 [TweetTableView] Holding \(potentialPrependCount) new tweet(s) behind tap-to-load banner")
-        return true
-    }
-
-    func refreshHiddenPendingTweetsBannerIfNeeded(currentTweets: [Tweet]) {
-        guard didAutoHideNewTweetsBanner,
-              let pendingFullTweetsAfterPrepend,
-              !pendingPrependedTweets.isEmpty,
-              newTweetsButton?.isHidden != false else {
-            return
-        }
-
-        let currentIds = currentTweets.map { $0.mid }
-        let pendingIds = pendingFullTweetsAfterPrepend.map { $0.mid }
-        guard currentIds == pendingIds else { return }
-
-        showNewTweetsButton(count: pendingPrependedTweets.count)
-    }
-
-    var hasPendingNewTweetsBanner: Bool {
-        !pendingPrependedTweets.isEmpty || pendingFullTweetsAfterPrepend != nil
-    }
-
-    func isHoldingPendingNewTweets(matching currentTweets: [Tweet]) -> Bool {
-        guard let pendingFullTweetsAfterPrepend else { return false }
-        return pendingFullTweetsAfterPrepend.map(\.mid) == currentTweets.map(\.mid)
-    }
-
-    func applyDirectTweetsAndClearPendingBanner(_ directTweets: [Tweet]) {
-        let previousAllowNewTweetsBanner = allowNewTweetsBanner
-        allowNewTweetsBanner = false
-        pendingPrependedTweets.removeAll()
-        pendingFullTweetsAfterPrepend = nil
-        hideNewTweetsButton()
-        updateTweets(directTweets)
-        allowNewTweetsBanner = previousAllowNewTweetsBanner
-    }
-
-    private func showNewTweetsButton(count: Int) {
-        didAutoHideNewTweetsBanner = false
-        scheduleNewTweetsBannerAutoHide()
-
-        let button: UIButton
-        if let existingButton = newTweetsButton {
-            button = existingButton
-        } else {
-            button = UIButton(type: .system)
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.backgroundColor = XTheme.accent.withAlphaComponent(0.86)
-            button.layer.cornerRadius = newTweetsBannerHeight / 2
-            button.layer.borderWidth = 0
-            button.layer.masksToBounds = false
-            button.layer.shadowColor = UIColor.black.cgColor
-            button.layer.shadowOpacity = 0.08
-            button.layer.shadowOffset = CGSize(width: 0, height: 3)
-            button.layer.shadowRadius = 8
-            button.accessibilityTraits.insert(.button)
-            button.alpha = 0
-            button.isHidden = true
-            button.addTarget(self, action: #selector(handleNewTweetsButtonTapped), for: .touchUpInside)
-            button.addTarget(self, action: #selector(handleNewTweetsButtonTouchDown), for: [.touchDown, .touchDragEnter])
-            button.addTarget(self, action: #selector(handleNewTweetsButtonTouchUp), for: [.touchCancel, .touchDragExit, .touchUpInside, .touchUpOutside])
-            view.addSubview(button)
-
-            let arrowImageView = UIImageView(
-                image: UIImage(
-                    systemName: "arrow.up",
-                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
-                )
-            )
-            arrowImageView.tintColor = .white
-            arrowImageView.contentMode = .scaleAspectFit
-            arrowImageView.translatesAutoresizingMaskIntoConstraints = false
-            arrowImageView.tag = 9101
-
-            let avatarCluster = UIView()
-            avatarCluster.translatesAutoresizingMaskIntoConstraints = false
-            newTweetsAvatarCluster = avatarCluster
-
-            let titleLabel = UILabel()
-            titleLabel.textColor = .white
-            titleLabel.font = .systemFont(ofSize: 15, weight: .regular)
-            titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-            titleLabel.setContentHuggingPriority(.required, for: .horizontal)
-            titleLabel.translatesAutoresizingMaskIntoConstraints = false
-            newTweetsTitleLabel = titleLabel
-
-            let contentStack = UIStackView(arrangedSubviews: [arrowImageView, avatarCluster, titleLabel])
-            contentStack.axis = .horizontal
-            contentStack.alignment = .center
-            contentStack.spacing = 7
-            contentStack.isUserInteractionEnabled = false
-            contentStack.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(contentStack)
-            newTweetsContentStack = contentStack
-
-            NSLayoutConstraint.activate([
-                button.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
-                button.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-                button.heightAnchor.constraint(equalToConstant: newTweetsBannerHeight),
-                button.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
-                contentStack.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
-                contentStack.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -14),
-                contentStack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                arrowImageView.widthAnchor.constraint(equalToConstant: 13),
-                arrowImageView.heightAnchor.constraint(equalToConstant: 16)
-            ])
-            newTweetsButton = button
-        }
-
-        let title = newTweetsButtonTitle(count: count)
-        newTweetsTitleLabel?.text = title
-        updateNewTweetsAvatars()
-        button.accessibilityLabel = title
-        updateNewTweetsButtonAppearance()
-
-        if button.alpha == 0 || button.isHidden {
-            button.alpha = 0
-            button.transform = CGAffineTransform(translationX: 0, y: -10)
-            button.isHidden = false
-            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
-                button.alpha = 1
-                button.transform = .identity
-            }
-        }
-    }
-
-    private func scheduleNewTweetsBannerAutoHide() {
-        newTweetsAutoHideWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.autoHideNewTweetsButton()
-        }
-        newTweetsAutoHideWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0, execute: workItem)
-    }
-
-    private func updateNewTweetsButtonAppearance() {
-        guard let button = newTweetsButton else { return }
-        button.backgroundColor = XTheme.accent.withAlphaComponent(0.86)
-        button.layer.borderWidth = 0
-        button.layer.shadowColor = UIColor.black.withAlphaComponent(isDarkModeEnabled ? 0.35 : 0.18).cgColor
-        newTweetsTitleLabel?.textColor = .white
-        newTweetsContentStack?.arrangedSubviews
-            .compactMap { $0 as? UIImageView }
-            .first { $0.tag == 9101 }?
-            .tintColor = .white
-    }
-
-    private func newTweetsButtonTitle(count: Int) -> String {
-        let format = count == 1
-            ? NSLocalizedString("%d new tweet", comment: "New tweet floating pill title")
-            : NSLocalizedString("%d new tweets", comment: "New tweets floating pill title")
-        return String(format: format, count)
-    }
-
-    private func updateNewTweetsAvatars() {
-        guard let avatarCluster = newTweetsAvatarCluster else { return }
-
-        avatarCluster.subviews.forEach { subview in
-            if let avatarView = subview as? AvatarUIView {
-                avatarView.prepareForReuse()
-            }
-            subview.removeFromSuperview()
-        }
-
-        let avatarSize: CGFloat = 32
-        let overlap: CGFloat = 14
-        let authors = pendingPrependedTweets
-            .compactMap(\.author)
-            .reduce(into: [User]()) { result, author in
-                guard !result.contains(where: { $0.mid == author.mid }) else { return }
-                result.append(author)
-            }
-            .prefix(3)
-
-        let avatarCount = max(1, authors.count)
-        let clusterWidth = avatarSize + CGFloat(avatarCount - 1) * overlap
-
-        avatarCluster.constraints
-            .filter { $0.firstAttribute == .width || $0.firstAttribute == .height }
-            .forEach { $0.isActive = false }
-        NSLayoutConstraint.activate([
-            avatarCluster.widthAnchor.constraint(equalToConstant: clusterWidth),
-            avatarCluster.heightAnchor.constraint(equalToConstant: avatarSize)
-        ])
-
-        if authors.isEmpty {
-            let placeholder = makeNewTweetsAvatarPlaceholder(size: avatarSize)
-            avatarCluster.addSubview(placeholder)
-            NSLayoutConstraint.activate([
-                placeholder.leadingAnchor.constraint(equalTo: avatarCluster.leadingAnchor),
-                placeholder.centerYAnchor.constraint(equalTo: avatarCluster.centerYAnchor),
-                placeholder.widthAnchor.constraint(equalToConstant: avatarSize),
-                placeholder.heightAnchor.constraint(equalToConstant: avatarSize)
-            ])
-            return
-        }
-
-        for (index, author) in authors.enumerated() {
-            let avatarView = AvatarUIView()
-            avatarView.translatesAutoresizingMaskIntoConstraints = false
-            avatarView.layer.cornerRadius = avatarSize / 2
-            avatarView.layer.borderWidth = 0
-            avatarView.layer.borderColor = nil
-            avatarView.clipsToBounds = true
-            avatarView.configure(user: author, size: avatarSize)
-            avatarCluster.addSubview(avatarView)
-            NSLayoutConstraint.activate([
-                avatarView.leadingAnchor.constraint(equalTo: avatarCluster.leadingAnchor, constant: CGFloat(index) * overlap),
-                avatarView.centerYAnchor.constraint(equalTo: avatarCluster.centerYAnchor),
-                avatarView.widthAnchor.constraint(equalToConstant: avatarSize),
-                avatarView.heightAnchor.constraint(equalToConstant: avatarSize)
-            ])
-        }
-    }
-
-    private func makeNewTweetsAvatarPlaceholder(size: CGFloat) -> UIView {
-        let container = UIView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        container.backgroundColor = XTheme.secondaryBackground
-        container.layer.cornerRadius = size / 2
-        container.layer.borderWidth = 0
-        container.layer.borderColor = nil
-        container.clipsToBounds = true
-
-        let imageView = UIImageView(
-            image: UIImage(
-                systemName: "person.fill",
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
-            )
-        )
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.tintColor = XTheme.secondaryText
-        imageView.contentMode = .scaleAspectFit
-        container.addSubview(imageView)
-
-        NSLayoutConstraint.activate([
-            imageView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            imageView.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            imageView.widthAnchor.constraint(equalToConstant: size * 0.55),
-            imageView.heightAnchor.constraint(equalToConstant: size * 0.55)
-        ])
-
-        return container
-    }
-
-    private func autoHideNewTweetsButton() {
-        didAutoHideNewTweetsBanner = true
-        hideNewTweetsButton(cancelAutoHide: false)
-    }
-
-    private func hideNewTweetsButton(cancelAutoHide: Bool = true) {
-        if cancelAutoHide {
-            newTweetsAutoHideWorkItem?.cancel()
-            newTweetsAutoHideWorkItem = nil
-            didAutoHideNewTweetsBanner = false
-        }
-
-        guard let button = newTweetsButton else { return }
-        UIView.animate(withDuration: 0.15, animations: {
-            button.alpha = 0
-            button.transform = CGAffineTransform(translationX: 0, y: -10)
-        }) { _ in
-            button.isHidden = true
-            button.transform = .identity
-        }
-    }
-
-    @objc private func handleNewTweetsButtonTapped() {
-        applyPendingPrependedTweets()
-    }
-
-    @objc private func handleNewTweetsButtonTouchDown() {
-        UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.newTweetsButton?.backgroundColor = XTheme.accent.withAlphaComponent(0.74)
-            self.newTweetsButton?.transform = CGAffineTransform(scaleX: 0.98, y: 0.98)
-        }
-    }
-
-    @objc private func handleNewTweetsButtonTouchUp() {
-        UIView.animate(withDuration: 0.16, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.newTweetsButton?.backgroundColor = XTheme.accent.withAlphaComponent(0.86)
-            self.newTweetsButton?.transform = .identity
-        }
-    }
-
-    private func applyPendingPrependedTweets() {
-        guard let fullTweets = pendingFullTweetsAfterPrepend, !pendingPrependedTweets.isEmpty else {
-            hideNewTweetsButton()
-            return
-        }
-
-        let prependCount = pendingPrependedTweets.count
-        let expectedRowsBeforeUpdate = pinnedTweets.count + tweets.count
-        tweets = fullTweets
-        pendingPrependedTweets.removeAll()
-        pendingFullTweetsAfterPrepend = nil
-        hideNewTweetsButton()
-
-        isTableViewUpdating = true
-        let insertIndexPaths = (0..<prependCount).map { regularTweetIndexPath($0) }
-        if tableView.numberOfRows(inSection: 0) == expectedRowsBeforeUpdate {
-            tableView.insertRows(at: insertIndexPaths, with: .automatic)
-        } else {
-            // Row count mismatch (concurrent update). Reload but preserve the scroll position so
-            // the feed does not silently jump to the top. UIKit reloadData() resets contentOffset;
-            // capture it first and restore it immediately after layout.
-            let savedOffset = tableView.contentOffset
-            tableView.reloadData()
-            tableView.layoutIfNeeded()
-            tableView.setContentOffset(savedOffset, animated: false)
-        }
-        isTableViewUpdating = false
-
-        prefetchEmbeddedTweetIdsIfNeeded(Set(fullTweets.prefix(prependCount).compactMap(\.originalTweetId)))
-        rebuildVideoListAndRefreshVisibility(reason: "pendingTweetsAppliedVideoList")
-        scheduleVideoVisibilityRefresh(reason: "pendingTweetsApplied")
-
-        let targetRow = pinnedTweets.count
-        if targetRow < tableView.numberOfRows(inSection: 0) {
-            tableView.scrollToRow(at: IndexPath(row: targetRow, section: 0), at: .top, animated: true)
-        } else {
-            tableView.setContentOffset(CGPoint(x: 0, y: -tableView.adjustedContentInset.top), animated: true)
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            self?.refreshVisiblePlaybackAfterProgrammaticListChange(reason: "pendingTweetsAppliedDelayed")
-        }
     }
 
     private func setupRefreshControl() {
@@ -1603,9 +1232,6 @@ class TweetTableViewController: UITableViewController {
         // causes UITableView row-count assertion failures.
         guard tableView.window != nil else {
             tweets = newTweets
-            pendingPrependedTweets.removeAll()
-            pendingFullTweetsAfterPrepend = nil
-            hideNewTweetsButton()
             return
         }
 
@@ -1617,15 +1243,7 @@ class TweetTableViewController: UITableViewController {
 
         let newOriginalTweetIds = Set(newTweets.compactMap(\.originalTweetId))
 
-        if deferPrependedTweetsIfNeeded(newTweets, oldTweets: oldTweets) {
-            prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds.subtracting(Set(oldTweets.compactMap(\.originalTweetId))))
-            return
-        }
-
         tweets = newTweets
-        pendingPrependedTweets.removeAll()
-        pendingFullTweetsAfterPrepend = nil
-        hideNewTweetsButton()
         
         
         // Handle initial load

@@ -64,7 +64,6 @@ struct FollowingsTweetView: View {
                 onScroll?(offset, delta)
             },
             allowDeleteAll: true,
-            allowNewTweetsBanner: false,
             preservesScrollPositionOnPrepend: true,
             onAvatarTap: { user in onAvatarTap(user) },
             onTweetTap: { tweet in onTweetTap(tweet) },

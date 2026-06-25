@@ -476,6 +476,28 @@ struct ContentView: View {
             }
         )
 
+        // 6a. Tweet deletion failed
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .errorOccurred,
+                object: nil,
+                queue: .main
+            ) { notification in
+                guard let error = notification.object as? NSError,
+                      error.domain == "TweetDeletion" else {
+                    return
+                }
+
+                self.toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                self.toastType = .error
+                self.showToast = true
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                    withAnimation { self.showToast = false }
+                }
+            }
+        )
+
         // 6b. Audio playback warning
         notificationObservers.append(
             NotificationCenter.default.addObserver(
@@ -893,14 +915,14 @@ private struct NewTweetsBannerOverlay: View {
         let items = avatarClusterItems(from: distinctAuthors)
         let avatarCount = max(1, items.count)
         let avatarSize: CGFloat = 32
-        let overlap: CGFloat = 12
-        let width = avatarSize + CGFloat(avatarCount - 1) * overlap
+        let trailingReveal: CGFloat = 7
+        let width = avatarSize + CGFloat(avatarCount - 1) * trailingReveal
 
         return ZStack(alignment: .leading) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 avatarView(for: item, size: avatarSize)
-                    .offset(x: CGFloat(index) * overlap)
-                    .zIndex(Double(index))
+                    .offset(x: CGFloat(index) * trailingReveal)
+                    .zIndex(Double(avatarCount - index))
             }
         }
         .frame(width: width, height: avatarSize)

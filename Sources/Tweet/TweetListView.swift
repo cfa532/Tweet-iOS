@@ -38,7 +38,6 @@ struct TweetListView: View {
     let feedIdentifier: String  // Unique identifier for persistent scroll position
     let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
     let allowDeleteAll: Bool  // If true, appUser can delete any tweet (main feed); otherwise only own tweets
-    let allowNewTweetsBanner: Bool
     /// True on the main feed: prepended tweets must not move scroll position. False on
     /// bounded feeds (profile/list/bookmarks) where new tweets should scroll to the top.
     let preservesScrollPositionOnPrepend: Bool
@@ -72,7 +71,6 @@ struct TweetListView: View {
     @State private var lastVisibleTweetIdBeforeLoad: String? = nil
     @State private var scrollProxy: ScrollViewProxy? = nil
     @State private var contentHeight: CGFloat = 0
-    @State private var isDirectFeedRefreshActive: Bool = false
     @State private var screenHeight: CGFloat = 0
     @State private var needsMoreContent: Bool = true
     @State private var startupTime: Date = Date()
@@ -177,7 +175,6 @@ struct TweetListView: View {
         feedIdentifier: String = "mainFeed",
         preserveOrder: Bool = false,
         allowDeleteAll: Bool = false,
-        allowNewTweetsBanner: Bool = false,
         preservesScrollPositionOnPrepend: Bool = false,
         externalRefreshToken: Int = 0,
         emptyStateText: LocalizedStringKey? = nil,
@@ -201,7 +198,6 @@ struct TweetListView: View {
         self.feedIdentifier = feedIdentifier
         self.preserveOrder = preserveOrder
         self.allowDeleteAll = allowDeleteAll
-        self.allowNewTweetsBanner = allowNewTweetsBanner
         self.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
         self.externalRefreshToken = externalRefreshToken
         self.emptyStateText = emptyStateText
@@ -250,12 +246,6 @@ struct TweetListView: View {
             hasMoreTweets: $hasMoreTweets,
             isLoading: isLoading,
             isLoadingMore: isLoadingMore,
-            isDirectFeedRefreshActive: isDirectFeedRefreshActive,
-            allowNewTweetsBanner: allowNewTweetsBanner
-                && initialLoadComplete
-                && !isLoading
-                && !isLoadingMore
-                && !isDirectFeedRefreshActive,
             preservesScrollPositionOnPrepend: preservesScrollPositionOnPrepend,
             loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
             onRefresh: {
@@ -704,10 +694,6 @@ struct TweetListView: View {
             return
         }
 
-        isDirectFeedRefreshActive = true
-        defer {
-            isDirectFeedRefreshActive = false
-        }
         isLoading = true
         initialLoadComplete = false
         didConfirmEmptyFromServer = false

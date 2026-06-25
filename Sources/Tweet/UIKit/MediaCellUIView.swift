@@ -443,12 +443,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var aspectRatio: Float = 1.0
     private var cellTweetId: String?
     private var isEmbeddedMedia: Bool = false
-    private var shouldLoadVideo: Bool = true
+    // Visibility and player acquisition intent - true when cell should have a player
     private var isVisible: Bool = false
+    private var shouldAcquirePlayer: Bool = true
     private var effectiveBaseUrl: URL = HproseInstance.baseUrl
     private var isSingleMedia: Bool = false
     private weak var parentViewController: UIViewController?
-    private var shouldAcquirePlayerWhenVisible: Bool = true
     private var requestedFallbackThumbnailMid: String?
 
     /// Matches VideoPlaybackInfo.identifier format: outerTweetId_mediaTweetId_videoMid_attachmentIndex.
@@ -906,7 +906,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func shouldShowVisibleVideoCoverSpinner(hasCover: Bool? = nil) -> Bool {
-        isVisible && isVideoAttachment && shouldLoadVideo && !(hasCover ?? hasVideoCoverForSpinner)
+        isVisible && isVideoAttachment && shouldAcquirePlayer && !(hasCover ?? hasVideoCoverForSpinner)
     }
 
     private var shouldShowReplayButton: Bool {
@@ -965,7 +965,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         parentTweet: Tweet,
         attachmentIndex: Int,
         aspectRatio: Float,
-        shouldLoadVideo: Bool,
+        shouldAcquirePlayer: Bool,
         isEmbedded: Bool,
         cellTweetId: String?,
         isSingleMedia: Bool,
@@ -979,7 +979,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
            self.attachment != nil {
             self.aspectRatio = aspectRatio
             self.isEmbeddedMedia = isEmbedded
-            self.shouldLoadVideo = shouldLoadVideo
+            self.shouldAcquirePlayer = shouldAcquirePlayer
             self.cellTweetId = cellTweetId
             self.isSingleMedia = isSingleMedia
             self.parentViewController = parentViewController
@@ -991,7 +991,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self.isEmbeddedMedia = isEmbedded
-        self.shouldLoadVideo = shouldLoadVideo
+        self.shouldAcquirePlayer = shouldAcquirePlayer
         self.cellTweetId = cellTweetId
         self.isSingleMedia = isSingleMedia
         self.parentViewController = parentViewController
@@ -1341,7 +1341,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         guard isVisible,
               isVideoAttachment,
-              shouldLoadVideo,
+              shouldAcquirePlayer,
               let mid = attachment?.mid,
               let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
               cachedPlayer.currentItem != nil else {
@@ -1379,8 +1379,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               isVideoAttachment,
               player == nil,
               setupPlayerTask == nil,
-              playerAcquireDebounceTask == nil else { return }
-        guard !deferVideoWorkUntilInfrastructureReady(reason: "schedulePlayerAcquire") else { return }
+              playerAcquireDebounceTask == nil else {
+            return
+        }
+        guard !deferVideoWorkUntilInfrastructureReady(reason: "schedulePlayerAcquire") else {
+            return
+        }
 
         if let att = attachment,
            (VideoStateCache.shared.getCachedState(for: att.mid) != nil
@@ -1493,12 +1497,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func acquireIndependentPlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
-        guard shouldLoadVideo else { return }
+        guard shouldAcquirePlayer else { return }
         acquireIndependentPlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
     }
 
     private func acquireIndependentPlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
-        guard shouldLoadVideo else { return }
+        guard shouldAcquirePlayer else { return }
 
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
         let mediaType = attachment.type
@@ -1714,7 +1718,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func acquirePlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
-        guard shouldLoadVideo else { return }
+        guard shouldAcquirePlayer else { return }
 
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
         let tweetId = parentTweet.mid
@@ -3143,7 +3147,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         requireLoadableVisibleVideo: Bool = false
     ) -> (attachment: MimeiFileType, url: URL, parentTweet: Tweet)? {
         if requireLoadableVisibleVideo {
-            guard isVisible, shouldLoadVideo else { return nil }
+            guard isVisible, shouldAcquirePlayer else { return nil }
         }
         guard isVideoAttachment,
               let attachment,
@@ -5134,25 +5138,38 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     func setVisible(_ visible: Bool, shouldAcquirePlayer: Bool = true) {
         let wasVisible = isVisible
-        let previousShouldAcquirePlayer = shouldAcquirePlayerWhenVisible
-        shouldAcquirePlayerWhenVisible = shouldAcquirePlayer
-        let shouldStartAcquiring = visible &&
-            wasVisible &&
-            !previousShouldAcquirePlayer &&
-            shouldAcquirePlayer
+        let wasAcquiring = self.shouldAcquirePlayer
+        self.shouldAcquirePlayer = shouldAcquirePlayer
 
-        if visible, wasVisible, isVideoAttachment {
-            shouldLoadVideo = shouldAcquirePlayer
-            if resumeSurfaceReturnHandoffIfNeeded(reason: "setVisible(true)") {
-                return
-            }
+        // Detect transition from "not acquiring" to "acquiring" while staying visible
+        let shouldStartAcquiring = visible && wasVisible && !wasAcquiring && shouldAcquirePlayer
+
+        // Recovery case: visible, infra ready, but no player (post-background state)
+        let needsRecovery = visible &&
+                            wasVisible &&
+                            isVideoAttachment &&
+                            shouldAcquirePlayer &&
+                            player == nil &&
+                            setupPlayerTask == nil &&
+                            videoCellState != .failed &&
+                            AppDelegate.isVideoInfrastructureReady
+
+        // needsRecovery covers the post-background case: visible with infrastructure
+        // ready but the player was torn down on background, so the cell has no player
+        // to resume. It must fall through to acquisition even though visibility is
+        // unchanged.
+        guard isVisible != visible || shouldStartAcquiring || needsRecovery else {
+            return
         }
-
-        guard isVisible != visible || shouldStartAcquiring else { return }
         isVisible = visible
 
         guard let attachment else { return }
 
+        if visible, wasVisible, isVideoAttachment {
+            if resumeSurfaceReturnHandoffIfNeeded(reason: "setVisible(true)") {
+                return
+            }
+        }
 
         if visible {
             // Update base URL
@@ -5179,7 +5196,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if isVideoAttachment {
                 // Visibility preserves the cell/delegate immediately, but AVPlayer
                 // creation is held until the media is close to autoplay range.
-                shouldLoadVideo = shouldAcquirePlayer
                 if attachment.getUrl(effectiveBaseUrl) != nil {
                     SharedAssetCache.shared.markAsVisible(attachment.mid)
                     VideoStateCache.shared.markAsVisible(attachment.mid)
@@ -5192,6 +5208,17 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                    setupPlayerTask == nil,
                    videoCellState != .failed {
                     transitionTo(.playerLoading)
+                }
+
+                // Recovery case: infrastructure is ready now but we didn't acquire before
+                if !shouldAcquirePlayer,
+                   isVideoAttachment,
+                   player == nil,
+                   setupPlayerTask == nil,
+                   videoCellState != .failed,
+                   AppDelegate.isVideoInfrastructureReady {
+                    transitionTo(.playerLoading)
+                    self.shouldAcquirePlayer = true
                 }
                 if !shouldAcquirePlayer {
                     restoreForegroundRecoveryPosterIfNeeded(reason: "visibleWithoutInfrastructure")
@@ -5344,7 +5371,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func restoreVisibleLoadingStateIfNeeded(reason: String) {
         guard isVisible,
               isVideoAttachment,
-              shouldLoadVideo,
+              shouldAcquirePlayer,
               let mid = attachment?.mid else { return }
 
         let activePlayer: AVPlayer
@@ -5428,7 +5455,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard isVisible,
               isVideoAttachment,
               isPrimaryFailure,
-              shouldLoadVideo,
+              shouldAcquirePlayer,
               automaticTransientRetryTask == nil,
               automaticTransientRetryCount < 1 else { return false }
 
@@ -5444,7 +5471,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                   self.isVisible,
                   self.isVideoAttachment,
                   (self.coordinatorWantsToPlay || self.isCurrentCoordinatorPrimary),
-                  self.shouldLoadVideo,
+                  self.shouldAcquirePlayer,
                   [
                     VideoCellState.failed,
                     .playerLoading,
@@ -6035,7 +6062,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         attachment = nil
         parentTweet = nil
         isVisible = false
-        shouldAcquirePlayerWhenVisible = true
+        shouldAcquirePlayer = true
     }
 
     deinit {

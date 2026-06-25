@@ -73,7 +73,6 @@ class FollowingsTweetViewModel: ObservableObject {
             await MainActor.run {
                 queuePendingNewTweets(freshTweets)
             }
-            NotificationCenter.default.post(name: .mainFeedPeriodicRefreshCompleted, object: nil)
         } catch {
             print("ERROR: [FollowingsTweetViewModel] \(reason) failed: \(error)")
         }

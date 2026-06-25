@@ -17,12 +17,9 @@ struct TweetTableView: UIViewControllerRepresentable {
     @Binding var hasMoreTweets: Bool
     let isLoading: Bool
     let isLoadingMore: Bool
-    let isDirectFeedRefreshActive: Bool
-    let allowNewTweetsBanner: Bool
     /// True for the long-lived main feed, where new tweets must NOT move the user's
-    /// scroll position (they surface behind the new-tweet banner). False for bounded
-    /// feeds (profile/list/bookmarks) where freshly prepended tweets should be brought
-    /// to the top so the user sees them.
+    /// scroll position. False for bounded feeds (profile/list/bookmarks) where freshly
+    /// prepended tweets should be brought to the top so the user sees them.
     let preservesScrollPositionOnPrepend: Bool
     let loadMoreTweets: (Bool) -> Void  // Parameter: forceLoad
     let onRefresh: (() async -> Void)?
@@ -79,7 +76,6 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.onShowLogin = onShowLogin
         controller.onShowToast = onShowToast
         controller.allowDeleteAll = allowDeleteAll
-        controller.allowNewTweetsBanner = allowNewTweetsBanner
         controller.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
 
         controller.updateHeader()
@@ -92,25 +88,14 @@ struct TweetTableView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: TweetTableViewController, context: Context) {
         let coordinator = context.coordinator
         uiViewController.isDarkModeEnabled = isDarkMode
-        uiViewController.allowNewTweetsBanner = allowNewTweetsBanner
         uiViewController.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
         uiViewController.applyTheme()
 
         // Only update tweets if they actually changed
         let currentTweetIds = tweets.map { $0.mid }
-        if isDirectFeedRefreshActive && uiViewController.hasPendingNewTweetsBanner {
-            coordinator.lastTweetIds = currentTweetIds
-            uiViewController.applyDirectTweetsAndClearPendingBanner(tweets)
-        } else if !allowNewTweetsBanner && uiViewController.hasPendingNewTweetsBanner {
-            coordinator.lastTweetIds = currentTweetIds
-            if !uiViewController.isHoldingPendingNewTweets(matching: tweets) {
-                uiViewController.applyDirectTweetsAndClearPendingBanner(tweets)
-            }
-        } else if coordinator.lastTweetIds != currentTweetIds {
+        if coordinator.lastTweetIds != currentTweetIds {
             coordinator.lastTweetIds = currentTweetIds
             uiViewController.updateTweets(tweets)
-        } else {
-            uiViewController.refreshHiddenPendingTweetsBannerIfNeeded(currentTweets: tweets)
         }
 
         // Only update pinned tweets if they actually changed

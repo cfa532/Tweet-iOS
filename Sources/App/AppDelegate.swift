@@ -32,10 +32,32 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         static let interval: TimeInterval = 5 * 60
     }
     
+    /// Release-only: mirror stdout/stderr (all `print()`/`NSLog`) to Documents/app.log so
+    /// overnight troubleshooting logs survive app suspension.
+    private static func redirectConsoleToFileInRelease() {
+        #if !DEBUG
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let logURL = docs.appendingPathComponent("app.log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        freopen(logURL.path, "a", stdout)
+        freopen(logURL.path, "a", stderr)
+        // Unbuffered so output is flushed immediately — critical for capturing the last
+        // lines before a background suspend or crash.
+        setvbuf(stdout, nil, _IONBF, 0)
+        setvbuf(stderr, nil, _IONBF, 0)
+        print("\n--- App log session started: \(Date()) ---")
+        print("📂 [LOG] Console output mirrored to \(logURL.path)")
+        #endif
+    }
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Lock app to portrait orientation by default
         AppDelegate.lockOrientation(.portrait)
-        
+
+        // Release: mirror all print()/NSLog output to Documents/app.log so overnight
+        // troubleshooting logs survive app backgrounding.
+        Self.redirectConsoleToFileInRelease()
+
         // Register background tasks before application finishes launching
         registerBackgroundTasks()
         

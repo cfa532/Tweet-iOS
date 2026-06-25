@@ -871,7 +871,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         guard currentVideoMid == mid else {
             if loadingMid == mid {
-                return .loading(showPoster: hasPoster, showSpinner: true)
+                return .loading(
+                    showPoster: hasPoster,
+                    showSpinner: shouldShowPreItemLoadingSpinner()
+                )
             }
             return .idle(showPoster: hasPoster)
         }
@@ -879,7 +882,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard let player = candidatePlayer,
               singletonPlayer === player,
               let item = player.currentItem else {
-            return .loading(showPoster: hasPoster, showSpinner: true)
+            return .loading(
+                showPoster: hasPoster,
+                showSpinner: shouldShowPreItemLoadingSpinner()
+            )
         }
 
         let hasPlayableData = hasPlayableData(player: player, item: item)
@@ -889,18 +895,26 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             player: player
         )
 
-        if hasPlayableData,
-           layerReadyForDisplay,
-           player.timeControlStatus == .playing,
-           isItemReady,
-           !isBeforeFirstVisibleFrame(player) {
+        let itemReady = isItemReady || item.status == .readyToPlay
+        let isPlaybackRendering = player.timeControlStatus == .playing || player.rate > 0
+
+        if isPlaybackRendering, itemReady {
             return .playing(showPoster: showPoster)
         }
 
+        let shouldShowSpinner = !isFullscreenVideoAtEnd(player)
+            && !isPlaybackRendering
+            && !(hasCachedMediaContent && hasPlayableData)
+            && !(layerReadyForDisplay && itemReady)
+
         return .loading(
             showPoster: showPoster,
-            showSpinner: !isFullscreenVideoAtEnd(player)
+            showSpinner: shouldShowSpinner
         )
+    }
+
+    private func shouldShowPreItemLoadingSpinner() -> Bool {
+        return !hasCachedMediaContent && !hasPlayableMediaContent
     }
 
     private func markPlayableMediaContentIfBuffered(
