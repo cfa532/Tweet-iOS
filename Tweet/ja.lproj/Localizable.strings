@@ -579,6 +579,8 @@
 "Message cannot be empty" = "メッセージを空にすることはできません";
 
 // MARK: - Cloud Drive Limit
+"%d new tweet" = "新しいツイート%d件";
+"%d new tweets" = "新しいツイート%d件";
 "Tweet Limit Reached" = "ツイート制限に達しました";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "これはWeb3ツイートアプリです。善意でホストされているツイートの最大数に達しました。独自のノードを設定するか、友人に今後のツイートをホストしてもらってください。";
 "Learn More" = "詳細を見る";

@@ -219,6 +219,9 @@ struct ProfileView: View {
     private func handleViewAppear() {
         // Ensure navigation is visible when view appears
         isNavigationVisible = true
+        DispatchQueue.main.async {
+            profileTweetsRefreshToken += 1
+        }
         NotificationCenter.default.post(
             name: .navigationVisibilityChanged,
             object: nil,

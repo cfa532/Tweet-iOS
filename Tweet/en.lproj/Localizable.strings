@@ -653,6 +653,8 @@
 "App ID mismatch" = "App ID mismatch";
 
 // MARK: - Cloud Drive Limit
+"%d new tweet" = "%d new tweet";
+"%d new tweets" = "%d new tweets";
 "Tweet Limit Reached" = "Tweet Limit Reached";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.";
 "Learn More" = "Learn More";

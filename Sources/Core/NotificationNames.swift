@@ -87,6 +87,8 @@ extension Notification.Name {
     static let popToRoot = Notification.Name("PopToRoot")
     /// Posted to scroll to top of a view
     static let scrollToTop = Notification.Name("ScrollToTop")
+    /// Posted after tapping the new-tweets banner outside the main feed.
+    static let showMainFeedNewTweets = Notification.Name("ShowMainFeedNewTweets")
     /// Posted when navigation visibility changes (for scroll-based hiding/showing)
     static let navigationVisibilityChanged = Notification.Name("NavigationVisibilityChanged")
     /// Posted to show navigation bars without animation during scroll-up correction.

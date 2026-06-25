@@ -299,8 +299,6 @@ struct ProfileTweetsSection<Header: View>: View {
         .onChange(of: resyncedTweetsToken) { _, _ in
             viewModel.mergeResyncedTweets(resyncedTweets)
         }
-        .onDisappear {
-        }
     }
     
 

@@ -512,6 +512,9 @@ struct TweetListView: View {
     
     /// Setup observer to fetch new tweets when app comes to foreground
     private func setupForegroundObserver() {
+        // Main feed foreground checks are handled centrally by AppDelegate so they
+        // can queue the shared new-tweets banner instead of merging directly.
+        guard feedIdentifier != "mainFeed" else { return }
         guard foregroundObserver == nil else { return }
         
         // Listen for app becoming active (returning from background or screen lock)

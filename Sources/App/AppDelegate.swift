@@ -26,6 +26,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         static let identifier = "com.example.ZZ.messageCheck"
         static let interval: TimeInterval = 15 * 60
     }
+
+    private enum BackgroundMainFeedCheck {
+        static let identifier = "com.example.ZZ.mainFeedCheck"
+        static let interval: TimeInterval = 5 * 60
+    }
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Lock app to portrait orientation by default
@@ -81,6 +86,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] 🚀 Scheduling initial background message check on app launch")
         Task { @MainActor in
             self.scheduleNextMessageCheck()
+            self.scheduleNextMainFeedCheck()
         }
         
         // CRITICAL: Clear any stale background timestamp from previous session
@@ -135,6 +141,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             self.handleMessageCheckBackgroundTask(task: task as! BGAppRefreshTask)
         }
 
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMainFeedCheck.identifier, using: nil) { task in
+            print("[AppDelegate] 🎯 Background task triggered: \(task.identifier)")
+            self.handleMainFeedCheckBackgroundTask(task: task as! BGAppRefreshTask)
+        }
+
         print("[AppDelegate] 📋 Background tasks registered")
     }
     
@@ -163,6 +174,28 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("[AppDelegate] ✅ Background message check completed successfully")
         }
     }
+
+    private func handleMainFeedCheckBackgroundTask(task: BGAppRefreshTask) {
+        print("[AppDelegate] 🔄 Background main feed check task STARTED")
+
+        Task { @MainActor in
+            self.scheduleNextMainFeedCheck()
+        }
+
+        let checkTask = Task {
+            if #available(iOS 16.0, *) {
+                await FollowingsTweetViewModel.shared.performBackgroundFeedCheck()
+            }
+            task.setTaskCompleted(success: true)
+            print("[AppDelegate] ✅ Background main feed check completed successfully")
+        }
+
+        task.expirationHandler = {
+            print("[AppDelegate] ⏰ Background main feed check task EXPIRED")
+            checkTask.cancel()
+            task.setTaskCompleted(success: false)
+        }
+    }
     
     @MainActor
     private func scheduleNextMessageCheck() {
@@ -182,23 +215,46 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             logMessageCheckSchedulingFailure(error)
         }
     }
+
+    @MainActor
+    private func scheduleNextMainFeedCheck() {
+        guard UIApplication.shared.backgroundRefreshStatus == .available else {
+            print("[AppDelegate] ℹ️ Background main feed check not scheduled; Background App Refresh is \(backgroundRefreshStatusDescription())")
+            return
+        }
+
+        let request = BGAppRefreshTaskRequest(identifier: BackgroundMainFeedCheck.identifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: BackgroundMainFeedCheck.interval)
+
+        do {
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundMainFeedCheck.identifier)
+            try BGTaskScheduler.shared.submit(request)
+            print("[AppDelegate] 📅 Next background main feed check scheduled for \(request.earliestBeginDate ?? Date())")
+        } catch {
+            logBackgroundTaskSchedulingFailure(error, taskDescription: "main feed check")
+        }
+    }
     
     private func logMessageCheckSchedulingFailure(_ error: Error) {
+        logBackgroundTaskSchedulingFailure(error, taskDescription: "message check")
+    }
+
+    private func logBackgroundTaskSchedulingFailure(_ error: Error, taskDescription: String) {
         let nsError = error as NSError
         guard nsError.domain == "BGTaskSchedulerErrorDomain" else {
-            print("[AppDelegate] ❌ Failed to schedule background message check: \(error)")
+            print("[AppDelegate] ❌ Failed to schedule background \(taskDescription): \(error)")
             return
         }
 
         switch nsError.code {
         case 1:
-            print("[AppDelegate] ℹ️ Background message check not scheduled because BGTaskScheduler is unavailable in this environment")
+            print("[AppDelegate] ℹ️ Background \(taskDescription) not scheduled because BGTaskScheduler is unavailable in this environment")
         case 2:
-            print("[AppDelegate] ⚠️ Background message check not scheduled because too many background task requests are pending")
+            print("[AppDelegate] ⚠️ Background \(taskDescription) not scheduled because too many background task requests are pending")
         case 3:
-            print("[AppDelegate] ❌ Background message check is not permitted; verify BGTaskSchedulerPermittedIdentifiers and UIBackgroundModes in Info.plist")
+            print("[AppDelegate] ❌ Background \(taskDescription) is not permitted; verify BGTaskSchedulerPermittedIdentifiers and UIBackgroundModes in Info.plist")
         default:
-            print("[AppDelegate] ❌ Failed to schedule background message check: \(error)")
+            print("[AppDelegate] ❌ Failed to schedule background \(taskDescription): \(error)")
         }
     }
     
@@ -408,6 +464,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
 
+        scheduleMainFeedCheckAfterForegroundReturn()
+
         // FAST PATH: background memory release didn't run — server & players are intact
         // Safety: if process was suspended before cleanup could fire AND we were
         // gone >5 minutes, the NWListener is likely dead. Fall through to slow path.
@@ -465,6 +523,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         Task {
             print("[AppDelegate] 📬 Checking for new messages on foreground return")
             await checkMessagesForBadgeOnly()
+        }
+    }
+
+    private func scheduleMainFeedCheckAfterForegroundReturn() {
+        Task { @MainActor in
+            self.scheduleNextMainFeedCheck()
+        }
+
+        Task {
+            if #available(iOS 16.0, *) {
+                await FollowingsTweetViewModel.shared.performForegroundFeedRefresh()
+            }
         }
     }
     

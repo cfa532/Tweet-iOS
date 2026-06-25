@@ -13,6 +13,7 @@
 	<array>
 		<string>com.zz.upload</string>
 		<string>com.example.ZZ.messageCheck</string>
+		<string>com.example.ZZ.mainFeedCheck</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>

@@ -6,6 +6,7 @@ struct ContentView: View {
     @StateObject private var hproseInstance = HproseInstance.shared
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @StateObject private var uploadProgressManager = UploadProgressManager.shared
+    @StateObject private var followingsTweetViewModel = FollowingsTweetViewModel.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
@@ -211,6 +212,14 @@ struct ContentView: View {
             .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: shouldHideHeight)
         }
         }
+        .overlay(alignment: .top) {
+            if shouldShowMainFeedNewTweetsBanner {
+                NewTweetsBannerOverlay(viewModel: followingsTweetViewModel) {
+                    openMainFeedAndShowNewTweets()
+                }
+                .zIndex(1500)
+            }
+        }
         .background(XTheme.backgroundColor)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(isPresented: $showComposeSheet) {
@@ -301,11 +310,39 @@ struct ContentView: View {
     }
     
     // MARK: - Notification Observer Management
+
+    private var shouldShowMainFeedNewTweetsBanner: Bool {
+        selectedTab == 0 || isInProfileFromChat
+    }
+
+    private func openMainFeedAndShowNewTweets() {
+        selectedTab = 0
+        if !navigationPath.isEmpty {
+            navigationPath.removeLast(navigationPath.count)
+        }
+        isInChatScreen = false
+        isInProfileFromChat = false
+        isNavigationVisible = true
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .scrollToTop, object: nil)
+        }
+    }
     
     private func setupNotificationObservers() {
         cleanupNotificationObservers()
         
         // 1. Tweet submitted
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .showMainFeedNewTweets,
+                object: nil,
+                queue: .main
+            ) { _ in
+                self.openMainFeedAndShowNewTweets()
+            }
+        )
+
         notificationObservers.append(
             NotificationCenter.default.addObserver(
                 forName: .tweetSubmitted,
@@ -748,4 +785,176 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
             .environmentObject(ThemeManager.shared)
     }
-} 
+}
+
+@available(iOS 16.0, *)
+private struct NewTweetsBannerOverlay: View {
+    @ObservedObject var viewModel: FollowingsTweetViewModel
+    let onTap: () -> Void
+
+    private struct AvatarClusterItem: Identifiable {
+        let id: String
+        let user: User?
+        let opacity: Double
+    }
+
+    private var pendingTweets: [Tweet] {
+        viewModel.pendingNewTweets
+    }
+
+    var body: some View {
+        VStack {
+            if viewModel.showNewTweetsBanner && !pendingTweets.isEmpty {
+                Button(action: {
+                    viewModel.applyPendingNewTweets()
+                    onTap()
+                }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 13, weight: .semibold))
+
+                        avatarCluster
+                            .padding(.leading, -2)
+                            .padding(.trailing, 5)
+
+                        if shouldShowTitle {
+                            Text(title)
+                                .font(.system(size: 15, weight: .regular))
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .padding(.leading, 12)
+                    .padding(.trailing, 14)
+                    .frame(height: 44)
+                    .background(
+                        Capsule()
+                            .fill(bannerBackgroundColor)
+                    )
+                    .clipShape(Capsule())
+                    .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 3)
+                }
+                .buttonStyle(.plain)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .onAppear {
+                    scheduleAutoHide()
+                }
+                .onChange(of: pendingTweets.map(\.mid)) { _, _ in
+                    scheduleAutoHide()
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.top, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(viewModel.showNewTweetsBanner && !pendingTweets.isEmpty)
+        .animation(.easeOut(duration: 0.22), value: viewModel.showNewTweetsBanner)
+    }
+
+    private var title: String {
+        let count = pendingTweets.count
+        let format = count == 1
+            ? NSLocalizedString("%d new tweet", comment: "New tweet floating pill title")
+            : NSLocalizedString("%d new tweets", comment: "New tweets floating pill title")
+        return String(format: format, count)
+    }
+
+    private var shouldShowTitle: Bool {
+        avatarClusterItems(from: distinctAuthors).count <= 3
+    }
+
+    private var bannerBackgroundColor: Color {
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard XTheme.accent.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
+            return XTheme.accentColor
+        }
+
+        return Color(uiColor: UIColor(
+            hue: hue,
+            saturation: saturation * 0.86,
+            brightness: brightness,
+            alpha: 1.0
+        ))
+    }
+
+    private var distinctAuthors: [User] {
+        pendingTweets.reduce(into: [User]()) { result, tweet in
+            let author = tweet.author ?? User.getInstance(mid: tweet.authorId)
+            guard !result.contains(where: { $0.mid == author.mid }) else { return }
+            result.append(author)
+        }
+    }
+
+    private var avatarCluster: some View {
+        let items = avatarClusterItems(from: distinctAuthors)
+        let avatarCount = max(1, items.count)
+        let avatarSize: CGFloat = 32
+        let overlap: CGFloat = 12
+        let width = avatarSize + CGFloat(avatarCount - 1) * overlap
+
+        return ZStack(alignment: .leading) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                avatarView(for: item, size: avatarSize)
+                    .offset(x: CGFloat(index) * overlap)
+                    .zIndex(Double(index))
+            }
+        }
+        .frame(width: width, height: avatarSize)
+    }
+
+    private func avatarClusterItems(from authors: [User]) -> [AvatarClusterItem] {
+        if authors.isEmpty {
+            return [AvatarClusterItem(id: "default-0", user: nil, opacity: 1.0)]
+        }
+
+        if authors.count <= 5 {
+            return authors.map { author in
+                AvatarClusterItem(id: author.mid, user: author, opacity: 1.0)
+            }
+        }
+
+        let firstAuthors = authors.prefix(2).map { author in
+            AvatarClusterItem(id: author.mid, user: author, opacity: 1.0)
+        }
+        let placeholders = [
+            AvatarClusterItem(id: "default-more-0", user: nil, opacity: 0.42),
+            AvatarClusterItem(id: "default-more-1", user: nil, opacity: 0.42)
+        ]
+        let lastAuthor = authors[authors.count - 1]
+        return firstAuthors + placeholders + [
+            AvatarClusterItem(id: lastAuthor.mid, user: lastAuthor, opacity: 1.0)
+        ]
+    }
+
+    @ViewBuilder
+    private func avatarView(for item: AvatarClusterItem, size: CGFloat) -> some View {
+        if let user = item.user {
+            Avatar(user: user, size: size)
+                .frame(width: size, height: size)
+        } else {
+            Circle()
+                .fill(XTheme.secondaryBackgroundColor)
+                .overlay(
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(XTheme.secondaryTextColor)
+                )
+                .frame(width: size, height: size)
+                .opacity(item.opacity)
+        }
+    }
+
+    private func scheduleAutoHide() {
+        let ids = pendingTweets.map(\.mid)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+            guard viewModel.pendingNewTweets.map(\.mid) == ids else { return }
+            Task { @MainActor in
+                viewModel.dismissNewTweetsBanner()
+            }
+        }
+    }
+}

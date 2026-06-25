@@ -33,9 +33,6 @@ struct FollowingsTweetView: View {
                     return serverTweets
                 }
             },
-            onForegroundRefresh: {
-                await viewModel.performForegroundFeedRefresh()
-            },
             showTitle: false,
             notifications: [
                 TweetListNotification(
@@ -67,7 +64,7 @@ struct FollowingsTweetView: View {
                 onScroll?(offset, delta)
             },
             allowDeleteAll: true,
-            allowNewTweetsBanner: viewModel.isPeriodicFeedRefreshActive,
+            allowNewTweetsBanner: false,
             preservesScrollPositionOnPrepend: true,
             onAvatarTap: { user in onAvatarTap(user) },
             onTweetTap: { tweet in onTweetTap(tweet) },

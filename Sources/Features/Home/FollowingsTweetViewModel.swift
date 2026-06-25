@@ -31,11 +31,9 @@ class FollowingsTweetViewModel: ObservableObject {
     @Published var isPeriodicFeedRefreshActive: Bool = false
     @Published var showTweetDetail: Bool = false
     @Published var selectedTweet: Tweet?
+    @Published var pendingNewTweets: [Tweet] = []
+    @Published var showNewTweetsBanner: Bool = false
     let hproseInstance: HproseInstance
-    private let feedRefreshInterval: TimeInterval = 5 * 60
-    private var feedRefreshTask: Task<Void, Never>?
-    private var nextFeedRefreshAt: Date?
-    private var foregroundObservers: [NSObjectProtocol] = []
     private let pageZeroFetchGate = PageZeroFetchGate()
     
     // Shared instance to keep tweets in memory across navigation
@@ -43,72 +41,14 @@ class FollowingsTweetViewModel: ObservableObject {
     
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
-        setupForegroundRefreshTimer()
-    }
-
-    deinit {
-        stopFeedRefreshTimer()
-        foregroundObservers.forEach { NotificationCenter.default.removeObserver($0) }
-    }
-
-    private func setupForegroundRefreshTimer() {
-        let notificationCenter = NotificationCenter.default
-        foregroundObservers.append(
-            notificationCenter.addObserver(
-                forName: UIApplication.didBecomeActiveNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                self?.startFeedRefreshTimer()
-            }
-        )
-        foregroundObservers.append(
-            notificationCenter.addObserver(
-                forName: UIApplication.didEnterBackgroundNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                self?.stopFeedRefreshTimer()
-            }
-        )
-
-        if UIApplication.shared.applicationState == .active {
-            startFeedRefreshTimer()
-        }
-    }
-
-    private func startFeedRefreshTimer() {
-        guard feedRefreshTask == nil else { return }
-
-        if nextFeedRefreshAt == nil {
-            nextFeedRefreshAt = Date().addingTimeInterval(feedRefreshInterval)
-        }
-
-        feedRefreshTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self = self else { return }
-                let waitInterval = max(0, self.nextFeedRefreshAt?.timeIntervalSinceNow ?? self.feedRefreshInterval)
-
-                if waitInterval > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(waitInterval * 1_000_000_000))
-                }
-
-                guard !Task.isCancelled else { return }
-
-                await self.performPeriodicFeedRefresh(reason: "5-minute foreground feed refresh", pageSize: 10)
-                self.nextFeedRefreshAt = Date().addingTimeInterval(self.feedRefreshInterval)
-            }
-        }
-    }
-
-    private func stopFeedRefreshTimer() {
-        feedRefreshTask?.cancel()
-        feedRefreshTask = nil
     }
 
     func performForegroundFeedRefresh() async {
         await performPeriodicFeedRefresh(reason: "foreground feed refresh", pageSize: 10)
-        nextFeedRefreshAt = Date().addingTimeInterval(feedRefreshInterval)
+    }
+
+    func performBackgroundFeedCheck() async {
+        await performPeriodicFeedRefresh(reason: "background main feed check", pageSize: 10)
     }
 
     private func performPeriodicFeedRefresh(reason: String, pageSize: UInt) async {
@@ -129,7 +69,10 @@ class FollowingsTweetViewModel: ObservableObject {
 
         do {
             print("DEBUG: [FollowingsTweetViewModel] \(reason)")
-            _ = try await fetchTweets(page: 0, pageSize: pageSize, isPeriodicRefresh: true)
+            let freshTweets = try await fetchTopMainFeedTweetsForBanner(pageSize: pageSize)
+            await MainActor.run {
+                queuePendingNewTweets(freshTweets)
+            }
             NotificationCenter.default.post(name: .mainFeedPeriodicRefreshCompleted, object: nil)
         } catch {
             print("ERROR: [FollowingsTweetViewModel] \(reason) failed: \(error)")
@@ -163,6 +106,80 @@ class FollowingsTweetViewModel: ObservableObject {
         Task {
             await gate.end(page: page)
         }
+    }
+
+    @MainActor
+    private func queuePendingNewTweets(_ incomingTweets: [Tweet]) {
+        let visibleTweetIds = Set(tweets.map(\.mid))
+        let existingPendingTweetIds = Set(pendingNewTweets.map(\.mid))
+        let newTweets = incomingTweets.filter { tweet in
+            !(tweet.isPrivate ?? false)
+            && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
+            && !visibleTweetIds.contains(tweet.mid)
+            && !existingPendingTweetIds.contains(tweet.mid)
+        }
+
+        if !newTweets.isEmpty {
+            pendingNewTweets.mergeTweets(newTweets)
+            showNewTweetsBanner = true
+
+            let cacheKey = hproseInstance.appUser.mid
+            for tweet in newTweets {
+                TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
+            }
+            print("DEBUG: [FollowingsTweetViewModel] Queued \(newTweets.count) pending main feed tweet(s)")
+        } else if !pendingNewTweets.isEmpty {
+            showNewTweetsBanner = true
+        }
+    }
+
+    @MainActor
+    func applyPendingNewTweets() {
+        guard !pendingNewTweets.isEmpty else {
+            showNewTweetsBanner = false
+            return
+        }
+
+        tweets.mergeTweets(pendingNewTweets)
+        pendingNewTweets.removeAll()
+        showNewTweetsBanner = false
+    }
+
+    @MainActor
+    func dismissNewTweetsBanner() {
+        showNewTweetsBanner = false
+    }
+
+    private func fetchTopMainFeedTweetsForBanner(pageSize: UInt) async throws -> [Tweet] {
+        if hproseInstance.appUser.isGuest {
+            print("[FollowingsTweetViewModel] Checking main feed for guest user from alphaId")
+            guard let alphaId = Gadget.getAlphaIds().first,
+                  let adminUser = try await hproseInstance.fetchUser(alphaId) else {
+                return []
+            }
+            return try await hproseInstance.fetchUserTweets(
+                user: adminUser,
+                pageNumber: 0,
+                pageSize: pageSize
+            )
+            .compactMap { $0 }
+        }
+
+        let serverTweets = try await hproseInstance.fetchTweetFeed(
+            user: hproseInstance.appUser,
+            pageNumber: 0,
+            pageSize: pageSize
+        )
+        var freshTweets = serverTweets.compactMap { $0 }
+
+        let followingTweets = try await hproseInstance.fetchTweetFeed(
+            user: hproseInstance.appUser,
+            pageNumber: 0,
+            pageSize: pageSize,
+            entry: "update_following_tweets"
+        )
+        freshTweets.append(contentsOf: followingTweets.compactMap { $0 })
+        return freshTweets
     }
     
     func fetchTweets(page: UInt, pageSize: UInt, isPeriodicRefresh: Bool = false) async throws -> [Tweet?] {
