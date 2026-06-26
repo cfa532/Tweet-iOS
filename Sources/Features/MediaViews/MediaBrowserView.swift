@@ -394,7 +394,7 @@ struct MediaBrowserView: View {
                         txn.animation = nil
                     }
                 }
-                .simultaneousGesture(verticalVideoNavigationGesture)
+                .simultaneousGesture(verticalNavigationGesture(allowImageAttachments: false))
                 .onChange(of: currentIndex) { _, newIndex in
                     previousIndex = newIndex
                     cleanupNonVisibleImagesClosure(newIndex)
@@ -455,9 +455,15 @@ struct MediaBrowserView: View {
             }
         }
 
-        private var verticalVideoNavigationGesture: some Gesture {
-            DragGesture(minimumDistance: 25)
+        private var currentAttachmentIsImage: Bool {
+            guard attachments.indices.contains(currentIndex) else { return false }
+            return isImageAttachment(attachments[currentIndex])
+        }
+
+        private func verticalNavigationGesture(allowImageAttachments: Bool) -> some Gesture {
+            DragGesture(minimumDistance: 25, coordinateSpace: .global)
                 .onChanged { value in
+                    guard allowImageAttachments || !currentAttachmentIsImage else { return }
                     guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else { return }
 
                     let vertical = abs(value.translation.height)
@@ -469,6 +475,7 @@ struct MediaBrowserView: View {
                     }
                 }
                 .onEnded { value in
+                    guard allowImageAttachments || !currentAttachmentIsImage else { return }
                     guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else {
                         resetDragOffset(animated: true)
                         return
@@ -629,7 +636,7 @@ struct MediaBrowserView: View {
                 isCurrentIndex: index == currentIndex
             )
             .contentShape(Rectangle())
-            .simultaneousGesture(verticalVideoNavigationGesture)
+            .simultaneousGesture(verticalNavigationGesture(allowImageAttachments: true))
             .onAppear {
                 loadImageIfNeededClosure(attachment, index)
             }
@@ -1028,6 +1035,11 @@ struct ImageViewWithPlaceholder: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 15)
                         .onChanged { value in
+                            guard scale > 1.0 else {
+                                lastOffset = .zero
+                                return
+                            }
+
                             let delta = CGSize(
                                 width: value.translation.width - lastOffset.width,
                                 height: value.translation.height - lastOffset.height
@@ -1058,7 +1070,7 @@ struct ImageViewWithPlaceholder: View {
                         .onEnded { _ in
                             lastOffset = .zero
                         },
-                    including: scale > 1.0 ? .gesture : .subviews
+                    including: scale > 1.0 ? .gesture : .none
                 )
                 .onTapGesture(count: 2) {
                     withAnimation(.easeInOut(duration: 0.3)) {
