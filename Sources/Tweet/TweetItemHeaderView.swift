@@ -359,37 +359,33 @@ struct TweetMenu: View {
         
         // Attempt actual deletion
         do {
-            if let tweetId = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId) {
-                print("DEBUG: [TweetItemHeaderView] Successfully deleted tweet: \(tweetId)")
-                
-                // Note: tweetCount is updated by refreshAppUserFromServer() inside deleteTweet()
-                
-                if let originalTweetId = tweet.originalTweetId,
-                   let originalAuthorId = tweet.originalAuthorId,
-                   let originalTweet = try? await hproseInstance.getTweet(
-                    tweetId: originalTweetId,
-                    authorId: originalAuthorId)
-                {
-                    // originalTweet is loaded in cache, which is visible to user.
-                    let currentCount = originalTweet.retweetCount ?? 0
-                    originalTweet.retweetCount = max(0, currentCount - 1)
-                    if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false) {
-                        // Cache the updated original tweet with its authorId as the cache key
-                        TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
-                        
-                        // Refresh original tweet from server to ensure all views get the updated count
-                        if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
-                            await MainActor.run {
-                                if let existingTweet = Tweet.getInstance(for: originalTweetId) {
-                                    try? existingTweet.update(from: refreshedTweet)
-                                }
+            let tweetId = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId)
+            print("DEBUG: [TweetItemHeaderView] Successfully deleted tweet: \(tweetId)")
+
+            // Note: tweetCount is updated by refreshAppUserFromServer() inside deleteTweet()
+
+            if let originalTweetId = tweet.originalTweetId,
+               let originalAuthorId = tweet.originalAuthorId,
+               let originalTweet = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId)
+            {
+                // originalTweet is loaded in cache, which is visible to user.
+                let currentCount = originalTweet.retweetCount ?? 0
+                originalTweet.retweetCount = max(0, currentCount - 1)
+                if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false) {
+                    // Cache the updated original tweet with its authorId as the cache key
+                    TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
+
+                    // Refresh original tweet from server to ensure all views get the updated count
+                    if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                        await MainActor.run {
+                            if let existingTweet = Tweet.getInstance(for: originalTweetId) {
+                                try? existingTweet.update(from: refreshedTweet)
                             }
                         }
                     }
                 }
-            } else {
-                print("DEBUG: [TweetItemHeaderView] deleteTweet returned nil for: \(tweet.mid)")
-                throw NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server returned nil"])
             }
         } catch {
             print("DEBUG: [TweetItemHeaderView] Tweet deletion failed for \(tweet.mid): \(error)")

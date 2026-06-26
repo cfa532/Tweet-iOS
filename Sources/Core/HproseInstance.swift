@@ -3408,37 +3408,23 @@ final class HproseInstance: ObservableObject {
     
     /**
      * Delete a tweet.
-     * For the caller's own tweets: uses appUser's writable client with appUser.mid as userid.
-     * For others' tweets (admin path): fetches the author, routes through the author's own
-     * writable client so the request lands on their node where getUser() always has hostIds.
+     * Sends the current app user as the requester and the tweet author as owner metadata.
+     * The backend decides whether to permanently delete the tweet or only remove it
+     * from the requester's personal lists.
      */
-    func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String? {
+    func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String {
         let entry = "delete_tweet"
         let params = [
             "aid": appId,
             "ver": "last",
-            "version": "v2",
-            "userid": tweetAuthorId,
+            "version": "v3",
+            "userid": appUser.mid,
+            "authorid": tweetAuthorId,
             "tweetid": tweetId
         ]
 
-        // Resolve which client to use:
-        // - Own tweet  → appUser's writable client (fast path, same as before)
-        // - Other's tweet → fetch the author and use THEIR writable client so the call
-        //   lands on the author's own node; getUser() always has hostIds there.
-        let requestUser: User
-        if tweetAuthorId == appUser.mid {
-            requestUser = appUser
-        } else {
-            guard let author = try await fetchUser(tweetAuthorId) else {
-                throw NSError(domain: "HproseClient", code: -1,
-                              userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "")])
-            }
-            requestUser = author
-        }
-
-        _ = try await requestUser.resolveWritableUrl()
-        guard let client = requestUser.writableClient ?? appUser.hproseClient else {
+        _ = try await appUser.resolveWritableUrl()
+        guard let client = appUser.writableClient ?? appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "")])
         }
@@ -3449,10 +3435,9 @@ final class HproseInstance: ObservableObject {
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
-        // unwrapV2Response already threw for success=false.
-        // Trust the success signal; fall back to the input tweetId if the server
-        // doesn't echo it back, so we never spuriously restore the UI.
-        var resolvedDeletedTweetId: String = tweetId
+        // unwrapV2Response already threw for success=false. For delete, also require
+        // a concrete tweet id so malformed success responses are not silently accepted.
+        var resolvedDeletedTweetId: String?
         if let response = unwrappedResponse as? [String: Any] {
             if let tid = response["tweetid"] as? String, !tid.isEmpty {
                 resolvedDeletedTweetId = tid
@@ -3460,7 +3445,10 @@ final class HproseInstance: ObservableObject {
                 resolvedDeletedTweetId = tid as String
             }
         }
-        let deletedTweetId = resolvedDeletedTweetId
+        guard let deletedTweetId = resolvedDeletedTweetId else {
+            throw NSError(domain: "HproseClient", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid delete response from server", comment: "Server response error")])
+        }
 
         print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
 
@@ -8432,12 +8420,8 @@ final class HproseInstance: ObservableObject {
     /// Reports a tweet for inappropriate content and deletes it from backend
     func reportTweet(tweetId: String, tweetAuthorId: String, category: String, comments: String) async throws {
         // First, delete the tweet from backend
-        if let deletedTweetId = try await deleteTweet(tweetId, tweetAuthorId: tweetAuthorId) {
-            print("[reportTweet] Successfully deleted tweet from backend: \(deletedTweetId)")
-        } else {
-            print("[reportTweet] Failed to delete tweet from backend: \(tweetId)")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to report tweet", comment: "Report tweet error")])
-        }
+        let deletedTweetId = try await deleteTweet(tweetId, tweetAuthorId: tweetAuthorId)
+        print("[reportTweet] Successfully deleted tweet from backend: \(deletedTweetId)")
         
         // Send notification to system admin about the reported and deleted content
         // Note: Admin notification failure won't affect tweet deletion success
