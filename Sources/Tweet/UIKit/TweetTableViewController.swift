@@ -105,9 +105,6 @@ class TweetTableViewController: UITableViewController {
     private var loadingTimeoutTimer: Timer?
     private let maximumLoadingTime: TimeInterval = 10.0  // 10 second timeout
     private var needsFooterUpdate = false
-    private var needsInitialLoadingUpdate = false
-    private weak var initialLoadingView: UIView?
-    private weak var initialLoadingSpinner: UIActivityIndicatorView?
     
     // No more tweets message state
     private var isShowingNoMoreTweetsMessage: Bool = false
@@ -1037,9 +1034,6 @@ class TweetTableViewController: UITableViewController {
             updateLoadingState(isLoading: isLoading, isLoadingMore: isLoadingMore, hasMoreTweets: hasMoreTweets)
         }
 
-        if needsInitialLoadingUpdate {
-            updateInitialLoadingSpinnerVisibility()
-        }
         schedulePendingBackgroundResumeRestore(reason: "viewDidAppear")
         scheduleVideoVisibilityRefresh(reason: "viewDidAppear")
         if let pendingReason = pendingFeedPlaybackResumeReason {
@@ -1171,7 +1165,6 @@ class TweetTableViewController: UITableViewController {
         tableView.backgroundColor = XTheme.background
         view.backgroundColor = XTheme.background
         customRefreshControl?.tintColor = XTheme.accent
-        initialLoadingSpinner?.color = XTheme.secondaryText
         if tableView.window != nil {
             tableView.visibleCells.forEach { cell in
                 if let tweetCell = cell as? TweetTableViewCell {
@@ -1356,7 +1349,6 @@ class TweetTableViewController: UITableViewController {
         let oldPinnedTweets = pinnedTweets
         let oldOriginalTweetIds = Set(oldPinnedTweets.compactMap(\.originalTweetId))
         self.pinnedTweets = tweets
-        updateInitialLoadingSpinnerVisibility()
 
         guard tableView.window != nil else { return }
 
@@ -1442,7 +1434,6 @@ class TweetTableViewController: UITableViewController {
         
         // Handle initial load
         if oldCount == 0 && newTweets.count > 0 {
-            updateInitialLoadingSpinnerVisibility()
             prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds)
             isTableViewUpdating = true
             tableView.reloadData()
@@ -1765,11 +1756,9 @@ class TweetTableViewController: UITableViewController {
             needsFooterUpdate = true
             loadingTimeoutTimer?.invalidate()
             loadingTimeoutTimer = nil
-            needsInitialLoadingUpdate = true
             return
         }
         needsFooterUpdate = false
-        updateInitialLoadingSpinnerVisibility()
 
         // Show/hide loading spinner with animations
         if isLoadingMore {
@@ -1841,59 +1830,6 @@ class TweetTableViewController: UITableViewController {
                 tableView.tableFooterView = nil
             }
         }
-    }
-
-    private func updateInitialLoadingSpinnerVisibility() {
-        guard tableView.window != nil else {
-            needsInitialLoadingUpdate = true
-            return
-        }
-
-        needsInitialLoadingUpdate = false
-        let shouldShow = isLoading && tweets.isEmpty && pinnedTweets.isEmpty
-        guard shouldShow else {
-            initialLoadingSpinner?.stopAnimating()
-            initialLoadingView?.isHidden = true
-            return
-        }
-
-        let loadingView: UIView
-        let spinner: UIActivityIndicatorView
-        if let existingView = initialLoadingView,
-           let existingSpinner = initialLoadingSpinner {
-            loadingView = existingView
-            spinner = existingSpinner
-        } else {
-            let container = UIView()
-            container.translatesAutoresizingMaskIntoConstraints = false
-            container.backgroundColor = .clear
-            container.isUserInteractionEnabled = false
-
-            let activity = UIActivityIndicatorView(style: .large)
-            activity.translatesAutoresizingMaskIntoConstraints = false
-            activity.hidesWhenStopped = true
-            activity.color = XTheme.secondaryText
-            container.addSubview(activity)
-            view.addSubview(container)
-
-            NSLayoutConstraint.activate([
-                container.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                container.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                container.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-                container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-                activity.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                activity.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: -24)
-            ])
-
-            initialLoadingView = container
-            initialLoadingSpinner = activity
-            loadingView = container
-            spinner = activity
-        }
-
-        view.bringSubviewToFront(loadingView)
-        loadingView.isHidden = false
-        spinner.startAnimating()
     }
 
     private func hideSpinner(shouldShowMessage: Bool) {
