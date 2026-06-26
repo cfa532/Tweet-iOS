@@ -35,10 +35,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         static let interval: TimeInterval = 5 * 60
     }
 
+    private static let logFileName = "app.log"
+    private static let legacyLogFileNames = ["app-debug.log"]
+    private static let logRetentionInterval: TimeInterval = 72 * 60 * 60
     private static var consoleMirror: ConsoleMirror?
 
     private final class ConsoleMirror {
-        private let logFile: FileHandle
+        private let logURL: URL
+        private var logFile: FileHandle?
+        private var logCreatedAt: Date?
         private let originalStdout: Int32
         private let originalStderr: Int32
         private let queue = DispatchQueue(label: "app.console.mirror")
@@ -46,19 +51,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         private var stderrSource: DispatchSourceRead?
 
         init?(logURL: URL) {
-            let fileManager = FileManager.default
-            if !fileManager.fileExists(atPath: logURL.path) {
-                fileManager.createFile(atPath: logURL.path, contents: nil)
-            }
-            guard let logFile = try? FileHandle(forWritingTo: logURL) else { return nil }
-            logFile.seekToEndOfFile()
+            guard let openedLog = Self.openLogFile(at: logURL) else { return nil }
 
             let originalStdout = dup(STDOUT_FILENO)
             let originalStderr = dup(STDERR_FILENO)
             guard originalStdout >= 0, originalStderr >= 0 else {
                 if originalStdout >= 0 { close(originalStdout) }
                 if originalStderr >= 0 { close(originalStderr) }
-                logFile.closeFile()
+                openedLog.fileHandle.closeFile()
                 return nil
             }
 
@@ -69,7 +69,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 Self.closePipe(stderrPipe)
                 close(originalStdout)
                 close(originalStderr)
-                logFile.closeFile()
+                openedLog.fileHandle.closeFile()
                 return nil
             }
 
@@ -85,7 +85,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 Self.closePipe(stderrPipe)
                 close(originalStdout)
                 close(originalStderr)
-                logFile.closeFile()
+                openedLog.fileHandle.closeFile()
                 return nil
             }
 
@@ -94,7 +94,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             setvbuf(stdout, nil, _IONBF, 0)
             setvbuf(stderr, nil, _IONBF, 0)
 
-            self.logFile = logFile
+            self.logURL = logURL
+            self.logFile = openedLog.fileHandle
+            self.logCreatedAt = openedLog.createdAt
             self.originalStdout = originalStdout
             self.originalStderr = originalStderr
             self.stdoutSource = makeSource(readFileDescriptor: stdoutPipe[0], originalFileDescriptor: originalStdout)
@@ -106,7 +108,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             stderrSource?.cancel()
             close(originalStdout)
             close(originalStderr)
-            logFile.closeFile()
+            logFile?.closeFile()
+        }
+
+        private static func openLogFile(at logURL: URL) -> (fileHandle: FileHandle, createdAt: Date)? {
+            let fileManager = FileManager.default
+            if !fileManager.fileExists(atPath: logURL.path) {
+                fileManager.createFile(atPath: logURL.path, contents: nil)
+            }
+
+            guard let logFile = try? FileHandle(forWritingTo: logURL) else { return nil }
+            logFile.seekToEndOfFile()
+
+            let attributes = try? fileManager.attributesOfItem(atPath: logURL.path)
+            let createdAt = attributes?[.creationDate] as? Date
+                ?? attributes?[.modificationDate] as? Date
+                ?? Date()
+            return (logFile, createdAt)
         }
 
         private static func closePipe(_ pipeFileDescriptors: [Int32]) {
@@ -132,13 +150,37 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     guard let baseAddress = rawBuffer.baseAddress else { return }
                     Self.writeAll(to: originalFileDescriptor, bytes: baseAddress, count: byteCount)
                 }
-                logFile.write(Data(buffer.prefix(byteCount)))
+                writeToLogFile(Data(buffer.prefix(byteCount)))
             }
             source.setCancelHandler {
                 close(readFileDescriptor)
             }
             source.resume()
             return source
+        }
+
+        private func writeToLogFile(_ data: Data) {
+            rotateLogFileIfNeeded()
+            logFile?.write(data)
+        }
+
+        private func rotateLogFileIfNeeded() {
+            guard let createdAt = logCreatedAt,
+                  Date().timeIntervalSince(createdAt) >= AppDelegate.logRetentionInterval else {
+                return
+            }
+
+            logFile?.closeFile()
+            logFile = nil
+            try? FileManager.default.removeItem(at: logURL)
+
+            guard let openedLog = Self.openLogFile(at: logURL) else { return }
+            logFile = openedLog.fileHandle
+            logCreatedAt = openedLog.createdAt
+
+            if let marker = "\n--- App log file rotated: \(Date()) ---\n".data(using: .utf8) {
+                logFile?.write(marker)
+            }
         }
 
         private static func writeAll(to fileDescriptor: Int32, bytes: UnsafeRawPointer, count: Int) {
@@ -158,11 +200,29 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// logs survive app suspension and process relaunches.
     private static func redirectConsoleToLogFile() {
         guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let logFileName = "app.log"
+        deleteExpiredLogFiles(in: docs)
         let logURL = docs.appendingPathComponent(logFileName)
         consoleMirror = ConsoleMirror(logURL: logURL)
         print("\n--- App log session started: \(Date()) pid=\(ProcessInfo.processInfo.processIdentifier) ---")
         print("📂 [LOG] Console output mirrored to \(logURL.path)")
+    }
+
+    private static func deleteExpiredLogFiles(in directory: URL) {
+        for fileName in [logFileName] + legacyLogFileNames {
+            let logURL = directory.appendingPathComponent(fileName)
+            guard shouldDeleteLogFile(at: logURL) else { continue }
+            try? FileManager.default.removeItem(at: logURL)
+        }
+    }
+
+    private static func shouldDeleteLogFile(at logURL: URL, now: Date = Date()) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+              let createdAt = attributes[.creationDate] as? Date
+                ?? attributes[.modificationDate] as? Date else {
+            return false
+        }
+
+        return now.timeIntervalSince(createdAt) >= logRetentionInterval
     }
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
