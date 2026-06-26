@@ -577,9 +577,9 @@ class MediaGridUIView: UIView {
         }
     }
 
-    func prepareVideosForBackground() {
+    func prepareMediaForBackground() {
         for cell in cellViews {
-            cell.prepareVideoForBackground()
+            cell.prepareForBackground()
         }
     }
 

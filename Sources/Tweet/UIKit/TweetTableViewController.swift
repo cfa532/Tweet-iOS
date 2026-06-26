@@ -592,7 +592,7 @@ class TweetTableViewController: UITableViewController {
         var preparedCount = 0
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
-            tweetCell.tweetContentView.prepareVideosForBackground()
+            tweetCell.tweetContentView.prepareMediaForBackground()
             preparedCount += 1
         }
 

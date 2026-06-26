@@ -331,8 +331,8 @@ class EmbeddedTweetUIView: UIView {
         bodyView.mediaGridView.refreshVideoLayersAfterForeground()
     }
 
-    func prepareVideosForBackground() {
-        bodyView.mediaGridView.prepareVideosForBackground()
+    func prepareMediaForBackground() {
+        bodyView.mediaGridView.prepareMediaForBackground()
     }
 
     // MARK: - Intrinsic Size

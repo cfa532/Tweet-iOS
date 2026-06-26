@@ -5607,9 +5607,19 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
     }
 
+    /// Release foreground media state before the global background cleanup runs.
+    /// Video cells keep a poster, and image cells keep only a small cover image for the app switcher.
+    func prepareForBackground() {
+        if isVideoAttachment {
+            prepareVideoForBackground()
+        } else if attachment?.type == .image {
+            prepareImageForBackground()
+        }
+    }
+
     /// Save playback state, cover the cell with a poster, and release local player state.
     /// Background cleanup drops every AVPlayer; the onscreen snapshot should be an image.
-    func prepareVideoForBackground() {
+    private func prepareVideoForBackground() {
         guard isVideoAttachment, isVisible else { return }
         guard videoCellState == .playing || videoCellState == .paused || videoCellState == .playerReady else { return }
         guard let mid = attachment?.mid else { return }
@@ -5641,6 +5651,22 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         cancelDelayedPrimarySpinner()
         loadingSpinner.stopAnimating()
         teardownPlayerAndObservers()
+    }
+
+    private func prepareImageForBackground() {
+        guard isVisible, let attachment, attachment.type == .image else { return }
+
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
+        loadingSpinner.stopAnimating()
+        retryButton.isHidden = true
+
+        guard let image = imageView.image else { return }
+        let displayedMaxDimension = max(bounds.width, bounds.height) * UIScreen.main.scale
+        let coverMaxDimension = max(240, min(480, displayedMaxDimension))
+        imageView.image = VideoFrameExtractor.downscale(image, maxDimension: coverMaxDimension)
+        imageView.isHidden = false
     }
 
     private func restoreCachedPosterForBackgroundIfNeeded(mid: String) -> Bool {
