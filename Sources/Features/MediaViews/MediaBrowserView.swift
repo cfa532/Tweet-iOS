@@ -379,7 +379,7 @@ struct MediaBrowserView: View {
                                 pdfView(for: attachment, index: index)
                             }
                         }
-                        .background(Color.black)
+                        .background(isImageAttachment(attachment) ? Color.clear : Color.black)
                         .offset(y: verticalOffset(for: index))
                         .scaleEffect(contentScale(for: index))
                         .animation(nil, value: dragOffset)
@@ -981,7 +981,7 @@ struct ImageViewWithPlaceholder: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Color.black
+                Color.clear
                 
                 Group {
                     switch imageState {

@@ -5049,6 +5049,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         )
         let hostingVC = UIHostingController(rootView: browserView)
         hostingVC.modalPresentationStyle = .fullScreen
+        hostingVC.modalTransitionStyle = .crossDissolve
         parentVC.present(hostingVC, animated: true)
     }
 
