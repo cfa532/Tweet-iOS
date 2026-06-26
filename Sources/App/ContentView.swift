@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var showCloudDriveLimitAlert = false
     @State private var showLoginSheet = false
     @State private var notificationObservers: [NSObjectProtocol] = []
+    @State private var didClearStartupNewTweetsBanner = false
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -299,6 +300,12 @@ struct ContentView: View {
             }
         )
         .onAppear {
+            if !didClearStartupNewTweetsBanner {
+                didClearStartupNewTweetsBanner = true
+                Task { @MainActor in
+                    followingsTweetViewModel.clearPendingNewTweetsBanner(reason: "app start")
+                }
+            }
             checkForPendingUpload()
             setupNotificationObservers()
         }
@@ -312,7 +319,7 @@ struct ContentView: View {
     // MARK: - Notification Observer Management
 
     private var shouldShowMainFeedNewTweetsBanner: Bool {
-        selectedTab == 0 || isInProfileFromChat
+        !hproseInstance.appUser.isGuest && (selectedTab == 0 || isInProfileFromChat)
     }
 
     private func openMainFeedAndShowNewTweets() {
@@ -821,7 +828,7 @@ private struct NewTweetsBannerOverlay: View {
     }
 
     private var pendingTweets: [Tweet] {
-        viewModel.pendingNewTweets
+        viewModel.visiblePendingNewTweets
     }
 
     var body: some View {
@@ -876,9 +883,9 @@ private struct NewTweetsBannerOverlay: View {
     private var title: String {
         let count = pendingTweets.count
         let format = count == 1
-            ? NSLocalizedString("%d new tweet", comment: "New tweet floating pill title")
-            : NSLocalizedString("%d new tweets", comment: "New tweets floating pill title")
-        return String(format: format, count)
+            ? NSLocalizedString("new_tweets_banner_one", comment: "New tweet floating pill title")
+            : NSLocalizedString("new_tweets_banner_many", comment: "New tweets floating pill title")
+        return String(format: format, count > 9 ? "9+" : "\(count)")
     }
 
     private var shouldShowTitle: Bool {
@@ -973,7 +980,7 @@ private struct NewTweetsBannerOverlay: View {
     private func scheduleAutoHide() {
         let ids = pendingTweets.map(\.mid)
         DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-            guard viewModel.pendingNewTweets.map(\.mid) == ids else { return }
+            guard viewModel.visiblePendingNewTweets.map(\.mid) == ids else { return }
             Task { @MainActor in
                 viewModel.dismissNewTweetsBanner()
             }

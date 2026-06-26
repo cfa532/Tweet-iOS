@@ -655,6 +655,8 @@
 // MARK: - Cloud Drive Limit
 "%d new tweet" = "%d new tweet";
 "%d new tweets" = "%d new tweets";
+"new_tweets_banner_one" = "%@ new tweet";
+"new_tweets_banner_many" = "%@ new tweets";
 "Tweet Limit Reached" = "Tweet Limit Reached";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.";
 "Learn More" = "Learn More";

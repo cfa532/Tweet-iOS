@@ -1,5 +1,6 @@
 @preconcurrency import Foundation
 import SwiftUI
+import UIKit
 
 struct TweetListNotification {
     let name: Notification.Name
@@ -340,6 +341,10 @@ struct TweetListView: View {
                 if waitCount > 0 {
                     print("⏳ [INIT RETRY] Waited \(waitCount * 100)ms for loading to settle, feed=\(feedIdentifier)")
                 }
+                guard UIApplication.shared.applicationState == .active else {
+                    print("🚀 [INIT RETRY] Deferred retry because app is not active, feed=\(feedIdentifier)")
+                    return
+                }
                 guard tweets.isEmpty else {
                     print("✅ [INIT RETRY] Skipped retry because feed already has \(tweets.count) tweet(s), feed=\(feedIdentifier)")
                     return
@@ -593,6 +598,7 @@ struct TweetListView: View {
             isLoading = true
         }
         let page: UInt = 0
+        var didLoadCachedContent = false
 
         do {
             // Step 1: Load the first cached page for the first paint. This mirrors
@@ -601,6 +607,7 @@ struct TweetListView: View {
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
             let validPage = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
             let hasCachedContent = !validPage.isEmpty
+            didLoadCachedContent = hasCachedContent
 
             if hasCachedContent {
                 await MainActor.run {
@@ -672,6 +679,17 @@ struct TweetListView: View {
             }
         }
         
+        if feedIdentifier == "mainFeed",
+           didLoadCachedContent,
+           UIApplication.shared.applicationState != .active {
+            await MainActor.run {
+                isLoading = false
+                initialLoadComplete = true
+            }
+            print("📋 [CACHE LOAD] Deferred main feed server refresh while app is not active; foreground refresh will queue banner")
+            return
+        }
+
         // CRITICAL: Let UI render cached tweets BEFORE fetching from server
         // If we await server fetch in same function, SwiftUI batches updates and only renders once
         // By launching server fetch in separate Task, cached tweets render immediately

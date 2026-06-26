@@ -145,18 +145,21 @@ class TweetTableViewController: UITableViewController {
     /// can exhaust before proxy restart + HLS resolution completes, leaving the on-screen
     /// video silent until the user scrolls. This watchdog re-runs the same visibility +
     /// autoplay pass a scroll triggers, but keeps going until a visible video is *actually*
-    /// playing (isActuallyPlaying), not just commanded. Additive only — it never overrides
+    /// rendering visible frames, not just commanded. Additive only — it never overrides
     /// the normal scroll or feed-resume paths; it just fills the gap they leave on cold return.
     private var foregroundRecoveryWatchdog: Timer?
-    private var foregroundRecoveryStart: CFTimeInterval = 0
+    private var foregroundRecoveryActionableStart: CFTimeInterval?
     private let foregroundRecoveryTimeout: TimeInterval = 12
     /// Brief settle before the watchdog takes any active step, so it doesn't race the existing
     /// fast-path recovery's initial play command. The real protection for a healthy
     /// short-background recovery is the `.loading` patience in the tick: while the delegate
     /// reports loading / recently-played, the watchdog only observes and never nudges.
     private let foregroundRecoverySettle: TimeInterval = 0.5
-    /// If no on-screen video is detected past this point, give up — genuinely nothing to play.
-    private let foregroundRecoveryNoCandidateGiveUp: TimeInterval = 3.0
+    /// Loading can be legitimate after foreground, but after a few seconds with no visible
+    /// frame we should re-run the same recovery pass a scroll would trigger.
+    private let foregroundRecoveryLoadingPatience: TimeInterval = 4.0
+    private let foregroundRecoveryNudgeInterval: TimeInterval = 1.5
+    private var lastForegroundRecoveryNudge: CFTimeInterval = 0
     private var videoVisibilityRefreshGeneration: Int = 0
 
     // Scroll position preservation
@@ -605,6 +608,9 @@ class TweetTableViewController: UITableViewController {
         // Arm the outcome-driven recovery backstop. It self-gates on infrastructure readiness
         // and view/table state, so it's safe to start here before recovery actually begins.
         startForegroundRecoveryWatchdog()
+        isUserDragging = false
+        isDecelerating = false
+        videoCoordinator.performPreloadOnScrollStop()
 
         print("☀️ [FOREGROUND] App returning to foreground")
 
@@ -654,6 +660,7 @@ class TweetTableViewController: UITableViewController {
         // recovering against a stale viewport picks the wrong primary and leaves the
         // on-screen video unplayed after a long background.
         requestForegroundRecovery(reason: "reloadVisibleVideosOnly")
+        startForegroundRecoveryWatchdog()
     }
 
     /// End the background task and invalidate the identifier
@@ -784,7 +791,8 @@ class TweetTableViewController: UITableViewController {
     @MainActor
     private func startForegroundRecoveryWatchdog() {
         foregroundRecoveryWatchdog?.invalidate()
-        foregroundRecoveryStart = CACurrentMediaTime()
+        foregroundRecoveryActionableStart = nil
+        lastForegroundRecoveryNudge = 0
         let timer = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
             DispatchQueue.main.async { self?.foregroundRecoveryWatchdogTick() }
         }
@@ -804,9 +812,10 @@ class TweetTableViewController: UITableViewController {
     @MainActor
     private func foregroundRecoveryWatchdogTick() {
         guard foregroundRecoveryWatchdog != nil else { return }
-        let elapsed = CACurrentMediaTime() - foregroundRecoveryStart
+        let now = CACurrentMediaTime()
+        let status = videoCoordinator.foregroundRecoveryStatus()
 
-        switch videoCoordinator.foregroundRecoveryStatus() {
+        switch status {
         case .playing:
             // Done. Checked on every tick so a healthy short-background recovery stops the
             // timer the moment playback starts, with zero interference.
@@ -816,20 +825,15 @@ class TweetTableViewController: UITableViewController {
             // The existing fast-path recovery is actively working (play commanded, item still
             // loading, or recently played). Stay out of its way: nudging play or recomputing
             // visibility here restarts the load and re-extends the poster — exactly the
-            // short-background regression (2s delay + visible thumbnail) we must avoid.
-            // Just keep observing.
-            return
+            // short-background regression (2s delay + visible thumbnail) we must avoid. After
+            // the patience window, treat it like a stuck foreground recovery and nudge.
+            break
         case .needsRetry, .noCandidates:
             break
         }
 
-        if elapsed > foregroundRecoveryTimeout {
-            stopForegroundRecoveryWatchdog()
-            return
-        }
-
         // Defer while a visibility pass isn't possible yet — proxy still restarting, table
-        // mid-update, etc. Keep ticking.
+        // mid-update, etc. Keep ticking. Recovery timeouts start only after this point.
         guard AppDelegate.isVideoInfrastructureReady,
               videoCoordinator.isFeedVisible,
               isReadyForFeedVideoResume,
@@ -837,18 +841,27 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
-        // Let the existing fast path take the first shot so we don't race its initial play.
-        guard elapsed >= foregroundRecoverySettle else { return }
+        if foregroundRecoveryActionableStart == nil {
+            foregroundRecoveryActionableStart = now
+        }
+        let actionableElapsed = now - (foregroundRecoveryActionableStart ?? now)
 
-        if videoCoordinator.foregroundRecoveryStatus() == .noCandidates {
+        if actionableElapsed > foregroundRecoveryTimeout {
+            stopForegroundRecoveryWatchdog()
+            return
+        }
+
+        // Let the existing fast path take the first shot so we don't race its initial play.
+        guard actionableElapsed >= foregroundRecoverySettle else { return }
+
+        if status == .loading {
+            guard actionableElapsed >= foregroundRecoveryLoadingPatience else { return }
+        }
+
+        if status == .noCandidates {
             // No on-screen video detected — geometry is stale (the long-background case the
             // bounded generation retry cannot recover). Repopulate onScreenMediaCells so the
-            // play nudge below can select a primary. Give up after a few seconds if genuinely
-            // nothing is on screen.
-            if elapsed > foregroundRecoveryNoCandidateGiveUp {
-                stopForegroundRecoveryWatchdog()
-                return
-            }
+            // play nudge below can select a primary.
             lastVisibleTweetIds = []
             lastLoadVisibleVideoIds = []
             lastContinuePlaybackVideoIds = []
@@ -857,7 +870,10 @@ class TweetTableViewController: UITableViewController {
             updateVisibleTweetsForVideoPlayback()
         }
 
-        // On-screen video exists but nothing is driving it (needsRetry), or we just refreshed
+        guard now - lastForegroundRecoveryNudge >= foregroundRecoveryNudgeInterval else { return }
+        lastForegroundRecoveryNudge = now
+
+        // On-screen video exists but nothing is visibly playing, or we just refreshed
         // geometry (noCandidates). Nudge — requestForegroundAutoplayRetry is idempotent.
         videoCoordinator.requestForegroundAutoplayRetry(reason: "foregroundWatchdog")
     }

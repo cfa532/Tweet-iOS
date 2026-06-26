@@ -69,13 +69,43 @@ class FollowingsTweetViewModel: ObservableObject {
 
         do {
             print("DEBUG: [FollowingsTweetViewModel] \(reason)")
+            guard await waitForAppInitializationIfNeeded(reason: reason) else {
+                return
+            }
+            guard !hproseInstance.appUser.isGuest else {
+                await MainActor.run {
+                    pendingNewTweets.removeAll()
+                    showNewTweetsBanner = false
+                }
+                print("DEBUG: [FollowingsTweetViewModel] Skipping \(reason) for guest user")
+                return
+            }
             let freshTweets = try await fetchTopMainFeedTweetsForBanner(pageSize: pageSize)
             await MainActor.run {
-                queuePendingNewTweets(freshTweets)
+                updateNewTweetsSnapshot(freshTweets)
             }
         } catch {
             print("ERROR: [FollowingsTweetViewModel] \(reason) failed: \(error)")
         }
+    }
+
+    private func waitForAppInitializationIfNeeded(reason: String) async -> Bool {
+        guard !hproseInstance.isAppInitialized else { return true }
+
+        print("DEBUG: [FollowingsTweetViewModel] Waiting for app initialization before \(reason)")
+        var waitCount = 0
+        while !hproseInstance.isAppInitialized && waitCount < 100 && !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waitCount += 1
+        }
+
+        if hproseInstance.isAppInitialized {
+            print("DEBUG: [FollowingsTweetViewModel] App initialization ready after \(waitCount * 100)ms for \(reason)")
+            return true
+        }
+
+        print("ERROR: [FollowingsTweetViewModel] Skipping \(reason) because app initialization did not finish")
+        return false
     }
 
     private func beginPageZeroFetchIfNeeded(page: UInt, isPeriodicRefresh: Bool) async -> Bool {
@@ -108,40 +138,90 @@ class FollowingsTweetViewModel: ObservableObject {
     }
 
     @MainActor
-    private func queuePendingNewTweets(_ incomingTweets: [Tweet]) {
+    var visiblePendingNewTweets: [Tweet] {
         let visibleTweetIds = Set(tweets.map(\.mid))
-        let existingPendingTweetIds = Set(pendingNewTweets.map(\.mid))
-        let newTweets = incomingTweets.filter { tweet in
+        return pendingNewTweets.filter { tweet in
             !(tweet.isPrivate ?? false)
             && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
             && !visibleTweetIds.contains(tweet.mid)
-            && !existingPendingTweetIds.contains(tweet.mid)
-        }
-
-        if !newTweets.isEmpty {
-            pendingNewTweets.mergeTweets(newTweets)
-            showNewTweetsBanner = true
-
-            let cacheKey = hproseInstance.appUser.mid
-            for tweet in newTweets {
-                TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
-            }
-            print("DEBUG: [FollowingsTweetViewModel] Queued \(newTweets.count) pending main feed tweet(s)")
-        } else if !pendingNewTweets.isEmpty {
-            showNewTweetsBanner = true
         }
     }
 
     @MainActor
+    private func updateNewTweetsSnapshot(_ incomingTweets: [Tweet]) {
+        var seenIncomingTweetIds = Set<String>()
+        let uniqueIncomingTweets = incomingTweets.filter { tweet in
+            seenIncomingTweetIds.insert(tweet.mid).inserted
+        }
+        let visibleTweetIds = Set(tweets.map(\.mid))
+        let newTweets = uniqueIncomingTweets.filter { tweet in
+            !(tweet.isPrivate ?? false)
+            && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
+            && !visibleTweetIds.contains(tweet.mid)
+        }
+        let snapshot = newTweets.sorted { $0.timestamp > $1.timestamp }
+
+        pendingNewTweets = snapshot
+        showNewTweetsBanner = !snapshot.isEmpty
+
+        let cacheKey = hproseInstance.appUser.mid
+        for tweet in snapshot {
+            TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
+        }
+        print("DEBUG: [FollowingsTweetViewModel] New tweet banner snapshot: \(snapshot.count) unrendered candidate(s)")
+    }
+
+    @MainActor
+    private func deferNewTopPageTweetsBehindBannerIfNeeded(_ incomingTweets: [Tweet], reason: String) -> (tweetsToMerge: [Tweet], deferredTweetIds: Set<String>) {
+        let shouldDeferNewTweets = isPeriodicFeedRefreshActive
+        guard shouldDeferNewTweets else {
+            return (incomingTweets, [])
+        }
+
+        let visibleTweetIds = Set(tweets.map(\.mid))
+        let deferrableTweets = incomingTweets.filter { tweet in
+            !(tweet.isPrivate ?? false)
+            && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
+            && !visibleTweetIds.contains(tweet.mid)
+        }
+
+        updateNewTweetsSnapshot(deferrableTweets)
+
+        let pendingTweetIds = Set(pendingNewTweets.map(\.mid))
+        let deferredTweetIds = Set(deferrableTweets.map(\.mid)).intersection(pendingTweetIds)
+        guard !deferredTweetIds.isEmpty else {
+            return (incomingTweets, [])
+        }
+
+        let tweetsToMerge = incomingTweets.filter { tweet in
+            !deferredTweetIds.contains(tweet.mid)
+        }
+        print("DEBUG: [FollowingsTweetViewModel] Deferred \(deferredTweetIds.count) top-page tweet(s) behind banner during \(reason)")
+        return (tweetsToMerge, deferredTweetIds)
+    }
+
+    @MainActor
     func applyPendingNewTweets() {
-        guard !pendingNewTweets.isEmpty else {
+        let pendingTweets = visiblePendingNewTweets
+        guard !pendingTweets.isEmpty else {
             showNewTweetsBanner = false
             return
         }
 
-        tweets.mergeTweets(pendingNewTweets)
+        let visibleTweetIds = Set(tweets.map(\.mid))
+        let tweetsToApply = pendingTweets.filter { tweet in
+            !(tweet.isPrivate ?? false)
+            && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
+            && !visibleTweetIds.contains(tweet.mid)
+        }
+        let staleCount = pendingTweets.count - tweetsToApply.count
+
+        if !tweetsToApply.isEmpty {
+            tweets.mergeTweets(tweetsToApply)
+        }
         pendingNewTweets.removeAll()
         showNewTweetsBanner = false
+        print("DEBUG: [FollowingsTweetViewModel] Applied \(tweetsToApply.count) pending main feed tweet(s), dropped \(staleCount) stale")
     }
 
     @MainActor
@@ -149,27 +229,23 @@ class FollowingsTweetViewModel: ObservableObject {
         showNewTweetsBanner = false
     }
 
+    @MainActor
+    func clearPendingNewTweetsBanner(reason: String) {
+        guard showNewTweetsBanner || !pendingNewTweets.isEmpty else { return }
+        pendingNewTweets.removeAll()
+        showNewTweetsBanner = false
+        print("DEBUG: [FollowingsTweetViewModel] Cleared pending new tweets banner: \(reason)")
+    }
+
     private func fetchTopMainFeedTweetsForBanner(pageSize: UInt) async throws -> [Tweet] {
-        if hproseInstance.appUser.isGuest {
-            print("[FollowingsTweetViewModel] Checking main feed for guest user from alphaId")
-            guard let alphaId = Gadget.getAlphaIds().first,
-                  let adminUser = try await hproseInstance.fetchUser(alphaId) else {
-                return []
-            }
-            return try await hproseInstance.fetchUserTweets(
-                user: adminUser,
-                pageNumber: 0,
-                pageSize: pageSize
-            )
-            .compactMap { $0 }
-        }
+        guard !hproseInstance.appUser.isGuest else { return [] }
 
         let serverTweets = try await hproseInstance.fetchTweetFeed(
             user: hproseInstance.appUser,
             pageNumber: 0,
             pageSize: pageSize
         )
-        var freshTweets = serverTweets.compactMap { $0 }
+        let feedTweets = serverTweets.compactMap { $0 }
 
         let followingTweets = try await hproseInstance.fetchTweetFeed(
             user: hproseInstance.appUser,
@@ -177,8 +253,9 @@ class FollowingsTweetViewModel: ObservableObject {
             pageSize: pageSize,
             entry: "update_following_tweets"
         )
-        freshTweets.append(contentsOf: followingTweets.compactMap { $0 })
-        return freshTweets
+        let updatedFollowingTweets = followingTweets.compactMap { $0 }
+        print("DEBUG: [FollowingsTweetViewModel] Banner check candidates: get_tweet_feed=\(feedTweets.count), update_following_tweets=\(updatedFollowingTweets.count)")
+        return feedTweets + updatedFollowingTweets
     }
     
     func fetchTweets(page: UInt, pageSize: UInt, isPeriodicRefresh: Bool = false) async throws -> [Tweet?] {
@@ -249,8 +326,26 @@ class FollowingsTweetViewModel: ObservableObject {
                 }
             }
             
-            await MainActor.run {
-                tweets.mergeTweets(filteredTweets)
+            let responseTweets = await MainActor.run { () -> [Tweet?] in
+                let split: (tweetsToMerge: [Tweet], deferredTweetIds: Set<String>)
+                if page == 0 {
+                    split = deferNewTopPageTweetsBehindBannerIfNeeded(filteredTweets, reason: "server page 0 refresh")
+                } else {
+                    split = (filteredTweets, [])
+                }
+
+                if !split.tweetsToMerge.isEmpty {
+                    tweets.mergeTweets(split.tweetsToMerge)
+                }
+
+                guard !split.deferredTweetIds.isEmpty else {
+                    return serverTweets
+                }
+
+                return serverTweets.map { tweet in
+                    guard let tweet else { return nil }
+                    return split.deferredTweetIds.contains(tweet.mid) ? nil : tweet
+                }
             }
             
             // Cache main feed tweets under appUser.mid for efficient loading
@@ -268,7 +363,7 @@ class FollowingsTweetViewModel: ObservableObject {
             
             let elapsed = Date().timeIntervalSince(startTime) * 1000
             print("✅ [SERVER FETCH] fetchTweets COMPLETE - loaded \(serverTweets.compactMap{$0}.count) tweets in \(String(format: "%.1f", elapsed))ms")
-            return serverTweets     // including nil
+            return responseTweets     // including nil
         } catch {
             let elapsed = Date().timeIntervalSince(startTime) * 1000
             print("❌ [SERVER FETCH] fetchTweets FAILED in \(String(format: "%.1f", elapsed))ms: \(error)")
@@ -295,7 +390,10 @@ class FollowingsTweetViewModel: ObservableObject {
             guard !filteredTweets.isEmpty else { return }
 
             await MainActor.run {
-                tweets.mergeTweets(filteredTweets)
+                let split = deferNewTopPageTweetsBehindBannerIfNeeded(filteredTweets, reason: "update_following_tweets")
+                if !split.tweetsToMerge.isEmpty {
+                    tweets.mergeTweets(split.tweetsToMerge)
+                }
             }
 
             let cacheKey = hproseInstance.appUser.mid

@@ -49,6 +49,10 @@ protocol MediaCellDelegate {
     /// Whether the video is actually playing (healthy player with rate > 0)
     var isActuallyPlaying: Bool { get }
 
+    /// True only when foreground recovery has visibly succeeded: playback is rendering
+    /// moving frames, not merely inside a buffering grace period.
+    var isVisiblePlaybackActive: Bool { get }
+
     /// True when the coordinator has commanded this video to play but the AVPlayerItem is still
     /// in .unknown status (item loading from network). Prevents false stall detection during
     /// legitimate loading delays (IPFS/HLS can take >3s before play() is called).
@@ -1317,8 +1321,12 @@ class VideoPlaybackCoordinator: ObservableObject {
                 return
             }
 
-            if delegate.isActuallyPlaying {
+            if delegate.isVisiblePlaybackActive {
                 refreshDirectionalPreloads(reason: "foreground autoplay healthy", throttle: true)
+                return
+            }
+            if delegate.isActuallyPlaying && !reason.hasPrefix("foregroundWatchdog") {
+                refreshDirectionalPreloads(reason: "foreground autoplay grace", throttle: true)
                 return
             }
 
@@ -1350,8 +1358,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     func foregroundRecoveryStatus() -> ForegroundRecoveryStatus {
         guard !visibleVideos.isEmpty else { return .noCandidates }
         guard let primaryId = primaryVideoId,
+              let primary = visibleVideos.first(where: { $0.identifier == primaryId }),
+              onScreenMediaCells.isEmpty || onScreenMediaCells.contains(primary.identifier),
               let activeDelegate = delegate(forIdentifier: primaryId) else { return .needsRetry }
-        if activeDelegate.isActuallyPlaying { return .playing }
+        if activeDelegate.isVisiblePlaybackActive { return .playing }
         if activeDelegate.isLoadingForCoordinator || activeDelegate.isRecentlyPlaying { return .loading }
         return .needsRetry
     }

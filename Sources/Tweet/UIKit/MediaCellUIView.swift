@@ -5368,6 +5368,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return false
     }
 
+    var isVisiblePlaybackActive: Bool {
+        guard coordinatorWantsToPlay,
+              let player = player,
+              player.currentItem != nil else { return false }
+        return isVisibleVideoFrameReady(player)
+            || hasRecentDecodedPlayback(for: player, maxAge: 1.5)
+    }
+
     private func restoreVisibleLoadingStateIfNeeded(reason: String) {
         guard isVisible,
               isVideoAttachment,

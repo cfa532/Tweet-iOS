@@ -12,6 +12,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     // Track if app has finished launching to distinguish startup from background recovery
     private var hasFinishedLaunching = false
+    private var didLaunchInBackground = false
+    private var hasEnteredBackgroundInCurrentProcess = false
     
     // Track ongoing infrastructure restart to prevent overlapping restarts
     private var infrastructureRestartTask: Task<Void, Never>?
@@ -32,31 +34,37 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         static let interval: TimeInterval = 5 * 60
     }
     
-    /// Release-only: mirror stdout/stderr (all `print()`/`NSLog`) to Documents/app.log so
-    /// overnight troubleshooting logs survive app suspension.
-    private static func redirectConsoleToFileInRelease() {
-        #if !DEBUG
+    /// Mirror stdout/stderr (all `print()`/`NSLog`) to Documents so troubleshooting
+    /// logs survive app suspension and process relaunches.
+    private static func redirectConsoleToLogFile() {
         guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let logURL = docs.appendingPathComponent("app.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        #if DEBUG
+        let logFileName = "app-debug.log"
+        #else
+        let logFileName = "app.log"
+        #endif
+        let logURL = docs.appendingPathComponent(logFileName)
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: logURL.path) {
+            fileManager.createFile(atPath: logURL.path, contents: nil)
+        }
         freopen(logURL.path, "a", stdout)
         freopen(logURL.path, "a", stderr)
         // Unbuffered so output is flushed immediately — critical for capturing the last
         // lines before a background suspend or crash.
         setvbuf(stdout, nil, _IONBF, 0)
         setvbuf(stderr, nil, _IONBF, 0)
-        print("\n--- App log session started: \(Date()) ---")
+        print("\n--- App log session started: \(Date()) pid=\(ProcessInfo.processInfo.processIdentifier) ---")
         print("📂 [LOG] Console output mirrored to \(logURL.path)")
-        #endif
     }
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Lock app to portrait orientation by default
         AppDelegate.lockOrientation(.portrait)
 
-        // Release: mirror all print()/NSLog output to Documents/app.log so overnight
-        // troubleshooting logs survive app backgrounding.
-        Self.redirectConsoleToFileInRelease()
+        // Mirror all print()/NSLog output to Documents so overnight troubleshooting
+        // logs survive app backgrounding and relaunches.
+        Self.redirectConsoleToLogFile()
 
         // Register background tasks before application finishes launching
         registerBackgroundTasks()
@@ -111,9 +119,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             self.scheduleNextMainFeedCheck()
         }
         
-        // CRITICAL: Clear any stale background timestamp from previous session
-        // This ensures we can distinguish app startup from returning from background
-        UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
+        didLaunchInBackground = application.applicationState == .background
+        if didLaunchInBackground {
+            print("[AppDelegate] App launched in background - preserving background timestamp for foreground recovery")
+        } else {
+            // CRITICAL: Clear any stale background timestamp from previous session
+            // This ensures normal app startup is not misclassified as returning from background.
+            UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
+        }
         
         // Mark that app has finished launching
         hasFinishedLaunching = true
@@ -172,6 +185,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     private func handleMessageCheckBackgroundTask(task: BGAppRefreshTask) {
+        didLaunchInBackground = didLaunchInBackground || UIApplication.shared.applicationState == .background
         print("[AppDelegate] 🔄 Background message check task STARTED")
 
         // Schedule the next background task
@@ -198,6 +212,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func handleMainFeedCheckBackgroundTask(task: BGAppRefreshTask) {
+        didLaunchInBackground = didLaunchInBackground || UIApplication.shared.applicationState == .background
         print("[AppDelegate] 🔄 Background main feed check task STARTED")
 
         Task { @MainActor in
@@ -206,7 +221,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         let checkTask = Task {
             if #available(iOS 16.0, *) {
-                await FollowingsTweetViewModel.shared.performBackgroundFeedCheck()
+                if HproseInstance.shared.appUser.isGuest {
+                    print("[AppDelegate] Skipping background main feed check for guest user")
+                } else {
+                    await FollowingsTweetViewModel.shared.performBackgroundFeedCheck()
+                }
             }
             task.setTaskCompleted(success: true)
             print("[AppDelegate] ✅ Background main feed check completed successfully")
@@ -396,6 +415,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     @objc private func handleAppDidEnterBackground() {
         print("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
+        hasEnteredBackgroundInCurrentProcess = true
 
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
@@ -481,10 +501,25 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         endBackgroundCleanupTask()
 
         guard let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date else {
-            print("🚀 [AppDelegate] No background timestamp - skipping foreground recovery during startup")
-            AppDelegate.isVideoInfrastructureReady = true
+            if didLaunchInBackground {
+                print("⚠️ [AppDelegate] Background-launched app entered foreground without timestamp - running foreground recovery")
+                didLaunchInBackground = false
+                AppDelegate.isVideoInfrastructureReady = false
+                scheduleMainFeedCheckAfterForegroundReturn()
+                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                    await self.recoverVideoInfrastructureAfterForeground(reason: "foreground after background launch without timestamp")
+                }
+                Task {
+                    print("[AppDelegate] 📬 Checking for new messages on foreground return")
+                    await checkMessagesForBadgeOnly()
+                }
+            } else {
+                print("🚀 [AppDelegate] No background timestamp - skipping foreground recovery during startup")
+                AppDelegate.isVideoInfrastructureReady = true
+            }
             return
         }
+        didLaunchInBackground = false
 
         scheduleMainFeedCheckAfterForegroundReturn()
 
@@ -553,8 +588,22 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             self.scheduleNextMainFeedCheck()
         }
 
+        guard hasEnteredBackgroundInCurrentProcess else {
+            print("[AppDelegate] Skipping foreground main feed check during app startup")
+            if #available(iOS 16.0, *) {
+                Task { @MainActor in
+                    FollowingsTweetViewModel.shared.clearPendingNewTweetsBanner(reason: "app startup foreground")
+                }
+            }
+            return
+        }
+
         Task {
             if #available(iOS 16.0, *) {
+                guard !HproseInstance.shared.appUser.isGuest else {
+                    print("[AppDelegate] Skipping foreground main feed check for guest user")
+                    return
+                }
                 await FollowingsTweetViewModel.shared.performForegroundFeedRefresh()
             }
         }
