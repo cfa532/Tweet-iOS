@@ -2,6 +2,7 @@ import UIKit
 import BackgroundTasks
 import UserNotifications
 import AVFoundation
+import Darwin
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
@@ -33,27 +34,133 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         static let identifier = "com.example.ZZ.mainFeedCheck"
         static let interval: TimeInterval = 5 * 60
     }
+
+    private static var consoleMirror: ConsoleMirror?
+
+    private final class ConsoleMirror {
+        private let logFile: FileHandle
+        private let originalStdout: Int32
+        private let originalStderr: Int32
+        private let queue = DispatchQueue(label: "app.console.mirror")
+        private var stdoutSource: DispatchSourceRead?
+        private var stderrSource: DispatchSourceRead?
+
+        init?(logURL: URL) {
+            let fileManager = FileManager.default
+            if !fileManager.fileExists(atPath: logURL.path) {
+                fileManager.createFile(atPath: logURL.path, contents: nil)
+            }
+            guard let logFile = try? FileHandle(forWritingTo: logURL) else { return nil }
+            logFile.seekToEndOfFile()
+
+            let originalStdout = dup(STDOUT_FILENO)
+            let originalStderr = dup(STDERR_FILENO)
+            guard originalStdout >= 0, originalStderr >= 0 else {
+                if originalStdout >= 0 { close(originalStdout) }
+                if originalStderr >= 0 { close(originalStderr) }
+                logFile.closeFile()
+                return nil
+            }
+
+            var stdoutPipe = [Int32](repeating: -1, count: 2)
+            var stderrPipe = [Int32](repeating: -1, count: 2)
+            guard pipe(&stdoutPipe) == 0, pipe(&stderrPipe) == 0 else {
+                Self.closePipe(stdoutPipe)
+                Self.closePipe(stderrPipe)
+                close(originalStdout)
+                close(originalStderr)
+                logFile.closeFile()
+                return nil
+            }
+
+            fflush(stdout)
+            fflush(stderr)
+
+            let stdoutRedirected = dup2(stdoutPipe[1], STDOUT_FILENO)
+            let stderrRedirected = dup2(stderrPipe[1], STDERR_FILENO)
+            guard stdoutRedirected >= 0, stderrRedirected >= 0 else {
+                dup2(originalStdout, STDOUT_FILENO)
+                dup2(originalStderr, STDERR_FILENO)
+                Self.closePipe(stdoutPipe)
+                Self.closePipe(stderrPipe)
+                close(originalStdout)
+                close(originalStderr)
+                logFile.closeFile()
+                return nil
+            }
+
+            close(stdoutPipe[1])
+            close(stderrPipe[1])
+            setvbuf(stdout, nil, _IONBF, 0)
+            setvbuf(stderr, nil, _IONBF, 0)
+
+            self.logFile = logFile
+            self.originalStdout = originalStdout
+            self.originalStderr = originalStderr
+            self.stdoutSource = makeSource(readFileDescriptor: stdoutPipe[0], originalFileDescriptor: originalStdout)
+            self.stderrSource = makeSource(readFileDescriptor: stderrPipe[0], originalFileDescriptor: originalStderr)
+        }
+
+        deinit {
+            stdoutSource?.cancel()
+            stderrSource?.cancel()
+            close(originalStdout)
+            close(originalStderr)
+            logFile.closeFile()
+        }
+
+        private static func closePipe(_ pipeFileDescriptors: [Int32]) {
+            for fileDescriptor in pipeFileDescriptors where fileDescriptor >= 0 {
+                close(fileDescriptor)
+            }
+        }
+
+        private func makeSource(readFileDescriptor: Int32, originalFileDescriptor: Int32) -> DispatchSourceRead {
+            let source = DispatchSource.makeReadSource(fileDescriptor: readFileDescriptor, queue: queue)
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                let availableBytes = max(1, min(Int(source.data), 8 * 1024))
+                var buffer = [UInt8](repeating: 0, count: availableBytes)
+                let byteCount = Darwin.read(readFileDescriptor, &buffer, buffer.count)
+
+                guard byteCount > 0 else {
+                    source.cancel()
+                    return
+                }
+
+                buffer.withUnsafeBytes { rawBuffer in
+                    guard let baseAddress = rawBuffer.baseAddress else { return }
+                    Self.writeAll(to: originalFileDescriptor, bytes: baseAddress, count: byteCount)
+                }
+                logFile.write(Data(buffer.prefix(byteCount)))
+            }
+            source.setCancelHandler {
+                close(readFileDescriptor)
+            }
+            source.resume()
+            return source
+        }
+
+        private static func writeAll(to fileDescriptor: Int32, bytes: UnsafeRawPointer, count: Int) {
+            var remainingByteCount = count
+            var cursor = bytes.assumingMemoryBound(to: UInt8.self)
+
+            while remainingByteCount > 0 {
+                let writtenByteCount = Darwin.write(fileDescriptor, cursor, remainingByteCount)
+                guard writtenByteCount > 0 else { break }
+                remainingByteCount -= writtenByteCount
+                cursor = cursor.advanced(by: writtenByteCount)
+            }
+        }
+    }
     
     /// Mirror stdout/stderr (all `print()`/`NSLog`) to Documents so troubleshooting
     /// logs survive app suspension and process relaunches.
     private static func redirectConsoleToLogFile() {
         guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        #if DEBUG
-        let logFileName = "app-debug.log"
-        #else
         let logFileName = "app.log"
-        #endif
         let logURL = docs.appendingPathComponent(logFileName)
-        let fileManager = FileManager.default
-        if !fileManager.fileExists(atPath: logURL.path) {
-            fileManager.createFile(atPath: logURL.path, contents: nil)
-        }
-        freopen(logURL.path, "a", stdout)
-        freopen(logURL.path, "a", stderr)
-        // Unbuffered so output is flushed immediately — critical for capturing the last
-        // lines before a background suspend or crash.
-        setvbuf(stdout, nil, _IONBF, 0)
-        setvbuf(stderr, nil, _IONBF, 0)
+        consoleMirror = ConsoleMirror(logURL: logURL)
         print("\n--- App log session started: \(Date()) pid=\(ProcessInfo.processInfo.processIdentifier) ---")
         print("📂 [LOG] Console output mirrored to \(logURL.path)")
     }
