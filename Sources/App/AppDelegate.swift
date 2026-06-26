@@ -304,6 +304,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         return AppDelegate.orientationLock
     }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        BackgroundResumeStateStore.shared.clear(reason: "application will terminate")
+    }
     
     static func lockOrientation(_ orientation: UIInterfaceOrientationMask) {
         orientationLock = orientation
@@ -614,8 +618,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             MemoryCapManager.shared.performBackgroundMemoryRelease()
             AppDelegate.didPerformAggressiveCleanup = true
 
-            print("[AppDelegate] 🚀 Performing IMMEDIATE background message check after cleanup")
-            self?.performImmediateBackgroundCheck()
+            print("[AppDelegate] 📅 Scheduling background message check after cleanup")
+            self?.scheduleNextMessageCheck()
 
             self?.endBackgroundCleanupTask()
             print("✅ [AppDelegate] Background memory release complete")
@@ -663,6 +667,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         if !hasFinishedLaunching {
             print("🚀 [AppDelegate] App still launching - skipping recovery (server starting in didFinishLaunching)")
             return
+        }
+
+        if hasEnteredBackgroundInCurrentProcess {
+            BackgroundResumeStateStore.shared.clear(reason: "same process foreground resume")
         }
 
         endBackgroundCleanupTask()
@@ -978,19 +986,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         return didRestartProxy
     }
     
-    private func performImmediateBackgroundCheck() {
-        print("[AppDelegate] ⚡ Performing immediate background message check")
-        Task {
-            await ChatSessionManager.shared.checkBackendForNewMessages()
-            print("[AppDelegate] ✅ Immediate background message check completed")
-
-            // Also schedule the regular background task for future checks
-            await MainActor.run {
-                self.scheduleNextMessageCheck()
-            }
-        }
-    }
-
     /// Setup message checking when app is initialized
     private func setupMessageCheckOnInitialization() {
         // Listen for app user ready notification

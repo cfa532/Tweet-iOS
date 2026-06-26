@@ -10,6 +10,60 @@ import SwiftUI
 import Combine
 import Darwin
 
+struct BackgroundFeedResumeSnapshot: Codable {
+    let feedIdentifier: String
+    let appUserId: String
+    let contentOffsetY: CGFloat
+    let topTweetId: String?
+    let topTweetOffsetY: CGFloat
+    let createdAt: Date
+}
+
+final class BackgroundResumeStateStore {
+    static let shared = BackgroundResumeStateStore()
+
+    private let snapshotKey = "backgroundFeedResumeSnapshot"
+    private let maxSnapshotAge: TimeInterval = 24 * 60 * 60
+
+    private init() {}
+
+    func save(_ snapshot: BackgroundFeedResumeSnapshot) {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        UserDefaults.standard.set(data, forKey: snapshotKey)
+        print("[BackgroundResume] Saved snapshot for feed=\(snapshot.feedIdentifier), topTweet=\(snapshot.topTweetId ?? "none")")
+    }
+
+    func snapshot(feedIdentifier: String, appUserId: String) -> BackgroundFeedResumeSnapshot? {
+        guard let data = UserDefaults.standard.data(forKey: snapshotKey),
+              let snapshot = try? JSONDecoder().decode(BackgroundFeedResumeSnapshot.self, from: data) else {
+            return nil
+        }
+
+        guard Date().timeIntervalSince(snapshot.createdAt) <= maxSnapshotAge else {
+            clear(reason: "expired snapshot")
+            return nil
+        }
+
+        guard snapshot.feedIdentifier == feedIdentifier,
+              snapshot.appUserId == appUserId else {
+            return nil
+        }
+
+        return snapshot
+    }
+
+    func hasSnapshot(feedIdentifier: String, appUserId: String) -> Bool {
+        snapshot(feedIdentifier: feedIdentifier, appUserId: appUserId) != nil
+    }
+
+    func clear(reason: String) {
+        if UserDefaults.standard.object(forKey: snapshotKey) != nil {
+            UserDefaults.standard.removeObject(forKey: snapshotKey)
+            print("[BackgroundResume] Cleared snapshot: \(reason)")
+        }
+    }
+}
+
 /// In-memory scroll position storage across view controller deallocation within the same session.
 /// Does NOT persist to disk — on app restart the feed starts from the top.
 @MainActor
@@ -128,6 +182,7 @@ class TweetTableViewController: UITableViewController {
     private var didBecomeActiveObserver: NSObjectProtocol?
     private var reloadVisibleVideosObserver: NSObjectProtocol?
     private var needsVideoLayerRefresh = false
+    private var pendingBackgroundResumeRestoreWork: DispatchWorkItem?
 
     // Observer for feed view appearance (to restart video playback after navigation)
     private var feedViewDidAppearObserver: NSObjectProtocol?
@@ -882,6 +937,9 @@ class TweetTableViewController: UITableViewController {
         // Clear saved scroll position when scrolling to top
         savedScrollPosition = nil
         ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
+        if feedIdentifier == "mainFeed" {
+            BackgroundResumeStateStore.shared.clear(reason: "manual scroll to top")
+        }
         isScrollingToTop = true
 
         // Scroll to the absolute top of the table view with animation
@@ -962,7 +1020,9 @@ class TweetTableViewController: UITableViewController {
             // and topInset is set (nav bar is present)
             // Ignore if already properly positioned or if user has scrolled
             // Also ignore if we just restored a saved position
-            let hasSavedPosition = savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+            let hasSavedPosition = savedScrollPosition != nil
+                || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+                || hasPendingBackgroundResumeSnapshot()
             if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 && !hasSavedPosition {
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
                 lastScrollOffset = -topInset
@@ -980,6 +1040,7 @@ class TweetTableViewController: UITableViewController {
         if needsInitialLoadingUpdate {
             updateInitialLoadingSpinnerVisibility()
         }
+        schedulePendingBackgroundResumeRestore(reason: "viewDidAppear")
         scheduleVideoVisibilityRefresh(reason: "viewDidAppear")
         if let pendingReason = pendingFeedPlaybackResumeReason {
             pendingFeedPlaybackResumeReason = nil
@@ -1145,6 +1206,123 @@ class TweetTableViewController: UITableViewController {
         return tweets[regularIndex]
     }
 
+    private func topVisibleTweetAnchor() -> (tweetId: String, offsetY: CGFloat)? {
+        guard let visibleRows = tableView.indexPathsForVisibleRows?.sorted(),
+              !visibleRows.isEmpty else {
+            return nil
+        }
+
+        let visibleTopY = tableView.contentOffset.y + tableView.adjustedContentInset.top
+
+        for indexPath in visibleRows {
+            guard let tweet = tweetForRow(indexPath.row) else { continue }
+            let rowRect = tableView.rectForRow(at: indexPath)
+            let offsetY = max(0, visibleTopY - rowRect.minY)
+            return (tweet.mid, offsetY)
+        }
+
+        return nil
+    }
+
+    private func currentBackgroundResumeSnapshot() -> BackgroundFeedResumeSnapshot? {
+        guard feedIdentifier == "mainFeed",
+              let appUser = hproseInstance?.appUser,
+              !appUser.isGuest else {
+            return nil
+        }
+
+        let anchor = topVisibleTweetAnchor()
+        return BackgroundFeedResumeSnapshot(
+            feedIdentifier: feedIdentifier,
+            appUserId: appUser.mid,
+            contentOffsetY: tableView.contentOffset.y,
+            topTweetId: anchor?.tweetId,
+            topTweetOffsetY: anchor?.offsetY ?? 0,
+            createdAt: Date()
+        )
+    }
+
+    private func pendingBackgroundResumeSnapshot() -> BackgroundFeedResumeSnapshot? {
+        guard feedIdentifier == "mainFeed",
+              let appUser = hproseInstance?.appUser,
+              !appUser.isGuest else {
+            return nil
+        }
+
+        return BackgroundResumeStateStore.shared.snapshot(
+            feedIdentifier: feedIdentifier,
+            appUserId: appUser.mid
+        )
+    }
+
+    private func hasPendingBackgroundResumeSnapshot() -> Bool {
+        pendingBackgroundResumeSnapshot() != nil
+    }
+
+    private func schedulePendingBackgroundResumeRestore(reason: String) {
+        guard let snapshot = pendingBackgroundResumeSnapshot() else { return }
+
+        pendingBackgroundResumeRestoreWork?.cancel()
+        applyBackgroundResumeSnapshot(snapshot, reason: "\(reason)-immediate", clearOnSuccess: false)
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.applyBackgroundResumeSnapshot(snapshot, reason: "\(reason)-settled", clearOnSuccess: true) {
+                self.requestForegroundRecovery(reason: "backgroundResumeRestore")
+            }
+        }
+
+        pendingBackgroundResumeRestoreWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    @discardableResult
+    private func applyBackgroundResumeSnapshot(
+        _ snapshot: BackgroundFeedResumeSnapshot,
+        reason: String,
+        clearOnSuccess: Bool
+    ) -> Bool {
+        guard tableView.window != nil, !tweets.isEmpty else { return false }
+
+        tableView.layoutIfNeeded()
+
+        let targetOffsetY: CGFloat?
+        if let tweetId = snapshot.topTweetId,
+           let regularIndex = tweets.firstIndex(where: { $0.mid == tweetId }) {
+            let indexPath = regularTweetIndexPath(regularIndex)
+            let rowRect = tableView.rectForRow(at: indexPath)
+            targetOffsetY = rowRect.minY + snapshot.topTweetOffsetY - tableView.adjustedContentInset.top
+        } else if tableView.contentSize.height > snapshot.contentOffsetY {
+            targetOffsetY = snapshot.contentOffsetY
+        } else {
+            targetOffsetY = nil
+        }
+
+        guard let targetOffsetY else {
+            print("[BackgroundResume] Restore skipped; anchor not loaded for \(reason)")
+            return false
+        }
+
+        let minimumOffsetY = -tableView.adjustedContentInset.top
+        let maximumOffsetY = max(
+            minimumOffsetY,
+            tableView.contentSize.height - tableView.bounds.height + tableView.adjustedContentInset.bottom
+        )
+        let boundedOffsetY = min(max(targetOffsetY, minimumOffsetY), maximumOffsetY)
+
+        tableView.setContentOffset(CGPoint(x: 0, y: boundedOffsetY), animated: false)
+        lastContentOffset = boundedOffsetY
+        lastCallbackOffset = boundedOffsetY
+        lastScrollOffset = boundedOffsetY
+
+        if clearOnSuccess {
+            BackgroundResumeStateStore.shared.clear(reason: "applied \(reason)")
+        }
+
+        print("[BackgroundResume] Restored feed snapshot via \(reason), offset=\(Int(boundedOffsetY))")
+        return true
+    }
+
     private func prefetchEmbeddedTweetIdsIfNeeded(_ tweetIds: Set<String>) {
         for tweetId in tweetIds {
             prefetchEmbeddedTweetIfNeeded(originalTweetId: tweetId)
@@ -1270,6 +1448,7 @@ class TweetTableViewController: UITableViewController {
             tableView.reloadData()
             isTableViewUpdating = false
             rebuildVideoListAndRefreshVisibility(reason: "initialTweetsVideoList")
+            schedulePendingBackgroundResumeRestore(reason: "initialTweets")
             
             // Trigger video detection after initial load. Multiple passes are intentional:
             // cached startup rows can self-size/layout over several run-loop turns, and a
@@ -2700,10 +2879,16 @@ class TweetTableViewController: UITableViewController {
             // Save to both instance variable (for same-session) and persistent storage
             savedScrollPosition = currentOffset
             ScrollPositionManager.shared.saveScrollPosition(currentOffset, for: feedIdentifier)
+            if let snapshot = currentBackgroundResumeSnapshot() {
+                BackgroundResumeStateStore.shared.save(snapshot)
+            }
         } else {
             // Clear position if at/near top
             savedScrollPosition = nil
             ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
+            if feedIdentifier == "mainFeed" {
+                BackgroundResumeStateStore.shared.clear(reason: "main feed near top")
+            }
         }
     }
     

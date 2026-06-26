@@ -134,6 +134,26 @@ struct TweetListView: View {
     private func visibleTweetsExcludingDeleted(_ candidateTweets: [Tweet]) -> [Tweet] {
         candidateTweets.filter { !TweetDeletionRegistry.shared.isDeleted($0.mid) }
     }
+
+    private func pendingBackgroundResumeSnapshotForInitialLoad() -> BackgroundFeedResumeSnapshot? {
+        guard feedIdentifier == "mainFeed",
+              !hproseInstance.appUser.isGuest else {
+            return nil
+        }
+
+        return BackgroundResumeStateStore.shared.snapshot(
+            feedIdentifier: feedIdentifier,
+            appUserId: hproseInstance.appUser.mid
+        )
+    }
+
+    private func appendUniqueTweetsPreservingCurrentOrder(_ newTweets: [Tweet], to existingTweets: inout [Tweet]) {
+        var existingIds = Set(existingTweets.map(\.mid))
+        for tweet in newTweets where !existingIds.contains(tweet.mid) {
+            existingTweets.append(tweet)
+            existingIds.insert(tweet.mid)
+        }
+    }
     
     /// Trim oldest tweets from memory if array exceeds maximum size
     /// Keeps most recent tweets to prevent unbounded memory growth
@@ -598,6 +618,7 @@ struct TweetListView: View {
             isLoading = true
         }
         let page: UInt = 0
+        var lastCachedPage = page
         var didLoadCachedContent = false
 
         do {
@@ -605,7 +626,48 @@ struct TweetListView: View {
             // Android: if the requested cached page has anything renderable, show it
             // immediately and let server refresh / scroll pagination handle the rest.
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
-            let validPage = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
+            var validPage = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
+            let resumeSnapshot = pendingBackgroundResumeSnapshotForInitialLoad()
+
+            if let resumeSnapshot,
+               let targetTweetId = resumeSnapshot.topTweetId,
+               !validPage.contains(where: { $0.mid == targetTweetId }) {
+                let maxResumeCachePages: UInt = 20
+                var nextPage = page + 1
+
+                while nextPage < maxResumeCachePages {
+                    let nextCachedTweets: [Tweet?]
+                    do {
+                        nextCachedTweets = try await tweetFetcher(nextPage, pageSize, true)
+                    } catch {
+                        print("[BackgroundResume] Cache page \(nextPage) failed during resume search: \(error)")
+                        break
+                    }
+
+                    let nextValidPage = visibleTweetsExcludingDeleted(nextCachedTweets.compactMap { $0 })
+
+                    if !nextValidPage.isEmpty {
+                        appendUniqueTweetsPreservingCurrentOrder(nextValidPage, to: &validPage)
+                        lastCachedPage = nextPage
+                    }
+
+                    if validPage.contains(where: { $0.mid == targetTweetId }) {
+                        print("[BackgroundResume] Loaded cached page \(nextPage) to reach saved tweet \(targetTweetId)")
+                        break
+                    }
+
+                    if UInt(nextCachedTweets.count) < pageSize {
+                        break
+                    }
+
+                    nextPage += 1
+                }
+
+                if !validPage.contains(where: { $0.mid == targetTweetId }) {
+                    print("[BackgroundResume] Saved tweet \(targetTweetId) not found in cached resume window")
+                }
+            }
+
             let hasCachedContent = !validPage.isEmpty
             didLoadCachedContent = hasCachedContent
 
@@ -613,7 +675,7 @@ struct TweetListView: View {
                 await MainActor.run {
                     // Use direct assignment for page 0 so cached order is not disturbed.
                     tweets = validPage
-                    currentPage = page
+                    currentPage = lastCachedPage
 
                     hasMoreTweets = true  // Server may have more
 
