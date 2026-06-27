@@ -273,6 +273,43 @@ final class HproseInstance: ObservableObject {
         }
         return nil
     }
+
+    private static func stringValues(in value: Any?) -> [String] {
+        let normalized = jsonObjectIfEncodedAsString(value)
+        if let string = normalized as? String {
+            return [string]
+        }
+        if let string = normalized as? NSString {
+            return [string as String]
+        }
+        if let dict = asStringKeyedDictionary(normalized) {
+            return dict.values.flatMap { stringValues(in: $0) }
+        }
+        if let array = normalized as? [Any] {
+            return array.flatMap { stringValues(in: $0) }
+        }
+        return []
+    }
+
+    private static func isTweetNotFoundMessage(_ message: String) -> Bool {
+        let normalized = message
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+
+        return normalized.contains("tweet not found")
+            || normalized.contains("cannot find the tweet")
+            || normalized.contains("cannot find tweet")
+            || normalized.contains("tweet does not exist")
+            || (normalized.contains("tweet") && normalized.contains("not found"))
+    }
+
+    private static func isTweetNotFoundDeleteFailure(_ error: Error, response: Any?) -> Bool {
+        if isTweetNotFoundMessage(error.localizedDescription) {
+            return true
+        }
+        return stringValues(in: response).contains(where: isTweetNotFoundMessage)
+    }
     
     /// Pull a string field from a server dict (NSString bridging, optional `commentId` vs `mid`).
     private static func stringField(_ dict: [String: Any], keys: [String]) -> String? {
@@ -3433,7 +3470,18 @@ final class HproseInstance: ObservableObject {
         defer { client.timeout = originalTimeout }
 
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        let unwrappedResponse: Any?
+        do {
+            unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        } catch {
+            if Self.isTweetNotFoundDeleteFailure(error, response: rawResponse) {
+                print("DEBUG: [deleteTweet] Tweet \(tweetId) is already missing on server; clearing local cache")
+                await removeDeletedTweetLocally(tweetId)
+                try? await self.refreshAppUserFromServer()
+                return tweetId
+            }
+            throw error
+        }
 
         // unwrapV2Response already threw for success=false. For delete, also require
         // a concrete tweet id so malformed success responses are not silently accepted.
@@ -3452,16 +3500,7 @@ final class HproseInstance: ObservableObject {
 
         print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
 
-        await MainActor.run {
-            TweetDeletionRegistry.shared.markDeleted(deletedTweetId)
-            TweetCacheManager.shared.deleteTweet(mid: deletedTweetId)
-            Tweet.clearInstance(mid: deletedTweetId)
-            NotificationCenter.default.post(
-                name: .tweetDeleted,
-                object: nil,
-                userInfo: ["tweetId": deletedTweetId, "confirmed": true]
-            )
-        }
+        await removeDeletedTweetLocally(deletedTweetId)
 
         // Only decrement tweetCount if appUser is the author
         // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
@@ -3479,6 +3518,18 @@ final class HproseInstance: ObservableObject {
         try? await self.refreshAppUserFromServer()
 
         return deletedTweetId
+    }
+
+    @MainActor
+    private func removeDeletedTweetLocally(_ tweetId: String) {
+        TweetDeletionRegistry.shared.markDeleted(tweetId)
+        TweetCacheManager.shared.deleteTweet(mid: tweetId)
+        Tweet.clearInstance(mid: tweetId)
+        NotificationCenter.default.post(
+            name: .tweetDeleted,
+            object: nil,
+            userInfo: ["tweetId": tweetId, "confirmed": true]
+        )
     }
 
     /// TweetWeb passes `appuserid: target author` so the server author check passes.

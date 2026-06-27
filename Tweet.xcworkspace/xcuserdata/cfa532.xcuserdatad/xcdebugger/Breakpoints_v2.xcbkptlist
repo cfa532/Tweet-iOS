@@ -16,7 +16,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "6699"
             endingLineNumber = "6699"
-            landmarkName = "uploadTweetWithPersistenceAndRetry(tweet:itemData:retryCount:videoJobId:)"
+            landmarkName = "uploadItemPair(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
