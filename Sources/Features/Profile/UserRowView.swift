@@ -86,6 +86,7 @@ struct UserRowView: View {
     @State private var toastType: ToastView.ToastType = .error
     @State private var isToggling: Bool = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    private let horizontalRowPadding: CGFloat = 8
     
     // MARK: - Initialization
     init(
@@ -127,6 +128,20 @@ struct UserRowView: View {
         }
         return "@\(username)"
     }
+
+    private var identityText: Text {
+        var text = Text(displayName)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+
+        if let usernameText {
+            text = text + Text(" \(usernameText)")
+                .font(.subheadline)
+                .foregroundColor(.gray)
+        }
+
+        return text
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -138,19 +153,46 @@ struct UserRowView: View {
                         Avatar(user: user, size: 48)
 
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(displayName)
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                if let usernameText {
-                                    Text(usernameText)
-                                        .font(.subheadline)
+                            HStack(alignment: .top, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    identityText
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Text(formatRegistrationDate(user.timestamp))
+                                        .font(.caption)
                                         .foregroundColor(.gray)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                // Only show follow/unfollow button if app user is not a guest and onFollowToggle is provided
+                                if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest, userId != hproseInstance.appUser.mid {
+                                    DebounceButton(
+                                        cooldownDuration: 0.5,
+                                        enableHaptic: false
+                                    ) {
+                                        guard !isToggling else { return }
+                                        isToggling = true
+                                        isFollowing.toggle()
+                                        Task {
+                                            await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
+                                            await MainActor.run { isToggling = false }
+                                        }
+                                    } label: {
+                                        Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
+                                            .font(.subheadline)
+                                            .fontWeight(.medium)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 8)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 20)
+                                                    .stroke(isFollowing ? Color.red : XTheme.accentColor, lineWidth: 1)
+                                            )
+                                            .foregroundColor(isFollowing ? .red : XTheme.accentColor)
+                                    }
+                                    .disabled(isToggling)
+                                    .opacity(isToggling ? 0.6 : 1.0)
+                                }
                             }
-                            Text(formatRegistrationDate(user.timestamp))
-                                .font(.caption)
-                                .foregroundColor(.gray)
+
                             if let profile = user.profile, !profile.isEmpty {
                                 Group {
                                     if showFullProfile {
@@ -182,37 +224,9 @@ struct UserRowView: View {
                                 }
                             }
                         }
-                        Spacer()
-                        // Only show follow/unfollow button if app user is not a guest and onFollowToggle is provided
-                        if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest, userId != hproseInstance.appUser.mid {
-                            DebounceButton(
-                                cooldownDuration: 0.5,
-                                enableHaptic: false
-                            ) {
-                                guard !isToggling else { return }
-                                isToggling = true
-                                isFollowing.toggle()
-                                Task {
-                                    await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
-                                    await MainActor.run { isToggling = false }
-                                }
-                            } label: {
-                                Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 20)
-                                            .stroke(isFollowing ? Color.red : XTheme.accentColor, lineWidth: 1)
-                                    )
-                                    .foregroundColor(isFollowing ? .red : XTheme.accentColor)
-                            }
-                            .disabled(isToggling)
-                            .opacity(isToggling ? 0.6 : 1.0)
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, horizontalRowPadding)
                     .padding(.vertical, 8)
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -221,7 +235,7 @@ struct UserRowView: View {
                 }
 
                 Divider()
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, horizontalRowPadding)
             }
         }
         .overlay(
@@ -467,7 +481,7 @@ struct UserRowView: View {
 
             Spacer()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, horizontalRowPadding)
         .padding(.vertical, 8)
     }
 }
