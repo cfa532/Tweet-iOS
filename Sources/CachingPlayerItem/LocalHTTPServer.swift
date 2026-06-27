@@ -2101,7 +2101,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return stored
             }
             storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: inferred)
-            print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) recovered contiguous metadata: stored=\(stored), inferred=\(inferred)")
             return inferred
         }
 
@@ -2111,7 +2110,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: inferred)
-        print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) restored missing contiguous metadata: inferred=\(inferred)")
         return inferred
     }
     
