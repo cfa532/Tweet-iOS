@@ -826,6 +826,15 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
     }
 
+    @discardableResult
+    private func capturePlayerFrameAsCoverIfPossible() -> Bool {
+        guard isVideoAttachment,
+              player != nil else { return false }
+
+        return preserveFrameToCache(skipImageView: true, allowCachedFallback: false)
+            || preserveFrameToCache(useVideoOutput: false, skipImageView: true, allowCachedFallback: false)
+    }
+
     private var shouldShowBackgroundRecoverySpinner: Bool {
         isHoldingBackgroundVideoCover
             && backgroundVideoCoverMid == attachment?.mid
@@ -1967,12 +1976,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             self.hasRenderedFrameForCurrentPlayer = true
             // Defer capture by one run-loop cycle: isReadyForDisplay fires before
             // the GPU composites the frame into the layer's backing store.
-            if self.imageView.image == nil && self.hasPlaybackCoverForCurrentVideo {
+            // If a generated/cached cover is already visible, replace it with the
+            // actual decoded player frame so the later cover→video handoff matches.
+            if self.imageView.image != nil || self.hasPlaybackCoverForCurrentVideo {
                 DispatchQueue.main.async { [weak self] in
                     guard let self,
-                          self.imageView.image == nil,
                           self.hasPlaybackCoverForCurrentVideo else { return }
-                    self.preserveFrameToCache()
+                    self.capturePlayerFrameAsCoverIfPossible()
                     // Re-transition to update imageView visibility now that a thumbnail exists.
                     if self.videoCellState == .playerLoading || self.videoCellState == .playerReady {
                         self.transitionTo(self.videoCellState)
@@ -3760,7 +3770,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     ///   - skipImageView: Set `true` when capturing during active playback — skips stale imageView.image
     ///     (which may hold an old first-frame thumbnail) and goes directly to video output for a fresh frame.
     @discardableResult
-    private func preserveFrameToCache(useVideoOutput: Bool = true, async: Bool = false, skipImageView: Bool = false) -> Bool {
+    private func preserveFrameToCache(
+        useVideoOutput: Bool = true,
+        async: Bool = false,
+        skipImageView: Bool = false,
+        allowCachedFallback: Bool = true
+    ) -> Bool {
         guard let mid = attachment?.mid else { return false }
         guard hasPlaybackCoverForCurrentVideo else { return false }
 
@@ -3882,6 +3897,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         // Priority 4: Restore cached-media thumbnail poster if available.
+        guard allowCachedFallback else { return false }
         if let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
             imageView.image = cached
             return true
