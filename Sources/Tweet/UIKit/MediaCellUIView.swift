@@ -329,7 +329,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var setupPlayerTask: Task<Void, Never>?
 
     /// Debounce task that delays player acquisition during fast scroll.
-    /// Cancelled if the cell scrolls off-screen within 0.5s of configure().
+    /// Cancelled if the cell scrolls off-screen before the short acquisition grace elapses.
     private var playerAcquireDebounceTask: Task<Void, Never>?
 
     /// Fallback task: if item.status stays .unknown after deferring to statusKVO,
@@ -1399,7 +1399,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         playerAcquireDebounceTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+            try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled,
                   let self else { return }
             defer { self.playerAcquireDebounceTask = nil }

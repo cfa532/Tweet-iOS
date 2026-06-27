@@ -529,23 +529,27 @@ class MediaGridUIView: UIView {
     }
 
     /// Updates per-media visibility.
-    /// `loadVisible` treats any positive on-screen intersection as visible so partially
-    /// visible media can start loading a cover frame/player.
+    /// `loadVisible` uses a near-viewport band so media can start attaching/warming
+    /// shortly before it scrolls on screen.
     /// `continuePlayback` is stricter than `playable`: the current feed video stops once it drops below this threshold.
     /// `playable` keeps the 50% threshold used by the video coordinator for new autoplay candidates.
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
         var loadVisible: [String] = []
         var continuePlayback: [String] = []
         var playable: [String] = []
+        let loadPrewarmMargin = max(240, visibleRect.height * 0.75)
+        let loadVisibleRect = visibleRect.insetBy(dx: 0, dy: -loadPrewarmMargin)
         let displayCount = min(cellViews.count, attachments.count, 4)
         for cellView in cellViews.prefix(displayCount) {
             let cellFrame = cellView.convert(cellView.bounds, to: coordinateSpace)
             let intersection = cellFrame.intersection(visibleRect)
+            let loadIntersection = cellFrame.intersection(loadVisibleRect)
             let cellArea = cellFrame.width * cellFrame.height
             let visibleArea = max(0, intersection.width) * max(0, intersection.height)
+            let loadVisibleArea = max(0, loadIntersection.width) * max(0, loadIntersection.height)
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
-            let isLoadVisible = isGridVisible && visibleArea > 0
+            let isLoadVisible = isGridVisible && loadVisibleArea > 0
             cellView.setVisible(
                 isLoadVisible,
                 shouldAcquirePlayer: isLoadVisible && AppDelegate.isVideoInfrastructureReady
