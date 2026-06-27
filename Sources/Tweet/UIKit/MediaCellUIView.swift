@@ -1923,6 +1923,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
         if usesIndependentPlayerInstance, let mid = attachment?.mid {
             Self.registerIndependentFeedPlayer(newPlayer, owner: self, mediaID: mid)
+            VideoStateCache.shared.cacheVideoState(
+                for: mid,
+                player: newPlayer,
+                time: newPlayer.currentTime(),
+                wasPlaying: newPlayer.rate > 0 || coordinatorWantsToPlay,
+                originalMuteState: newPlayer.isMuted
+            )
         }
         // Notify other feed cells that may hold the same player (tweet + retweet case)
         // to release their KVO observers. Must post after self.player = newPlayer so that

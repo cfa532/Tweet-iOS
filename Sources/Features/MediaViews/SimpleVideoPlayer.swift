@@ -139,7 +139,7 @@ class VideoStateCache {
     }
 
     func cachePlaybackInfo(for mid: String, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
-        cache[mid] = (player: nil, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState, timestamp: Date())
+        cache[mid] = (player: cache[mid]?.player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState, timestamp: Date())
         trimCacheIfNeeded()
     }
 

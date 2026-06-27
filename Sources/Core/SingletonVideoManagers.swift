@@ -807,6 +807,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var isSeekingToRestoredPosition = false // Track if we're currently seeking to restored position
     private var isUsingBorrowedFeedPlayer = false
     private var prewarmedNextVideoMid: String?
+    private var prewarmedColdLoadMediaID: String?
     private var playbackSurfaceReadyMid: String?
     private var pendingSurfacePlayback: (player: AVPlayer, item: AVPlayerItem, log: String)?
     private var playbackSurfaceFallbackTask: Task<Void, Never>?
@@ -1047,6 +1048,19 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         singletonPlayer = AVPlayer()
         singletonPlayer?.isMuted = false
         
+    }
+
+    func prewarmColdLoadCacheIfNeeded(url: URL, mediaID: String, tweetId: String, mediaType: MediaType) {
+        guard prewarmedColdLoadMediaID != mediaID else { return }
+        prewarmedColdLoadMediaID = mediaID
+        initializePlayerEarly()
+        print("🔮 [FullScreenVideoManager] Prewarming fullscreen cold-load cache \(shortMID(mediaID))")
+        SharedAssetCache.shared.preloadPlayer(
+            for: url,
+            mediaID: mediaID,
+            tweetId: tweetId,
+            mediaType: mediaType
+        )
     }
 
     /// Load and play a video in the singleton player
@@ -2767,9 +2781,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     // We solve this by scheduling a delayed clear that gets cancelled when another detail view appears.
     private var activeDetailViewCount: Int = 0
     private var scheduledClearTask: Task<Void, Never>?
-    private var prewarmTask: Task<Void, Never>?
-    private var didPrewarmFirstItem: Bool = false
-    private var prewarmPlayer: AVPlayer? // separate from currentPlayer (doesn't affect detail playback state)
 
     func beginDetailViewSession() {
         activeDetailViewCount += 1
@@ -2806,43 +2817,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
             guard self.activeDetailViewCount == 0 else { return }
             self.clearCurrentVideo(preserveSharedFeedPlayback: true)
-        }
-    }
-
-    /// Prewarm the detail video pipeline by preparing a first AVPlayerItem at startup.
-    /// Uses a dedicated hidden player so it won't affect the active detail singleton state.
-    func prewarmFirstItemIfNeeded(url: URL, mediaID: String, mediaType: MediaType) {
-        guard !didPrewarmFirstItem else { return }
-        didPrewarmFirstItem = true
-
-        if prewarmPlayer == nil {
-            prewarmPlayer = AVPlayer()
-            prewarmPlayer?.isMuted = true
-        }
-
-        prewarmTask?.cancel()
-        prewarmTask = Task.detached(priority: .utility) { [url, mediaID, mediaType] in
-            do {
-                let item = try await SharedAssetCache.shared.getOrCreatePlayerItem(
-                    for: url,
-                    mediaID: mediaID,
-                    mediaType: mediaType
-                )
-                await MainActor.run {
-                    guard let player = self.prewarmPlayer else { return }
-                    player.replaceCurrentItem(with: item)
-                    player.pause()
-                    // IMPORTANT: `preroll(atRate:)` will throw an Obj-C exception unless
-                    // `player.status == .readyToPlay`. Never call it during prewarm unless ready.
-                    if player.status == .readyToPlay {
-                        player.preroll(atRate: 0.0) { _ in }
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    print("⚠️ [DetailVideoManager] Failed to prewarm first item for \(mediaID): \(error)")
-                }
-            }
         }
     }
     
@@ -3191,43 +3165,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         // Borrow the canonical feed player when available. This keeps one AVPlayer
         // moving across feed/detail/fullscreen instead of restarting decode/buffer
         // state on every surface switch.
-        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
-           let cachedItem = cachedPlayer.currentItem {
-            if releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(cachedPlayer, item: cachedItem, mid: mid, owner: "detail borrow") {
-                pendingFeedResumeTime = nil
-                activeFeedHandoffTime = nil
-            } else {
-                print("📱 [DetailVideoManager] Borrowing shared feed player \(shortMID(mid)): cached=\(detailDiagnostic(cachedPlayer, item: cachedItem))")
-                cachedItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-                AudioSessionManager.shared.activateForVideoPlayback()
-                currentPlayer = cachedPlayer
-                isUsingBorrowedFeedPlayer = true
-                isItemReady = cachedItem.status == .readyToPlay
-                isPlaybackRendering = false
-                isPlaying = true
-                Task { @MainActor [weak self] in
-                    guard let self, self.currentVideoMid == mid else { return }
-                    self.refreshDetailCachedMediaContent(for: mid)
-                }
-                updateDetailBufferedData(for: cachedItem)
-                isBuffering = shouldKeepDetailBuffering(player: cachedPlayer, item: cachedItem)
-                pendingFeedResumeTime = nil
-                activeFeedHandoffTime = nil
-                if isVideoAtEnd(cachedPlayer) {
-                    // A feed player can be handed to detail while it is within the
-                    // finish threshold. Pause before installing completion observers
-                    // so detail gets a controlled rewind instead of an immediate
-                    // finish event followed by a spinner-only resume.
-                    cachedPlayer.pause()
-                }
-                resetDetailRenderingProgress(to: currentPlayer?.currentTime() ?? .zero)
-                setupDetailVideoOutput(for: cachedItem)
-                applyStartupAudioMuteIfNeeded()
-                setupDetailCompletionObserver(cachedItem)
-                setupDetailTimeControlObserver()
-                startDetailPlayback(playerItem: cachedItem, mid: mid)
-                return
-            }
+        if borrowCachedFeedPlayerIfAvailable(mid: mid) {
+            return
         }
 
         pendingFeedResumeTime = activeFeedHandoffTime(for: mid)
@@ -3289,6 +3228,67 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 }
             }
         }
+    }
+
+    @discardableResult
+    private func borrowCachedFeedPlayerIfAvailable(mid: String) -> Bool {
+        var candidates: [(player: AVPlayer, source: String)] = []
+
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            candidates.append((cachedState.player, "VideoStateCache"))
+        }
+
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
+           !candidates.contains(where: { $0.player === cachedPlayer }) {
+            candidates.append((cachedPlayer, "SharedAssetCache"))
+        }
+
+        for candidate in candidates {
+            guard let cachedItem = candidate.player.currentItem else { continue }
+
+            if releaseCachedFeedPlayerForFocusedPlaybackIfNeeded(candidate.player, item: cachedItem, mid: mid, owner: "detail borrow from \(candidate.source)") {
+                pendingFeedResumeTime = nil
+                activeFeedHandoffTime = nil
+                return false
+            }
+
+            if candidate.source == "VideoStateCache" {
+                SharedAssetCache.shared.cachePlayer(candidate.player, for: mid)
+            }
+
+            print("📱 [DetailVideoManager] Borrowing \(candidate.source) feed player \(shortMID(mid)): cached=\(detailDiagnostic(candidate.player, item: cachedItem))")
+            cachedItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            AudioSessionManager.shared.activateForVideoPlayback()
+            currentPlayer = candidate.player
+            isUsingBorrowedFeedPlayer = true
+            isItemReady = cachedItem.status == .readyToPlay
+            isPlaybackRendering = false
+            isPlaying = true
+            Task { @MainActor [weak self] in
+                guard let self, self.currentVideoMid == mid else { return }
+                self.refreshDetailCachedMediaContent(for: mid)
+            }
+            updateDetailBufferedData(for: cachedItem)
+            isBuffering = shouldKeepDetailBuffering(player: candidate.player, item: cachedItem)
+            pendingFeedResumeTime = nil
+            activeFeedHandoffTime = nil
+            if isVideoAtEnd(candidate.player) {
+                // A feed player can be handed to detail while it is within the
+                // finish threshold. Pause before installing completion observers
+                // so detail gets a controlled rewind instead of an immediate
+                // finish event followed by a spinner-only resume.
+                candidate.player.pause()
+            }
+            resetDetailRenderingProgress(to: currentPlayer?.currentTime() ?? .zero)
+            setupDetailVideoOutput(for: cachedItem)
+            applyStartupAudioMuteIfNeeded()
+            setupDetailCompletionObserver(cachedItem)
+            setupDetailTimeControlObserver()
+            startDetailPlayback(playerItem: cachedItem, mid: mid)
+            return true
+        }
+
+        return false
     }
     
     func setStartupAudioMuteWindow(duration: TimeInterval) {

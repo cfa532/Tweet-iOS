@@ -68,7 +68,7 @@ struct TweetListView: View {
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
     @State private var lastScrollOffset: CGFloat = 0
-    @State private var didPrewarmSingletonFirstItem: Bool = false
+    @State private var didPrewarmFocusedVideoCache: Bool = false
     @State private var lastVisibleTweetIdBeforeLoad: String? = nil
     @State private var scrollProxy: ScrollViewProxy? = nil
     @State private var contentHeight: CGFloat = 0
@@ -699,7 +699,7 @@ struct TweetListView: View {
                 }
             }
 
-            // Prewarm singleton players based on the first available cached video (best-effort).
+            // Warm shared video cache based on the first available cached video (best-effort).
             // Defer during initial startup to prevent hangs
             Task.detached(priority: .background) {
                 // Wait for startup phase to end before prewarming videos
@@ -721,7 +721,7 @@ struct TweetListView: View {
                 // Defer prewarming to avoid overwhelming system when startup phase ends
                 Task.detached(priority: .background) {
                     await MainActor.run {
-                        self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                        self.prewarmFocusedVideoCacheFromFirstVideoIfNeeded()
                     }
                 }
             }
@@ -1073,7 +1073,7 @@ struct TweetListView: View {
                     // Wait 2 seconds after initial load before prewarming videos
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     await MainActor.run {
-                        self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                        self.prewarmFocusedVideoCacheFromFirstVideoIfNeeded()
                     }
                 }
             }
@@ -1110,8 +1110,8 @@ struct TweetListView: View {
     }
 
     @MainActor
-    private func prewarmSingletonPlayersFromFirstVideoIfNeeded() {
-        guard !didPrewarmSingletonFirstItem else { return }
+    private func prewarmFocusedVideoCacheFromFirstVideoIfNeeded() {
+        guard !didPrewarmFocusedVideoCache else { return }
 
         // Find the first video/HLS attachment we can resolve to a URL.
         for tweet in tweets {
@@ -1121,12 +1121,13 @@ struct TweetListView: View {
             for attachment in attachments where (attachment.type == .video || attachment.type == .hls_video) {
                 guard let url = attachment.getUrl(baseUrl) else { continue }
 
-                didPrewarmSingletonFirstItem = true
+                didPrewarmFocusedVideoCache = true
 
-                // Prewarm the detail singleton pipeline (no playback).
-                DetailVideoManager.shared.prewarmFirstItemIfNeeded(
+                // Warm the shared proxy/cache path used by fullscreen-owned cold loads.
+                FullScreenVideoManager.shared.prewarmColdLoadCacheIfNeeded(
                     url: url,
                     mediaID: attachment.mid,
+                    tweetId: tweet.mid,
                     mediaType: attachment.type
                 )
                 return
