@@ -630,7 +630,7 @@ struct TweetListView: View {
             let resumeSnapshot = pendingBackgroundResumeSnapshotForInitialLoad()
 
             if let resumeSnapshot,
-               let targetTweetId = resumeSnapshot.topTweetId,
+               let targetTweetId = resumeSnapshot.anchorTweetId ?? resumeSnapshot.topTweetId,
                !validPage.contains(where: { $0.mid == targetTweetId }) {
                 let maxResumeCachePages: UInt = 20
                 var nextPage = page + 1
