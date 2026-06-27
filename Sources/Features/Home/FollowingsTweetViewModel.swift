@@ -141,10 +141,25 @@ class FollowingsTweetViewModel: ObservableObject {
     var visiblePendingNewTweets: [Tweet] {
         let visibleTweetIds = Set(tweets.map(\.mid))
         return pendingNewTweets.filter { tweet in
-            !(tweet.isPrivate ?? false)
-            && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
-            && !visibleTweetIds.contains(tweet.mid)
+            isPendingNewFeedTweet(tweet, visibleTweetIds: visibleTweetIds)
         }
+    }
+
+    @MainActor
+    private func isNewerThanCurrentFeedTop(_ tweet: Tweet) -> Bool {
+        guard let topTweet = tweets.first else { return true }
+        if tweet.timestamp == topTweet.timestamp {
+            return tweet.mid > topTweet.mid
+        }
+        return tweet.timestamp > topTweet.timestamp
+    }
+
+    @MainActor
+    private func isPendingNewFeedTweet(_ tweet: Tweet, visibleTweetIds: Set<String>) -> Bool {
+        !(tweet.isPrivate ?? false)
+        && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
+        && !visibleTweetIds.contains(tweet.mid)
+        && isNewerThanCurrentFeedTop(tweet)
     }
 
     @MainActor
@@ -155,9 +170,7 @@ class FollowingsTweetViewModel: ObservableObject {
         }
         let visibleTweetIds = Set(tweets.map(\.mid))
         let newTweets = uniqueIncomingTweets.filter { tweet in
-            !(tweet.isPrivate ?? false)
-            && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
-            && !visibleTweetIds.contains(tweet.mid)
+            isPendingNewFeedTweet(tweet, visibleTweetIds: visibleTweetIds)
         }
         let snapshot = newTweets.sorted { $0.timestamp > $1.timestamp }
 
@@ -180,9 +193,7 @@ class FollowingsTweetViewModel: ObservableObject {
 
         let visibleTweetIds = Set(tweets.map(\.mid))
         let deferrableTweets = incomingTweets.filter { tweet in
-            !(tweet.isPrivate ?? false)
-            && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
-            && !visibleTweetIds.contains(tweet.mid)
+            isPendingNewFeedTweet(tweet, visibleTweetIds: visibleTweetIds)
         }
 
         updateNewTweetsSnapshot(deferrableTweets)
@@ -210,9 +221,7 @@ class FollowingsTweetViewModel: ObservableObject {
 
         let visibleTweetIds = Set(tweets.map(\.mid))
         let tweetsToApply = pendingTweets.filter { tweet in
-            !(tweet.isPrivate ?? false)
-            && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
-            && !visibleTweetIds.contains(tweet.mid)
+            isPendingNewFeedTweet(tweet, visibleTweetIds: visibleTweetIds)
         }
         let staleCount = pendingTweets.count - tweetsToApply.count
 
