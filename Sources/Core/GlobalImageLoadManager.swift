@@ -88,6 +88,7 @@ class GlobalImageLoadManager: ObservableObject {
     private var nonImageResponses: Set<String> = [] // Track requests that returned non-image content
     private var scheduledRetries: [String: DispatchWorkItem] = [:] // Track scheduled retries for cancellation
     private var permanentlyFailedRequests: Set<String> = [] // Track requests that have exhausted all retries
+    private var focusedImageMID: String?
     
     // MARK: - Memory Management
     private var currentMemoryUsage: UInt64 = 0
@@ -264,6 +265,12 @@ class GlobalImageLoadManager: ObservableObject {
                 return
             }
         }
+
+        if isBlockedByFocusedImage(request) {
+            addToPendingQueue(request)
+            print("⏸️ [IMAGE LOAD] Holding \(request.id) while fullscreen image \(focusedImageMID ?? "") is focused")
+            return
+        }
         
         // Check if we can start loading immediately
         if canStartLoad(priority: request.priority) {
@@ -438,6 +445,22 @@ class GlobalImageLoadManager: ObservableObject {
             || pendingRequests.contains { $0.id == id }
             || scheduledRetries[id] != nil
     }
+
+    /// Let the fullscreen image own image-download starts until it has a usable result.
+    func beginFocusedImageLoad(for mid: String) {
+        guard !mid.isEmpty else { return }
+        focusedImageMID = mid
+        cancelBlockedActiveLoadsForFocusedImage()
+        print("🎯 [IMAGE LOAD] Focused image load started: \(mid)")
+        processNextPendingRequest()
+    }
+
+    func endFocusedImageLoad(for mid: String) {
+        guard focusedImageMID == mid else { return }
+        focusedImageMID = nil
+        print("🎯 [IMAGE LOAD] Focused image load ended: \(mid)")
+        processNextPendingRequest()
+    }
     
     /// Get current memory usage information
     func getMemoryInfo() -> (current: UInt64, max: UInt64, pressure: Bool) {
@@ -476,6 +499,32 @@ class GlobalImageLoadManager: ObservableObject {
         request.attachment.mid.isEmpty ? nil : request.attachment.mid
     }
 
+    private func isBlockedByFocusedImage(_ request: ImageLoadRequest) -> Bool {
+        guard let focusedImageMID else { return false }
+        return request.attachment.mid != focusedImageMID
+    }
+
+    private func cancelBlockedActiveLoadsForFocusedImage() {
+        guard let focusedImageMID else { return }
+
+        var cancelled = 0
+        for id in Array(activeLoads.keys) {
+            let mediaID = activeLoadKeyById[id] ?? id
+            guard mediaID != focusedImageMID else { continue }
+
+            activeLoads[id]?.cancel()
+            ImageCacheManager.shared.cancelImageLoad(forMid: mediaID)
+            activeLoadWaiters.removeValue(forKey: id)
+            clearActiveLoadState(for: id)
+            cancelled += 1
+        }
+
+        if cancelled > 0 {
+            print("🛑 [IMAGE LOAD] Cancelled \(cancelled) active non-focused image load(s) for fullscreen image \(focusedImageMID)")
+            updateStatistics()
+        }
+    }
+
     private func clearActiveLoadState(for id: String) {
         activeLoads.removeValue(forKey: id)
         activeLoadPriorities.removeValue(forKey: id)
@@ -512,6 +561,12 @@ class GlobalImageLoadManager: ObservableObject {
             }
         }
     }
+
+    private func focusedRetryRequest(for request: ImageLoadRequest) -> ImageLoadRequest? {
+        guard focusedImageMID == request.attachment.mid else { return nil }
+        let candidates = [request] + (activeLoadWaiters[request.id] ?? [])
+        return candidates.first { $0.id.hasPrefix("browser_") } ?? candidates.first
+    }
     
     private func handleLoadFailure(_ request: ImageLoadRequest) {
         let currentRetryCount = retryCounts[request.id] ?? 0
@@ -527,18 +582,34 @@ class GlobalImageLoadManager: ObservableObject {
             
             // Longer delays with exponential backoff: 5s, 10s
             let delay = Double(newRetryCount) * 5.0
+            let focusedRetryRequest = focusedRetryRequest(for: request)
             
             // ✅ CRITICAL MEMORY LEAK FIX: Only capture minimal data, NOT completion handlers
             // Completion handlers may capture views, creating retain cycles via DispatchWorkItem
             // Instead of capturing the completion handler, we mark request as "needs retry"
             // and let the cell request it again when it reappears
             let requestId = request.id
+            let retryRequestId = focusedRetryRequest?.id
             
             // Create a weak reference to avoid retain cycles
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 // Remove the work item from tracking
                 self.scheduledRetries.removeValue(forKey: requestId)
+                if let retryRequestId {
+                    self.scheduledRetries.removeValue(forKey: retryRequestId)
+                }
+
+                if let focusedRetryRequest,
+                   self.focusedImageMID == focusedRetryRequest.attachment.mid {
+                    self.completedRequests.remove(requestId)
+                    self.completedRequests.remove(focusedRetryRequest.id)
+                    self.permanentlyFailedRequests.remove(focusedRetryRequest.id)
+                    self.retryCounts[focusedRetryRequest.id] = newRetryCount
+                    print("🔄 [GlobalImageLoadManager] Retrying focused fullscreen image: \(focusedRetryRequest.id)")
+                    self.loadImage(request: focusedRetryRequest)
+                    return
+                }
                 
                 // ✅ MEMORY FIX: Check if request was cancelled before retry
                 // If cancelLoad() was called, don't retry (cell disappeared)
@@ -566,6 +637,9 @@ class GlobalImageLoadManager: ObservableObject {
             }
             
             scheduledRetries[request.id] = workItem
+            if let retryRequestId {
+                scheduledRetries[retryRequestId] = workItem
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             print("DEBUG: [GlobalImageLoadManager] Scheduled retry #\(newRetryCount) in \(delay)s for: \(request.id)")
         } else {
@@ -921,6 +995,12 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func addToPendingQueue(_ request: ImageLoadRequest) {
+        if let existingIndex = pendingRequests.firstIndex(where: { $0.id == request.id }) {
+            let existing = pendingRequests[existingIndex]
+            guard request.priority.rawValue > existing.priority.rawValue else { return }
+            pendingRequests.remove(at: existingIndex)
+        }
+
         // Insert request in priority order (highest priority first)
         let insertIndex = pendingRequests.firstIndex { $0.priority.rawValue < request.priority.rawValue } ?? pendingRequests.count
         pendingRequests.insert(request, at: insertIndex)
@@ -954,11 +1034,12 @@ class GlobalImageLoadManager: ObservableObject {
     private func processNextPendingRequest() {
         guard !pendingRequests.isEmpty else { return }
 
-        let nextPriority = pendingRequests.first!.priority
-        guard canStartLoad(priority: nextPriority) else { return }
+        guard let nextIndex = pendingRequests.firstIndex(where: { request in
+            !isBlockedByFocusedImage(request) && canStartLoad(priority: request.priority)
+        }) else { return }
 
-        // Get the highest priority request
-        let nextRequest = pendingRequests.removeFirst()
+        // Get the highest priority request that is allowed to start now.
+        let nextRequest = pendingRequests.remove(at: nextIndex)
         startLoading(nextRequest)
     }
     

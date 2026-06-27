@@ -452,6 +452,23 @@ class ImageCacheManager: @unchecked Sendable {
         }
     }
 
+    func cancelImageLoad(forMid mid: String) {
+        guard !mid.isEmpty else { return }
+        let cacheKeys = [mid, "\(mid)_original"]
+        requestsQueue.async(flags: .barrier) {
+            var cancelled = 0
+            for cacheKey in cacheKeys {
+                if let task = self.ongoingRequests.removeValue(forKey: cacheKey) {
+                    task.cancel()
+                    cancelled += 1
+                }
+            }
+            if cancelled > 0 {
+                print("🛑 [ImageCacheManager] Cancelled \(cancelled) in-flight image request(s) for focused fullscreen load: \(mid)")
+            }
+        }
+    }
+
     private func getCacheKey(for attachment: MimeiFileType) -> String? {
         // ALWAYS use mid as the cache key (stable identifier)
         // If mid is somehow empty, this is a programming error that should be fixed at the source

@@ -356,11 +356,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     private func handleMessageCheckBackgroundTask(task: BGAppRefreshTask) {
-        didLaunchInBackground = didLaunchInBackground || UIApplication.shared.applicationState == .background
         print("[AppDelegate] 🔄 Background message check task STARTED")
 
         // Schedule the next background task
         Task { @MainActor in
+            self.noteBackgroundLaunchIfNeeded()
             self.scheduleNextMessageCheck()
         }
 
@@ -383,10 +383,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func handleMainFeedCheckBackgroundTask(task: BGAppRefreshTask) {
-        didLaunchInBackground = didLaunchInBackground || UIApplication.shared.applicationState == .background
         print("[AppDelegate] 🔄 Background main feed check task STARTED")
 
         Task { @MainActor in
+            self.noteBackgroundLaunchIfNeeded()
             self.scheduleNextMainFeedCheck()
         }
 
@@ -407,6 +407,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             checkTask.cancel()
             task.setTaskCompleted(success: false)
         }
+    }
+
+    @MainActor
+    private func noteBackgroundLaunchIfNeeded() {
+        didLaunchInBackground = didLaunchInBackground || UIApplication.shared.applicationState == .background
     }
     
     @MainActor

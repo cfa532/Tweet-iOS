@@ -36,6 +36,7 @@ struct MediaBrowserView: View {
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
     @State private var isDismissingForBackground = false
     @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
+    @State private var focusedImageMid: String?
     private var attachments: [MimeiFileType] {
         // Audio is handled by the compact playlist player; the browser pages visual media only.
         let allAttachments = currentTweet.attachments ?? []
@@ -149,6 +150,7 @@ struct MediaBrowserView: View {
                 FullScreenVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
                 setupFullScreenManager()
                 OverlayVisibilityCoordinator.shared.beginOverlayIfNeeded(id: "mediaBrowserView", source: "MediaBrowserView")
+                updateFocusedImageLoad(for: currentIndex)
 
                 // NOTE: Don't broadcast stopAllVideos here. Fullscreen borrows the
                 // feed's shared player, so overlay coverage should transfer ownership
@@ -165,10 +167,19 @@ struct MediaBrowserView: View {
                 // CRITICAL: Clean up controls timer to prevent CPU cycles accumulation
                 controlsTimer?.invalidate()
                 controlsTimer = nil
+                clearFocusedImageLoad()
                 
                 // DON'T post reloadVisibleVideosOnly here
                 // MediaCell videos manage themselves via VideoPlaybackCoordinator
                 // Fullscreen manager is now inactive and won't interfere
+            }
+            .onChange(of: currentIndex) { _, newIndex in
+                updateFocusedImageLoad(for: newIndex)
+                guard attachments.indices.contains(newIndex) else { return }
+                let selectedAttachment = attachments[newIndex]
+                if selectedAttachment.type == .image {
+                    loadImageIfNeeded(for: selectedAttachment, at: newIndex)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                 dismissFullscreenForBackground()
@@ -271,6 +282,41 @@ struct MediaBrowserView: View {
         // Set up exit fullscreen callback (when no more videos)
         FullScreenVideoManager.shared.onExitFullScreen = { [self] in
             dismissFullScreen()
+        }
+    }
+
+    private func updateFocusedImageLoad(for index: Int) {
+        guard attachments.indices.contains(index),
+              attachments[index].type == .image else {
+            cancelOriginalImageTasks(except: nil)
+            clearFocusedImageLoad()
+            return
+        }
+
+        let mid = attachments[index].mid
+        cancelOriginalImageTasks(except: index)
+        guard focusedImageMid != mid else { return }
+
+        clearFocusedImageLoad()
+        focusedImageMid = mid
+        GlobalImageLoadManager.shared.beginFocusedImageLoad(for: mid)
+        SharedAssetCache.shared.suspendFeedActivityForFocusedPlayback(
+            protecting: mid,
+            owner: "fullscreen image"
+        )
+    }
+
+    private func clearFocusedImageLoad() {
+        guard let focusedImageMid else { return }
+        GlobalImageLoadManager.shared.endFocusedImageLoad(for: focusedImageMid)
+        self.focusedImageMid = nil
+    }
+
+    private func cancelOriginalImageTasks(except protectedIndex: Int?) {
+        let indexesToCancel = originalImageTasks.keys.filter { $0 != protectedIndex }
+        for index in indexesToCancel {
+            originalImageTasks[index]?.cancel()
+            originalImageTasks.removeValue(forKey: index)
         }
     }
     
@@ -733,7 +779,9 @@ struct MediaBrowserView: View {
             // ✅ Load original image in background and replace compressed cache
             // This ensures fullscreen views use the highest quality image
             guard let url = attachment.getUrl(baseUrl) else { return }
-            startOriginalImageLoad(for: attachment, at: index, url: url)
+            if index == currentIndex {
+                startOriginalImageLoad(for: attachment, at: index, url: url)
+            }
             return
         }
         
@@ -758,7 +806,9 @@ struct MediaBrowserView: View {
                 
                 // ✅ Load original image in background and replace compressed cache
                 // This ensures fullscreen and detail views use the highest quality image
-                startOriginalImageLoad(for: attachment, at: index, url: url)
+                if index == currentIndex {
+                    startOriginalImageLoad(for: attachment, at: index, url: url)
+                }
             } else {
                 self.imageStates[index] = .error
             }
@@ -766,6 +816,7 @@ struct MediaBrowserView: View {
     }
 
     private func startOriginalImageLoad(for attachment: MimeiFileType, at index: Int, url: URL) {
+        guard index == currentIndex else { return }
         originalImageTasks[index]?.cancel()
         originalImageTasks[index] = Task {
             if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
