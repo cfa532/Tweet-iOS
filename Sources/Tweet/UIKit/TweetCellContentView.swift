@@ -364,6 +364,7 @@ class TweetCellContentView: UIView {
 
         // Forward content expansion callback (set before early return so it's always current)
         bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
+        embeddedTweetView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
         let showDelete = Gadget.canShowTweetDeleteMenu(
             appUser: hproseInstance.appUser,

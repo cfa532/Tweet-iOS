@@ -265,7 +265,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// Mute button background circle (26pt visual, inside 44pt touch area)
     private let muteCircleLayer: CALayer = {
         let layer = CALayer()
-        layer.backgroundColor = UIColor.black.withAlphaComponent(0.2).cgColor
+        layer.backgroundColor = UIColor.black.withAlphaComponent(0.4).cgColor
         layer.cornerRadius = 13
         return layer
     }()
@@ -273,7 +273,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// Mute button (only for single-video tweets) — 44pt touch area, 26pt visual circle
     private lazy var muteButton: UIButton = {
         let btn = UIButton(type: .system)
-        btn.tintColor = .white.withAlphaComponent(0.6)
+        btn.tintColor = .white
         btn.backgroundColor = .clear
         btn.layer.insertSublayer(muteCircleLayer, at: 0)
         btn.addTarget(self, action: #selector(muteTapped), for: .touchUpInside)
@@ -285,9 +285,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private lazy var timerLabel: UILabel = {
         let label = UILabel()
         label.font = .monospacedSystemFont(ofSize: 14, weight: .medium)
-        label.textColor = .white.withAlphaComponent(0.4)
+        label.textColor = .white.withAlphaComponent(0.6)
         label.textAlignment = .center
-        label.backgroundColor = UIColor.black.withAlphaComponent(0.2)
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.4)
         label.layer.cornerRadius = 13
         label.clipsToBounds = true
         label.isHidden = true

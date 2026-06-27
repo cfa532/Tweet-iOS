@@ -97,6 +97,7 @@ class EmbeddedTweetUIView: UIView {
     }
 
     var onTap: ((Tweet) -> Void)?
+    var onContentExpanded: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -164,8 +165,15 @@ class EmbeddedTweetUIView: UIView {
 
         // Tap gesture for navigation
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tap.cancelsTouchesInView = false
         addGestureRecognizer(tap)
         isUserInteractionEnabled = true
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        let bodyLocation = gestureRecognizer.location(in: bodyView)
+        guard bodyView.bounds.contains(bodyLocation) else { return true }
+        return !bodyView.isURLLinkPoint(bodyLocation) && !bodyView.isMoreLinkPoint(bodyLocation)
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -218,6 +226,9 @@ class EmbeddedTweetUIView: UIView {
         bodyView.onTweetBodyTap = { [weak self] in
             guard let self, let tweet = self.loadedTweet else { return }
             self.onTap?(tweet)
+        }
+        bodyView.onContentExpanded = { [weak self] in
+            self?.onContentExpanded?()
         }
 
         // Keep a real inset below embedded media so rounded borders do not clip the content.
@@ -355,6 +366,7 @@ class EmbeddedTweetUIView: UIView {
         currentTweetId = nil
         loadedTweet = nil
         onTap = nil
+        onContentExpanded = nil
         avatarView.prepareForReuse()
         headerView.prepareForReuse()
         bodyView.prepareForReuse()
