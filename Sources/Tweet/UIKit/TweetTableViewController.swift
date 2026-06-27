@@ -16,6 +16,9 @@ struct BackgroundFeedResumeSnapshot: Codable {
     let contentOffsetY: CGFloat
     let topTweetId: String?
     let topTweetOffsetY: CGFloat
+    let anchorTweetId: String?
+    let anchorTweetOffsetY: CGFloat?
+    let anchorViewportY: CGFloat?
     let createdAt: Date
 }
 
@@ -179,7 +182,8 @@ class TweetTableViewController: UITableViewController {
     private var didBecomeActiveObserver: NSObjectProtocol?
     private var reloadVisibleVideosObserver: NSObjectProtocol?
     private var needsVideoLayerRefresh = false
-    private var pendingBackgroundResumeRestoreWork: DispatchWorkItem?
+    private var pendingBackgroundResumeRestoreWorks: [DispatchWorkItem] = []
+    private var backgroundResumeRestoreGeneration: Int = 0
 
     // Observer for feed view appearance (to restart video playback after navigation)
     private var feedViewDidAppearObserver: NSObjectProtocol?
@@ -399,6 +403,7 @@ class TweetTableViewController: UITableViewController {
         loadingTimeoutTimer?.invalidate()
         embeddedTweetPrefetchInFlight.removeAll()
         cancelDirectionalImagePreloads()
+        cancelPendingBackgroundResumeRestores()
 
         // NOTE: Removed .shouldStopAllVideos notification from deinit
         // This was causing issues when navigating back from profile - it would stop
@@ -1045,6 +1050,7 @@ class TweetTableViewController: UITableViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         stopForegroundRecoveryWatchdog()
+        cancelPendingBackgroundResumeRestores()
 
         videoCoordinator.isFeedVisible = false
         feedPlaybackResumeGeneration += 1
@@ -1199,22 +1205,50 @@ class TweetTableViewController: UITableViewController {
         return tweets[regularIndex]
     }
 
-    private func topVisibleTweetAnchor() -> (tweetId: String, offsetY: CGFloat)? {
+    private func rowForTweetId(_ tweetId: String) -> Int? {
+        if let pinnedIndex = pinnedTweets.firstIndex(where: { $0.mid == tweetId }) {
+            return pinnedIndex
+        }
+        if let regularIndex = tweets.firstIndex(where: { $0.mid == tweetId }) {
+            return pinnedTweets.count + regularIndex
+        }
+        return nil
+    }
+
+    private func dominantVisibleTweetAnchor() -> (tweetId: String, tweetOffsetY: CGFloat, viewportY: CGFloat)? {
         guard let visibleRows = tableView.indexPathsForVisibleRows?.sorted(),
               !visibleRows.isEmpty else {
             return nil
         }
 
         let visibleTopY = tableView.contentOffset.y + tableView.adjustedContentInset.top
+        let visibleBottomY = tableView.contentOffset.y + tableView.bounds.height - tableView.adjustedContentInset.bottom
+        guard visibleBottomY > visibleTopY else { return nil }
 
+        var bestAnchor: (tweetId: String, tweetOffsetY: CGFloat, viewportY: CGFloat, visibleHeight: CGFloat)?
         for indexPath in visibleRows {
             guard let tweet = tweetForRow(indexPath.row) else { continue }
             let rowRect = tableView.rectForRow(at: indexPath)
-            let offsetY = max(0, visibleTopY - rowRect.minY)
-            return (tweet.mid, offsetY)
+            let intersectionTop = max(rowRect.minY, visibleTopY)
+            let intersectionBottom = min(rowRect.maxY, visibleBottomY)
+            let visibleHeight = intersectionBottom - intersectionTop
+            guard visibleHeight > 1 else { continue }
+
+            let anchorContentY = (intersectionTop + intersectionBottom) / 2
+            let anchor = (
+                tweetId: tweet.mid,
+                tweetOffsetY: anchorContentY - rowRect.minY,
+                viewportY: anchorContentY - tableView.contentOffset.y,
+                visibleHeight: visibleHeight
+            )
+
+            if bestAnchor == nil || anchor.visibleHeight > bestAnchor!.visibleHeight {
+                bestAnchor = anchor
+            }
         }
 
-        return nil
+        guard let bestAnchor else { return nil }
+        return (bestAnchor.tweetId, bestAnchor.tweetOffsetY, bestAnchor.viewportY)
     }
 
     private func currentBackgroundResumeSnapshot() -> BackgroundFeedResumeSnapshot? {
@@ -1224,13 +1258,16 @@ class TweetTableViewController: UITableViewController {
             return nil
         }
 
-        let anchor = topVisibleTweetAnchor()
+        let anchor = dominantVisibleTweetAnchor()
         return BackgroundFeedResumeSnapshot(
             feedIdentifier: feedIdentifier,
             appUserId: appUser.mid,
             contentOffsetY: tableView.contentOffset.y,
             topTweetId: anchor?.tweetId,
-            topTweetOffsetY: anchor?.offsetY ?? 0,
+            topTweetOffsetY: anchor?.tweetOffsetY ?? 0,
+            anchorTweetId: anchor?.tweetId,
+            anchorTweetOffsetY: anchor?.tweetOffsetY,
+            anchorViewportY: anchor?.viewportY,
             createdAt: Date()
         )
     }
@@ -1252,21 +1289,41 @@ class TweetTableViewController: UITableViewController {
         pendingBackgroundResumeSnapshot() != nil
     }
 
+    private func cancelPendingBackgroundResumeRestores() {
+        backgroundResumeRestoreGeneration += 1
+        pendingBackgroundResumeRestoreWorks.forEach { $0.cancel() }
+        pendingBackgroundResumeRestoreWorks.removeAll()
+    }
+
     private func schedulePendingBackgroundResumeRestore(reason: String) {
         guard let snapshot = pendingBackgroundResumeSnapshot() else { return }
 
-        pendingBackgroundResumeRestoreWork?.cancel()
+        cancelPendingBackgroundResumeRestores()
+        let generation = backgroundResumeRestoreGeneration
         applyBackgroundResumeSnapshot(snapshot, reason: "\(reason)-immediate", clearOnSuccess: false)
 
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            if self.applyBackgroundResumeSnapshot(snapshot, reason: "\(reason)-settled", clearOnSuccess: true) {
-                self.requestForegroundRecovery(reason: "backgroundResumeRestore")
-            }
-        }
+        let restorePasses: [(delay: TimeInterval, label: String, final: Bool)] = [
+            (0.10, "settle1", false),
+            (0.35, "settle2", false),
+            (0.80, "settle3", true)
+        ]
 
-        pendingBackgroundResumeRestoreWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        for pass in restorePasses {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                guard self.backgroundResumeRestoreGeneration == generation else { return }
+                if self.applyBackgroundResumeSnapshot(
+                    snapshot,
+                    reason: "\(reason)-\(pass.label)",
+                    clearOnSuccess: pass.final
+                ), pass.final {
+                    self.requestForegroundRecovery(reason: "backgroundResumeRestore")
+                    self.pendingBackgroundResumeRestoreWorks.removeAll()
+                }
+            }
+            pendingBackgroundResumeRestoreWorks.append(work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + pass.delay, execute: work)
+        }
     }
 
     @discardableResult
@@ -1280,11 +1337,15 @@ class TweetTableViewController: UITableViewController {
         tableView.layoutIfNeeded()
 
         let targetOffsetY: CGFloat?
-        if let tweetId = snapshot.topTweetId,
-           let regularIndex = tweets.firstIndex(where: { $0.mid == tweetId }) {
-            let indexPath = regularTweetIndexPath(regularIndex)
+        let anchorTweetId = snapshot.anchorTweetId ?? snapshot.topTweetId
+        let anchorTweetOffsetY = snapshot.anchorTweetOffsetY ?? snapshot.topTweetOffsetY
+        let anchorViewportY = snapshot.anchorViewportY ?? tableView.adjustedContentInset.top
+
+        if let tweetId = anchorTweetId,
+           let row = rowForTweetId(tweetId) {
+            let indexPath = IndexPath(row: row, section: 0)
             let rowRect = tableView.rectForRow(at: indexPath)
-            targetOffsetY = rowRect.minY + snapshot.topTweetOffsetY - tableView.adjustedContentInset.top
+            targetOffsetY = rowRect.minY + anchorTweetOffsetY - anchorViewportY
         } else if tableView.contentSize.height > snapshot.contentOffsetY {
             targetOffsetY = snapshot.contentOffsetY
         } else {
@@ -1312,7 +1373,7 @@ class TweetTableViewController: UITableViewController {
             BackgroundResumeStateStore.shared.clear(reason: "applied \(reason)")
         }
 
-        print("[BackgroundResume] Restored feed snapshot via \(reason), offset=\(Int(boundedOffsetY))")
+        print("[BackgroundResume] Restored feed snapshot via \(reason), anchor=\(anchorTweetId ?? "none"), offset=\(Int(boundedOffsetY))")
         return true
     }
 
@@ -2815,7 +2876,8 @@ class TweetTableViewController: UITableViewController {
             // Save to both instance variable (for same-session) and persistent storage
             savedScrollPosition = currentOffset
             ScrollPositionManager.shared.saveScrollPosition(currentOffset, for: feedIdentifier)
-            if let snapshot = currentBackgroundResumeSnapshot() {
+            if UIApplication.shared.applicationState == .background,
+               let snapshot = currentBackgroundResumeSnapshot() {
                 BackgroundResumeStateStore.shared.save(snapshot)
             }
         } else {
