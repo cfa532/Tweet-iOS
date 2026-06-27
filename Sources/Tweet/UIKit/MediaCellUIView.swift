@@ -796,34 +796,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func fadeOutVideoCoverForPlayback() {
-        guard isVideoAttachment,
-              imageView.image != nil,
-              !imageView.isHidden else {
-            clearBackgroundVideoCoverHold()
-            hideImageViewImmediately()
-            return
-        }
-
         videoPlayerView.isHidden = false
         imageView.layer.removeAllAnimations()
-        imageView.alpha = 1
-
-        UIView.animate(
-            withDuration: 0.14,
-            delay: 0,
-            options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseOut]
-        ) { [weak self] in
-            self?.imageView.alpha = 0
-        } completion: { [weak self] finished in
-            guard let self, finished else { return }
-            guard self.videoCellState == .playing || self.videoCellState == .playerReady else {
-                self.imageView.alpha = 1
-                return
-            }
-            self.imageView.isHidden = true
-            self.imageView.alpha = 1
-            self.clearBackgroundVideoCoverHold()
-        }
+        hideImageViewImmediately()
+        imageView.image = nil
+        clearBackgroundVideoCoverHold()
     }
 
     @discardableResult
@@ -854,11 +831,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard isVideoAttachment,
               self.player === player,
               imageView.image != nil else { return false }
-        guard playerHasLoadedData(player) else { return false }
-        let canReplaceCover = coordinatorWantsToPlay
-            ? (isVisibleVideoFrameReady(player) || hasRecentDecodedPlayback(for: player, maxAge: 1.0))
-            : (videoPlayerView.isLayerReadyForDisplay || hasRenderedFrameForCurrentPlayer)
-        guard canReplaceCover else { return false }
+        guard playerHasDisplayableFrame(player) else { return false }
 
         videoPlayerView.isHidden = false
         hideImageViewImmediately()
@@ -1668,11 +1641,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private var currentPlayerCanReplaceCover: Bool {
         guard let player else { return false }
-        if coordinatorWantsToPlay {
-            return isVisibleVideoFrameReady(player) || hasRecentDecodedPlayback(for: player, maxAge: 1.0)
-        }
-        return videoPlayerView.isLayerReadyForDisplay
+        return playerHasDisplayableFrame(player)
+    }
+
+    private func playerHasDisplayableFrame(_ player: AVPlayer) -> Bool {
+        guard self.player === player else { return false }
+        return videoPlayerView.isShowingPlayer(player) && videoPlayerView.isLayerReadyForDisplay
             || hasRenderedFrameForCurrentPlayer
+            || hasRecentDecodedPlayback(for: player, maxAge: 1.0)
     }
 
     private func softResetFeedPlayerIfEmpty(_ player: AVPlayer, mid: String) {
@@ -1974,6 +1950,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         videoPlayerView.onReadyForDisplay = { [weak self] in
             guard let self else { return }
             self.hasRenderedFrameForCurrentPlayer = true
+            if let player = self.player {
+                self.removeVideoCoverIfLoadedAndDisplayable(player, reason: "onReadyForDisplay-firstFrame")
+            }
             // Defer capture by one run-loop cycle: isReadyForDisplay fires before
             // the GPU composites the frame into the layer's backing store.
             // If a generated/cached cover is already visible, replace it with the
