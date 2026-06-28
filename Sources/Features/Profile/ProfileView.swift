@@ -28,9 +28,9 @@ struct ProfileView: View {
     @State private var didLoad = false
     /// Bumped when stale-IP recovery changes this profile's read route so tweets reload without clearing cached content.
     @State private var profileTweetsRefreshToken = 0
-    @State private var profileHeaderRefreshToken = 0
     @State private var resyncedTweets: [Tweet] = []
     @State private var resyncedTweetsToken = 0
+    @StateObject private var profileHeaderState = ProfileHeaderState()
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
@@ -50,19 +50,11 @@ struct ProfileView: View {
         user.mid == hproseInstance.appUser.mid
     }
     
-    @State private var isFollowing: Bool = false
-
     // Scroll detection state
     @State private var isNavigationVisible = true
     
     var body: some View {
-        // The follow button reads `isFollowing` only inside the `header:` closure that
-        // is later executed by a UIHostingController inside TweetTableView. SwiftUI's
-        // @State dependency tracking does not see reads inside escaping closures, so
-        // without a synchronous read here `body` would not re-run when `isFollowing`
-        // flips and the header would render with a stale value.
-        _ = isFollowing
-        return contentWithNavigation
+        contentWithNavigation
             .sheet(isPresented: $showEditSheet, onDismiss: handleSheetDismiss) {
                 profileEditSheet
             }
@@ -95,7 +87,7 @@ struct ProfileView: View {
     private var contentWithNavigation: some View {
         mainContentView
             .onAppear {
-                // Calculate isFollowing by checking if the user's mid is in the app user's followingList
+                // Keep the hosted SwiftUI profile header in sync with the app user's follow list.
                 setFollowingState((hproseInstance.appUser.followingList)?.contains(user.mid) ?? false)
             }
             .onReceive(hproseInstance.appUser.$followingList) { newList in
@@ -111,7 +103,9 @@ struct ProfileView: View {
             .task(id: user.mid) {
                 // Only fetch if this is the first load for this user
                 if !didLoad {
-                await refreshProfileData()
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard !Task.isCancelled else { return }
+                    await refreshProfileData()
                     didLoad = true
                 }
             }
@@ -158,24 +152,6 @@ struct ProfileView: View {
                 let animated = notification.userInfo?["animated"] as? Bool ?? false
                 postNavigationVisibilityNotification(isVisible: true, animated: animated)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .imageCached)) { notification in
-                guard isProfileAvatarCacheNotification(notification) else { return }
-                profileHeaderRefreshToken += 1
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in
-                guard (notification.userInfo?["userId"] as? String) == user.mid else { return }
-                profileHeaderRefreshToken += 1
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
-                guard (notification.userInfo?["userId"] as? String) == user.mid else { return }
-                profileHeaderRefreshToken += 1
-            }
-    }
-
-    private func isProfileAvatarCacheNotification(_ notification: Notification) -> Bool {
-        guard let avatar = user.avatar,
-              let avatarId = notification.userInfo?["avatarId"] as? String else { return false }
-        return avatarId == avatar || avatarId == "avatar_\(avatar)"
     }
     
     @ViewBuilder
@@ -219,9 +195,6 @@ struct ProfileView: View {
     private func handleViewAppear() {
         // Ensure navigation is visible when view appears
         isNavigationVisible = true
-        DispatchQueue.main.async {
-            profileTweetsRefreshToken += 1
-        }
         NotificationCenter.default.post(
             name: .navigationVisibilityChanged,
             object: nil,
@@ -273,15 +246,14 @@ struct ProfileView: View {
                     onShowLogin: onShowLogin,
                     onShowToast: onShowToast,
                     routeRefreshToken: profileTweetsRefreshToken,
-                    headerRefreshToken: profileHeaderRefreshToken,
                     resyncedTweets: resyncedTweets,
                     resyncedTweetsToken: resyncedTweetsToken,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
                                 user: user,
+                                headerState: profileHeaderState,
                                 isCurrentUser: isAppUser,
-                                isFollowing: isFollowing,
                                 onEditTap: {
                                     if hproseInstance.appUser.isGuest {
                                         onShowLogin?()
@@ -290,7 +262,7 @@ struct ProfileView: View {
                                     }
                                 },
                                 onFollowToggle: {
-                                    let optimisticFollowing = !isFollowing
+                                    let optimisticFollowing = !profileHeaderState.isFollowing
                                     setFollowingState(optimisticFollowing)
                                     Task {
                                         await handleToggleFollowing(for: user, optimisticFollowing: optimisticFollowing)
@@ -602,9 +574,8 @@ struct ProfileView: View {
     }
 
     private func setFollowingState(_ newValue: Bool) {
-        guard isFollowing != newValue else { return }
-        isFollowing = newValue
-        profileHeaderRefreshToken += 1
+        guard profileHeaderState.isFollowing != newValue else { return }
+        profileHeaderState.isFollowing = newValue
     }
     
     private func handleToggleFollowing(for user: User, optimisticFollowing: Bool) async {
@@ -735,6 +706,8 @@ struct ProfileView: View {
         let userId = user.mid
         Task {
             do {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled else { return }
                 let resyncResult = try await hproseInstance.resyncUser(userId: userId)
                 print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server with \(resyncResult.tweets.count) tweets")
                 

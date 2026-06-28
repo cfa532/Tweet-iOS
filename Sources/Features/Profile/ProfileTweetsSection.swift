@@ -71,10 +71,6 @@ class ProfileTweetsViewModel: ObservableObject {
             }
             
             
-            await MainActor.run {
-                tweets.mergeTweets(filteredTweets.compactMap{ $0 })
-            }
-            
             // Cache profile tweets under their authorId (which is user.mid for profile view)
             for tweet in filteredTweets.compactMap({ $0 }) {
                 TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
@@ -100,22 +96,6 @@ class ProfileTweetsViewModel: ObservableObject {
                 TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
             } else {
             }
-        }
-    }
-
-    func mergeResyncedTweets(_ resyncedTweets: [Tweet]) {
-        let visibleTweets = resyncedTweets.filter { tweet in
-            tweet.authorId == user.mid &&
-            !TweetDeletionRegistry.shared.isDeleted(tweet.mid) &&
-            (!(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid) &&
-            !pinnedTweetIds.contains(tweet.mid)
-        }
-
-        guard !visibleTweets.isEmpty else { return }
-        tweets.mergeTweets(visibleTweets)
-
-        for tweet in visibleTweets {
-            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
         }
     }
 
@@ -254,6 +234,8 @@ struct ProfileTweetsSection<Header: View>: View {
             pinnedTweets: pinnedTweets,
             feedIdentifier: "profile_\(user.mid)",
             externalRefreshToken: routeRefreshToken,
+            profileResyncedTweets: resyncedTweets,
+            profileResyncedTweetsToken: resyncedTweetsToken,
             emptyStateText: LocalizedStringKey("No tweets yet"),
             header: {
                 AnyView(
@@ -295,9 +277,6 @@ struct ProfileTweetsSection<Header: View>: View {
         }
         .onChange(of: pinnedTweetIds) { _, newPinnedTweetIds in
             viewModel.updatePinnedTweetIds(newPinnedTweetIds)
-        }
-        .onChange(of: resyncedTweetsToken) { _, _ in
-            viewModel.mergeResyncedTweets(resyncedTweets)
         }
     }
     

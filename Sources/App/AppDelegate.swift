@@ -383,7 +383,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func handleMainFeedCheckBackgroundTask(task: BGAppRefreshTask) {
-        print("[AppDelegate] 🔄 Background main feed check task STARTED")
+        print("[AppDelegate] Background main feed banner check disabled")
 
         Task { @MainActor in
             self.noteBackgroundLaunchIfNeeded()
@@ -391,15 +391,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
 
         let checkTask = Task {
-            if #available(iOS 16.0, *) {
-                if HproseInstance.shared.appUser.isGuest {
-                    print("[AppDelegate] Skipping background main feed check for guest user")
-                } else {
-                    await FollowingsTweetViewModel.shared.performBackgroundFeedCheck()
-                }
-            }
             task.setTaskCompleted(success: true)
-            print("[AppDelegate] ✅ Background main feed check completed successfully")
+            print("[AppDelegate] ✅ Background main feed banner check skipped")
         }
 
         task.expirationHandler = {
@@ -766,27 +759,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func scheduleMainFeedCheckAfterForegroundReturn() {
         Task { @MainActor in
             self.scheduleNextMainFeedCheck()
-        }
-
-        guard hasEnteredBackgroundInCurrentProcess else {
-            print("[AppDelegate] Skipping foreground main feed check during app startup")
             if #available(iOS 16.0, *) {
-                Task { @MainActor in
-                    FollowingsTweetViewModel.shared.clearPendingNewTweetsBanner(reason: "app startup foreground")
-                }
-            }
-            return
-        }
-
-        Task {
-            if #available(iOS 16.0, *) {
-                guard !HproseInstance.shared.appUser.isGuest else {
-                    print("[AppDelegate] Skipping foreground main feed check for guest user")
-                    return
-                }
-                await FollowingsTweetViewModel.shared.performForegroundFeedRefresh()
+                FollowingsTweetViewModel.shared.clearPendingNewTweetsBanner(reason: "main feed banner disabled")
             }
         }
+        print("[AppDelegate] Foreground main feed banner check disabled")
     }
     
     /// Refresh appUser's provider IP when app returns from background

@@ -1,10 +1,14 @@
 import SwiftUI
 
+final class ProfileHeaderState: ObservableObject {
+    @Published var isFollowing: Bool = false
+}
+
 @available(iOS 16.0, *)
 struct ProfileHeaderView: View {
     @ObservedObject var user: User
+    @ObservedObject var headerState: ProfileHeaderState
     let isCurrentUser: Bool
-    let isFollowing: Bool
     let onEditTap: () -> Void
     let onFollowToggle: () -> Void
     let onAvatarTap: () -> Void
@@ -56,7 +60,7 @@ struct ProfileHeaderView: View {
                 } else if !hproseInstance.appUser.isGuest {
                     // Only show follow/unfollow button if app user is not a guest
                     DebounceButton(
-                        isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"),
+                        headerState.isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"),
                         cooldownDuration: 0.5,
                         enableHaptic: false
                     ) {
@@ -66,7 +70,7 @@ struct ProfileHeaderView: View {
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 20)
-                            .fill(isFollowing ? Color(.systemRed) : Color(.systemBlue))
+                            .fill(headerState.isFollowing ? Color(.systemRed) : Color(.systemBlue))
                     )
                     .foregroundColor(.white)
                 }

@@ -194,6 +194,7 @@ class TweetTableViewController: UITableViewController {
 
     // Scroll position preservation
     private var savedScrollPosition: CGFloat?
+    private var didAttemptInitialSavedScrollPositionRestore = false
     private var isScrollingToTop: Bool = false
 
     // Feed identifier for persistent scroll position storage
@@ -212,6 +213,7 @@ class TweetTableViewController: UITableViewController {
     private var isUserDragging: Bool = false
     private var isDecelerating: Bool = false
     private var isTableViewUpdating: Bool = false
+    private var deferredPinnedTweets: [Tweet]?
     private var pendingHeightRelayoutTweetIds = Set<String>()
     /// Tweet IDs whose content is currently expanded by the user ("More..." tapped).
     /// `heightForRowAt` returns `automaticDimension` for these so the table re-measures
@@ -221,6 +223,10 @@ class TweetTableViewController: UITableViewController {
 
     private var isReadyForFeedVideoResume: Bool {
         isViewLoaded && view.window != nil && tableView.window != nil
+    }
+
+    private var isTableAttachedForLayout: Bool {
+        isViewLoaded && view.window != nil && tableView.window != nil && tableView.superview != nil
     }
 
     private var currentRowLayoutWidth: CGFloat {
@@ -766,10 +772,10 @@ class TweetTableViewController: UITableViewController {
             scheduleFeedPlaybackResume(after: resumeDelay, reason: "viewWillAppear")
         }
 
-        // Restore scroll position only when this table is first attached. UIKit keeps the
-        // live contentOffset during push/pop and modal returns; restoring again on every
-        // viewWillAppear causes a one-frame reposition flicker on return to feed.
-        if !isScrollingToTop && !hasAdjustedInitialPosition {
+        // Restore the in-memory offset only for the main feed. Profile/detail feeds are
+        // created frequently during navigation; applying a saved offset before their
+        // first layout can stack with media setup and make the first gesture feel frozen.
+        if feedIdentifier == "mainFeed", !isScrollingToTop && !hasAdjustedInitialPosition {
             // Check instance variable first, then in-memory ScrollPositionManager
             let position = savedScrollPosition ?? ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier)
             if let position {
@@ -799,8 +805,10 @@ class TweetTableViewController: UITableViewController {
             // and topInset is set (nav bar is present)
             // Ignore if already properly positioned or if user has scrolled
             // Also ignore if we just restored a saved position
-            let hasSavedPosition = savedScrollPosition != nil
-                || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+            let hasSavedPosition = (feedIdentifier == "mainFeed" && (
+                savedScrollPosition != nil
+                    || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+            ))
                 || hasPendingBackgroundResumeSnapshot()
             if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 && !hasSavedPosition {
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
@@ -880,7 +888,8 @@ class TweetTableViewController: UITableViewController {
 
             // If offset is too negative (header would be under nav bar), correct it
             // But only if we don't have a saved position to restore
-            let hasSavedPosition = savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+            let hasSavedPosition = feedIdentifier == "mainFeed"
+                && (savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil)
             if currentOffset < -topInset && !hasSavedPosition {
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
                 lastScrollOffset = -topInset
@@ -888,7 +897,7 @@ class TweetTableViewController: UITableViewController {
         }
 
         if headerViewBuilder != nil,
-           tableView.window != nil,
+           isTableAttachedForLayout,
            abs(tableView.bounds.width - lastHeaderLayoutWidth) > 1 {
             updateHeader()
         }
@@ -1082,35 +1091,75 @@ class TweetTableViewController: UITableViewController {
         BackgroundResumeStateStore.shared.clear(reason: "user scroll took control")
     }
 
+    private func scheduleInitialSavedScrollPositionRestoreIfNeeded(reason: String) {
+        guard feedIdentifier != "mainFeed" else { return }
+        guard !didAttemptInitialSavedScrollPositionRestore else { return }
+        guard savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil else { return }
+
+        didAttemptInitialSavedScrollPositionRestore = true
+        DispatchQueue.main.async { [weak self] in
+            self?.restoreInitialSavedScrollPositionIfValid(reason: reason, allowDeferral: true)
+        }
+    }
+
+    private func restoreInitialSavedScrollPositionIfValid(reason: String, allowDeferral: Bool) {
+        guard isTableAttachedForLayout, !tweets.isEmpty else { return }
+        guard let position = savedScrollPosition ?? ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) else { return }
+        guard !tableView.isTracking, !tableView.isDragging, !tableView.isDecelerating else { return }
+
+        let minimumOffsetY = -tableView.adjustedContentInset.top
+        let maximumOffsetY = max(
+            minimumOffsetY,
+            tableView.contentSize.height - tableView.bounds.height + tableView.adjustedContentInset.bottom
+        )
+
+        if allowDeferral,
+           position > minimumOffsetY + 1,
+           maximumOffsetY <= minimumOffsetY + 1,
+           tableView.numberOfRows(inSection: 0) > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.restoreInitialSavedScrollPositionIfValid(reason: reason, allowDeferral: false)
+            }
+            return
+        }
+
+        guard position >= minimumOffsetY, position <= maximumOffsetY else {
+            savedScrollPosition = nil
+            ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
+            tableView.setContentOffset(CGPoint(x: 0, y: minimumOffsetY), animated: false)
+            lastScrollOffset = minimumOffsetY
+            print("[ScrollRestore] Cleared invalid saved position for \(feedIdentifier) during \(reason)")
+            return
+        }
+
+        tableView.setContentOffset(CGPoint(x: 0, y: position), animated: false)
+        lastContentOffset = position
+        lastCallbackOffset = position
+        lastScrollOffset = position
+        savedScrollPosition = nil
+        print("[ScrollRestore] Restored saved position for \(feedIdentifier) during \(reason), offset=\(Int(position))")
+    }
+
     private func schedulePendingBackgroundResumeRestore(reason: String) {
         guard let snapshot = pendingBackgroundResumeSnapshot() else { return }
 
         cancelPendingBackgroundResumeRestores()
         let generation = backgroundResumeRestoreGeneration
-        applyBackgroundResumeSnapshot(snapshot, reason: "\(reason)-immediate", clearOnSuccess: false)
 
-        let restorePasses: [(delay: TimeInterval, label: String, final: Bool)] = [
-            (0.10, "settle1", false),
-            (0.35, "settle2", false),
-            (0.80, "settle3", true)
-        ]
-
-        for pass in restorePasses {
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                guard self.backgroundResumeRestoreGeneration == generation else { return }
-                if self.applyBackgroundResumeSnapshot(
-                    snapshot,
-                    reason: "\(reason)-\(pass.label)",
-                    clearOnSuccess: pass.final
-                ), pass.final {
-                    self.recoverVideoCoordinatorAfterForeground(reason: "backgroundResumeRestore")
-                    self.pendingBackgroundResumeRestoreWorks.removeAll()
-                }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.backgroundResumeRestoreGeneration == generation else { return }
+            if self.applyBackgroundResumeSnapshot(
+                snapshot,
+                reason: "\(reason)-settled",
+                clearOnSuccess: true
+            ) {
+                self.scheduleVideoVisibilityRefresh(reason: "backgroundResumeRestore")
             }
-            pendingBackgroundResumeRestoreWorks.append(work)
-            DispatchQueue.main.asyncAfter(deadline: .now() + pass.delay, execute: work)
+            self.pendingBackgroundResumeRestoreWorks.removeAll()
         }
+        pendingBackgroundResumeRestoreWorks.append(work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
     @discardableResult
@@ -1119,7 +1168,7 @@ class TweetTableViewController: UITableViewController {
         reason: String,
         clearOnSuccess: Bool
     ) -> Bool {
-        guard tableView.window != nil, !tweets.isEmpty else { return false }
+        guard isTableAttachedForLayout, !tweets.isEmpty else { return false }
         guard !tableView.isTracking,
               !tableView.isDragging,
               !tableView.isDecelerating,
@@ -1128,8 +1177,6 @@ class TweetTableViewController: UITableViewController {
             print("[BackgroundResume] Restore skipped during user scroll for \(reason)")
             return false
         }
-
-        tableView.layoutIfNeeded()
 
         let targetOffsetY: CGFloat?
         let anchorTweetId = snapshot.anchorTweetId ?? snapshot.topTweetId
@@ -1201,12 +1248,17 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Public API
     
     func updatePinnedTweets(_ tweets: [Tweet]) {
+        if isTableAttachedForLayout, isScrollInteractionActive {
+            deferredPinnedTweets = tweets
+            return
+        }
+
         let oldCount = pinnedTweets.count
         let oldPinnedTweets = pinnedTweets
         let oldOriginalTweetIds = Set(oldPinnedTweets.compactMap(\.originalTweetId))
         self.pinnedTweets = tweets
 
-        guard tableView.window != nil else { return }
+        guard isTableAttachedForLayout else { return }
 
         let newOriginalTweetIds = Set(tweets.compactMap(\.originalTweetId))
         prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds.subtracting(oldOriginalTweetIds))
@@ -1272,7 +1324,7 @@ class TweetTableViewController: UITableViewController {
         // This can happen when a pending SwiftUI update fires after navigation has already
         // popped this view (e.g. immediately after logout). Updating a detached table view
         // causes UITableView row-count assertion failures.
-        guard tableView.window != nil else {
+        guard isTableAttachedForLayout else {
             tweets = newTweets
             return
         }
@@ -1294,6 +1346,7 @@ class TweetTableViewController: UITableViewController {
             isTableViewUpdating = true
             tableView.reloadData()
             isTableViewUpdating = false
+            scheduleInitialSavedScrollPositionRestoreIfNeeded(reason: "initialTweets")
             rebuildVideoListAndRefreshVisibility(reason: "initialTweetsVideoList")
             schedulePendingBackgroundResumeRestore(reason: "initialTweets")
             
@@ -1351,14 +1404,12 @@ class TweetTableViewController: UITableViewController {
                 isTableViewUpdating = true
                 let indexPaths = (0..<potentialPrependCount).map { regularTweetIndexPath($0) }
                 if preservesScrollPositionOnPrepend {
-                    // Main feed. At the very top (e.g. app open) the new tweets should
-                    // surface — leave the offset so they show at the top. Only when the
-                    // user is scrolled down (e.g. a push-notification tweet arriving while
-                    // reading) do we preserve their position: insertRows above the viewport
-                    // shifts content down without UIKit adjusting the offset, so we restore
-                    // it by the inserted height to keep the same rows on screen.
+                    // Main feed. At idle top (e.g. app open), let fresh top tweets surface.
+                    // Once the user has started interacting, keep the same rows under them.
+                    // insertRows above the viewport shifts content down without UIKit adjusting
+                    // the offset, so restore by the inserted height.
                     let scrolledDown = tableView.contentOffset.y > tableView.adjustedContentInset.top + 10
-                    if scrolledDown {
+                    if scrolledDown || isScrollInteractionActive {
                         let contentHeightBefore = tableView.contentSize.height
                         let contentOffsetBefore = tableView.contentOffset.y
                         tableView.insertRows(at: indexPaths, with: .none)
@@ -1381,7 +1432,7 @@ class TweetTableViewController: UITableViewController {
                     // estimated position and the view drifts once the cell renders.
                     tableView.insertRows(at: indexPaths, with: .none)
                     DispatchQueue.main.async { [weak self] in
-                        guard let self else { return }
+                        guard let self, self.isTableAttachedForLayout else { return }
                         self.tableView.layoutIfNeeded()
                         let topRow = self.pinnedTweets.count
                         if topRow < self.tableView.numberOfRows(inSection: 0) {
@@ -1460,10 +1511,33 @@ class TweetTableViewController: UITableViewController {
     
     private var needsHeaderUpdate = false
 
+    private var isScrollInteractionActive: Bool {
+        tableView.isTracking
+            || tableView.isDragging
+            || tableView.isDecelerating
+            || isUserDragging
+            || isDecelerating
+    }
+
+    private func applyDeferredTableChromeUpdatesAfterScroll() {
+        if needsHeaderUpdate {
+            updateHeader()
+        }
+
+        if let deferredPinnedTweets {
+            self.deferredPinnedTweets = nil
+            updatePinnedTweets(deferredPinnedTweets)
+        }
+    }
+
     func updateHeader() {
         // Defer header layout until the view is in the hierarchy to avoid
         // "UITableView layout outside view hierarchy" warnings.
-        guard viewIfLoaded?.window != nil else {
+        guard isTableAttachedForLayout else {
+            needsHeaderUpdate = true
+            return
+        }
+        guard !isScrollInteractionActive else {
             needsHeaderUpdate = true
             return
         }
@@ -1605,7 +1679,7 @@ class TweetTableViewController: UITableViewController {
         if stateChanged {
         }
 
-        guard tableView.window != nil else {
+        guard isTableAttachedForLayout else {
             // SwiftUI can deliver loading state before the UIKit table is attached.
             // Mutating tableFooterView while detached forces UIKit to lay out
             // visible rows outside the view hierarchy and emits a noisy warning.
@@ -1695,7 +1769,7 @@ class TweetTableViewController: UITableViewController {
         loadingTimeoutTimer?.invalidate()
         loadingTimeoutTimer = nil
 
-        guard tableView.window != nil else {
+        guard isTableAttachedForLayout else {
             needsFooterUpdate = true
             loadingSpinnerStartTime = nil
             return
@@ -2367,6 +2441,7 @@ class TweetTableViewController: UITableViewController {
             performPendingHeightRelayout()
             saveScrollPositionIfNeeded()
             triggerPreloadOnScrollStop()
+            applyDeferredTableChromeUpdatesAfterScroll()
         }
     }
 
@@ -2389,6 +2464,8 @@ class TweetTableViewController: UITableViewController {
         if scrollView.contentOffset.y <= -topInset + 10 {
             showBarsWithoutAnimation()
         }
+
+        applyDeferredTableChromeUpdatesAfterScroll()
     }
 
     override func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
@@ -2694,17 +2771,18 @@ class TweetTableViewController: UITableViewController {
     
     // MARK: - Video Playback Coordination
 
-    private func rebuildVideoListAndRefreshVisibility(reason _: String) {
+    private func rebuildVideoListAndRefreshVisibility(reason: String) {
         let currentTweets = tweets
         let currentPinnedTweets = pinnedTweets
         videoCoordinator.buildVideoList(from: currentTweets, pinnedTweets: currentPinnedTweets) { [weak self] in
-            DispatchQueue.main.async { [weak self] in
+            let delay: TimeInterval = self?.feedIdentifier == "mainFeed" ? 0.18 : 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.tableView.window != nil else { return }
+                guard !self.isScrollInteractionActive else { return }
                 self.lastVisibleTweetIds = []
                 self.lastLoadVisibleVideoIds = []
                 self.lastContinuePlaybackVideoIds = []
                 self.lastOnScreenVideoIds = []
-                self.forceLayoutVisibleCellsForVisibilityPass()
                 self.updateVisibleTweetsForVideoPlayback()
             }
         }
@@ -2717,7 +2795,7 @@ class TweetTableViewController: UITableViewController {
         let isLightweightUpdate = reason == "tweetsSameOrder" || reason == "emptyDiff"
         let delays: [TimeInterval]
         if isFeedReturn {
-            delays = [0, 0.15]
+            delays = [0.18]
         } else if isLightweightUpdate {
             delays = [0.1]
         } else {
@@ -2728,7 +2806,8 @@ class TweetTableViewController: UITableViewController {
                 guard let self,
                       self.videoVisibilityRefreshGeneration == generation,
                       self.tableView.window != nil else { return }
-                if !isFeedReturn && !isLightweightUpdate {
+                guard !self.isScrollInteractionActive else { return }
+                if delay > 0, !isFeedReturn && !isLightweightUpdate {
                     self.forceLayoutVisibleCellsForVisibilityPass()
                 }
                 self.updateVisibleTweetsForVideoPlayback()
@@ -2737,7 +2816,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func forceLayoutVisibleCellsForVisibilityPass() {
-        guard isReadyForFeedVideoResume else { return }
+        guard isTableAttachedForLayout else { return }
         guard !isUserDragging && !isDecelerating else { return }
         tableView.layoutIfNeeded()
         for cell in tableView.visibleCells {

@@ -255,6 +255,7 @@ class SharedAssetCache: ObservableObject {
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var preloadedThumbnailMids: Set<String> = []
+    private var decodedPreloadThumbnailMids: Set<String> = []
     private var backgroundPosterMids: Set<String> = []
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
 
@@ -2255,6 +2256,53 @@ class SharedAssetCache: ObservableObject {
 
         preloadTasks[cacheKey] = task
     }
+
+    /// Preload only enough media state to produce a poster frame.
+    /// This intentionally avoids creating/warming an AVPlayer so near-viewport work
+    /// cannot compete with scrolling or foreground gestures.
+    func preloadPoster(for url: URL, mediaID explicitMediaID: String? = nil, tweetId: String? = nil, mediaType: MediaType? = nil) {
+        guard let mediaID = explicitMediaID ?? extractMediaID(from: url) else { return }
+        let cacheKey = mediaID
+
+        guard cachedThumbnail(for: mediaID) == nil else { return }
+
+        if let cachedAsset = assetCache[cacheKey] {
+            generateThumbnail(from: cachedAsset, for: mediaID)
+            return
+        }
+
+        if preloadTasks[cacheKey] != nil { return }
+
+        if let loadingTask = loadingTasks[cacheKey] {
+            let task = Task {
+                defer { preloadTasks.removeValue(forKey: cacheKey) }
+                do {
+                    let asset = try await loadingTask.value
+                    guard !Task.isCancelled,
+                          cachedThumbnail(for: mediaID) == nil else { return }
+                    generateThumbnail(from: asset, for: mediaID)
+                } catch {
+                    // Poster preload failure is non-critical; visible playback can still load normally.
+                }
+            }
+            preloadTasks[cacheKey] = task
+            return
+        }
+
+        let task = Task {
+            defer { preloadTasks.removeValue(forKey: cacheKey) }
+            do {
+                let asset = try await getAsset(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType)
+                guard !Task.isCancelled,
+                      cachedThumbnail(for: mediaID) == nil else { return }
+                generateThumbnail(from: asset, for: mediaID)
+            } catch {
+                // Poster preload failure is non-critical; visible playback can still load normally.
+            }
+        }
+
+        preloadTasks[cacheKey] = task
+    }
     
     /// Preload player (not just asset) for upcoming video in scroll direction.
     /// Creates an AVPlayer, warms a small initial buffer, and decodes a non-black
@@ -2319,9 +2367,11 @@ class SharedAssetCache: ObservableObject {
                     return
                 }
 
-                if cachedThumbnail(for: mediaID) == nil,
+                let needsDecodedFrame = cachedThumbnail(for: mediaID) == nil ||
+                    (preloadedThumbnailMids.contains(mediaID) && !decodedPreloadThumbnailMids.contains(mediaID))
+                if needsDecodedFrame,
                    let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID) {
-                    if await generateDecodedPreloadFrame(from: player, for: mediaID) == false,
+                    if await generateDecodedPreloadFrame(from: player, for: mediaID, allowReplacingPreloadThumbnail: true) == false,
                        cachedThumbnail(for: mediaID) == nil {
                         generateThumbnail(from: readyAsset, for: mediaID)
                     }
@@ -2369,11 +2419,13 @@ class SharedAssetCache: ObservableObject {
 
         let task = Task {
             defer { preloadTasks.removeValue(forKey: mediaID) }
-            guard cachedThumbnail(for: mediaID) == nil else { return }
+            let needsDecodedFrame = cachedThumbnail(for: mediaID) == nil ||
+                (preloadedThumbnailMids.contains(mediaID) && !decodedPreloadThumbnailMids.contains(mediaID))
+            guard needsDecodedFrame else { return }
 
             if let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID),
-               cachedThumbnail(for: mediaID) == nil {
-                if await generateDecodedPreloadFrame(from: player, for: mediaID) == false,
+               cachedThumbnail(for: mediaID) == nil || preloadedThumbnailMids.contains(mediaID) {
+                if await generateDecodedPreloadFrame(from: player, for: mediaID, allowReplacingPreloadThumbnail: true) == false,
                    cachedThumbnail(for: mediaID) == nil {
                     generateThumbnail(from: readyAsset, for: mediaID)
                 }
@@ -2430,9 +2482,20 @@ class SharedAssetCache: ObservableObject {
     /// AVAssetImageGenerator is unreliable for some local-HLS/proxy assets until
     /// playback has decoded media, so this path prerolls the muted off-screen player
     /// and grabs a pixel buffer before the cell scrolls into view.
-    private func generateDecodedPreloadFrame(from player: AVPlayer, for mediaID: String) async -> Bool {
-        guard cachedThumbnail(for: mediaID) == nil,
-              let item = player.currentItem else { return cachedThumbnail(for: mediaID) != nil }
+    private func generateDecodedPreloadFrame(
+        from player: AVPlayer,
+        for mediaID: String,
+        allowReplacingPreloadThumbnail: Bool = false
+    ) async -> Bool {
+        let existingThumbnail = cachedThumbnail(for: mediaID)
+        if existingThumbnail != nil {
+            guard allowReplacingPreloadThumbnail,
+                  preloadedThumbnailMids.contains(mediaID),
+                  !decodedPreloadThumbnailMids.contains(mediaID) else {
+                return true
+            }
+        }
+        guard let item = player.currentItem else { return existingThumbnail != nil }
 
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
@@ -2472,7 +2535,7 @@ class SharedAssetCache: ObservableObject {
             if let image = copyPreloadFrame(from: output, player: player),
                 !VideoFrameExtractor.isMostlyBlack(image),
                !VideoFrameExtractor.isMostlyWhite(image) {
-                storeCachedThumbnail(image, for: mediaID, source: "preload")
+                storeCachedThumbnail(image, for: mediaID, source: "preload-decoded")
                 if !wasPlaying {
                     player.pause()
                 }
@@ -2600,6 +2663,7 @@ class SharedAssetCache: ObservableObject {
         if VideoFrameExtractor.isMostlyBlack(image) || VideoFrameExtractor.isMostlyWhite(image) {
             VideoLastFrameCache.shared.clear(for: mediaID)
             preloadedThumbnailMids.remove(mediaID)
+            decodedPreloadThumbnailMids.remove(mediaID)
             return nil
         }
         return image
@@ -2608,6 +2672,7 @@ class SharedAssetCache: ObservableObject {
     func hasPreloadedThumbnail(for mediaID: String) -> Bool {
         guard cachedThumbnail(for: mediaID) != nil else {
             preloadedThumbnailMids.remove(mediaID)
+            decodedPreloadThumbnailMids.remove(mediaID)
             return false
         }
         return preloadedThumbnailMids.contains(mediaID)
@@ -2652,10 +2717,16 @@ class SharedAssetCache: ObservableObject {
         guard !VideoFrameExtractor.isMostlyBlack(image),
               !VideoFrameExtractor.isMostlyWhite(image) else { return }
         VideoLastFrameCache.shared.set(image, for: mediaID)
-        if source == "preload" {
+        if source == "preload" || source == "preload-decoded" {
             preloadedThumbnailMids.insert(mediaID)
+            if source == "preload-decoded" {
+                decodedPreloadThumbnailMids.insert(mediaID)
+            } else {
+                decodedPreloadThumbnailMids.remove(mediaID)
+            }
         } else {
             preloadedThumbnailMids.remove(mediaID)
+            decodedPreloadThumbnailMids.remove(mediaID)
         }
         NotificationCenter.default.post(
             name: .videoThumbnailCached,
@@ -3286,6 +3357,7 @@ class SharedAssetCache: ObservableObject {
         protectedPreloadMids.removeAll()
         preloadedPlayerGraceExpirations.removeAll()
         preloadedThumbnailMids.formIntersection(visibleMidsForPosters)
+        decodedPreloadThumbnailMids.formIntersection(visibleMidsForPosters)
         backgroundPosterMids.removeAll()
 
         print("🌙 [SharedAssetCache] Background release: \(playerCount) players released, \(assetCount) assets cleared, \(mediaIDsToCancel.count) media downloads cancelled, \(visibleMidsForPosters.count) visible poster(s) kept")

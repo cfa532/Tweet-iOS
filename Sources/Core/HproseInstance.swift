@@ -887,7 +887,7 @@ final class HproseInstance: ObservableObject {
         
         print("DEBUG: [fetchComments] Using author's baseUrl (\(author.baseUrl?.absoluteString ?? "nil")) for tweet \(parentTweet.mid)")
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -1122,20 +1122,6 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
-                    // For retweets/quoted tweets, ensure the original tweet is available
-                    if let originalTweetId = tweet.originalTweetId,
-                       let originalAuthorId = tweet.originalAuthorId {
-                        if Tweet.getInstance(for: originalTweetId) == nil {
-                            // Original tweet not in cache — try fetching from server
-                            let fetched = try? await self.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
-                            if fetched == nil {
-                                print("[fetchTweetFeed] Skipping tweet \(tweet.mid) - original tweet \(originalTweetId) not available")
-                                tweets.append(nil)
-                                continue
-                            }
-                        }
-                    }
-
                     // Cache main feed tweets under appUser.mid for efficient main feed loading
                     TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
                     tweets.append(tweet)
@@ -1285,7 +1271,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ] as [String : Any]
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
@@ -1342,20 +1328,6 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
-                    // For retweets/quoted tweets, ensure the original tweet is available
-                    if let originalTweetId = tweet.originalTweetId,
-                       let originalAuthorId = tweet.originalAuthorId {
-                        if Tweet.getInstance(for: originalTweetId) == nil {
-                            // Original tweet not in cache — try fetching from server
-                            let fetched = try? await self.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
-                            if fetched == nil {
-                                print("[fetchUserTweets] Skipping tweet \(tweet.mid) - original tweet \(originalTweetId) not available")
-                                tweets.append(nil)
-                                continue
-                            }
-                        }
-                    }
-
                     // Cache tweet under its authorId
                     TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                     tweets.append(tweet)
@@ -1422,7 +1394,7 @@ final class HproseInstance: ObservableObject {
         ]
         
         do {
-            let rawResponse = authorClient.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: authorClient, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
             if let tweetDict = unwrappedResponse as? [String: Any] {
@@ -1484,7 +1456,7 @@ final class HproseInstance: ObservableObject {
             "hostid": author?.hostIds?.first,
             "appuserid": appUser.mid
         ]
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         if let tweetDict = unwrappedResponse as? [String: Any] {
@@ -1535,7 +1507,7 @@ final class HproseInstance: ObservableObject {
             }
             let client = clientPool.getClientByIP(for: entryIP)
 
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
             if let stringResponse = unwrappedResponse as? String {
@@ -2008,7 +1980,7 @@ final class HproseInstance: ObservableObject {
                 hproseClient.timeout = 15
                 
                 // Make server call
-                guard let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
+                guard let rawResponse = await invokeRunMApp(using: hproseClient, entry: entry, params: params) else {
                     throw HproseError.noResponse(userId: user.mid)
                 }
                 
@@ -2280,7 +2252,7 @@ final class HproseInstance: ObservableObject {
         }
         
         // Let network errors propagate as exceptions
-        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: hproseClient, entry: entry, params: params)
         print("DEBUG: [_getProviderIP][RAW] mid=\(mid), rawResponse=\(providerIPDebugDescription(rawResponse))")
         guard let response = rawResponse else {
             print("DEBUG: [_getProviderIP] No response from server - network error")
@@ -2587,7 +2559,7 @@ final class HproseInstance: ObservableObject {
 
         print("DEBUG: [resyncUser] Calling resync_user for userId: \(userId) with baseUrl: \(route)")
 
-        guard let rawResponse = client.invoke("runMApp", withArgs: [entry, params]) else {
+        guard let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from resync_user for user \(userId)"])
         }
 
@@ -3007,7 +2979,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -3159,7 +3131,7 @@ final class HproseInstance: ObservableObject {
         let originalTimeout = client.timeout
         client.timeout = 30.0
         defer { client.timeout = originalTimeout }
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
         if let dataDict = unwrappedResponse as? [String: Any],
@@ -7279,7 +7251,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)

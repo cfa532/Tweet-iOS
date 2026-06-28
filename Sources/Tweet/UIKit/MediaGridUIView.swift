@@ -550,9 +550,10 @@ class MediaGridUIView: UIView {
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
             let isLoadVisible = isGridVisible && loadVisibleArea > 0
+            let isPlayable = ratio >= FeedPlaybackTuning.videoStartVisibilityRatio
             cellView.setVisible(
                 isLoadVisible,
-                shouldAcquirePlayer: isLoadVisible && AppDelegate.isVideoInfrastructureReady
+                shouldAcquirePlayer: isPlayable && AppDelegate.isVideoInfrastructureReady
             )
 
             guard cellView.isVideoAttachment,
@@ -563,7 +564,7 @@ class MediaGridUIView: UIView {
             if ratio >= playbackContinueVisibilityThreshold {
                 continuePlayback.append(identifier)
             }
-            if ratio >= FeedPlaybackTuning.videoStartVisibilityRatio {
+            if isPlayable {
                 playable.append(identifier)
             }
         }

@@ -18,6 +18,70 @@ private struct TweetContentHeightPreferenceKey: PreferenceKey {
 }
 
 @available(iOS 16.0, *)
+private struct ProfileNewTweetsBanner: View {
+    let tweets: [Tweet]
+    let onTap: () -> Void
+
+    var body: some View {
+        VStack {
+            Button(action: onTap) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+
+                    avatarCluster
+
+                    Text(title)
+                        .font(.system(size: 15, weight: .regular))
+                }
+                .foregroundColor(.white)
+                .padding(.leading, 12)
+                .padding(.trailing, 14)
+                .frame(height: 44)
+                .background(Capsule().fill(Color.accentColor))
+                .clipShape(Capsule())
+                .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 3)
+            }
+            .buttonStyle(.plain)
+            .transition(.move(edge: .top).combined(with: .opacity))
+
+            Spacer()
+        }
+        .padding(.top, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(!tweets.isEmpty)
+        .animation(.easeOut(duration: 0.22), value: tweets.map(\.mid))
+    }
+
+    private var title: String {
+        let count = tweets.count
+        let format = count == 1
+            ? NSLocalizedString("new_tweets_banner_one", comment: "New tweet floating pill title")
+            : NSLocalizedString("new_tweets_banner_many", comment: "New tweets floating pill title")
+        return String(format: format, count > 9 ? "9+" : "\(count)")
+    }
+
+    private var avatarCluster: some View {
+        HStack(spacing: -9) {
+            ForEach(Array(distinctAuthors.prefix(3).enumerated()), id: \.element.mid) { index, user in
+                Avatar(user: user, size: 26)
+                    .frame(width: 26, height: 26)
+                    .overlay(Circle().stroke(Color.white.opacity(0.85), lineWidth: 1))
+                    .zIndex(Double(3 - index))
+            }
+        }
+        .padding(.horizontal, distinctAuthors.isEmpty ? 0 : 4)
+    }
+
+    private var distinctAuthors: [User] {
+        var seen = Set<String>()
+        return tweets.compactMap(\.author).filter { user in
+            seen.insert(user.mid).inserted
+        }
+    }
+}
+
+@available(iOS 16.0, *)
 struct TweetListView: View {
     // MARK: - Properties
     let title: String
@@ -39,6 +103,8 @@ struct TweetListView: View {
     let preservesScrollPositionOnPrepend: Bool
     /// External signal used by profile route recovery to reload page 0 while preserving currently visible tweets.
     let externalRefreshToken: Int
+    let profileResyncedTweets: [Tweet]
+    let profileResyncedTweetsToken: Int
     let emptyStateText: LocalizedStringKey?
     private let pageSize: UInt = 10  // Manual load-more only
 
@@ -73,6 +139,8 @@ struct TweetListView: View {
     @State private var hasAppearedOnce: Bool = false  // Track if view has appeared before (to detect navigation return)
     @State private var lastCleanupTime: Date = Date()
     @State private var didConfirmEmptyFromServer: Bool = false
+    @State private var pendingProfileNewTweets: [Tweet] = []
+    @State private var showProfileNewTweetsBanner = false
     private let cleanupInterval: TimeInterval = 10.0  // Cleanup every 10 seconds max
 
     /// Per-feed video coordinator — main feed uses .shared, other feeds get independent instances
@@ -127,6 +195,137 @@ struct TweetListView: View {
         candidateTweets.filter { !TweetDeletionRegistry.shared.isDeleted($0.mid) }
     }
 
+    private var shouldUseProfileNewTweetsBanner: Bool {
+        feedIdentifier.hasPrefix("profile_")
+    }
+
+    private var isProfileAtTopAfterInitialization: Bool {
+        abs(ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) ?? 0) <= 0.5
+    }
+
+    private var visiblePendingProfileNewTweets: [Tweet] {
+        let visibleTweetIds = Set(tweets.map(\.mid))
+        return pendingProfileNewTweets.filter { tweet in
+            isPendingProfileNewTweet(tweet, visibleTweetIds: visibleTweetIds)
+        }
+    }
+
+    private func isNewerThanCurrentTop(_ tweet: Tweet) -> Bool {
+        guard let topTweet = tweets.first else { return false }
+        if tweet.timestamp == topTweet.timestamp {
+            return tweet.mid > topTweet.mid
+        }
+        return tweet.timestamp > topTweet.timestamp
+    }
+
+    private func isPendingProfileNewTweet(_ tweet: Tweet, visibleTweetIds: Set<String>) -> Bool {
+        !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
+            && !visibleTweetIds.contains(tweet.mid)
+            && isNewerThanCurrentTop(tweet)
+    }
+
+    private func visibleProfileResyncedTweets(_ resyncedTweets: [Tweet]) -> [Tweet] {
+        guard shouldUseProfileNewTweetsBanner else { return [] }
+
+        let profileUserId = String(feedIdentifier.dropFirst("profile_".count))
+        let pinnedTweetIds = Set(pinnedTweets.map(\.mid))
+        return resyncedTweets.filter { tweet in
+            tweet.authorId == profileUserId
+                && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
+                && (!(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid)
+                && !pinnedTweetIds.contains(tweet.mid)
+        }
+    }
+
+    private func applyProfileResyncedTweets(_ resyncedTweets: [Tweet]) {
+        let visibleResyncedTweets = visibleProfileResyncedTweets(resyncedTweets)
+        guard !visibleResyncedTweets.isEmpty else { return }
+
+        let visibleTweetIds = Set(tweets.map(\.mid))
+        let existingTweets = visibleResyncedTweets.filter { visibleTweetIds.contains($0.mid) }
+        let newTopTweets = visibleResyncedTweets.filter { tweet in
+            !visibleTweetIds.contains(tweet.mid) && (tweets.isEmpty || isNewerThanCurrentTop(tweet))
+        }
+
+        let renderableNewTweets = newTopTweets.isEmpty
+            ? []
+            : stageProfileNewTweetsBehindBannerIfNeeded(
+                newTopTweets,
+                reason: "profile resync"
+            ).tweetsToRender
+        let renderableTweets = existingTweets + renderableNewTweets
+
+        for tweet in visibleResyncedTweets {
+            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+        }
+
+        guard !renderableTweets.isEmpty else { return }
+        tweets.mergeTweets(renderableTweets)
+        scheduleMemoryMaintenance(delay: 0.2)
+    }
+
+    @discardableResult
+    private func stageProfileNewTweetsBehindBannerIfNeeded(
+        _ incomingTweets: [Tweet],
+        reason: String
+    ) -> (tweetsToRender: [Tweet], deferredTweetIds: Set<String>) {
+        guard shouldUseProfileNewTweetsBanner, !tweets.isEmpty, !isProfileAtTopAfterInitialization else {
+            return (incomingTweets, [])
+        }
+
+        var seenTweetIds = Set<String>()
+        let uniqueIncomingTweets = incomingTweets.filter { tweet in
+            seenTweetIds.insert(tweet.mid).inserted
+        }
+
+        let visibleTweetIds = Set(tweets.map(\.mid))
+        let newTweets = uniqueIncomingTweets.filter { tweet in
+            isPendingProfileNewTweet(tweet, visibleTweetIds: visibleTweetIds)
+        }
+        let snapshot = newTweets.sorted { lhs, rhs in
+            if lhs.timestamp == rhs.timestamp {
+                return lhs.mid > rhs.mid
+            }
+            return lhs.timestamp > rhs.timestamp
+        }
+
+        pendingProfileNewTweets = snapshot
+        showProfileNewTweetsBanner = !snapshot.isEmpty
+
+        for tweet in snapshot {
+            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+        }
+
+        let deferredTweetIds = Set(snapshot.map(\.mid))
+        guard !deferredTweetIds.isEmpty else {
+            print("DEBUG: [TweetListView] No profile new tweets for banner during \(reason), feed=\(feedIdentifier)")
+            return (incomingTweets, [])
+        }
+
+        print("DEBUG: [TweetListView] Deferred \(deferredTweetIds.count) profile tweet(s) behind banner during \(reason), feed=\(feedIdentifier)")
+        return (
+            incomingTweets.filter { !deferredTweetIds.contains($0.mid) },
+            deferredTweetIds
+        )
+    }
+
+    private func applyPendingProfileNewTweets() {
+        let pendingTweets = visiblePendingProfileNewTweets
+        guard !pendingTweets.isEmpty else {
+            pendingProfileNewTweets.removeAll()
+            showProfileNewTweetsBanner = false
+            return
+        }
+
+        tweets.mergeTweets(pendingTweets)
+        pendingProfileNewTweets.removeAll()
+        showProfileNewTweetsBanner = false
+        currentPage = 0
+        hasMoreTweets = true
+        scheduleMemoryMaintenance(delay: 0.2)
+        print("DEBUG: [TweetListView] Applied \(pendingTweets.count) pending profile tweet(s), feed=\(feedIdentifier)")
+    }
+
     private func pendingBackgroundResumeSnapshotForInitialLoad() -> BackgroundFeedResumeSnapshot? {
         guard feedIdentifier == "mainFeed",
               !hproseInstance.appUser.isGuest else {
@@ -139,14 +338,6 @@ struct TweetListView: View {
         )
     }
 
-    private func appendUniqueTweetsPreservingCurrentOrder(_ newTweets: [Tweet], to existingTweets: inout [Tweet]) {
-        var existingIds = Set(existingTweets.map(\.mid))
-        for tweet in newTweets where !existingIds.contains(tweet.mid) {
-            existingTweets.append(tweet)
-            existingIds.insert(tweet.mid)
-        }
-    }
-    
     /// Trim oldest tweets from memory if array exceeds maximum size
     /// Keeps most recent tweets to prevent unbounded memory growth
     private func trimTweetsIfNeeded() async {
@@ -190,6 +381,8 @@ struct TweetListView: View {
         allowDeleteAll: Bool = false,
         preservesScrollPositionOnPrepend: Bool = false,
         externalRefreshToken: Int = 0,
+        profileResyncedTweets: [Tweet] = [],
+        profileResyncedTweetsToken: Int = 0,
         emptyStateText: LocalizedStringKey? = nil,
         header: (() -> AnyView)? = nil,
         headerRefreshToken: Int = 0,
@@ -213,6 +406,8 @@ struct TweetListView: View {
         self.allowDeleteAll = allowDeleteAll
         self.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
         self.externalRefreshToken = externalRefreshToken
+        self.profileResyncedTweets = profileResyncedTweets
+        self.profileResyncedTweetsToken = profileResyncedTweetsToken
         self.emptyStateText = emptyStateText
         self.header = header
         self.headerRefreshToken = headerRefreshToken
@@ -324,6 +519,14 @@ struct TweetListView: View {
                 .animation(.easeInOut(duration: 0.3), value: showToast)
                 .allowsHitTesting(false)
             }
+
+            if showProfileNewTweetsBanner && !visiblePendingProfileNewTweets.isEmpty {
+                ProfileNewTweetsBanner(
+                    tweets: visiblePendingProfileNewTweets,
+                    onTap: applyPendingProfileNewTweets
+                )
+                .zIndex(1000)
+            }
             }  // Close ZStack
             .task {
                 // Only load if tweets are empty and we haven't completed initial load
@@ -371,6 +574,9 @@ struct TweetListView: View {
             Task {
                 await reloadFromServerAfterRouteChange()
             }
+        }
+        .onChange(of: profileResyncedTweetsToken) { _, _ in
+            applyProfileResyncedTweets(profileResyncedTweets)
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -455,6 +661,13 @@ struct TweetListView: View {
                 // Find matching notification handlers for this notification name
                 for notification in notificationHandlers where notification.name == name {
                     if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
+                        if name == .newTweetCreated, shouldUseProfileNewTweetsBanner {
+                            let stagingResult = stageProfileNewTweetsBehindBannerIfNeeded([tweet], reason: "newTweetCreated notification")
+                            if !stagingResult.deferredTweetIds.contains(tweet.mid) {
+                                notification.action(tweet)
+                            }
+                            continue
+                        }
                         notification.action(tweet)
                     }
                     // Special case: tweetId notifications send String instead of Tweet
@@ -582,12 +795,24 @@ struct TweetListView: View {
             
             await MainActor.run {
                 if !validTweets.isEmpty {
+                    let renderableTweets: [Tweet]
+                    if shouldUseProfileNewTweetsBanner {
+                        renderableTweets = stageProfileNewTweetsBehindBannerIfNeeded(
+                            validTweets,
+                            reason: "foreground refresh"
+                        ).tweetsToRender
+                    } else {
+                        renderableTweets = validTweets
+                    }
+
                     // For preserveOrder lists (bookmarks/favorites), append in server order
                     // For other lists, merge with timestamp sorting
-                    if preserveOrder {
-                        tweets.appendTweetsPreservingOrder(validTweets)
-                    } else {
-                        tweets.mergeTweets(validTweets)
+                    if !renderableTweets.isEmpty {
+                        if preserveOrder {
+                            tweets.appendTweetsPreservingOrder(renderableTweets)
+                        } else {
+                            tweets.mergeTweets(renderableTweets)
+                        }
                     }
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
@@ -595,7 +820,7 @@ struct TweetListView: View {
                     // Update video manager with debouncing
                     scheduleMemoryMaintenance(delay: 0.2)
 
-                    print("📱 [FOREGROUND] ✅ Merged \(validTweets.count) fresh tweets")
+                    print("📱 [FOREGROUND] ✅ Processed \(validTweets.count) fresh tweets")
                 } else {
                     print("📱 [FOREGROUND] No new tweets found")
                 }
@@ -612,7 +837,6 @@ struct TweetListView: View {
             isLoading = true
         }
         let page: UInt = 0
-        var lastCachedPage = page
         var didLoadCachedContent = false
 
         do {
@@ -620,46 +844,14 @@ struct TweetListView: View {
             // Android: if the requested cached page has anything renderable, show it
             // immediately and let server refresh / scroll pagination handle the rest.
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
-            var validPage = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
+            let validPage = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
             let resumeSnapshot = pendingBackgroundResumeSnapshotForInitialLoad()
 
             if let resumeSnapshot,
                let targetTweetId = resumeSnapshot.anchorTweetId ?? resumeSnapshot.topTweetId,
                !validPage.contains(where: { $0.mid == targetTweetId }) {
-                let maxResumeCachePages: UInt = 20
-                var nextPage = page + 1
-
-                while nextPage < maxResumeCachePages {
-                    let nextCachedTweets: [Tweet?]
-                    do {
-                        nextCachedTweets = try await tweetFetcher(nextPage, pageSize, true)
-                    } catch {
-                        print("[BackgroundResume] Cache page \(nextPage) failed during resume search: \(error)")
-                        break
-                    }
-
-                    let nextValidPage = visibleTweetsExcludingDeleted(nextCachedTweets.compactMap { $0 })
-
-                    if !nextValidPage.isEmpty {
-                        appendUniqueTweetsPreservingCurrentOrder(nextValidPage, to: &validPage)
-                        lastCachedPage = nextPage
-                    }
-
-                    if validPage.contains(where: { $0.mid == targetTweetId }) {
-                        print("[BackgroundResume] Loaded cached page \(nextPage) to reach saved tweet \(targetTweetId)")
-                        break
-                    }
-
-                    if UInt(nextCachedTweets.count) < pageSize {
-                        break
-                    }
-
-                    nextPage += 1
-                }
-
-                if !validPage.contains(where: { $0.mid == targetTweetId }) {
-                    print("[BackgroundResume] Saved tweet \(targetTweetId) not found in cached resume window")
-                }
+                BackgroundResumeStateStore.shared.clear(reason: "saved tweet not in first cached page")
+                print("[BackgroundResume] Skipped deep cached resume search for saved tweet \(targetTweetId)")
             }
 
             let hasCachedContent = !validPage.isEmpty
@@ -669,7 +861,7 @@ struct TweetListView: View {
                 await MainActor.run {
                     // Use direct assignment for page 0 so cached order is not disturbed.
                     tweets = validPage
-                    currentPage = lastCachedPage
+                    currentPage = page
 
                     hasMoreTweets = true  // Server may have more
 
@@ -721,8 +913,9 @@ struct TweetListView: View {
 
         // CRITICAL: Let UI render cached tweets BEFORE fetching from server
         // If we await server fetch in same function, SwiftUI batches updates and only renders once
-        // By launching server fetch in separate Task, cached tweets render immediately
-        Task {
+        // By launching server fetch in a detached task, cached tweets render immediately
+        // and the blocking backend path cannot inherit SwiftUI's main actor.
+        Task.detached(priority: .utility) {
             // Step 2: Load from server to get the most up-to-date data (in background)
             // Additional pages are loaded automatically when user scrolls near the bottom
             await loadFromServer(page: page, pageSize: pageSize) { _ in }
@@ -760,7 +953,30 @@ struct TweetListView: View {
             return
         }
 
-        await refreshTweets()
+        isLoading = true
+        initialLoadComplete = false
+        didConfirmEmptyFromServer = false
+        currentPage = 0
+
+        do {
+            let cachedTweets = try await tweetFetcher(0, pageSize, true)
+            let visibleCachedTweets = visibleTweetsExcludingDeleted(cachedTweets.compactMap { $0 })
+
+            if !visibleCachedTweets.isEmpty {
+                if preserveOrder {
+                    tweets = visibleCachedTweets
+                } else {
+                    tweets.mergeTweets(visibleCachedTweets)
+                }
+                hasMoreTweets = cachedTweets.count >= pageSize
+                scheduleMemoryMaintenance(delay: 0.2)
+                print("🔄 [PULL REFRESH] Rendered \(visibleCachedTweets.count) cached tweet(s) before server refresh, feed=\(feedIdentifier)")
+            }
+        } catch {
+            print("🔄 [PULL REFRESH] Cache refresh failed before server refresh, feed=\(feedIdentifier): \(error)")
+        }
+
+        await loadFromServer(page: 0, pageSize: pageSize) { _ in }
     }
 
     func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
@@ -833,9 +1049,9 @@ struct TweetListView: View {
             }
 
             // CRITICAL: Let UI render cached tweets BEFORE continuing with server fetch
-            // By spawning the rest in a separate Task, cached tweets render immediately
-            // (Same pattern as performInitialLoad - SwiftUI batches updates within same Task)
-            Task {
+            // By spawning the rest in a detached task, cached tweets render immediately
+            // without resuming backend work on SwiftUI's main actor.
+            Task.detached(priority: .utility) {
                 // Step 2: Load from server to get fresh data (always try, even if cache failed)
                 // Keep isLoadingMore = true until server responds so spinner stays visible
                 await loadFromServer(page: page, pageSize: pageSize, completion: completion)
@@ -981,7 +1197,16 @@ struct TweetListView: View {
         page: UInt,
         pageSize: UInt
     ) {
-        let hasValidTweet = !validServerTweets.isEmpty
+        let renderableServerTweets: [Tweet]
+        if page == 0 {
+            renderableServerTweets = stageProfileNewTweetsBehindBannerIfNeeded(
+                validServerTweets,
+                reason: "server page 0 refresh"
+            ).tweetsToRender
+        } else {
+            renderableServerTweets = validServerTweets
+        }
+        let hasValidTweet = !renderableServerTweets.isEmpty
 
         // BRANCH 1: Got valid tweets - check response size
         if hasValidTweet {
@@ -989,16 +1214,16 @@ struct TweetListView: View {
             // For preserveOrder lists (bookmarks/favorites), page 0 should always REPLACE
             // to ensure correct server order (sorted by bookmark/favorite time)
             if page == 0 && preserveOrder {
-                tweets = validServerTweets
+                tweets = renderableServerTweets
             } else if page == 0 && tweets.isEmpty {
-                tweets = validServerTweets
+                tweets = renderableServerTweets
             } else {
                 // For preserveOrder lists (bookmarks/favorites), append in server order
                 // For other lists, merge with timestamp sorting
                 if preserveOrder {
-                    tweets.appendTweetsPreservingOrder(validServerTweets)
+                    tweets.appendTweetsPreservingOrder(renderableServerTweets)
                 } else {
-                    tweets.mergeTweets(validServerTweets)
+                    tweets.mergeTweets(renderableServerTweets)
                 }
             }
 
@@ -1018,6 +1243,17 @@ struct TweetListView: View {
                 isLoading = false
                 initialLoadComplete = true
             }
+
+        // BRANCH 1b: Valid profile page contained only new top tweets deferred behind the banner.
+        } else if !validServerTweets.isEmpty {
+            didConfirmEmptyFromServer = false
+            currentPage = page
+            hasMoreTweets = tweetsFromServer.count >= pageSize
+            if page == 0 {
+                isLoading = false
+                initialLoadComplete = true
+            }
+            print("📊 [PAGINATION] Page \(page): deferred \(validServerTweets.count) profile entries behind banner, hasMoreTweets = \(hasMoreTweets)")
 
         // BRANCH 2: No valid tweets AND partial page - server depleted
         } else if tweetsFromServer.count < pageSize {

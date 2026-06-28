@@ -238,10 +238,8 @@ extension TweetCacheManager {
                     let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                     origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
                     origRequest.fetchLimit = 1
-                    if let cdOrigTweet = try? context.fetch(origRequest).first,
-                       let _ = try? Tweet.from(cdTweet: cdOrigTweet) {
-                    } else {
-                        return .skip
+                    if let cdOrigTweet = try? context.fetch(origRequest).first {
+                        _ = try? Tweet.from(cdTweet: cdOrigTweet)
                     }
                 }
             }

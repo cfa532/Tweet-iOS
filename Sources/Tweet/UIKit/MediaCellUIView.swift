@@ -5213,16 +5213,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     transitionTo(.playerLoading)
                 }
 
-                // Recovery case: infrastructure is ready now but we didn't acquire before
-                if !shouldAcquirePlayer,
-                   isVideoAttachment,
-                   player == nil,
-                   setupPlayerTask == nil,
-                   videoCellState != .failed,
-                   AppDelegate.isVideoInfrastructureReady {
-                    transitionTo(.playerLoading)
-                    self.shouldAcquirePlayer = true
-                }
                 if !shouldAcquirePlayer {
                     restoreForegroundRecoveryPosterIfNeeded(reason: "visibleWithoutInfrastructure")
                 }

@@ -225,8 +225,11 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Actively tracked directional video preloads — explicitly managed on scroll stop.
     private var activePreloadMids: Set<String> = []
+    private var directionalExactFrameWorkItem: DispatchWorkItem?
+    private var directionalExactFrameGeneration = 0
     private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
     private let directionalPreloadRefreshInterval = FeedPlaybackTuning.directionalVideoPreloadRefreshInterval
+    private let directionalExactFramePreloadDelay: TimeInterval = 0.9
     var directionalPlayerPreloadCount: Int = FeedPlaybackTuning.directionalVideoPreloadCount {
         didSet {
             if directionalPlayerPreloadCount <= 0 {
@@ -1420,9 +1423,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         SharedAssetCache.shared.preloadAsset(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
-    /// Preload video player (asset + AVPlayer) for upcoming video in scroll direction.
-    /// The pre-created player will be instantly available when the cell becomes visible.
-    private func preloadVideoPlayer(_ video: VideoPlaybackInfo) {
+    /// Preload a poster for upcoming video in scroll direction without creating an AVPlayer.
+    private func preloadVideoPoster(_ video: VideoPlaybackInfo) {
+        guard let resolved = resolveVideoURL(video) else { return }
+        SharedAssetCache.shared.preloadPoster(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+    }
+
+    /// Upgrade a directional poster to a player-decoded frame after the feed is idle.
+    private func preloadDecodedVideoFrame(_ video: VideoPlaybackInfo) {
         guard let resolved = resolveVideoURL(video) else { return }
         SharedAssetCache.shared.preloadPlayer(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
@@ -1484,9 +1492,16 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Clear preloaded video tracking (called when video list is rebuilt)
     private func clearPreloadedTracking() {
+        cancelDirectionalExactFramePreload()
         activePreloadMids.removeAll()
         lastDirectionalPreloadRefreshTime = 0
         SharedAssetCache.shared.updateProtectedPreloadMids([])
+    }
+
+    private func cancelDirectionalExactFramePreload() {
+        directionalExactFrameWorkItem?.cancel()
+        directionalExactFrameWorkItem = nil
+        directionalExactFrameGeneration += 1
     }
 
     // MARK: - Private Methods
@@ -1501,6 +1516,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// off-screen preload work as soon as the user starts moving again.
     func onScrollStarted() {
         isScrolling = true
+        cancelDirectionalExactFramePreload()
         let onScreenMids = currentOnScreenVideoMids()
         SharedAssetCache.shared.cancelDirectionalPreloadsForScrollStart(except: onScreenMids)
         activePreloadMids.formIntersection(onScreenMids)
@@ -1582,13 +1598,35 @@ class VideoPlaybackCoordinator: ObservableObject {
         activePreloadMids = newPreloadMids
         SharedAssetCache.shared.updateProtectedPreloadMids(newPreloadMids)
 
-        for video in nextVideos where SharedAssetCache.shared.getCachedPlayer(for: video.videoMid) == nil {
-            preloadVideoPlayer(video)
+        for video in nextVideos {
+            preloadVideoPoster(video)
         }
+        scheduleExactFrameUpgradeIfStable(for: nextVideos)
 
         if !newPreloadMids.isEmpty {
-            print("🎬 [COORD] \(reason): preloading \(newPreloadMids.count) directional players")
+            print("🎬 [COORD] \(reason): preloading \(newPreloadMids.count) directional poster(s)")
         }
+    }
+
+    private func scheduleExactFrameUpgradeIfStable(for nextVideos: [VideoPlaybackInfo]) {
+        cancelDirectionalExactFramePreload()
+        guard let firstVideo = nextVideos.first else { return }
+
+        directionalExactFrameGeneration += 1
+        let generation = directionalExactFrameGeneration
+        let expectedMid = firstVideo.videoMid
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.directionalExactFrameGeneration == generation,
+                      self.canRunDirectionalPreloads(),
+                      self.activePreloadMids.contains(expectedMid),
+                      SharedAssetCache.shared.getCachedPlayer(for: expectedMid) == nil else { return }
+                self.preloadDecodedVideoFrame(firstVideo)
+            }
+        }
+        directionalExactFrameWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + directionalExactFramePreloadDelay, execute: workItem)
     }
 
     private func currentOnScreenVideoMids() -> Set<String> {
