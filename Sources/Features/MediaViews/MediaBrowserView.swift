@@ -1501,37 +1501,6 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     }
 }
 
-private struct FullscreenPlayerLayerView: UIViewRepresentable {
-    let player: AVPlayer
-    let mid: String
-    let onReadyForDisplay: () -> Void
-
-    func makeUIView(context: Context) -> LightweightVideoPlayerView {
-        let view = LightweightVideoPlayerView()
-        view.backgroundColor = .black
-        view.setVideoGravity(.resizeAspect)
-        view.onReadyForDisplay = onReadyForDisplay
-        view.setPlayer(player)
-        view.observeReadyForDisplay()
-        markSurfaceReady(for: player, mid: mid)
-        return view
-    }
-
-    func updateUIView(_ uiView: LightweightVideoPlayerView, context: Context) {
-        uiView.setVideoGravity(.resizeAspect)
-        uiView.onReadyForDisplay = onReadyForDisplay
-        uiView.setPlayer(player)
-        uiView.observeReadyForDisplay()
-        markSurfaceReady(for: player, mid: mid)
-    }
-
-    private func markSurfaceReady(for player: AVPlayer, mid: String) {
-        DispatchQueue.main.async {
-            FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
-        }
-    }
-}
-
 // MARK: - Array Extension for Safe Access
 extension Array {
     subscript(safe index: Index) -> Element? {

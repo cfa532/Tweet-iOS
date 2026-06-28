@@ -412,6 +412,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastStartupBufferReleaseDate: Date = .distantPast
     private var startupBufferReleaseUntil: Date = .distantPast
     private var pendingRecoverySeekTime: CMTime?
+    private var pendingManualReplayMid: String?
     private weak var liveHandoffPlayer: AVPlayer?
     private var liveHandoffMid: String?
     private var liveHandoffSeekSuppressionUntil: Date = .distantPast
@@ -4377,6 +4378,27 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         reason: String,
         afterPlay: @escaping (AVPlayer) -> Void = { _ in }
     ) -> Bool {
+        if let mid = attachment?.mid,
+           pendingManualReplayMid == mid {
+            pendingManualReplayMid = nil
+            pendingRecoverySeekTime = nil
+            updateTimerLabelIfPossible(videoMid: mid, currentTime: .zero)
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
+                DispatchQueue.main.async {
+                    guard let self,
+                          let player,
+                          self.player === player,
+                          self.attachment?.mid == mid,
+                          self.coordinatorWantsToPlay else { return }
+                    self.logVerbose("🔁 manual replay seek to start (\(reason))")
+                    player.play()
+                    self.resetPlaybackProgressTracking(to: .zero)
+                    afterPlay(player)
+                }
+            }
+            return true
+        }
+
         let playAction: (AVPlayer) -> Void = { [weak self] player in
             guard let self else { return }
             guard self.canDriveForegroundPlayback else { return }
@@ -4830,6 +4852,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         VideoStateCache.shared.clearCache(for: mid, force: true)
         clearFeedResumeState(for: mid)
+        pendingManualReplayMid = mid
+        if isSingleMedia {
+            timerLabelVideoMid = mid
+            timerLabel.isHidden = false
+            updateTimerLabelIfPossible(videoMid: mid, currentTime: .zero)
+            updateTimerLabelLayout()
+        }
 
         replayButton.isHidden = true
         retryButton.isHidden = true
@@ -6012,6 +6041,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         resetFeedPlayerRebuildBudget()
         resetPlaybackProgressTracking()
         resetDecodedPlaybackTracking()
+        pendingManualReplayMid = nil
         lastLoggedTimeControlStatus = nil
         lastLoggedTimeControlBucket = -1
         lastLoggedTimeControlDate = .distantPast
@@ -6084,6 +6114,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         timerLabelVideoMid = nil
         // Reset state
         pendingRecoverySeekTime = nil
+        pendingManualReplayMid = nil
         videoCellState = .noContent
         isEmbeddedMedia = false
         attachment = nil

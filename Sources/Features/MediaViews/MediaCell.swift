@@ -8,6 +8,66 @@
 import SwiftUI
 import AVFoundation
 import Combine
+import QuartzCore
+
+// MARK: - Shared Display Link Manager
+
+@MainActor
+class SharedDisplayLinkManager: NSObject {
+    static let shared = SharedDisplayLinkManager()
+
+    private var displayLink: CADisplayLink?
+    private var observers: [UUID: (CADisplayLink) -> Void] = [:]
+    private(set) var isRunning = false
+
+    var preferredFramesPerSecond: Int = 30 {
+        didSet {
+            guard isRunning else { return }
+            stop()
+            start()
+        }
+    }
+
+    private override init() {
+        super.init()
+        displayLink = CADisplayLink(target: self, selector: #selector(displayLinkFired))
+        displayLink?.preferredFramesPerSecond = preferredFramesPerSecond
+    }
+
+    func addObserver(id: UUID, callback: @escaping (CADisplayLink) -> Void) {
+        let shouldStart = observers.isEmpty
+        observers[id] = callback
+        if shouldStart {
+            start()
+        }
+    }
+
+    func removeObserver(id: UUID) {
+        observers[id] = nil
+        if observers.isEmpty {
+            stop()
+        }
+    }
+
+    private func start() {
+        guard !isRunning, let displayLink else { return }
+        displayLink.preferredFramesPerSecond = preferredFramesPerSecond
+        displayLink.add(to: .main, forMode: .common)
+        isRunning = true
+    }
+
+    private func stop() {
+        guard isRunning, let displayLink else { return }
+        displayLink.remove(from: .main, forMode: .common)
+        isRunning = false
+    }
+
+    @objc private func displayLinkFired(_ link: CADisplayLink) {
+        for callback in observers.values {
+            callback(link)
+        }
+    }
+}
 
 // Global video visibility manager
 class VideoVisibilityManager: ObservableObject {
@@ -278,8 +338,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             }
         }
         
-        // Phase 3: Using delegate-based communication for pause/stop commands
-        // Keeping notification listener for play commands from SharedVideoPlayerManager
+        // Phase 3: Using delegate-based communication for pause/stop commands.
+        // Keep notification listener for legacy coordinator play commands.
         .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in
             // Extract notification data
             guard let videoMid = notification.userInfo?["videoMid"] as? String,

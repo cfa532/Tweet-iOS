@@ -3507,20 +3507,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
     private func shouldResetCachedFeedPlayerForFocusedPlayback(_ player: AVPlayer, item: AVPlayerItem) -> Bool {
         let hasPlayerFailure = item.status == .failed || player.error != nil || item.error != nil
-        if hasPlayerFailure { return true }
-
-        if isVideoAtEnd(player) { return false }
-
-        let hasLoadedData = item.loadedTimeRanges.contains { value in
-            let duration = CMTimeGetSeconds(value.timeRangeValue.duration)
-            return duration.isFinite && duration > 0
-        }
-        if item is CachingPlayerItem,
-           item.status == .unknown,
-           hasLoadedData {
-            return true
-        }
-        return false
+        return hasPlayerFailure
     }
 
     @discardableResult
@@ -3851,6 +3838,25 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
               player.currentItem === item,
               currentVideoMid == mid,
               detailStallItemRebuildCount < 1 else { return false }
+
+        if item is CachingPlayerItem {
+            if let mid {
+                LocalHTTPServer.shared.clearCancelledState(for: mid)
+                LocalHTTPServer.shared.setPrimaryMediaID(mid)
+            }
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            item.preferredForwardBufferDuration = 0
+            player.automaticallyWaitsToMinimizeStalling = true
+            player.play()
+            updateDetailBufferedData(for: item)
+            isBuffering = shouldKeepDetailBuffering(player: player, item: item)
+            detailStartupRecoveryTask = nil
+            detailStartupRecoveryItem = nil
+            detailStartupRecoveryAttemptCount = 0
+            detailStartupUnknownAttemptCount = 0
+            print("📱 [DetailVideoManager] preserving caching-backed detail item during recovery \(shortMID(mid)) (\(reason)): \(detailDiagnostic(player, item: item))")
+            return true
+        }
 
         detailStallItemRebuildCount += 1
         let currentTime = player.currentTime()
@@ -5015,7 +5021,7 @@ class ChatVideoManager: ObservableObject {
         sessionState.pausedVideos.remove(mid)
         activeChatSessions[receiptId] = sessionState
 
-        // Notify CachingVideoPlayer to start playing
+        // Notify chat video views to start playing
         NotificationCenter.default.post(
             name: NSNotification.Name("ChatVideoShouldPlay"),
             object: nil,
@@ -5040,7 +5046,7 @@ class ChatVideoManager: ObservableObject {
         sessionState.pausedVideos.insert(mid)
         activeChatSessions[receiptId] = sessionState
 
-        // Notify CachingVideoPlayer to pause
+        // Notify chat video views to pause
         NotificationCenter.default.post(
             name: NSNotification.Name("ChatVideoShouldPlay"),
             object: nil,
@@ -5062,7 +5068,7 @@ class ChatVideoManager: ObservableObject {
         sessionState.pausedVideos.remove(mid)
         activeChatSessions[receiptId] = sessionState
 
-        // Notify CachingVideoPlayer to stop
+        // Notify chat video views to stop
         NotificationCenter.default.post(
             name: NSNotification.Name("ChatVideoShouldStop"),
             object: nil,

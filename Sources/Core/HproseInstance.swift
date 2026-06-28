@@ -1455,15 +1455,17 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let entry = "refresh_tweet"
-        let params = [
+        var params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "tweetid": tweetId,
             "userid": authorId,
-            "hostid": author?.hostIds?.first,
             "appuserid": appUser.mid
         ]
+        if let hostId = author?.hostIds?.first {
+            params["hostid"] = hostId
+        }
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
