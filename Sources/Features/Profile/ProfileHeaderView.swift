@@ -77,6 +77,7 @@ struct ProfileHeaderView: View {
                     .foregroundColor(.themeText)
                     .lineLimit(3)
                     .truncationMode(.tail)
+                    .padding(.leading, 8)
             }
         }
         .padding(.top)
