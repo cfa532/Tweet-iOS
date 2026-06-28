@@ -24,7 +24,6 @@ struct ProfileView: View {
     @State private var chatNavigationPath = NavigationPath()
     @State private var showBlockUserMenu = false
     @State private var previousScrollOffset: CGFloat = 0
-    @State private var isLoading = false
     @State private var didLoad = false
     /// Bumped when stale-IP recovery changes this profile's read route so tweets reload without clearing cached content.
     @State private var profileTweetsRefreshToken = 0
@@ -101,13 +100,11 @@ struct ProfileView: View {
             }
             .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
             .task(id: user.mid) {
-                // Only fetch if this is the first load for this user
-                if !didLoad {
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    guard !Task.isCancelled else { return }
-                    await refreshProfileData()
-                    didLoad = true
-                }
+                guard !didLoad else { return }
+                didLoad = true
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                await refreshProfileData()
             }
             .onChange(of: user.mid) { _, _ in
                 // Reset didLoad when user changes so the new user's data is fetched
@@ -654,18 +651,7 @@ struct ProfileView: View {
     }
     
     private func refreshProfileData() async {
-        await MainActor.run {
-            isLoading = true
-        }
-        
-        defer {
-            Task { @MainActor in
-                isLoading = false
-                didLoad = true
-            }
-        }
-        
-        var didFetchUser = false
+        var refreshedProfileUser: User?
 
         // Fetch fresh user data from server
         do {
@@ -677,7 +663,7 @@ struct ProfileView: View {
                 refreshExpiredCacheInBackground: false
             )
             if let userData = refreshedUser {
-                didFetchUser = true
+                refreshedProfileUser = userData
                 let refreshedRoute = userData.baseUrl?.absoluteString ?? ""
                 if refreshedRoute != cachedRoute {
                     await MainActor.run {
@@ -695,18 +681,24 @@ struct ProfileView: View {
             print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
         }
 
-        guard didFetchUser else {
+        guard let refreshedProfileUser else {
             print("DEBUG: [ProfileView] Skipping pinned tweet refresh/resync because user fetch failed for \(user.mid)")
             return
         }
         
-        await refreshPinnedTweets()
-        
-        // Resync user data on server in background each time the profile opens.
-        let userId = user.mid
         Task {
+            await refreshPinnedTweets()
+        }
+        
+        guard shouldResyncProfileUser(refreshedProfileUser) else {
+            print("DEBUG: [ProfileView] Skipping resync for \(user.mid): current read node is already root host")
+            return
+        }
+
+        // Resync only when reading from an access node that is not the user's root/writable host.
+        let userId = user.mid
+        Task(priority: .utility) {
             do {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
                 guard !Task.isCancelled else { return }
                 let resyncResult = try await hproseInstance.resyncUser(userId: userId)
                 print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server with \(resyncResult.tweets.count) tweets")
@@ -723,6 +715,17 @@ struct ProfileView: View {
             }
         }
     }
+
+    private func shouldResyncProfileUser(_ user: User) -> Bool {
+        guard let hostIds = user.hostIds,
+              let rootHostId = hostIds.first,
+              !rootHostId.isEmpty else {
+            return false
+        }
+
+        let currentReadHostId = hostIds.count > 1 ? hostIds[1] : rootHostId
+        return currentReadHostId != rootHostId
+    }
     
     private func refreshPinnedTweets() async {
         print("DEBUG: [ProfileView] Starting to refresh pinned tweets for user: \(user.mid)")
@@ -735,7 +738,6 @@ struct ProfileView: View {
             
             // Extract tweets and IDs from the response
             for (index, tweetData) in pinnedTweetData.enumerated() {
-                print("DEBUG: [ProfileView] Processing pinned tweet data item \(index): \(tweetData)")
                 if let tweet = tweetData["tweet"] as? Tweet {
                     print("DEBUG: [ProfileView] Successfully extracted tweet: \(tweet.mid)")
                     pinnedTweets.append(tweet)

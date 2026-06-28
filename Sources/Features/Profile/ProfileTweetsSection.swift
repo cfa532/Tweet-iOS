@@ -34,21 +34,6 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
-        // Wait for app initialization with timeout — don't block forever when server is unreachable
-        if !hproseInstance.isAppInitialized {
-            print("⏳ [PROFILE FETCH] Waiting for app initialization (max 10s)...")
-            var waitCount = 0
-            while !hproseInstance.isAppInitialized && waitCount < 100 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                waitCount += 1
-            }
-            if hproseInstance.isAppInitialized {
-                print("✅ [PROFILE FETCH] App initialization complete")
-            } else {
-                print("⚠️ [PROFILE FETCH] Timed out waiting for app initialization")
-            }
-        }
-        
         do {
             let serverTweets = try await hproseInstance.fetchUserTweets(
                 user: user,
@@ -68,12 +53,6 @@ class ProfileTweetsViewModel: ObservableObject {
                     return !isPinned
                 }
                 return true // Keep nil tweets
-            }
-            
-            
-            // Cache profile tweets under their authorId (which is user.mid for profile view)
-            for tweet in filteredTweets.compactMap({ $0 }) {
-                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
             }
             
             return filteredTweets

@@ -1289,20 +1289,9 @@ final class HproseInstance: ObservableObject {
             if let dict = originalTweetDict {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    // Fetch the author - fetchUser returns singleton, which will be updated by background Task if needed
-                    // The singleton reference will see updates when fetch completes
-                    do {
-                        let author = try await fetchUser(originalTweet.authorId)
-                        await MainActor.run {
-                            originalTweet.author = author
-                        }
-                    } catch {
-                        print("⚠️ [fetchUserTweets] Failed to fetch original author \(originalTweet.authorId) for tweet \(originalTweet.mid): \(error)")
-                        // Server fetch failed - use skeleton to indicate error
-                        await MainActor.run {
-                            originalTweet.author = User.getInstance(mid: originalTweet.authorId)
-                            print("⚠️ [fetchUserTweets] Server fetch failed, using skeleton for \(originalTweet.authorId) to indicate error")
-                        }
+                    let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: originalTweet.authorId)
+                    await MainActor.run {
+                        originalTweet.author = cachedAuthor
                     }
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
@@ -7269,14 +7258,27 @@ final class HproseInstance: ObservableObject {
         }
         
         var result: [[String: Any]] = []
+        var scheduledBackgroundAuthorFetches = Set<String>()
+        func scheduleBackgroundAuthorFetch(authorId: String) {
+            guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
+
+            Task.detached(priority: .utility) {
+                do {
+                    _ = try await self.fetchUser(authorId)
+                } catch {
+                    print("DEBUG: [getPinnedTweets] Background author fetch failed for \(authorId): \(error)")
+                }
+            }
+        }
+
         for dict in response {
             if let tweetDict = dict["tweet"] as? [String: Any] {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                if let author = try? await fetchUser(tweet.authorId) {
-                    await MainActor.run {
-                        tweet.author = author  // Set on main thread since author is @Published
-                    }
+                let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
+                await MainActor.run {
+                    tweet.author = cachedAuthor
                 }
+                scheduleBackgroundAuthorFetch(authorId: tweet.authorId)
                 let timePinned = dict["timestamp"]
                 result.append([
                     "tweet": tweet,

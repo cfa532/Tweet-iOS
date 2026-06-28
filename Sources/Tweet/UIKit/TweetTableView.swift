@@ -24,6 +24,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     let loadMoreTweets: (Bool) -> Void  // Parameter: forceLoad
     let onRefresh: (() async -> Void)?
     let onScroll: ((CGFloat, CGFloat) -> Void)?
+    let onScrollStateChange: ((CGFloat, Bool, Bool) -> Void)?
     let leadingPadding: CGFloat
     let trailingPadding: CGFloat
     let pinnedTweets: [Tweet]
@@ -63,6 +64,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.loadMoreTweets = loadMoreTweets
         controller.onRefresh = onRefresh
         controller.onScroll = onScroll
+        controller.onScrollStateChange = onScrollStateChange
         controller.leadingPadding = leadingPadding
         controller.trailingPadding = trailingPadding
         controller.feedIdentifier = feedIdentifier
@@ -116,6 +118,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.loadMoreTweets = loadMoreTweets
         uiViewController.onRefresh = onRefresh
         uiViewController.onScroll = onScroll
+        uiViewController.onScrollStateChange = onScrollStateChange
         uiViewController.leadingPadding = leadingPadding
         uiViewController.trailingPadding = trailingPadding
         uiViewController.feedIdentifier = feedIdentifier

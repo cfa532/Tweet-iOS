@@ -121,6 +121,7 @@ class TweetTableViewController: UITableViewController {
     var onLoadMoreRequested: (() -> Void)?  // Callback when load more is requested programmatically
     var headerViewBuilder: (() -> AnyView)?
     var onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
+    var onScrollStateChange: ((CGFloat, Bool, Bool) -> Void)?  // (offset, isAtTop, isInteracting)
     var leadingPadding: CGFloat = 8  // Configurable leading padding for cells
     var trailingPadding: CGFloat = 8  // Configurable trailing padding for cells
 
@@ -398,14 +399,25 @@ class TweetTableViewController: UITableViewController {
             if let targetFeedId = notification.userInfo?["feedIdentifier"] as? String {
                 // Only scroll if the notification targets this feed
                 if targetFeedId == self.feedIdentifier {
-                    self.scrollToTop()
+                    self.handleScrollToTopNotification(notification)
                 }
             } else {
                 // No target specified - scroll if this is the main feed
                 if self.feedIdentifier == "mainFeed" {
-                    self.scrollToTop()
+                    self.handleScrollToTopNotification(notification)
                 }
             }
+        }
+    }
+
+    private func handleScrollToTopNotification(_ notification: Notification) {
+        if (notification.userInfo?["scrollTarget"] as? String) == "tweetId",
+           let targetTweetId = notification.userInfo?["targetTweetId"] as? String {
+            scrollToTweet(targetTweetId)
+        } else if (notification.userInfo?["scrollTarget"] as? String) == "firstRegularTweet" {
+            scrollToFirstRegularTweet()
+        } else {
+            scrollToTop()
         }
     }
 
@@ -741,6 +753,51 @@ class TweetTableViewController: UITableViewController {
         tableView.layoutIfNeeded()
 
         // Reset flag after animation completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.isScrollingToTop = false
+        }
+    }
+
+    func scrollToFirstRegularTweet() {
+        savedScrollPosition = nil
+        ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
+        if feedIdentifier == "mainFeed" {
+            BackgroundResumeStateStore.shared.clear(reason: "manual scroll to first new tweet")
+        }
+
+        isScrollingToTop = true
+        tableView.layoutIfNeeded()
+
+        let indexPath = regularTweetIndexPath(0)
+        if indexPath.row < tableView.numberOfRows(inSection: 0) {
+            tableView.scrollToRow(at: indexPath, at: .top, animated: true)
+        } else {
+            scrollToTop()
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.isScrollingToTop = false
+        }
+    }
+
+    func scrollToTweet(_ tweetId: String) {
+        savedScrollPosition = nil
+        ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
+        if feedIdentifier == "mainFeed" {
+            BackgroundResumeStateStore.shared.clear(reason: "manual scroll to tweet")
+        }
+
+        isScrollingToTop = true
+        tableView.layoutIfNeeded()
+
+        if let row = rowForTweetId(tweetId), row < tableView.numberOfRows(inSection: 0) {
+            tableView.scrollToRow(at: IndexPath(row: row, section: 0), at: .top, animated: true)
+        } else {
+            scrollToFirstRegularTweet()
+            return
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.isScrollingToTop = false
         }
@@ -1293,15 +1350,25 @@ class TweetTableViewController: UITableViewController {
             // offset lands ~one row off. When scrolled down, restore the offset by the
             // height delta so the same content stays visible; at the very top, keep the
             // top so a fresh open still shows pinned + first regular.
-            let scrolledDown = tableView.contentOffset.y > tableView.adjustedContentInset.top + 10
+            let topPosition = -tableView.adjustedContentInset.top
+            let wasAtTop = tableView.contentOffset.y <= topPosition + 10
             let contentHeightBefore = tableView.contentSize.height
             let offsetBefore = tableView.contentOffset.y
             tableView.reloadData()
             tableView.layoutIfNeeded()
-            if scrolledDown {
+            if wasAtTop {
+                tableView.setContentOffset(CGPoint(x: 0, y: topPosition), animated: false)
+                lastContentOffset = topPosition
+                lastCallbackOffset = topPosition
+                lastScrollOffset = topPosition
+            } else {
                 let heightDelta = tableView.contentSize.height - contentHeightBefore
                 if abs(heightDelta) > 0.5 {
-                    tableView.setContentOffset(CGPoint(x: 0, y: offsetBefore + heightDelta), animated: false)
+                    let restoredOffset = offsetBefore + heightDelta
+                    tableView.setContentOffset(CGPoint(x: 0, y: restoredOffset), animated: false)
+                    lastContentOffset = restoredOffset
+                    lastCallbackOffset = restoredOffset
+                    lastScrollOffset = restoredOffset
                 }
             }
         } else if oldCount > 0 {
@@ -1408,7 +1475,8 @@ class TweetTableViewController: UITableViewController {
                     // Once the user has started interacting, keep the same rows under them.
                     // insertRows above the viewport shifts content down without UIKit adjusting
                     // the offset, so restore by the inserted height.
-                    let scrolledDown = tableView.contentOffset.y > tableView.adjustedContentInset.top + 10
+                    let topPosition = -tableView.adjustedContentInset.top
+                    let scrolledDown = tableView.contentOffset.y > topPosition + 10
                     if scrolledDown || isScrollInteractionActive {
                         let contentHeightBefore = tableView.contentSize.height
                         let contentOffsetBefore = tableView.contentOffset.y
@@ -1424,23 +1492,34 @@ class TweetTableViewController: UITableViewController {
                         tableView.insertRows(at: indexPaths, with: .none)
                     }
                 } else {
-                    // Bounded feed (profile/list/bookmarks): surface the freshly prepended
-                    // tweets. Pinned tweets sit above the regular list, so the first new
-                    // tweet lands at row pinnedTweets.count — scroll there. Defer one
-                    // runloop, then force layout so the new cell is configured and its real
-                    // frame is known BEFORE scrolling — otherwise scrollToRow targets an
-                    // estimated position and the view drifts once the cell renders.
-                    tableView.insertRows(at: indexPaths, with: .none)
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self, self.isTableAttachedForLayout else { return }
-                        self.tableView.layoutIfNeeded()
-                        let topRow = self.pinnedTweets.count
-                        if topRow < self.tableView.numberOfRows(inSection: 0) {
-                            self.tableView.scrollToRow(
-                                at: IndexPath(row: topRow, section: 0),
-                                at: .top,
+                    // Bounded feed (profile/list/bookmarks): never auto-scroll on prepend.
+                    // If the feed is already at the top, render new tweets in place and keep
+                    // the profile header visible. If the user is away from the top, preserve
+                    // the visible content and let the banner tap perform the explicit scroll.
+                    let topPosition = -tableView.adjustedContentInset.top
+                    let wasAtTop = !isScrollInteractionActive
+                        && tableView.contentOffset.y <= topPosition + 10
+
+                    if wasAtTop {
+                        tableView.insertRows(at: indexPaths, with: .none)
+                        tableView.setContentOffset(CGPoint(x: 0, y: topPosition), animated: false)
+                        lastContentOffset = topPosition
+                        lastCallbackOffset = topPosition
+                        lastScrollOffset = topPosition
+                    } else {
+                        let contentHeightBefore = tableView.contentSize.height
+                        let contentOffsetBefore = tableView.contentOffset.y
+                        tableView.insertRows(at: indexPaths, with: .none)
+                        let heightDelta = tableView.contentSize.height - contentHeightBefore
+                        if heightDelta > 0.5 {
+                            let restoredOffset = contentOffsetBefore + heightDelta
+                            tableView.setContentOffset(
+                                CGPoint(x: 0, y: restoredOffset),
                                 animated: false
                             )
+                            lastContentOffset = restoredOffset
+                            lastCallbackOffset = restoredOffset
+                            lastScrollOffset = restoredOffset
                         }
                     }
                 }
@@ -1517,6 +1596,12 @@ class TweetTableViewController: UITableViewController {
             || tableView.isDecelerating
             || isUserDragging
             || isDecelerating
+    }
+
+    private func notifyScrollStateChanged(_ scrollView: UIScrollView) {
+        let topPosition = -scrollView.adjustedContentInset.top
+        let isAtTop = scrollView.contentOffset.y <= topPosition + 10
+        onScrollStateChange?(scrollView.contentOffset.y, isAtTop, isScrollInteractionActive)
     }
 
     private func applyDeferredTableChromeUpdatesAfterScroll() {
@@ -2338,6 +2423,7 @@ class TweetTableViewController: UITableViewController {
         let currentOffset = scrollView.contentOffset.y
         let frameDelta = currentOffset - lastContentOffset
         lastContentOffset = currentOffset  // always update for frame-level tracking
+        notifyScrollStateChanged(scrollView)
 
         // Update scroll direction only during active user dragging
         if isUserDragging && abs(frameDelta) >= 2.0 {
@@ -2427,6 +2513,7 @@ class TweetTableViewController: UITableViewController {
         // Directional preloads restart only after scrolling stops.
         cancelDirectionalImagePreloads()
         videoCoordinator.onScrollStarted()
+        notifyScrollStateChanged(scrollView)
     }
 
     override func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -2443,6 +2530,7 @@ class TweetTableViewController: UITableViewController {
             triggerPreloadOnScrollStop()
             applyDeferredTableChromeUpdatesAfterScroll()
         }
+        notifyScrollStateChanged(scrollView)
     }
 
     override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
@@ -2466,6 +2554,7 @@ class TweetTableViewController: UITableViewController {
         }
 
         applyDeferredTableChromeUpdatesAfterScroll()
+        notifyScrollStateChanged(scrollView)
     }
 
     override func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {

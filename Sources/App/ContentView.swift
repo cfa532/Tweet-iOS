@@ -332,7 +332,11 @@ struct ContentView: View {
         isNavigationVisible = true
 
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .scrollToTop, object: nil)
+            NotificationCenter.default.post(
+                name: .scrollToTop,
+                object: nil,
+                userInfo: ["scrollTarget": "firstRegularTweet"]
+            )
         }
     }
     

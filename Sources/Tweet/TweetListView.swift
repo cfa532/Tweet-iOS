@@ -128,7 +128,9 @@ struct TweetListView: View {
     @State private var initialLoadComplete = false
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
-    @State private var lastScrollOffset: CGFloat = 0
+    @State private var hasReceivedScrollState = false
+    @State private var isFeedAtTop: Bool = true
+    @State private var isFeedScrollInteractionActive: Bool = false
     @State private var contentHeight: CGFloat = 0
     @State private var screenHeight: CGFloat = 0
     @State private var needsMoreContent: Bool = true
@@ -199,8 +201,13 @@ struct TweetListView: View {
         feedIdentifier.hasPrefix("profile_")
     }
 
-    private var isProfileAtTopAfterInitialization: Bool {
-        abs(ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) ?? 0) <= 0.5
+    private var shouldRenderProfileNewTweetsImmediately: Bool {
+        guard shouldUseProfileNewTweetsBanner else { return true }
+        guard !isFeedScrollInteractionActive else { return false }
+        if hasReceivedScrollState {
+            return isFeedAtTop
+        }
+        return ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) == nil
     }
 
     private var visiblePendingProfileNewTweets: [Tweet] {
@@ -255,10 +262,6 @@ struct TweetListView: View {
             ).tweetsToRender
         let renderableTweets = existingTweets + renderableNewTweets
 
-        for tweet in visibleResyncedTweets {
-            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
-        }
-
         guard !renderableTweets.isEmpty else { return }
         tweets.mergeTweets(renderableTweets)
         scheduleMemoryMaintenance(delay: 0.2)
@@ -269,7 +272,9 @@ struct TweetListView: View {
         _ incomingTweets: [Tweet],
         reason: String
     ) -> (tweetsToRender: [Tweet], deferredTweetIds: Set<String>) {
-        guard shouldUseProfileNewTweetsBanner, !tweets.isEmpty, !isProfileAtTopAfterInitialization else {
+        guard shouldUseProfileNewTweetsBanner,
+              !tweets.isEmpty,
+              !shouldRenderProfileNewTweetsImmediately else {
             return (incomingTweets, [])
         }
 
@@ -289,12 +294,17 @@ struct TweetListView: View {
             return lhs.timestamp > rhs.timestamp
         }
 
-        pendingProfileNewTweets = snapshot
-        showProfileNewTweetsBanner = !snapshot.isEmpty
-
-        for tweet in snapshot {
-            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
-        }
+        let combinedPendingTweets = pendingProfileNewTweets + snapshot
+        var seenPendingTweetIds = Set<String>()
+        pendingProfileNewTweets = combinedPendingTweets
+            .filter { tweet in seenPendingTweetIds.insert(tweet.mid).inserted }
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp {
+                    return lhs.mid > rhs.mid
+                }
+                return lhs.timestamp > rhs.timestamp
+            }
+        showProfileNewTweetsBanner = !pendingProfileNewTweets.isEmpty
 
         let deferredTweetIds = Set(snapshot.map(\.mid))
         guard !deferredTweetIds.isEmpty else {
@@ -317,12 +327,27 @@ struct TweetListView: View {
             return
         }
 
+        let firstNewTweetId = pendingTweets.first?.mid
         tweets.mergeTweets(pendingTweets)
         pendingProfileNewTweets.removeAll()
         showProfileNewTweetsBanner = false
         currentPage = 0
         hasMoreTweets = true
         scheduleMemoryMaintenance(delay: 0.2)
+        DispatchQueue.main.async {
+            var userInfo: [String: Any] = [
+                "feedIdentifier": feedIdentifier,
+                "scrollTarget": "tweetId"
+            ]
+            if let firstNewTweetId {
+                userInfo["targetTweetId"] = firstNewTweetId
+            }
+            NotificationCenter.default.post(
+                name: .scrollToTop,
+                object: nil,
+                userInfo: userInfo
+            )
+        }
         print("DEBUG: [TweetListView] Applied \(pendingTweets.count) pending profile tweet(s), feed=\(feedIdentifier)")
     }
 
@@ -461,6 +486,18 @@ struct TweetListView: View {
                 await onRefreshExtra?()
             },
             onScroll: onScroll,
+            onScrollStateChange: { _, isAtTop, isInteracting in
+                guard shouldUseProfileNewTweetsBanner else { return }
+                if !hasReceivedScrollState {
+                    hasReceivedScrollState = true
+                }
+                if isFeedAtTop != isAtTop {
+                    isFeedAtTop = isAtTop
+                }
+                if isFeedScrollInteractionActive != isInteracting {
+                    isFeedScrollInteractionActive = isInteracting
+                }
+            },
             leadingPadding: leadingPadding,
             trailingPadding: trailingPadding,
             pinnedTweets: pinnedTweets,
