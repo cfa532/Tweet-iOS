@@ -71,6 +71,9 @@ struct FollowingsTweetView: View {
             onScroll: { offset, delta in
                 onScroll?(offset, delta)
             },
+            onScrollStateChange: { _, isAtTop, isInteracting in
+                viewModel.updateMainFeedScrollState(isAtTop: isAtTop, isInteracting: isInteracting)
+            },
             allowDeleteAll: true,
             preservesScrollPositionOnPrepend: true,
             onAvatarTap: { user in onAvatarTap(user) },

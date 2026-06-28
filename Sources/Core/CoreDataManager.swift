@@ -36,6 +36,9 @@ class CoreDataManager {
                 print("[CoreDataManager] Core Data loaded successfully")
             }
         }
+
+        container.viewContext.automaticallyMergesChangesFromParent = true
+        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
     }
     
     private func recoverFromError() throws {
@@ -48,4 +51,20 @@ class CoreDataManager {
     }
     
     var context: NSManagedObjectContext { container.viewContext }
-} 
+
+    lazy var cacheContext: NSManagedObjectContext = {
+        let context = container.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.automaticallyMergesChangesFromParent = true
+        context.name = "TweetCacheManager.cacheContext"
+        return context
+    }()
+
+    lazy var cacheReadContext: NSManagedObjectContext = {
+        let context = container.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.automaticallyMergesChangesFromParent = true
+        context.name = "TweetCacheManager.cacheReadContext"
+        return context
+    }()
+}

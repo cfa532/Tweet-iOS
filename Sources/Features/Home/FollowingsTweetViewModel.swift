@@ -37,6 +37,8 @@ class FollowingsTweetViewModel: ObservableObject {
     @Published var showNewTweetsBanner: Bool = false
     let hproseInstance: HproseInstance
     private let pageZeroFetchGate = PageZeroFetchGate()
+    private var isMainFeedAtTop: Bool = true
+    private var isMainFeedScrollInteractionActive: Bool = false
     
     // Shared instance to keep tweets in memory across navigation
     static let shared = FollowingsTweetViewModel(hproseInstance: HproseInstance.shared)
@@ -46,14 +48,26 @@ class FollowingsTweetViewModel: ObservableObject {
     }
 
     func performForegroundFeedRefresh() async {
-        await performPeriodicFeedRefresh(reason: "foreground feed refresh", pageSize: 10)
+        await performFeedRefreshPair(
+            reason: "foreground feed refresh",
+            pageSize: 5,
+            renderGetTweetFeedUsingScrollState: true
+        )
     }
 
     func performBackgroundFeedCheck() async {
-        await performPeriodicFeedRefresh(reason: "background main feed check", pageSize: 10)
+        await performFeedRefreshPair(
+            reason: "background main feed check",
+            pageSize: 5,
+            renderGetTweetFeedUsingScrollState: false
+        )
     }
 
-    private func performPeriodicFeedRefresh(reason: String, pageSize: UInt) async {
+    private func performFeedRefreshPair(
+        reason: String,
+        pageSize: UInt,
+        renderGetTweetFeedUsingScrollState: Bool
+    ) async {
         let didBegin = await MainActor.run {
             guard !isPeriodicFeedRefreshActive else { return false }
             isPeriodicFeedRefreshActive = true
@@ -69,25 +83,39 @@ class FollowingsTweetViewModel: ObservableObject {
             }
         }
 
-        do {
-            print("DEBUG: [FollowingsTweetViewModel] \(reason)")
-            guard await waitForAppInitializationIfNeeded(reason: reason) else {
-                return
-            }
-            guard !hproseInstance.appUser.isGuest else {
-                await MainActor.run {
-                    pendingNewTweets.removeAll()
-                    showNewTweetsBanner = false
-                }
-                print("DEBUG: [FollowingsTweetViewModel] Skipping \(reason) for guest user")
-                return
-            }
-            let freshTweets = try await fetchFollowingTweetsForBanner(pageSize: pageSize)
+        print("DEBUG: [FollowingsTweetViewModel] \(reason) via get_tweet_feed + update_following_tweets")
+        guard await waitForAppInitializationIfNeeded(reason: reason) else {
+            return
+        }
+        guard !hproseInstance.appUser.isGuest else {
             await MainActor.run {
-                updateNewTweetsSnapshot(freshTweets)
+                pendingNewTweets.removeAll()
+                showNewTweetsBanner = false
+            }
+            print("DEBUG: [FollowingsTweetViewModel] Skipping \(reason) for guest user")
+            return
+        }
+
+        do {
+            let freshTweets = try await fetchForegroundMainFeedTweets(pageSize: pageSize)
+            await MainActor.run {
+                processForegroundMainFeedTweets(
+                    freshTweets,
+                    renderImmediately: renderGetTweetFeedUsingScrollState && shouldRenderForegroundMainFeedTweetsImmediately(),
+                    reason: "\(reason) get_tweet_feed"
+                )
             }
         } catch {
-            print("ERROR: [FollowingsTweetViewModel] \(reason) failed: \(error)")
+            print("ERROR: [FollowingsTweetViewModel] \(reason) get_tweet_feed failed: \(error)")
+        }
+
+        do {
+            let followingTweets = try await fetchFollowingTweetsForBanner(pageSize: pageSize)
+            await MainActor.run {
+                updateNewTweetsSnapshot(followingTweets)
+            }
+        } catch {
+            print("ERROR: [FollowingsTweetViewModel] \(reason) update_following_tweets failed: \(error)")
         }
     }
 
@@ -165,6 +193,74 @@ class FollowingsTweetViewModel: ObservableObject {
     }
 
     @MainActor
+    func updateMainFeedScrollState(isAtTop: Bool, isInteracting: Bool) {
+        isMainFeedAtTop = isAtTop
+        isMainFeedScrollInteractionActive = isInteracting
+    }
+
+    @MainActor
+    private func shouldRenderForegroundMainFeedTweetsImmediately() -> Bool {
+        !isMainFeedScrollInteractionActive && isMainFeedAtTop
+    }
+
+    @MainActor
+    private func processForegroundMainFeedTweets(
+        _ incomingTweets: [Tweet],
+        renderImmediately: Bool,
+        reason: String
+    ) {
+        var seenIncomingTweetIds = Set<String>()
+        let uniqueIncomingTweets = incomingTweets.filter { tweet in
+            seenIncomingTweetIds.insert(tweet.mid).inserted
+        }
+        let visibleIncomingTweets = uniqueIncomingTweets.filter { tweet in
+            !(tweet.isPrivate ?? false) && !TweetDeletionRegistry.shared.isDeleted(tweet.mid)
+        }
+
+        let cacheKey = TweetCacheManager.mainFeedCacheKey(appUserId: hproseInstance.appUser.mid)
+        for tweet in visibleIncomingTweets {
+            TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
+        }
+
+        let visibleTweetIds = Set(tweets.map(\.mid))
+        let newTweets = visibleIncomingTweets
+            .filter { tweet in isPendingNewFeedTweet(tweet, visibleTweetIds: visibleTweetIds) }
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp {
+                    return lhs.mid > rhs.mid
+                }
+                return lhs.timestamp > rhs.timestamp
+            }
+
+        guard !newTweets.isEmpty else {
+            print("DEBUG: [FollowingsTweetViewModel] No foreground main feed tweets to render/banner during \(reason)")
+            return
+        }
+
+        if renderImmediately {
+            tweets.mergeTweets(newTweets)
+            pendingNewTweets.removeAll { pending in
+                newTweets.contains(where: { $0.mid == pending.mid })
+            }
+            showNewTweetsBanner = !visiblePendingNewTweets.isEmpty
+            print("DEBUG: [FollowingsTweetViewModel] Rendered \(newTweets.count) foreground main feed tweet(s) immediately")
+        } else {
+            let combinedPendingTweets = pendingNewTweets + newTweets
+            var seenPendingTweetIds = Set<String>()
+            pendingNewTweets = combinedPendingTweets
+                .filter { tweet in seenPendingTweetIds.insert(tweet.mid).inserted }
+                .sorted { lhs, rhs in
+                    if lhs.timestamp == rhs.timestamp {
+                        return lhs.mid > rhs.mid
+                    }
+                    return lhs.timestamp > rhs.timestamp
+                }
+            showNewTweetsBanner = !visiblePendingNewTweets.isEmpty
+            print("DEBUG: [FollowingsTweetViewModel] Staged \(newTweets.count) foreground main feed tweet(s) behind banner")
+        }
+    }
+
+    @MainActor
     private func updateNewTweetsSnapshot(_ incomingTweets: [Tweet]) {
         var seenIncomingTweetIds = Set<String>()
         let uniqueIncomingTweets = incomingTweets.filter { tweet in
@@ -224,15 +320,34 @@ class FollowingsTweetViewModel: ObservableObject {
     private func fetchFollowingTweetsForBanner(pageSize: UInt) async throws -> [Tweet] {
         guard !hproseInstance.appUser.isGuest else { return [] }
 
-        let followingTweets = try await hproseInstance.fetchTweetFeed(
-            user: hproseInstance.appUser,
-            pageNumber: 0,
-            pageSize: pageSize,
-            entry: Self.followingTweetsBannerEntry
-        )
+        let hproseInstance = hproseInstance
+        let appUser = hproseInstance.appUser
+        let followingTweets = try await Task.detached(priority: .utility) {
+            try await hproseInstance.fetchTweetFeed(
+                user: appUser,
+                pageNumber: 0,
+                pageSize: pageSize,
+                entry: Self.followingTweetsBannerEntry
+            )
+        }.value
         let updatedFollowingTweets = followingTweets.compactMap { $0 }
         print("DEBUG: [FollowingsTweetViewModel] Banner candidates from \(Self.followingTweetsBannerEntry)=\(updatedFollowingTweets.count)")
         return updatedFollowingTweets
+    }
+
+    private func fetchForegroundMainFeedTweets(pageSize: UInt) async throws -> [Tweet] {
+        let hproseInstance = hproseInstance
+        let appUser = hproseInstance.appUser
+        let serverTweets = try await Task.detached(priority: .utility) {
+            try await hproseInstance.fetchTweetFeed(
+                user: appUser,
+                pageNumber: 0,
+                pageSize: pageSize
+            )
+        }.value
+        let filteredTweets = serverTweets.compactMap { $0 }
+        print("DEBUG: [FollowingsTweetViewModel] Foreground get_tweet_feed returned \(filteredTweets.count) valid tweet(s)")
+        return filteredTweets
     }
     
     func fetchTweets(page: UInt, pageSize: UInt, isPeriodicRefresh: Bool = false) async throws -> [Tweet?] {
@@ -268,8 +383,14 @@ class FollowingsTweetViewModel: ObservableObject {
         if hproseInstance.appUser.isGuest {
             do {
                 print("[HproseInstance] Loading tweets for guest user from alphaId")
-                if let adminUser = try await hproseInstance.fetchUser(Gadget.getAlphaIds().first ?? "") {
-                    let serverTweets = try await hproseInstance.fetchUserTweets(user: adminUser, pageNumber: page, pageSize: pageSize)
+                let hproseInstance = hproseInstance
+                let adminUser = try await Task.detached(priority: .utility) {
+                    try await hproseInstance.fetchUser(Gadget.getAlphaIds().first ?? "")
+                }.value
+                if let adminUser {
+                    let serverTweets = try await Task.detached(priority: .utility) {
+                        try await hproseInstance.fetchUserTweets(user: adminUser, pageNumber: page, pageSize: pageSize)
+                    }.value
                     print("[HproseInstance] Loaded \(serverTweets.compactMap { $0 }.count) tweets for guest user")
                     return serverTweets
                 }
@@ -284,11 +405,15 @@ class FollowingsTweetViewModel: ObservableObject {
             /// The backend may return an array containing nils. If the returned array size is less than pageSize, it means there are no more tweets on the backend.
             /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
             print("🌐 [API CALL] fetchTweetFeed - userId: \(hproseInstance.appUser.mid), page: \(page), pageSize: \(pageSize)")
-            let serverTweets = try await hproseInstance.fetchTweetFeed(
-                user: hproseInstance.appUser,
-                pageNumber: page,
-                pageSize: pageSize
-            )
+            let hproseInstance = hproseInstance
+            let appUser = hproseInstance.appUser
+            let serverTweets = try await Task.detached(priority: .utility) {
+                try await hproseInstance.fetchTweetFeed(
+                    user: appUser,
+                    pageNumber: page,
+                    pageSize: pageSize
+                )
+            }.value
             print("🌐 [API RESPONSE] Received \(serverTweets.count) items (including nils)")
             let filteredTweets = serverTweets.compactMap{ $0 }
             print("🌐 [API RESPONSE] After filtering: \(filteredTweets.count) valid tweets")
@@ -324,7 +449,7 @@ class FollowingsTweetViewModel: ObservableObject {
     }
 
     private func refreshFollowingTweets(pageSize: UInt) {
-        Task { [weak self] in
+        Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
             await self.refreshFollowingTweetsAsync(pageSize: pageSize)
         }
@@ -332,12 +457,16 @@ class FollowingsTweetViewModel: ObservableObject {
 
     private func refreshFollowingTweetsAsync(pageSize: UInt) async {
         do {
-            let newTweets = try await hproseInstance.fetchTweetFeed(
-                user: hproseInstance.appUser,
-                pageNumber: 0,
-                pageSize: pageSize,
-                entry: Self.followingTweetsBannerEntry
-            )
+            let hproseInstance = hproseInstance
+            let appUser = hproseInstance.appUser
+            let newTweets = try await Task.detached(priority: .utility) {
+                try await hproseInstance.fetchTweetFeed(
+                    user: appUser,
+                    pageNumber: 0,
+                    pageSize: pageSize,
+                    entry: Self.followingTweetsBannerEntry
+                )
+            }.value
             let filteredTweets = newTweets.compactMap { $0 }
             guard !filteredTweets.isEmpty else { return }
 
@@ -410,11 +539,14 @@ class FollowingsTweetViewModel: ObservableObject {
             print("[FollowingsTweetViewModel] Fetching recent tweets from newly followed user: \(user.mid)")
             
             // Fetch first page of user's tweets (10 tweets should be enough for initial display)
-            let userTweets = try await hproseInstance.fetchUserTweets(
-                user: user,
-                pageNumber: 0,
-                pageSize: 10
-            )
+            let hproseInstance = hproseInstance
+            let userTweets = try await Task.detached(priority: .utility) {
+                try await hproseInstance.fetchUserTweets(
+                    user: user,
+                    pageNumber: 0,
+                    pageSize: 10
+                )
+            }.value
             
             // Filter out nils and private tweets
             let validTweets = userTweets.compactMap { $0 }.filter { !($0.isPrivate ?? false) }

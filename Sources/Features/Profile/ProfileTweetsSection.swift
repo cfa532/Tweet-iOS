@@ -35,11 +35,15 @@ class ProfileTweetsViewModel: ObservableObject {
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
         do {
-            let serverTweets = try await hproseInstance.fetchUserTweets(
-                user: user,
-                pageNumber: page,
-                pageSize: pageSize
-            )
+            let hproseInstance = hproseInstance
+            let user = user
+            let serverTweets = try await Task.detached(priority: .utility) {
+                try await hproseInstance.fetchUserTweets(
+                    user: user,
+                    pageNumber: page,
+                    pageSize: pageSize
+                )
+            }.value
             
             // Filter out pinned tweets from server response
             let filteredTweets = serverTweets.filter { tweet in
@@ -178,12 +182,22 @@ struct ProfileTweetsSection<Header: View>: View {
             title: "",
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache in
+                let startTime = Date()
                 if isFromCache {
+                    print("📋 [PROFILE CACHE LOAD] Fetching page \(page) from cache for \(user.mid)")
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid, isProfileView: true)
+                    let elapsed = Date().timeIntervalSince(startTime) * 1000
+                    let validCount = cachedTweets.compactMap { $0 }.count
+                    print("✅ [PROFILE CACHE LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms for \(user.mid)")
                     return cachedTweets
                 } else {
-                    return try await viewModel.fetchTweets(page: page, pageSize: size)
+                    print("🌐 [PROFILE SERVER LOAD] Fetching page \(page) from server for \(user.mid)")
+                    let serverTweets = try await viewModel.fetchTweets(page: page, pageSize: size)
+                    let elapsed = Date().timeIntervalSince(startTime) * 1000
+                    let validCount = serverTweets.compactMap { $0 }.count
+                    print("✅ [PROFILE SERVER LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms for \(user.mid)")
+                    return serverTweets
                 }
             },
             showTitle: false,

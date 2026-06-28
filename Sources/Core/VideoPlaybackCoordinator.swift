@@ -181,12 +181,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// until cleared by next scroll update or stopAllVideos
     private var finishedPrimaryIdentifier: String?
     
-    /// Timer for debouncing video playback (0.2s delay)
-    private var playbackDebounceTimer: Timer?
-    /// The video identifier that the pending debounce timer was started for.
-    /// If the top candidate changes, the timer resets; if it stays the same, the timer keeps running.
-    private var pendingPrimaryCandidate: String?
-
     /// Timestamp when primary video was last switched (to prevent immediate re-switching)
     private var lastPrimarySwitchTime: Date?
 
@@ -423,8 +417,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
         notificationObservers.removeAll()
 
-        // Invalidate all timers
-        playbackDebounceTimer?.invalidate()
+        // Invalidate timers
         overlayUncoverPlaybackTimer?.invalidate()
     }
     
@@ -513,8 +506,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // manage onScreenMediaCells. Otherwise off-screen cells get selected as primary.
         //
         // At app start, cells register AFTER the initial updateVisibleTweetsForVideoPlayback().
-        // Use scheduleStartPrimary so active scrolling still debounces, while idle feeds can
-        // start as soon as the visible delegate is available.
+        // Use scheduleStartPrimary so active scrolling stays quiet, while idle feeds
+        // can start as soon as the visible delegate is available.
         if phase == .idle {
             scheduleStartPrimary()
         }
@@ -1116,10 +1109,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Stop all videos and reset state
     func stopAllVideos() {
-        // Cancel all timers
-        playbackDebounceTimer?.invalidate()
-        playbackDebounceTimer = nil
-        pendingPrimaryCandidate = nil
+        // Cancel timers
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
 
@@ -1277,16 +1267,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Long background recovery restarts LocalHTTPServer and clears cached players.
-    /// The coordinator object survives, but its primary/debounce/preload state can point
+    /// The coordinator object survives, but its primary/preload state can point
     /// at delegates or players that no longer own a valid AVPlayerItem. Reset just that
     /// coordinator state; the table view will rebuild the video list and refresh viewport
     /// visibility before normal primary selection runs again.
     func resetForForegroundInfrastructureRecovery(reason: String) {
         print("🎬 [COORD] reset after foreground infrastructure recovery: \(reason)")
-
-        playbackDebounceTimer?.invalidate()
-        playbackDebounceTimer = nil
-        pendingPrimaryCandidate = nil
 
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
@@ -1712,71 +1698,40 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Schedule primary video playback.
-    /// Fast paths: idle table or cached-ready player → play immediately.
-    /// Scroll path for cold players: start a 0.3s timer, then promote the current
-    /// visible candidate even if the table is still moving.
-    /// Per-candidate: the timer is NOT reset as long as the same video remains the top
-    /// candidate. Only resets when the candidate changes.
+    /// Fast path: idle table -> play immediately. While the table is moving, keep
+    /// visibility bookkeeping current but leave playback selection for scroll stop.
     private func scheduleStartPrimary() {
-        guard let candidate = identifyPrimaryVideo() else { return }
-        let topCandidate = candidate.identifier
+        let candidates = visibleVideos
 
         // If the table is not moving, there is no visibility churn to absorb.
         // Start immediately so scroll-stop autoplay feels responsive.
         if isTableViewScrollIdle {
-            playbackDebounceTimer?.invalidate()
-            playbackDebounceTimer = nil
-            pendingPrimaryCandidate = nil
-            if phase == .idle {
+            if phase == .idle, identifyPrimaryVideo() != nil {
                 startPrimaryVideoPlayback()
             }
             return
         }
 
-        // Preserve old UX for already-warmed videos: they can start immediately
-        // without showing a blank poster while the user scrolls slowly.
-        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: candidate.videoMid),
-           cachedPlayer.currentItem?.status == .readyToPlay {
-            playbackDebounceTimer?.invalidate()
-            playbackDebounceTimer = nil
-            pendingPrimaryCandidate = nil
-            if phase == .idle {
-                startPrimaryVideoPlayback()
-            }
-            return
+        // Do not start/swap videos mid-scroll. Starting AVPlayer decode and changing
+        // primary bandwidth priority while the table is moving shows up as gesture
+        // slowdown on video-heavy profile pages. performPreloadOnScrollStop() calls
+        // back here once the table is idle.
+        //
+        // Exception: if there is exactly one playable video, or the selected
+        // candidate is already inside the stricter continue band, there is no
+        // ambiguous choice to churn between. Start immediately so a fully-visible
+        // primary is not blocked by partially visible lower videos.
+        if phase == .idle,
+           let candidate = identifyPrimaryVideo(),
+           candidates.count == 1 || continuePlaybackMediaCells.contains(candidate.identifier) {
+            startPrimaryVideoPlayback()
         }
-
-        // If the timer is already running for this exact candidate, let it keep ticking.
-        if playbackDebounceTimer != nil && topCandidate == pendingPrimaryCandidate {
-            return
-        }
-
-        // Candidate changed (or no timer running) — restart the clock for the new candidate.
-        playbackDebounceTimer?.invalidate()
-        pendingPrimaryCandidate = topCandidate
-        let timer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.playbackDebounceTimer = nil
-                self.pendingPrimaryCandidate = nil
-                if self.phase == .idle && !self.visibleVideos.isEmpty {
-                    self.startPrimaryVideoPlayback()
-                }
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        playbackDebounceTimer = timer
     }
 
     /// Start primary video playback — play topmost video immediately.
     /// Fully synchronous: visibility calculations use direct UITableView access.
     /// Delegate existence is validated before committing state to prevent stuck `primaryPlaying`.
     private func startPrimaryVideoPlayback() {
-        // Cancel any pending debounced start — immediate caller wins
-        playbackDebounceTimer?.invalidate()
-        playbackDebounceTimer = nil
-        pendingPrimaryCandidate = nil
-
         guard AppDelegate.isVideoInfrastructureReady else {
             print("🎬 [COORD] startPrimary: video infrastructure not ready")
             return
@@ -1871,16 +1826,23 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate.
         // Skip failedPrimaryIdentifier and finishedPrimaryIdentifier to avoid re-selecting.
+        var belowContinueFallback: VideoPlaybackInfo?
         for video in candidates {
             guard delegate(forIdentifier: video.identifier) != nil else { continue }
             if video.identifier == failedPrimaryIdentifier { continue }
             if video.identifier == finishedPrimaryIdentifier { continue }
             if VideoStateCache.shared.isVideoFinished(video.identifier) { continue }
-            if video.identifier == primaryBelowContinueIdentifier { continue }
+            if video.identifier == primaryBelowContinueIdentifier {
+                belowContinueFallback = belowContinueFallback ?? video
+                continue
+            }
             return video
         }
 
-        return nil
+        // If the only visible video is the previous primary that fell below the
+        // continuation threshold, let it become primary again once normal selection
+        // is allowed. Otherwise the feed can sit idle with one visible video.
+        return belowContinueFallback
     }
 
     /// Pause a specific video
@@ -1922,7 +1884,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Do NOT clear previousVisibleIdentifiers — preserve visibility tracking
         // Do NOT broadcast shouldStopAllVideos — cells keep their players/state
 
-        // Let the debounce timer check for a new visible candidate (e.g. preloaded video appears on scroll)
+        // Let the normal primary selection path check for a new visible candidate.
         scheduleStartPrimary()
     }
 
@@ -2051,10 +2013,6 @@ class VideoPlaybackCoordinator: ObservableObject {
               isFeedVisible else {
             return
         }
-
-        playbackDebounceTimer?.invalidate()
-        playbackDebounceTimer = nil
-        pendingPrimaryCandidate = nil
 
         guard !visibleVideos.isEmpty else {
             currentlyPlayingVideoIds.removeAll()

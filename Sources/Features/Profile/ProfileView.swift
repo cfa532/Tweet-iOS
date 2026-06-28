@@ -652,16 +652,20 @@ struct ProfileView: View {
     
     private func refreshProfileData() async {
         var refreshedProfileUser: User?
+        let profileUserId = user.mid
+        let cachedRoute = user.baseUrl?.absoluteString ?? ""
+        let hproseInstance = hproseInstance
 
         // Fetch fresh user data from server
         do {
-            let cachedRoute = user.baseUrl?.absoluteString ?? ""
-            let refreshedUser = try await hproseInstance.fetchUser(
-                user.mid,
-                baseUrl: cachedRoute,
-                forceRefresh: true,
-                refreshExpiredCacheInBackground: false
-            )
+            let refreshedUser = try await Task.detached(priority: .utility) {
+                try await hproseInstance.fetchUser(
+                    profileUserId,
+                    baseUrl: cachedRoute,
+                    forceRefresh: true,
+                    refreshExpiredCacheInBackground: false
+                )
+            }.value
             if let userData = refreshedUser {
                 refreshedProfileUser = userData
                 let refreshedRoute = userData.baseUrl?.absoluteString ?? ""
@@ -671,18 +675,18 @@ struct ProfileView: View {
                     }
                     print("DEBUG: [ProfileView] User route changed from \(cachedRoute.isEmpty ? "nil" : cachedRoute) to \(refreshedRoute.isEmpty ? "nil" : refreshedRoute); reloading profile tweets")
                 }
-                print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - username: \(userData.username ?? "nil"), baseUrl: \(userData.baseUrl?.absoluteString ?? "nil"), tweetCount: \(userData.tweetCount ?? 0), followersCount: \(userData.followersCount ?? 0), followingCount: \(userData.followingCount ?? 0)")
+                print("DEBUG: [ProfileView] Successfully fetched user \(profileUserId) from server - username: \(userData.username ?? "nil"), baseUrl: \(userData.baseUrl?.absoluteString ?? "nil"), tweetCount: \(userData.tweetCount ?? 0), followersCount: \(userData.followersCount ?? 0), followingCount: \(userData.followingCount ?? 0)")
                 TweetCacheManager.shared.saveUser(userData)
                 print("DEBUG: [ProfileView] Saved fetched user to cache")
             } else {
-                print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): server returned nil")
+                print("DEBUG: [ProfileView] Failed to fetch user \(profileUserId): server returned nil")
             }
         } catch {
-            print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
+            print("DEBUG: [ProfileView] Failed to fetch user \(profileUserId): \(error)")
         }
 
         guard let refreshedProfileUser else {
-            print("DEBUG: [ProfileView] Skipping pinned tweet refresh/resync because user fetch failed for \(user.mid)")
+            print("DEBUG: [ProfileView] Skipping pinned tweet refresh/resync because user fetch failed for \(profileUserId)")
             return
         }
         
@@ -691,28 +695,27 @@ struct ProfileView: View {
         }
         
         guard shouldResyncProfileUser(refreshedProfileUser) else {
-            print("DEBUG: [ProfileView] Skipping resync for \(user.mid): current read node is already root host")
+            print("DEBUG: [ProfileView] Skipping resync for \(profileUserId): current read node is already root host")
             return
         }
 
         // Resync only when reading from an access node that is not the user's root/writable host.
-        let userId = user.mid
-        Task(priority: .utility) {
-            do {
-                guard !Task.isCancelled else { return }
-                let resyncResult = try await hproseInstance.resyncUser(userId: userId)
-                print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server with \(resyncResult.tweets.count) tweets")
-                
-                TweetCacheManager.shared.saveUser(resyncResult.user)
-                print("DEBUG: [ProfileView] Saved resynced user to cache")
+        do {
+            guard !Task.isCancelled else { return }
+            let resyncResult = try await Task.detached(priority: .utility) {
+                try await hproseInstance.resyncUser(userId: profileUserId)
+            }.value
+            print("DEBUG: [ProfileView] Successfully resynced user \(profileUserId) on server with \(resyncResult.tweets.count) tweets")
+            
+            TweetCacheManager.shared.saveUser(resyncResult.user)
+            print("DEBUG: [ProfileView] Saved resynced user to cache")
 
-                await MainActor.run {
-                    resyncedTweets = resyncResult.tweets
-                    resyncedTweetsToken += 1
-                }
-            } catch {
-                print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
+            await MainActor.run {
+                resyncedTweets = resyncResult.tweets
+                resyncedTweetsToken += 1
             }
+        } catch {
+            print("DEBUG: [ProfileView] Failed to resync user \(profileUserId): \(error)")
         }
     }
 
@@ -728,9 +731,14 @@ struct ProfileView: View {
     }
     
     private func refreshPinnedTweets() async {
-        print("DEBUG: [ProfileView] Starting to refresh pinned tweets for user: \(user.mid)")
+        let profileUser = user
+        let hproseInstance = hproseInstance
+
+        print("DEBUG: [ProfileView] Starting to refresh pinned tweets for user: \(profileUser.mid)")
         do {
-            let pinnedTweetData = try await hproseInstance.getPinnedTweets(user: user)
+            let pinnedTweetData = try await Task.detached(priority: .utility) {
+                try await hproseInstance.getPinnedTweets(user: profileUser)
+            }.value
             print("DEBUG: [ProfileView] Got \(pinnedTweetData.count) pinned tweet data items from server")
             
             var pinnedTweets: [Tweet] = []

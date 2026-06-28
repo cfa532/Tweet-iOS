@@ -550,10 +550,11 @@ class MediaGridUIView: UIView {
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
             let isLoadVisible = isGridVisible && loadVisibleArea > 0
+            let shouldWarmPlayer = ratio >= FeedPlaybackTuning.videoWarmVisibilityRatio
             let isPlayable = ratio >= FeedPlaybackTuning.videoStartVisibilityRatio
             cellView.setVisible(
                 isLoadVisible,
-                shouldAcquirePlayer: isPlayable && AppDelegate.isVideoInfrastructureReady
+                shouldAcquirePlayer: shouldWarmPlayer && AppDelegate.isVideoInfrastructureReady
             )
 
             guard cellView.isVideoAttachment,

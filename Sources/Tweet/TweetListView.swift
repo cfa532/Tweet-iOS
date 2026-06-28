@@ -92,6 +92,7 @@ struct TweetListView: View {
     let headerRefreshToken: Int
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
+    let onScrollStateChange: ((CGFloat, Bool, Bool) -> Void)?
     let leadingPadding: CGFloat  // Leading padding for cells
     let trailingPadding: CGFloat  // Trailing padding for cells
     let pinnedTweets: [Tweet]  // Pinned tweets for video coordination
@@ -106,7 +107,7 @@ struct TweetListView: View {
     let profileResyncedTweets: [Tweet]
     let profileResyncedTweetsToken: Int
     let emptyStateText: LocalizedStringKey?
-    private let pageSize: UInt = 10  // Manual load-more only
+    private let pageSize: UInt = 5  // Smaller pages keep per-insert table work light
 
     // Navigation callbacks (passed through to UIKit cells)
     let onAvatarTap: ((User) -> Void)?
@@ -195,6 +196,38 @@ struct TweetListView: View {
 
     private func visibleTweetsExcludingDeleted(_ candidateTweets: [Tweet]) -> [Tweet] {
         candidateTweets.filter { !TweetDeletionRegistry.shared.isDeleted($0.mid) }
+    }
+
+    private func mergePaginatedTweets(_ paginatedTweets: [Tweet]) {
+        if preserveOrder {
+            tweets.appendTweetsPreservingOrder(paginatedTweets)
+        } else {
+            tweets.mergeTweets(paginatedTweets)
+        }
+        scheduleMemoryMaintenance(delay: 0.2)
+    }
+
+    private func applyCachedPaginationTweets(
+        _ cachedTweets: [Tweet],
+        responseCount: Int,
+        page: UInt,
+        pageSize: UInt
+    ) {
+        mergePaginatedTweets(cachedTweets)
+        if responseCount >= pageSize {
+            hasMoreTweets = true
+        }
+    }
+
+    private func applyServerPaginationTweets(
+        _ serverTweets: [Tweet],
+        responseCount: Int,
+        page: UInt,
+        pageSize: UInt
+    ) {
+        mergePaginatedTweets(serverTweets)
+        currentPage = page
+        hasMoreTweets = responseCount >= pageSize
     }
 
     private var shouldUseProfileNewTweetsBanner: Bool {
@@ -398,6 +431,7 @@ struct TweetListView: View {
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
         onScroll: ((CGFloat, CGFloat) -> Void)? = nil,
+        onScrollStateChange: ((CGFloat, Bool, Bool) -> Void)? = nil,
         leadingPadding: CGFloat = 8,
         trailingPadding: CGFloat = 8,
         pinnedTweets: [Tweet] = [],
@@ -423,6 +457,7 @@ struct TweetListView: View {
         self.onForegroundRefresh = onForegroundRefresh
         self.showTitle = showTitle
         self.onScroll = onScroll
+        self.onScrollStateChange = onScrollStateChange
         self.leadingPadding = leadingPadding
         self.trailingPadding = trailingPadding
         self.pinnedTweets = pinnedTweets
@@ -486,16 +521,18 @@ struct TweetListView: View {
                 await onRefreshExtra?()
             },
             onScroll: onScroll,
-            onScrollStateChange: { _, isAtTop, isInteracting in
-                guard shouldUseProfileNewTweetsBanner else { return }
-                if !hasReceivedScrollState {
-                    hasReceivedScrollState = true
-                }
-                if isFeedAtTop != isAtTop {
-                    isFeedAtTop = isAtTop
-                }
-                if isFeedScrollInteractionActive != isInteracting {
-                    isFeedScrollInteractionActive = isInteracting
+            onScrollStateChange: { offset, isAtTop, isInteracting in
+                DispatchQueue.main.async {
+                    if !hasReceivedScrollState {
+                        hasReceivedScrollState = true
+                    }
+                    if isFeedAtTop != isAtTop {
+                        isFeedAtTop = isAtTop
+                    }
+                    if isFeedScrollInteractionActive != isInteracting {
+                        isFeedScrollInteractionActive = isInteracting
+                    }
+                    onScrollStateChange?(offset, isAtTop, isInteracting)
                 }
             },
             leadingPadding: leadingPadding,
@@ -870,8 +907,11 @@ struct TweetListView: View {
     func performInitialLoad() async {
         currentPage = 0
         didConfirmEmptyFromServer = false
+        // First paint is cache-first. Do not show the blank loading spinner until
+        // the first cache probe misses; otherwise a valid cached profile briefly
+        // looks blocked by network even though cached rows are about to render.
         if tweets.isEmpty {
-            isLoading = true
+            isLoading = false
         }
         let page: UInt = 0
         var didLoadCachedContent = false
@@ -1063,20 +1103,12 @@ struct TweetListView: View {
                         // For preserveOrder lists (bookmarks/favorites), append in server order
                         // For other lists, merge with timestamp sorting
                         let visibleCachedTweets = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
-                        if preserveOrder {
-                            tweets.appendTweetsPreservingOrder(visibleCachedTweets)
-                        } else {
-                            tweets.mergeTweets(visibleCachedTweets)
-                        }
-
-                        // Set hasMoreTweets based on cache - if we got a full page, there might be more
-                        // This is optimistic - server update will correct it if needed
-                        if tweetsFromCache.count >= pageSize {
-                            hasMoreTweets = true
-                        }
-
-                        // Schedule memory maintenance with debouncing.
-                        scheduleMemoryMaintenance(delay: 0.2)
+                        applyCachedPaginationTweets(
+                            visibleCachedTweets,
+                            responseCount: tweetsFromCache.count,
+                            page: page,
+                            pageSize: pageSize
+                        )
                     }
                     print("✅ [PAGINATION] Loaded \(tweetsFromCache.count) tweets from cache for page \(page)")
                 }
@@ -1252,27 +1284,25 @@ struct TweetListView: View {
             // to ensure correct server order (sorted by bookmark/favorite time)
             if page == 0 && preserveOrder {
                 tweets = renderableServerTweets
+                currentPage = page
+                hasMoreTweets = tweetsFromServer.count >= pageSize
+                scheduleMemoryMaintenance(delay: 0.2)
             } else if page == 0 && tweets.isEmpty {
                 tweets = renderableServerTweets
+                currentPage = page
+                hasMoreTweets = tweetsFromServer.count >= pageSize
+                scheduleMemoryMaintenance(delay: 0.2)
             } else {
                 // For preserveOrder lists (bookmarks/favorites), append in server order
                 // For other lists, merge with timestamp sorting
-                if preserveOrder {
-                    tweets.appendTweetsPreservingOrder(renderableServerTweets)
-                } else {
-                    tweets.mergeTweets(renderableServerTweets)
-                }
+                applyServerPaginationTweets(
+                    renderableServerTweets,
+                    responseCount: tweetsFromServer.count,
+                    page: page,
+                    pageSize: pageSize
+                )
             }
 
-            // Schedule memory maintenance with debouncing.
-            scheduleMemoryMaintenance(delay: 0.2)
-
-            currentPage = page
-
-            // Check response size (including nils) to determine if more items exist
-            // Server slices bookmark/favorite ENTRIES before calling get_tweet
-            // So array count reflects number of entries, not valid tweets
-            hasMoreTweets = tweetsFromServer.count >= pageSize
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (\(validServerTweets.count) valid), hasMoreTweets = \(hasMoreTweets)")
 
             // Mark initial load as complete for page 0 only if we got valid tweets

@@ -96,7 +96,8 @@ final class TweetCacheManager: @unchecked Sendable {
         }
     }
     
-    var context: NSManagedObjectContext { coreDataManager.context }
+    var context: NSManagedObjectContext { coreDataManager.cacheContext }
+    private var readContext: NSManagedObjectContext { coreDataManager.cacheReadContext }
     
     // MARK: - Media Cleanup
 
@@ -224,7 +225,8 @@ extension TweetCacheManager {
         cdTweet: CDTweet,
         userId: String,
         shouldFilterByAuthorId: Bool,
-        currentUserId: String?
+        currentUserId: String?,
+        in context: NSManagedObjectContext
     ) -> CachedTweetListSlot {
         do {
             let tweet = try Tweet.from(cdTweet: cdTweet)
@@ -280,7 +282,9 @@ extension TweetCacheManager {
 
     func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil, isProfileView: Bool = false) async -> [Tweet?] {
         return await withCheckedContinuation { continuation in
-            context.perform {
+            let readContext = self.readContext
+            readContext.perform {
+                readContext.refreshAllObjects()
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
 
                 // For profile views: load from the profile user's cache key and filter by authorId.
@@ -314,14 +318,15 @@ extension TweetCacheManager {
                     fetchLoop: while pageTweets.count < pageSizeInt {
                         request.fetchOffset = cdOffset
                         request.fetchLimit = batchSize
-                        guard let batch = try? self.context.fetch(request), !batch.isEmpty else { break }
+                        guard let batch = try? readContext.fetch(request), !batch.isEmpty else { break }
 
                         for cdTweet in batch {
                             switch self.cachedTweetListSlot(
                                 cdTweet: cdTweet,
                                 userId: userId,
                                 shouldFilterByAuthorId: shouldFilterByAuthorId,
-                                currentUserId: currentUserId
+                                currentUserId: currentUserId,
+                                in: readContext
                             ) {
                             case .skip:
                                 break
@@ -345,14 +350,15 @@ extension TweetCacheManager {
                 request.fetchLimit = pageSizeInt
                 request.fetchOffset = startSlot
 
-                if let cdTweets = try? self.context.fetch(request) {
+                if let cdTweets = try? readContext.fetch(request) {
                     var tweets: [Tweet?] = []
                     for cdTweet in cdTweets {
                         switch self.cachedTweetListSlot(
                             cdTweet: cdTweet,
                             userId: userId,
                             shouldFilterByAuthorId: shouldFilterByAuthorId,
-                            currentUserId: currentUserId
+                            currentUserId: currentUserId,
+                            in: readContext
                         ) {
                         case .skip:
                             break
@@ -491,15 +497,15 @@ extension TweetCacheManager {
             return
         }
         
-        context.performAndWait {
+        context.perform {
             // A tweet can belong to multiple cached lists at the same time: main feed,
             // the author's profile, bookmarks, favorites, etc. Keep list membership
             // keyed by (tweet id, cache key) so saving one list does not move the tweet
             // out of another list's cache.
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
-            let existingRows = (try? context.fetch(request)) ?? []
-            let cdTweet = existingRows.first { $0.uid == userId } ?? CDTweet(context: context)
+            let existingRows = (try? self.context.fetch(request)) ?? []
+            let cdTweet = existingRows.first { $0.uid == userId } ?? CDTweet(context: self.context)
 
             // Always save the current in-memory tweet state to cache
             // This ensures that any updates made to the tweet in memory are preserved
@@ -509,7 +515,9 @@ extension TweetCacheManager {
                 let rowAlreadyExists = existingRows.contains { $0.objectID == cdTweet.objectID }
                 let rowsToUpdate = rowAlreadyExists ? existingRows : existingRows + [cdTweet]
                 if rowsToUpdate.contains(where: { $0.tweetData != nil && $0.tweetData != tweetData }) {
-                    clearHeightCache(for: tweet)
+                    DispatchQueue.main.async {
+                        self.clearHeightCache(for: tweet)
+                    }
                 }
                 for row in rowsToUpdate {
                     row.tweetData = tweetData
@@ -526,7 +534,7 @@ extension TweetCacheManager {
             // For bookmarks/favorites, timeCached should be set to preserve server order
             cdTweet.timeCached = timeCached ?? Date()
             
-            try? context.save()
+            try? self.context.save()
         }
         
         // Mark media as permanent for: private tweets OR bookmarks/favorites

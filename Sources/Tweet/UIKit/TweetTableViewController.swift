@@ -101,6 +101,8 @@ class TweetTableViewController: UITableViewController {
     private var isBottomPullActive: Bool = false
     private var bottomPullThreshold: CGFloat = 50
     private var previousDistanceFromBottom: CGFloat = .greatestFiniteMagnitude
+    private var autoLoadMoreCountDuringCurrentScrollGesture: Int = 0
+    private let maxAutoLoadMorePerScrollGesture: Int = 2
     
     // Spinner timing
     private var isLoading: Bool = false
@@ -237,6 +239,10 @@ class TweetTableViewController: UITableViewController {
 
     private var isTableAttachedForLayout: Bool {
         isViewLoaded && view.window != nil && tableView.window != nil && tableView.superview != nil
+    }
+
+    private var isTableVisibleForMutation: Bool {
+        isTableAttachedForLayout && videoCoordinator.isFeedVisible
     }
 
     private var currentRowLayoutWidth: CGFloat {
@@ -634,6 +640,7 @@ class TweetTableViewController: UITableViewController {
 
     private func prepareVisibleVideosForBackground(reason: String) {
         guard videoCoordinator.isFeedVisible else { return }
+        guard isTableAttachedForLayout else { return }
 
         cancelDirectionalImagePreloads()
 
@@ -733,6 +740,8 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func refreshVisibleVideoLayersAfterForeground() {
+        guard isTableVisibleForMutation else { return }
+
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
             tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
@@ -740,7 +749,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     func scrollToTop() {
-        guard isTableAttachedForLayout else {
+        guard isTableVisibleForMutation else {
             pendingScrollRequest = .top
             return
         }
@@ -773,7 +782,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     func scrollToFirstRegularTweet() {
-        guard isTableAttachedForLayout else {
+        guard isTableVisibleForMutation else {
             pendingScrollRequest = .firstRegularTweet
             return
         }
@@ -801,7 +810,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     func scrollToTweet(_ tweetId: String) {
-        guard isTableAttachedForLayout else {
+        guard isTableVisibleForMutation else {
             pendingScrollRequest = .tweet(tweetId)
             return
         }
@@ -936,7 +945,7 @@ class TweetTableViewController: UITableViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
 
-        guard isTableAttachedForLayout else { return }
+        guard isTableVisibleForMutation else { return }
 
         // Compensate contentOffset when the header expands without animation.
         // The frame jumps instantly; we adjust offset by the same amount so
@@ -977,7 +986,7 @@ class TweetTableViewController: UITableViewController {
         }
 
         if headerViewBuilder != nil,
-           isTableAttachedForLayout,
+           isTableVisibleForMutation,
            abs(tableView.bounds.width - lastHeaderLayoutWidth) > 1 {
             updateHeader()
         }
@@ -1175,7 +1184,7 @@ class TweetTableViewController: UITableViewController {
         guard feedIdentifier != "mainFeed" else { return }
         guard !didAttemptInitialSavedScrollPositionRestore else { return }
         guard savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil else { return }
-        guard isTableAttachedForLayout else { return }
+        guard isTableVisibleForMutation else { return }
 
         didAttemptInitialSavedScrollPositionRestore = true
         DispatchQueue.main.async { [weak self] in
@@ -1186,7 +1195,7 @@ class TweetTableViewController: UITableViewController {
     private func applyMainFeedSavedScrollPositionIfReady() {
         guard feedIdentifier == "mainFeed",
               !isScrollingToTop,
-              isTableAttachedForLayout else { return }
+              isTableVisibleForMutation else { return }
         guard let position = savedScrollPosition ?? ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) else { return }
 
         lastContentOffset = position
@@ -1197,7 +1206,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func restoreInitialSavedScrollPositionIfValid(reason: String, allowDeferral: Bool) {
-        guard isTableAttachedForLayout, !tweets.isEmpty else { return }
+        guard isTableVisibleForMutation, !tweets.isEmpty else { return }
         guard let position = savedScrollPosition ?? ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) else { return }
         guard !tableView.isTracking, !tableView.isDragging, !tableView.isDecelerating else { return }
 
@@ -1262,7 +1271,7 @@ class TweetTableViewController: UITableViewController {
         reason: String,
         clearOnSuccess: Bool
     ) -> Bool {
-        guard isTableAttachedForLayout, !tweets.isEmpty else { return false }
+        guard isTableVisibleForMutation, !tweets.isEmpty else { return false }
         guard !tableView.isTracking,
               !tableView.isDragging,
               !tableView.isDecelerating,
@@ -1342,7 +1351,7 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Public API
     
     func updatePinnedTweets(_ tweets: [Tweet]) {
-        if isTableAttachedForLayout, isScrollInteractionActive {
+        if isTableVisibleForMutation, isScrollInteractionActive {
             deferredPinnedTweets = tweets
             return
         }
@@ -1352,7 +1361,7 @@ class TweetTableViewController: UITableViewController {
         let oldOriginalTweetIds = Set(oldPinnedTweets.compactMap(\.originalTweetId))
         self.pinnedTweets = tweets
 
-        guard isTableAttachedForLayout else {
+        guard isTableVisibleForMutation else {
             needsFullReloadAfterAttach = true
             return
         }
@@ -1424,21 +1433,24 @@ class TweetTableViewController: UITableViewController {
     }
     
     func updateTweets(_ newTweets: [Tweet]) {
-        if isTableAttachedForLayout,
-           isScrollInteractionActive,
-           feedIdentifier.hasPrefix("profile_") {
+        let oldCount = tweets.count
+        let oldTweets = tweets
+        let isPaginationAppendDuringScroll = isScrollInteractionActive
+            && newTweets.count > oldCount
+            && oldTweets.enumerated().allSatisfy { index, tweet in
+                newTweets[index].mid == tweet.mid
+            }
+
+        if isTableVisibleForMutation, isScrollInteractionActive, !isPaginationAppendDuringScroll {
             deferredTweets = newTweets
             return
         }
-
-        let oldCount = tweets.count
-        let oldTweets = tweets
 
         // Skip all UIKit table operations if the view is not in the window hierarchy.
         // This can happen when a pending SwiftUI update fires after navigation has already
         // popped this view (e.g. immediately after logout). Updating a detached table view
         // causes UITableView row-count assertion failures.
-        guard isTableAttachedForLayout else {
+        guard isTableVisibleForMutation else {
             tweets = newTweets
             needsFullReloadAfterAttach = true
             return
@@ -1671,7 +1683,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func applyPendingDetachedTableReloadIfNeeded(reason: String) {
-        guard needsFullReloadAfterAttach, isTableAttachedForLayout else { return }
+        guard needsFullReloadAfterAttach, isTableVisibleForMutation else { return }
         guard !isScrollInteractionActive else { return }
 
         needsFullReloadAfterAttach = false
@@ -1684,7 +1696,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func applyPendingScrollRequestIfNeeded() {
-        guard isTableAttachedForLayout, !isScrollInteractionActive, let request = pendingScrollRequest else { return }
+        guard isTableVisibleForMutation, !isScrollInteractionActive, let request = pendingScrollRequest else { return }
 
         pendingScrollRequest = nil
         switch request {
@@ -1700,7 +1712,7 @@ class TweetTableViewController: UITableViewController {
     func updateHeader() {
         // Defer header layout until the view is in the hierarchy to avoid
         // "UITableView layout outside view hierarchy" warnings.
-        guard isTableAttachedForLayout else {
+        guard isTableVisibleForMutation else {
             needsHeaderUpdate = true
             return
         }
@@ -1846,7 +1858,7 @@ class TweetTableViewController: UITableViewController {
         if stateChanged {
         }
 
-        guard isTableAttachedForLayout else {
+        guard isTableVisibleForMutation else {
             // SwiftUI can deliver loading state before the UIKit table is attached.
             // Mutating tableFooterView while detached forces UIKit to lay out
             // visible rows outside the view hierarchy and emits a noisy warning.
@@ -1936,7 +1948,7 @@ class TweetTableViewController: UITableViewController {
         loadingTimeoutTimer?.invalidate()
         loadingTimeoutTimer = nil
 
-        guard isTableAttachedForLayout else {
+        guard isTableVisibleForMutation else {
             needsFooterUpdate = true
             loadingSpinnerStartTime = nil
             return
@@ -2505,6 +2517,9 @@ class TweetTableViewController: UITableViewController {
         let currentOffset = scrollView.contentOffset.y
         let frameDelta = currentOffset - lastContentOffset
         lastContentOffset = currentOffset  // always update for frame-level tracking
+
+        guard isTableVisibleForMutation else { return }
+
         notifyScrollStateChanged(scrollView)
 
         // Update scroll direction only during active user dragging
@@ -2541,11 +2556,12 @@ class TweetTableViewController: UITableViewController {
         // emit scroll events; those should not chain-load pages.
         let isUserDrivenScroll = isUserDragging || isDecelerating || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
         if isUserDrivenScroll,
+           autoLoadMoreCountDuringCurrentScrollGesture < maxAutoLoadMorePerScrollGesture,
            isMovingTowardBottom,
            crossedIntoNearBottom,
-           tweets.count >= 4,
            hasMoreTweets,
            !isLoadingMore {
+            autoLoadMoreCountDuringCurrentScrollGesture += 1
             triggerAutoLoadMore()
         }
         previousDistanceFromBottom = distanceFromBottom
@@ -2610,6 +2626,7 @@ class TweetTableViewController: UITableViewController {
         isDecelerating = false
         let distanceFromBottom = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.frame.size.height
         previousDistanceFromBottom = max(distanceFromBottom, scrollView.frame.size.height * 2)
+        autoLoadMoreCountDuringCurrentScrollGesture = 0
         lastCallbackOffset = scrollView.contentOffset.y
         // Directional preloads restart only after scrolling stops.
         cancelDirectionalImagePreloads()
@@ -2667,6 +2684,7 @@ class TweetTableViewController: UITableViewController {
             pendingHeightRelayoutTweetIds.insert(tweetId)
         }
         guard !pendingHeightRelayoutTweetIds.isEmpty else { return }
+        guard isTableVisibleForMutation else { return }
 
         let expectedCount = pinnedTweets.count + tweets.count
         let currentCount = tableView.numberOfRows(inSection: 0)
@@ -2682,6 +2700,8 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func runDeferredHeightOverflowChecksForVisibleCells() {
+        guard isTableVisibleForMutation else { return }
+
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
             tweetCell.runDeferredHeightOverflowCheckIfNeeded()
@@ -2967,7 +2987,7 @@ class TweetTableViewController: UITableViewController {
         videoCoordinator.buildVideoList(from: currentTweets, pinnedTweets: currentPinnedTweets) { [weak self] in
             let delay: TimeInterval = self?.feedIdentifier == "mainFeed" ? 0.18 : 0
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self, self.tableView.window != nil else { return }
+                guard let self, self.isTableVisibleForMutation else { return }
                 guard !self.isScrollInteractionActive else { return }
                 self.lastVisibleTweetIds = []
                 self.lastLoadVisibleVideoIds = []
@@ -2995,7 +3015,7 @@ class TweetTableViewController: UITableViewController {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self,
                       self.videoVisibilityRefreshGeneration == generation,
-                      self.tableView.window != nil else { return }
+                      self.isTableVisibleForMutation else { return }
                 guard !self.isScrollInteractionActive else { return }
                 if delay > 0, !isFeedReturn && !isLightweightUpdate {
                     self.forceLayoutVisibleCellsForVisibilityPass()
@@ -3006,7 +3026,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func forceLayoutVisibleCellsForVisibilityPass() {
-        guard isTableAttachedForLayout else { return }
+        guard isTableVisibleForMutation else { return }
         guard !isUserDragging && !isDecelerating else { return }
         tableView.layoutIfNeeded()
         for cell in tableView.visibleCells {
@@ -3018,6 +3038,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func refreshVisiblePlaybackAfterProgrammaticListChange(reason: String) {
+        guard isTableVisibleForMutation else { return }
         guard isReadyForFeedVideoResume else { return }
         lastVisibleTweetIds = []
         lastLoadVisibleVideoIds = []
@@ -3032,7 +3053,7 @@ class TweetTableViewController: UITableViewController {
     }
     
     private func updateVisibleTweetsForVideoPlayback() {
-        guard tableView.window != nil else { return }
+        guard isTableVisibleForMutation else { return }
         guard !isTableViewUpdating else { return }
         guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
 

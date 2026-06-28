@@ -383,7 +383,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func handleMainFeedCheckBackgroundTask(task: BGAppRefreshTask) {
-        print("[AppDelegate] Background main feed banner check disabled")
+        print("[AppDelegate] 🔄 Background main feed check task STARTED")
 
         Task { @MainActor in
             self.noteBackgroundLaunchIfNeeded()
@@ -391,8 +391,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
 
         let checkTask = Task {
+            if #available(iOS 16.0, *) {
+                await FollowingsTweetViewModel.shared.performBackgroundFeedCheck()
+            }
             task.setTaskCompleted(success: true)
-            print("[AppDelegate] ✅ Background main feed banner check skipped")
+            print("[AppDelegate] ✅ Background main feed check completed")
         }
 
         task.expirationHandler = {
@@ -759,11 +762,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func scheduleMainFeedCheckAfterForegroundReturn() {
         Task { @MainActor in
             self.scheduleNextMainFeedCheck()
-            if #available(iOS 16.0, *) {
-                FollowingsTweetViewModel.shared.clearPendingNewTweetsBanner(reason: "main feed banner disabled")
+        }
+        if #available(iOS 16.0, *) {
+            Task.detached(priority: .utility) {
+                await FollowingsTweetViewModel.shared.performForegroundFeedRefresh()
             }
         }
-        print("[AppDelegate] Foreground main feed banner check disabled")
+        print("[AppDelegate] Scheduled foreground main feed get_tweet_feed check")
     }
     
     /// Refresh appUser's provider IP when app returns from background

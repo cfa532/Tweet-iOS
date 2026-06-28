@@ -46,6 +46,7 @@ enum FeedPlaybackTuning {
     static let tweetVisibleRatio: CGFloat = 0.50
 
     // Video playback visibility
+    static let videoWarmVisibilityRatio: CGFloat = 0.25
     static let videoStartVisibilityRatio: CGFloat = 0.50
     static let videoContinueVisibilityRatio: CGFloat = 0.70
 
