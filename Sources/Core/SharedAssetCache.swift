@@ -2735,6 +2735,8 @@ class SharedAssetCache: ObservableObject {
         )
         if source == "preload" {
             print("🖼️ [PLAYER PRELOAD] Generated thumbnail for \(mediaID)")
+        } else if source == "preload-decoded" {
+            print("🖼️ [PLAYER PRELOAD] Generated decoded thumbnail for \(mediaID)")
         }
     }
 

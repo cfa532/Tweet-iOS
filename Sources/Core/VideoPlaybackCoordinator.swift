@@ -229,7 +229,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var directionalExactFrameGeneration = 0
     private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
     private let directionalPreloadRefreshInterval = FeedPlaybackTuning.directionalVideoPreloadRefreshInterval
-    private let directionalExactFramePreloadDelay: TimeInterval = 0.9
+    private let directionalExactFramePreloadDelay: TimeInterval = 0.35
     var directionalPlayerPreloadCount: Int = FeedPlaybackTuning.directionalVideoPreloadCount {
         didSet {
             if directionalPlayerPreloadCount <= 0 {
@@ -1435,54 +1435,78 @@ class VideoPlaybackCoordinator: ObservableObject {
         SharedAssetCache.shared.preloadPlayer(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
-    /// Get up to `count` preloadable videos in the scroll direction that are not currently visible.
+    /// Get up to `count` preloadable videos in the scroll direction.
+    /// Prefer the low-threshold near-viewport band (`loadVisibleMediaCells`) before
+    /// looking beyond it, because those are the videos most likely to flicker next.
     private func getNextVideosInScrollDirection(count: Int) -> [VideoPlaybackInfo] {
-        // Use the low-threshold load-visible set so any media already on screen is
-        // treated as foreground work. Preload starts after the farthest visible media,
-        // so the target may be beyond the adjacent tweet if that tweet is still visible.
-        let visibleIndices: [Int]
-        if !loadVisibleMediaCells.isEmpty {
-            visibleIndices = allVideos.enumerated()
-                .filter { loadVisibleMediaCells.contains($0.element.identifier) && $0.element.isInVisibleMediaRange }
-                .map { $0.offset }
-                .sorted()
-        } else if !onScreenMediaCells.isEmpty {
-            visibleIndices = allVideos.enumerated()
-                .filter { onScreenMediaCells.contains($0.element.identifier) && $0.element.isInVisibleMediaRange }
-                .map { $0.offset }
-                .sorted()
-        } else {
-            let visibleVideoSet = visibleTweetIds
-            visibleIndices = allVideos.enumerated()
-                .filter { visibleVideoSet.contains($0.element.cellTweetId) && $0.element.isInVisibleMediaRange }
-                .map { $0.offset }
-                .sorted()
-        }
+        guard count > 0 else { return [] }
 
-        guard !visibleIndices.isEmpty else { return [] }
+        let indexedVideos = allVideos.enumerated()
+            .filter { $0.element.isInVisibleMediaRange }
+            .map { (index: $0.offset, video: $0.element) }
+
+        let onScreenIndices = indexedVideos
+            .filter { onScreenMediaCells.contains($0.video.identifier) }
+            .map(\.index)
+            .sorted()
+
+        let loadVisibleIndices = indexedVideos
+            .filter { loadVisibleMediaCells.contains($0.video.identifier) }
+            .map(\.index)
+            .sorted()
+
+        let tweetVisibleIndices = indexedVideos
+            .filter { visibleTweetIds.contains($0.video.cellTweetId) }
+            .map(\.index)
+            .sorted()
+
+        let boundaryIndices = !onScreenIndices.isEmpty ? onScreenIndices :
+            (!loadVisibleIndices.isEmpty ? loadVisibleIndices : tweetVisibleIndices)
+        guard !boundaryIndices.isEmpty else { return [] }
 
         var result: [VideoPlaybackInfo] = []
         var seenMids = Set<String>()
 
-        func appendIfPreloadable(_ video: VideoPlaybackInfo) {
+        func appendIfPreloadable(_ video: VideoPlaybackInfo, allowLoadVisible: Bool) {
             guard video.isInVisibleMediaRange,
-                  !loadVisibleMediaCells.contains(video.identifier),
+                  (allowLoadVisible || !loadVisibleMediaCells.contains(video.identifier)),
                   !onScreenMediaCells.contains(video.identifier),
                   !seenMids.contains(video.videoMid) else { return }
             result.append(video)
             seenMids.insert(video.videoMid)
         }
 
+        let nearViewportCandidates = indexedVideos.filter {
+            loadVisibleMediaCells.contains($0.video.identifier) &&
+            !onScreenMediaCells.contains($0.video.identifier)
+        }
+
         if scrollDirection {
-            var nextIndex = (visibleIndices.max() ?? 0) + 1
+            let lowerBound = boundaryIndices.max() ?? -1
+            for candidate in nearViewportCandidates.sorted(by: { $0.index < $1.index }) where result.count < count {
+                if candidate.index > lowerBound || onScreenIndices.isEmpty {
+                    appendIfPreloadable(candidate.video, allowLoadVisible: true)
+                }
+            }
+
+            let preloadBoundary = max(loadVisibleIndices.max() ?? lowerBound, lowerBound)
+            var nextIndex = preloadBoundary + 1
             while nextIndex < allVideos.count && result.count < count {
-                appendIfPreloadable(allVideos[nextIndex])
+                appendIfPreloadable(allVideos[nextIndex], allowLoadVisible: false)
                 nextIndex += 1
             }
         } else {
-            var prevIndex = (visibleIndices.min() ?? 0) - 1
+            let upperBound = boundaryIndices.min() ?? allVideos.count
+            for candidate in nearViewportCandidates.sorted(by: { $0.index > $1.index }) where result.count < count {
+                if candidate.index < upperBound || onScreenIndices.isEmpty {
+                    appendIfPreloadable(candidate.video, allowLoadVisible: true)
+                }
+            }
+
+            let preloadBoundary = min(loadVisibleIndices.min() ?? upperBound, upperBound)
+            var prevIndex = preloadBoundary - 1
             while prevIndex >= 0 && result.count < count {
-                appendIfPreloadable(allVideos[prevIndex])
+                appendIfPreloadable(allVideos[prevIndex], allowLoadVisible: false)
                 prevIndex -= 1
             }
         }
@@ -1535,11 +1559,20 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     func canRunDirectionalPreloads() -> Bool {
+        canRunDirectionalExactFramePreloads()
+    }
+
+    private func canScheduleDirectionalCoverPreloads() -> Bool {
         guard AppDelegate.isVideoInfrastructureReady,
               isTableViewScrollIdle,
               !isPlaybackSuppressedByOverlay,
               isFeedVisible else { return false }
 
+        return true
+    }
+
+    private func canRunDirectionalExactFramePreloads() -> Bool {
+        guard canScheduleDirectionalCoverPreloads() else { return false }
         guard !visibleVideos.isEmpty else { return true }
 
         guard phase == .primaryPlaying,
@@ -1566,7 +1599,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         guard isTableViewScrollIdle else { return }
         promoteForegroundVisibleMedia(reason: reason)
 
-        guard canRunDirectionalPreloads() else {
+        guard canScheduleDirectionalCoverPreloads() else {
             cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
             activePreloadMids.removeAll()
             SharedAssetCache.shared.updateProtectedPreloadMids([])
@@ -1614,19 +1647,35 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         directionalExactFrameGeneration += 1
         let generation = directionalExactFrameGeneration
-        let expectedMid = firstVideo.videoMid
+        scheduleExactFrameUpgrade(firstVideo, generation: generation, attempt: 0)
+    }
+
+    private func scheduleExactFrameUpgrade(_ video: VideoPlaybackInfo, generation: Int, attempt: Int) {
+        let maxAttempts = 6
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self,
                       self.directionalExactFrameGeneration == generation,
-                      self.canRunDirectionalPreloads(),
-                      self.activePreloadMids.contains(expectedMid),
-                      SharedAssetCache.shared.getCachedPlayer(for: expectedMid) == nil else { return }
-                self.preloadDecodedVideoFrame(firstVideo)
+                      self.isDirectionalExactFrameTargetStillRelevant(video),
+                      SharedAssetCache.shared.getCachedPlayer(for: video.videoMid) == nil else { return }
+
+                guard self.canRunDirectionalExactFramePreloads() else {
+                    guard attempt < maxAttempts else { return }
+                    self.scheduleExactFrameUpgrade(video, generation: generation, attempt: attempt + 1)
+                    return
+                }
+
+                self.preloadDecodedVideoFrame(video)
             }
         }
         directionalExactFrameWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + directionalExactFramePreloadDelay, execute: workItem)
+    }
+
+    private func isDirectionalExactFrameTargetStillRelevant(_ video: VideoPlaybackInfo) -> Bool {
+        if activePreloadMids.contains(video.videoMid) { return true }
+        return loadVisibleMediaCells.contains(video.identifier) &&
+            !onScreenMediaCells.contains(video.identifier)
     }
 
     private func currentOnScreenVideoMids() -> Set<String> {

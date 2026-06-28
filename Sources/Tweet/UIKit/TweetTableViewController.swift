@@ -100,6 +100,7 @@ class TweetTableViewController: UITableViewController {
     // Bottom pull-to-load state (manual pull past bottom edge)
     private var isBottomPullActive: Bool = false
     private var bottomPullThreshold: CGFloat = 50
+    private var previousDistanceFromBottom: CGFloat = .greatestFiniteMagnitude
     
     // Spinner timing
     private var isLoading: Bool = false
@@ -197,6 +198,12 @@ class TweetTableViewController: UITableViewController {
     private var savedScrollPosition: CGFloat?
     private var didAttemptInitialSavedScrollPositionRestore = false
     private var isScrollingToTop: Bool = false
+    private enum PendingScrollRequest {
+        case top
+        case firstRegularTweet
+        case tweet(String)
+    }
+    private var pendingScrollRequest: PendingScrollRequest?
 
     // Feed identifier for persistent scroll position storage
     var feedIdentifier: String = "mainFeed"  // Default to main feed
@@ -215,6 +222,8 @@ class TweetTableViewController: UITableViewController {
     private var isDecelerating: Bool = false
     private var isTableViewUpdating: Bool = false
     private var deferredPinnedTweets: [Tweet]?
+    private var deferredTweets: [Tweet]?
+    private var needsFullReloadAfterAttach: Bool = false
     private var pendingHeightRelayoutTweetIds = Set<String>()
     /// Tweet IDs whose content is currently expanded by the user ("More..." tapped).
     /// `heightForRowAt` returns `automaticDimension` for these so the table re-measures
@@ -731,6 +740,11 @@ class TweetTableViewController: UITableViewController {
     }
 
     func scrollToTop() {
+        guard isTableAttachedForLayout else {
+            pendingScrollRequest = .top
+            return
+        }
+
         // Clear saved scroll position when scrolling to top
         savedScrollPosition = nil
         ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
@@ -759,6 +773,11 @@ class TweetTableViewController: UITableViewController {
     }
 
     func scrollToFirstRegularTweet() {
+        guard isTableAttachedForLayout else {
+            pendingScrollRequest = .firstRegularTweet
+            return
+        }
+
         savedScrollPosition = nil
         ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
         if feedIdentifier == "mainFeed" {
@@ -782,6 +801,11 @@ class TweetTableViewController: UITableViewController {
     }
 
     func scrollToTweet(_ tweetId: String) {
+        guard isTableAttachedForLayout else {
+            pendingScrollRequest = .tweet(tweetId)
+            return
+        }
+
         savedScrollPosition = nil
         ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
         if feedIdentifier == "mainFeed" {
@@ -833,16 +857,9 @@ class TweetTableViewController: UITableViewController {
         // created frequently during navigation; applying a saved offset before their
         // first layout can stack with media setup and make the first gesture feel frozen.
         if feedIdentifier == "mainFeed", !isScrollingToTop && !hasAdjustedInitialPosition {
-            // Check instance variable first, then in-memory ScrollPositionManager
-            let position = savedScrollPosition ?? ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier)
-            if let position {
+            if savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil {
                 DispatchQueue.main.async { [weak self] in
-                    guard let self = self, !self.isScrollingToTop else { return }
-                    self.lastContentOffset = position
-                    self.lastCallbackOffset = position
-                    self.tableView.setContentOffset(CGPoint(x: 0, y: position), animated: false)
-                    self.lastScrollOffset = position
-                    self.savedScrollPosition = nil
+                    self?.applyMainFeedSavedScrollPositionIfReady()
                 }
             }
         }
@@ -873,6 +890,7 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
+        applyMainFeedSavedScrollPositionIfReady()
         // NOTE: Video playback restart is handled by .feedViewDidAppear notification
         // (see setupFeedViewDidAppearObserver) which re-evaluates visibility to resume playback
 
@@ -881,6 +899,9 @@ class TweetTableViewController: UITableViewController {
             updateLoadingState(isLoading: isLoading, isLoadingMore: isLoadingMore, hasMoreTweets: hasMoreTweets)
         }
 
+        applyPendingDetachedTableReloadIfNeeded(reason: "viewDidAppear")
+        applyDeferredTableChromeUpdatesAfterScroll()
+        applyPendingScrollRequestIfNeeded()
         schedulePendingBackgroundResumeRestore(reason: "viewDidAppear")
         scheduleVideoVisibilityRefresh(reason: "viewDidAppear")
         if let pendingReason = pendingFeedPlaybackResumeReason {
@@ -914,6 +935,8 @@ class TweetTableViewController: UITableViewController {
     
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+
+        guard isTableAttachedForLayout else { return }
 
         // Compensate contentOffset when the header expands without animation.
         // The frame jumps instantly; we adjust offset by the same amount so
@@ -1152,11 +1175,25 @@ class TweetTableViewController: UITableViewController {
         guard feedIdentifier != "mainFeed" else { return }
         guard !didAttemptInitialSavedScrollPositionRestore else { return }
         guard savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil else { return }
+        guard isTableAttachedForLayout else { return }
 
         didAttemptInitialSavedScrollPositionRestore = true
         DispatchQueue.main.async { [weak self] in
             self?.restoreInitialSavedScrollPositionIfValid(reason: reason, allowDeferral: true)
         }
+    }
+
+    private func applyMainFeedSavedScrollPositionIfReady() {
+        guard feedIdentifier == "mainFeed",
+              !isScrollingToTop,
+              isTableAttachedForLayout else { return }
+        guard let position = savedScrollPosition ?? ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) else { return }
+
+        lastContentOffset = position
+        lastCallbackOffset = position
+        tableView.setContentOffset(CGPoint(x: 0, y: position), animated: false)
+        lastScrollOffset = position
+        savedScrollPosition = nil
     }
 
     private func restoreInitialSavedScrollPositionIfValid(reason: String, allowDeferral: Bool) {
@@ -1315,7 +1352,10 @@ class TweetTableViewController: UITableViewController {
         let oldOriginalTweetIds = Set(oldPinnedTweets.compactMap(\.originalTweetId))
         self.pinnedTweets = tweets
 
-        guard isTableAttachedForLayout else { return }
+        guard isTableAttachedForLayout else {
+            needsFullReloadAfterAttach = true
+            return
+        }
 
         let newOriginalTweetIds = Set(tweets.compactMap(\.originalTweetId))
         prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds.subtracting(oldOriginalTweetIds))
@@ -1384,6 +1424,13 @@ class TweetTableViewController: UITableViewController {
     }
     
     func updateTweets(_ newTweets: [Tweet]) {
+        if isTableAttachedForLayout,
+           isScrollInteractionActive,
+           feedIdentifier.hasPrefix("profile_") {
+            deferredTweets = newTweets
+            return
+        }
+
         let oldCount = tweets.count
         let oldTweets = tweets
 
@@ -1393,6 +1440,7 @@ class TweetTableViewController: UITableViewController {
         // causes UITableView row-count assertion failures.
         guard isTableAttachedForLayout else {
             tweets = newTweets
+            needsFullReloadAfterAttach = true
             return
         }
 
@@ -1605,6 +1653,11 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func applyDeferredTableChromeUpdatesAfterScroll() {
+        if let deferredTweets {
+            self.deferredTweets = nil
+            updateTweets(deferredTweets)
+        }
+
         if needsHeaderUpdate {
             updateHeader()
         }
@@ -1612,6 +1665,35 @@ class TweetTableViewController: UITableViewController {
         if let deferredPinnedTweets {
             self.deferredPinnedTweets = nil
             updatePinnedTweets(deferredPinnedTweets)
+        }
+
+        applyPendingScrollRequestIfNeeded()
+    }
+
+    private func applyPendingDetachedTableReloadIfNeeded(reason: String) {
+        guard needsFullReloadAfterAttach, isTableAttachedForLayout else { return }
+        guard !isScrollInteractionActive else { return }
+
+        needsFullReloadAfterAttach = false
+        isTableViewUpdating = true
+        tableView.reloadData()
+        isTableViewUpdating = false
+        rebuildVideoListAndRefreshVisibility(reason: "\(reason)DetachedReload")
+        scheduleInitialSavedScrollPositionRestoreIfNeeded(reason: reason)
+        scheduleVideoVisibilityRefresh(reason: "\(reason)DetachedReload")
+    }
+
+    private func applyPendingScrollRequestIfNeeded() {
+        guard isTableAttachedForLayout, !isScrollInteractionActive, let request = pendingScrollRequest else { return }
+
+        pendingScrollRequest = nil
+        switch request {
+        case .top:
+            scrollToTop()
+        case .firstRegularTweet:
+            scrollToFirstRegularTweet()
+        case .tweet(let tweetId):
+            scrollToTweet(tweetId)
         }
     }
 
@@ -2450,13 +2532,30 @@ class TweetTableViewController: UITableViewController {
         let contentInsetBottom = scrollView.contentInset.bottom
         let bottomOffset = scrollView.contentOffset.y + scrollViewHeight - contentHeight + contentInsetBottom
 
-        // Auto-load: trigger when within 2 screen heights of the bottom (only if more tweets exist)
-        if tweets.count >= 4 && hasMoreTweets && distanceFromBottom < scrollViewHeight * 2 && !isLoadingMore {
-            triggerBottomPullLoadMore()
+        let autoLoadThreshold = scrollViewHeight * 2
+        let crossedIntoNearBottom = previousDistanceFromBottom >= autoLoadThreshold && distanceFromBottom < autoLoadThreshold
+        let isMovingTowardBottom = frameDelta > 0
+
+        // Auto-load only when the user crosses into the near-bottom zone while moving
+        // downward. Layout/content-size changes can keep the table inside this zone and
+        // emit scroll events; those should not chain-load pages.
+        let isUserDrivenScroll = isUserDragging || isDecelerating || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
+        if isUserDrivenScroll,
+           isMovingTowardBottom,
+           crossedIntoNearBottom,
+           tweets.count >= 4,
+           hasMoreTweets,
+           !isLoadingMore {
+            triggerAutoLoadMore()
         }
+        previousDistanceFromBottom = distanceFromBottom
 
         // Manual pull-to-load: user pulled past the bottom edge (works even when hasMoreTweets is false)
-        if tweets.count >= 4 && bottomOffset > bottomPullThreshold && !isLoadingMore && !isBottomPullActive {
+        if isUserDragging,
+           tweets.count >= 4,
+           bottomOffset > bottomPullThreshold,
+           !isLoadingMore,
+           !isBottomPullActive {
             isBottomPullActive = true
             triggerBottomPullLoadMore()
         } else if bottomOffset <= 0 {
@@ -2509,6 +2608,8 @@ class TweetTableViewController: UITableViewController {
         cancelBackgroundResumeForUserScroll()
         isUserDragging = true
         isDecelerating = false
+        let distanceFromBottom = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.frame.size.height
+        previousDistanceFromBottom = max(distanceFromBottom, scrollView.frame.size.height * 2)
         lastCallbackOffset = scrollView.contentOffset.y
         // Directional preloads restart only after scrolling stops.
         cancelDirectionalImagePreloads()
@@ -3099,11 +3200,18 @@ class TweetTableViewController: UITableViewController {
 
         // Notify callback if registered
         onLoadMoreRequested?()
+    }
 
-        // Reset manual pull flag after a delay to allow next pull
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.isBottomPullActive = false
-        }
+    private func triggerAutoLoadMore() {
+        guard hasMoreTweets, !isLoadingMore else { return }
+
+        updateLoadingState(isLoading: isLoading, isLoadingMore: true, hasMoreTweets: hasMoreTweets)
+
+        // Automatic pagination should obey hasMoreTweets; threshold crossing decides when it fires.
+        loadMoreTweets?(false)
+
+        // Notify callback if registered
+        onLoadMoreRequested?()
     }
     
     private func showNoMoreTweetsMessage() {

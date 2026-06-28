@@ -1023,7 +1023,7 @@ struct TweetListView: View {
             hasMoreTweets = false
             return
         }
-        
+
         // Allow bypassing hasMoreTweets check for manual pull-to-load
         guard (hasMoreTweets || forceLoad), !isLoadingMore, initialLoadComplete else {
             return 
