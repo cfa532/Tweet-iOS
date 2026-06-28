@@ -4,6 +4,18 @@ import UIKit
 
 final class TweetCacheManager: @unchecked Sendable {
     static let shared = TweetCacheManager()
+    static func mainFeedCacheKey(appUserId: String) -> String {
+        "main_feed_\(appUserId)"
+    }
+
+    static func bookmarkCacheKey(userId: String) -> String {
+        "\(UserContentType.BOOKMARKS.rawValue)_\(userId)"
+    }
+
+    static func favoriteCacheKey(userId: String) -> String {
+        "\(UserContentType.FAVORITES.rawValue)_\(userId)"
+    }
+
     private let coreDataManager = CoreDataManager.shared
     private let maxCacheAge: TimeInterval = 14 * 24 * 60 * 60 // 14 days (2 weeks) for auto-cleanup
     private let maxCacheSize: Int = 5000 // Maximum number of tweets to cache
@@ -271,11 +283,11 @@ extension TweetCacheManager {
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
 
-                // For profile views: load from userId cache and filter by authorId
-                // For main feed: load from userId (appUser.mid) cache, no authorId filtering
+                // For profile views: load from the profile user's cache key and filter by authorId.
+                // For main feed/list views: load from the explicit list cache key, no authorId filtering.
                 let shouldFilterByAuthorId = isProfileView
 
-                // Always load from userId cache (which equals authorId for profile views)
+                // Always load from the requested cache key. For profile views this equals authorId.
                 request.predicate = NSPredicate(format: "uid == %@", userId)
 
                 // For bookmarks and favorites, sort by timeCached (when bookmarked/favorited)
@@ -361,7 +373,7 @@ extension TweetCacheManager {
     /// IMPORTANT: Searches across ALL user caches, not just a specific user's cache
     /// This is necessary because:
     /// - Original tweets are cached under their authorId
-    /// - Retweets are cached under appUser.mid
+    /// - Main feed entries are cached under `main_feed_<appUserId>`
     /// - When we only have a tweet mid, we don't know which user's cache it's in
     /// Synchronously fetch tweet from cache (in-memory singleton or Core Data)
     /// Used for height estimation and other synchronous operations
@@ -376,6 +388,7 @@ extension TweetCacheManager {
         return context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", mid)
+            request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
             
             guard let cdTweet = try? context.fetch(request).first else {
                 return nil
@@ -421,6 +434,7 @@ extension TweetCacheManager {
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                 request.predicate = NSPredicate(format: "tid == %@", mid)
+                request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
                 
                 // Get the tweet and convert it
                 if let cdTweet = try? self.context.fetch(request).first {
@@ -467,7 +481,7 @@ extension TweetCacheManager {
     /// If a tweet with the same mid already exists, it will be updated with new counts and favorites instead of being replaced.
     /// - Parameters:
     ///   - tweet: The tweet to save
-    ///   - userId: The cache key (e.g., "bookmark_list_userId" or user's mid)
+    ///   - userId: The cache key (e.g., "main_feed_userId", "bookmark_list_userId", or user's mid)
     ///   - timeCached: Optional timestamp to use for timeCached. If nil, uses current Date().
     ///                 For bookmarks/favorites, this should be set to preserve server order.
     func saveTweet(_ tweet: Tweet, userId: String, timeCached: Date? = nil) {
@@ -478,51 +492,33 @@ extension TweetCacheManager {
         }
         
         context.performAndWait {
-            // For bookmarks/favorites, look up by both tid AND uid to find the exact cache entry
-            // This ensures we update the correct entry and preserve order
-            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+            // A tweet can belong to multiple cached lists at the same time: main feed,
+            // the author's profile, bookmarks, favorites, etc. Keep list membership
+            // keyed by (tweet id, cache key) so saving one list does not move the tweet
+            // out of another list's cache.
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            
-            if isBookmarkOrFavorite {
-                // Look up by both tid and uid for bookmarks/favorites to find exact cache entry
-                request.predicate = NSPredicate(format: "tid == %@ AND uid == %@", tweet.mid, userId)
-            } else {
-                // For other types, look up by tid only (tweet can be in multiple caches)
-                request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
-            }
-            
-            let cdTweet: CDTweet
-            
-            if let existingTweet = try? context.fetch(request).first {
-                cdTweet = existingTweet
-            } else {
-                // If not found with the specific uid (for bookmarks/favorites), check if tweet exists with different uid
-                if isBookmarkOrFavorite {
-                    let fallbackRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-                    fallbackRequest.predicate = NSPredicate(format: "tid == %@", tweet.mid)
-                    if let existingWithDifferentUid = try? context.fetch(fallbackRequest).first {
-                        // Update existing entry to use the bookmark/favorite cache key
-                        cdTweet = existingWithDifferentUid
-                    } else {
-                        cdTweet = CDTweet(context: context)
-                    }
-                } else {
-                    cdTweet = CDTweet(context: context)
-                }
-            }
-            
+            request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+            let existingRows = (try? context.fetch(request)) ?? []
+            let cdTweet = existingRows.first { $0.uid == userId } ?? CDTweet(context: context)
+
             // Always save the current in-memory tweet state to cache
             // This ensures that any updates made to the tweet in memory are preserved
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .millisecondsSince1970
             if let tweetData = try? encoder.encode(tweet) {
-                if let existingTweetData = cdTweet.tweetData, existingTweetData != tweetData {
+                let rowAlreadyExists = existingRows.contains { $0.objectID == cdTweet.objectID }
+                let rowsToUpdate = rowAlreadyExists ? existingRows : existingRows + [cdTweet]
+                if rowsToUpdate.contains(where: { $0.tweetData != nil && $0.tweetData != tweetData }) {
                     clearHeightCache(for: tweet)
                 }
-                cdTweet.tweetData = tweetData
+                for row in rowsToUpdate {
+                    row.tweetData = tweetData
+                    row.tid = tweet.mid
+                    row.timestamp = tweet.timestamp
+                }
             }
                         
-            // Update common fields
+            // Update this list's membership fields.
             cdTweet.tid = tweet.mid
             cdTweet.uid = userId
             cdTweet.timestamp = tweet.timestamp
@@ -555,11 +551,10 @@ extension TweetCacheManager {
     }
 
     /// Update a tweet in cache for main feed.
-    /// Main feed tweets are cached under appUser.mid for efficient loading.
+    /// Main feed tweets are cached under a dedicated list key for efficient loading.
     /// Profile tweets should use saveTweet directly with their authorId.
     func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
-        // Cache main feed tweets under appUser.mid
-        saveTweet(tweet, userId: appUserId)
+        saveTweet(tweet, userId: Self.mainFeedCacheKey(appUserId: appUserId))
     }
 
     func deleteExpiredTweets() {

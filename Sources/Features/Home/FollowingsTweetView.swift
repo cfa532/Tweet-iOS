@@ -17,13 +17,21 @@ struct FollowingsTweetView: View {
                 let startTime = Date()
                 if isFromCache {
                     print("📋 [CACHE LOAD] Fetching page \(page) from cache")
+                    let cacheKey = TweetCacheManager.mainFeedCacheKey(appUserId: viewModel.hproseInstance.appUser.mid)
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                        for: viewModel.hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid, isProfileView: false)
+                        for: cacheKey, page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid, isProfileView: false)
+                    let tweetsToReturn: [Tweet?]
+                    if cachedTweets.isEmpty {
+                        tweetsToReturn = await TweetCacheManager.shared.fetchCachedTweets(
+                            for: viewModel.hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid, isProfileView: false)
+                    } else {
+                        tweetsToReturn = cachedTweets
+                    }
 
                     let elapsed = Date().timeIntervalSince(startTime) * 1000
-                    let validCount = cachedTweets.compactMap{$0}.count
+                    let validCount = tweetsToReturn.compactMap{$0}.count
                     print("✅ [CACHE LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms - rendering immediately!")
-                    return cachedTweets
+                    return tweetsToReturn
                 } else {
                     print("🌐 [SERVER LOAD] Fetching page \(page) from server")
                     let serverTweets = try await viewModel.fetchTweets(page: page, pageSize: size)

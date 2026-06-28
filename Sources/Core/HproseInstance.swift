@@ -1012,8 +1012,24 @@ final class HproseInstance: ObservableObject {
 
         // If app is not initialized, only return cached tweets
         if !isInitializationComplete {
-            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
-            return cachedTweets
+            let cacheKey = TweetCacheManager.mainFeedCacheKey(appUserId: appUser.mid)
+            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                for: cacheKey,
+                page: pageNumber,
+                pageSize: pageSize,
+                currentUserId: appUser.mid
+            )
+            if !cachedTweets.isEmpty {
+                return cachedTweets
+            }
+            // Legacy fallback for cache rows written before the main feed had its own cache key.
+            let legacyCachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                for: user.mid,
+                page: pageNumber,
+                pageSize: pageSize,
+                currentUserId: appUser.mid
+            )
+            return legacyCachedTweets
         }
 
         if isFollowingTweetUpdate,
@@ -1122,8 +1138,11 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
-                    // Cache main feed tweets under appUser.mid for efficient main feed loading
-                    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                    // Cache main feed tweets under an explicit list key, not the app user's profile key.
+                    TweetCacheManager.shared.saveTweet(
+                        tweet,
+                        userId: TweetCacheManager.mainFeedCacheKey(appUserId: appUser.mid)
+                    )
                     tweets.append(tweet)
                 } catch {
                     print("[fetchTweetFeed] Error processing tweet: \(error)")
@@ -3022,10 +3041,12 @@ final class HproseInstance: ObservableObject {
                             }
                         }
                     }
-                    // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed
-                    // Use format: "bookmark_list_userId" or "favorite_list_userId"
+                    // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed.
+                    // Use format: "bookmark_list_userId" or "favorite_list_userId".
                     // saveTweet will automatically mark media as permanent based on the prefix
-                    let cacheKey = "\(type.rawValue)_\(user.mid)"
+                    let cacheKey = type == .BOOKMARKS
+                        ? TweetCacheManager.bookmarkCacheKey(userId: user.mid)
+                        : TweetCacheManager.favoriteCacheKey(userId: user.mid)
                     
                     // For bookmarks/favorites, preserve server order by using a timestamp that reflects position
                     // Subtract index milliseconds to ensure earlier items (lower index) have later timestamps

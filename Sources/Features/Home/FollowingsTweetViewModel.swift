@@ -179,7 +179,7 @@ class FollowingsTweetViewModel: ObservableObject {
         pendingNewTweets = snapshot
         showNewTweetsBanner = !snapshot.isEmpty
 
-        let cacheKey = hproseInstance.appUser.mid
+        let cacheKey = TweetCacheManager.mainFeedCacheKey(appUserId: hproseInstance.appUser.mid)
         for tweet in snapshot {
             TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
         }
@@ -300,8 +300,8 @@ class FollowingsTweetViewModel: ObservableObject {
                 }
             }
             
-            // Cache main feed tweets under appUser.mid for efficient loading
-            let cacheKey = hproseInstance.appUser.mid
+            // Cache main feed tweets under an explicit list key for efficient loading.
+            let cacheKey = TweetCacheManager.mainFeedCacheKey(appUserId: hproseInstance.appUser.mid)
             for tweet in serverTweets.compactMap({ $0 }) {
                 TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
             }
@@ -345,7 +345,7 @@ class FollowingsTweetViewModel: ObservableObject {
                 updateNewTweetsSnapshot(filteredTweets)
             }
 
-            let cacheKey = hproseInstance.appUser.mid
+            let cacheKey = TweetCacheManager.mainFeedCacheKey(appUserId: hproseInstance.appUser.mid)
             for tweet in filteredTweets {
                 TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
             }
@@ -368,8 +368,11 @@ class FollowingsTweetViewModel: ObservableObject {
                 let countAfter = tweets.count
                 print("DEBUG: [FollowingsTweetViewModel] Added new tweet to main feed - count: \(countBefore) -> \(countAfter), tweetId: \(tweet.mid)")
                 
-                // Cache new tweets in main feed under appUser.mid
-                TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
+                // Cache new tweets in the main feed list.
+                TweetCacheManager.shared.saveTweet(
+                    tweet,
+                    userId: TweetCacheManager.mainFeedCacheKey(appUserId: hproseInstance.appUser.mid)
+                )
             } else {
                 print("DEBUG: [FollowingsTweetViewModel] Skipped private tweet: \(tweet.mid)")
             }
@@ -395,7 +398,10 @@ class FollowingsTweetViewModel: ObservableObject {
         tweets.removeAll { $0.authorId == userId }
         
         // Remove from local cache
-        TweetCacheManager.shared.deleteTweetsFromUser(userId: userId, cacheKey: hproseInstance.appUser.mid)
+        TweetCacheManager.shared.deleteTweetsFromUser(
+            userId: userId,
+            cacheKey: TweetCacheManager.mainFeedCacheKey(appUserId: hproseInstance.appUser.mid)
+        )
     }
     
     // Fetch and add recent tweets from a newly followed user
@@ -421,8 +427,8 @@ class FollowingsTweetViewModel: ObservableObject {
                     tweets.mergeTweets(validTweets)
                 }
                 
-                // Cache newly followed user's tweets under appUser.mid for main feed
-                let cacheKey = hproseInstance.appUser.mid
+                // Cache newly followed user's tweets in the main feed list.
+                let cacheKey = TweetCacheManager.mainFeedCacheKey(appUserId: hproseInstance.appUser.mid)
                 for tweet in validTweets {
                     TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
                 }

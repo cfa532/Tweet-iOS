@@ -387,7 +387,9 @@ struct TweetListDestinationView: View {
             tweetFetcher: { page, size, isFromCache in
                 if isFromCache {
                     let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
-                    let cacheKey = "\(tweetType.rawValue)_\(destination.userId)"
+                    let cacheKey = tweetType == .BOOKMARKS
+                        ? TweetCacheManager.bookmarkCacheKey(userId: destination.userId)
+                        : TweetCacheManager.favoriteCacheKey(userId: destination.userId)
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: cacheKey,
                         page: page,
