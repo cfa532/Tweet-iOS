@@ -1,5 +1,5 @@
 import Foundation
-import hprose
+@preconcurrency import hprose
 import PhotosUI
 import AVFoundation
 
@@ -33,6 +33,20 @@ final class HproseInstance: ObservableObject {
     private let ipCacheLock = NSLock()
     private var heavyCallLastAttemptAt: [String: Date] = [:]
     private let heavyCallLock = NSLock()
+
+    private func invokeRunMApp(
+        using client: HproseClient,
+        entry: String,
+        params: [String: Any],
+        priority: DispatchQoS.QoSClass = .userInitiated
+    ) async -> Any? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: priority).async {
+                let response = client.invoke("runMApp", withArgs: [entry, params])
+                continuation.resume(returning: response)
+            }
+        }
+    }
     
     /// The domain to use for sharing links
     var domainToShare: String {
@@ -1031,7 +1045,7 @@ final class HproseInstance: ObservableObject {
         if isFollowingTweetUpdate {
             params["hostid"] = appUser.hostIds?.first
         }
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {

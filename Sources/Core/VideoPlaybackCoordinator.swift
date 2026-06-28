@@ -360,9 +360,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Previous content offset to track scroll direction
     private var previousContentOffset: CGFloat = 0
 
-    /// Whether the initial (non-scroll) preload has been triggered after first visibility update
-    private var initialPreloadDone: Bool = false
-    
     /// Table view reference for viewport calculations
     private weak var tableView: UITableView?
     
@@ -724,7 +721,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 // Clear caches when video list is rebuilt
                 self.cachedVisibilityRatios.removeAll()
                 self.clearPreloadedTracking()
-                self.initialPreloadDone = false
                 self.primaryBelowContinueIdentifier = nil
 
                 // Store tweet list for embedded tweet lookup
@@ -742,9 +738,8 @@ class VideoPlaybackCoordinator: ObservableObject {
                     self.startPrimaryVideoPlayback()
                 }
 
-                // NOTE: Preloading is NOT triggered here because visibleTweetIds
-                // hasn't been set yet. performPreloadOnScrollStop() is called from
-                // updateViewportVisibility() on the first visibility update (initialPreloadDone).
+                // NOTE: Directional preloading is intentionally started only after
+                // real scroll-stop events, not during first paint.
             }
         }
     }
@@ -954,11 +949,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         let filteredTweetIds = tweetIds.intersection(feedVisibleVideoTweetIds)
 
         self.visibleTweetIds = filteredTweetIds
-        // On initial feed load (no scroll), trigger preload once as if scroll stopped.
-        if !initialPreloadDone && !filteredTweetIds.isEmpty && !allVideos.isEmpty {
-            initialPreloadDone = true
-            performPreloadOnScrollStop()
-        }
     }
 
     private func updatePlayableMediaCells(
@@ -1283,87 +1273,32 @@ class VideoPlaybackCoordinator: ObservableObject {
         recoverVisiblePlaybackAfterInterruption(reason: "feedResume", isForegroundRecovery: false)
     }
 
-    /// Foreground recovery can restore the visible player/layer before playback has
-    /// actually resumed. Re-send the coordinator-owned play command without waiting
-    /// for a scroll event to trigger the normal stall path.
-    func requestForegroundAutoplayRetry(reason: String) {
-        guard AppDelegate.isVideoInfrastructureReady else {
-            print("🎬 [COORD] foreground autoplay retry \(reason): video infrastructure not ready")
-            return
-        }
-        guard !isPlaybackSuppressedByOverlay, isFeedVisible else { return }
+    /// Long background recovery restarts LocalHTTPServer and clears cached players.
+    /// The coordinator object survives, but its primary/debounce/preload state can point
+    /// at delegates or players that no longer own a valid AVPlayerItem. Reset just that
+    /// coordinator state; the table view will rebuild the video list and refresh viewport
+    /// visibility before normal primary selection runs again.
+    func resetForForegroundInfrastructureRecovery(reason: String) {
+        print("🎬 [COORD] reset after foreground infrastructure recovery: \(reason)")
+
+        playbackDebounceTimer?.invalidate()
+        playbackDebounceTimer = nil
+        pendingPrimaryCandidate = nil
+
+        currentlyPlayingVideoIds.removeAll()
+        primaryVideoId = nil
+        failedPrimaryIdentifier = nil
+        finishedPrimaryIdentifier = nil
+        primaryBelowContinueIdentifier = nil
+        phase = .idle
 
         clearFinishedAutoplayGateForForeground()
-
-        guard !visibleVideos.isEmpty else {
-            phase = .idle
-            primaryVideoId = nil
-            currentlyPlayingVideoIds.removeAll()
-            return
-        }
-
-        if phase == .primaryPlaying,
-           let primaryId = primaryVideoId,
-           let primary = visibleVideos.first(where: { $0.identifier == primaryId }) {
-            guard onScreenMediaCells.isEmpty || onScreenMediaCells.contains(primary.identifier) else {
-                phase = .idle
-                primaryVideoId = nil
-                currentlyPlayingVideoIds.removeAll()
-                startPrimaryVideoPlayback()
-                return
-            }
-
-            guard let delegate = delegate(forIdentifier: primary.identifier) else {
-                phase = .idle
-                primaryVideoId = nil
-                currentlyPlayingVideoIds.removeAll()
-                startPrimaryVideoPlayback()
-                return
-            }
-
-            if delegate.isVisiblePlaybackActive {
-                refreshDirectionalPreloads(reason: "foreground autoplay healthy", throttle: true)
-                return
-            }
-            if delegate.isActuallyPlaying && !reason.hasPrefix("foregroundWatchdog") {
-                refreshDirectionalPreloads(reason: "foreground autoplay grace", throttle: true)
-                return
-            }
-
-            print("🎬 [COORD] foreground autoplay retry \(reason): reissuing play for \(shortMID(primary.videoMid))")
-            lastPrimarySwitchTime = Date()
-            LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
-            delegate.shouldPlayVideo(withMid: primary.videoMid)
-            refreshDirectionalPreloads(reason: "foreground autoplay retry \(reason)", throttle: false)
-            return
-        }
-
-        phase = .idle
-        primaryVideoId = nil
-        currentlyPlayingVideoIds.removeAll()
-        startPrimaryVideoPlayback()
-    }
-
-    /// Outcome query for the foreground-recovery watchdog in TweetTableViewController.
-    /// Measures the *actual* result of recovery (is a visible video really playing?), not
-    /// whether a play command was merely issued. This is what makes the watchdog robust
-    /// against the long-background races that command-only retries can't detect.
-    enum ForegroundRecoveryStatus {
-        case playing      // a visible on-screen video is actually playing — recovery done
-        case loading      // play commanded and still loading / recently played — be patient
-        case needsRetry   // on-screen but not playing/loading — genuinely stuck, needs a nudge
-        case noCandidates // no on-screen videos (geometry likely stale after a long background)
-    }
-
-    func foregroundRecoveryStatus() -> ForegroundRecoveryStatus {
-        guard !visibleVideos.isEmpty else { return .noCandidates }
-        guard let primaryId = primaryVideoId,
-              let primary = visibleVideos.first(where: { $0.identifier == primaryId }),
-              onScreenMediaCells.isEmpty || onScreenMediaCells.contains(primary.identifier),
-              let activeDelegate = delegate(forIdentifier: primaryId) else { return .needsRetry }
-        if activeDelegate.isVisiblePlaybackActive { return .playing }
-        if activeDelegate.isLoadingForCoordinator || activeDelegate.isRecentlyPlaying { return .loading }
-        return .needsRetry
+        cachedVisibilityRatios.removeAll()
+        previousVisibleIdentifiers.removeAll()
+        clearPreloadedTracking()
+        pruneReleasedDelegates()
+        invalidateVisibleVideoCache()
+        LocalHTTPServer.shared.clearPrimaryRestriction()
     }
 
     // MARK: - Background/Foreground Video Memory Management

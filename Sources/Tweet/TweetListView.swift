@@ -17,11 +17,6 @@ private struct TweetContentHeightPreferenceKey: PreferenceKey {
     }
 }
 
-private final class ObserverHolder: @unchecked Sendable {
-    var observer: NSObjectProtocol?
-    init(_ observer: NSObjectProtocol?) { self.observer = observer }
-}
-
 @available(iOS 16.0, *)
 struct TweetListView: View {
     // MARK: - Properties
@@ -68,9 +63,6 @@ struct TweetListView: View {
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
     @State private var lastScrollOffset: CGFloat = 0
-    @State private var didPrewarmFocusedVideoCache: Bool = false
-    @State private var lastVisibleTweetIdBeforeLoad: String? = nil
-    @State private var scrollProxy: ScrollViewProxy? = nil
     @State private var contentHeight: CGFloat = 0
     @State private var screenHeight: CGFloat = 0
     @State private var needsMoreContent: Bool = true
@@ -270,7 +262,7 @@ struct TweetListView: View {
             preservesScrollPositionOnPrepend: preservesScrollPositionOnPrepend,
             loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
             onRefresh: {
-                await refreshTweets()
+                await refreshTweetsFromUserPull()
                 await onRefreshExtra?()
             },
             onScroll: onScroll,
@@ -302,6 +294,7 @@ struct TweetListView: View {
                     .scaleEffect(2.0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(header == nil ? XTheme.backgroundColor : Color.clear)
+                    .allowsHitTesting(false)
             }
 
             if let emptyStateText,
@@ -329,6 +322,7 @@ struct TweetListView: View {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .animation(.easeInOut(duration: 0.3), value: showToast)
+                .allowsHitTesting(false)
             }
             }  // Close ZStack
             .task {
@@ -699,33 +693,6 @@ struct TweetListView: View {
                 }
             }
 
-            // Warm shared video cache based on the first available cached video (best-effort).
-            // Defer during initial startup to prevent hangs
-            Task.detached(priority: .background) {
-                // Wait for startup phase to end before prewarming videos
-                if await MainActor.run(body: { videoLoadingManager.isInStartupPhase }) {
-                    await withCheckedContinuation { continuation in
-                        let holder = ObserverHolder(nil)
-                        holder.observer = NotificationCenter.default.addObserver(
-                            forName: .startupPhaseEnded,
-                            object: nil,
-                            queue: nil
-                        ) { _ in
-                            if let observer = holder.observer {
-                                NotificationCenter.default.removeObserver(observer)
-                            }
-                            continuation.resume()
-                        }
-                    }
-                }
-                // Defer prewarming to avoid overwhelming system when startup phase ends
-                Task.detached(priority: .background) {
-                    await MainActor.run {
-                        self.prewarmFocusedVideoCacheFromFirstVideoIfNeeded()
-                    }
-                }
-            }
-
             // End startup phase after 3 seconds
             Task.detached(priority: .background) {
                 try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
@@ -787,6 +754,15 @@ struct TweetListView: View {
         await loadFromServer(page: 0, pageSize: pageSize) { _ in }
     }
 
+    private func refreshTweetsFromUserPull() async {
+        guard initialLoadComplete, !isLoading, !isLoadingMore else {
+            print("🔄 [PULL REFRESH] Skipped while feed is still loading, feed=\(feedIdentifier)")
+            return
+        }
+
+        await refreshTweets()
+    }
+
     func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
         // Prevent loading if we've reached memory limit
         if tweets.count >= maxTweetsInMemory && !forceLoad {
@@ -819,11 +795,6 @@ struct TweetListView: View {
             let startTime = Date()
 
             await MainActor.run {
-                // Capture the last visible tweet before loading
-                if let lastTweet = tweets.last {
-                    lastVisibleTweetIdBeforeLoad = lastTweet.mid
-                }
-
                 isLoadingMore = true
                 loadingStartTime = startTime
             }
@@ -864,9 +835,6 @@ struct TweetListView: View {
             // CRITICAL: Let UI render cached tweets BEFORE continuing with server fetch
             // By spawning the rest in a separate Task, cached tweets render immediately
             // (Same pattern as performInitialLoad - SwiftUI batches updates within same Task)
-            let capturedLastTweetId = lastVisibleTweetIdBeforeLoad
-            let tweetCountBeforeServer = tweets.count
-
             Task {
                 // Step 2: Load from server to get fresh data (always try, even if cache failed)
                 // Keep isLoadingMore = true until server responds so spinner stays visible
@@ -876,24 +844,6 @@ struct TweetListView: View {
                 await MainActor.run {
                     isLoadingMore = false
                     loadingStartTime = nil
-
-                    // Only restore scroll position if:
-                    // 1. New tweets were actually loaded (count increased)
-                    // 2. Not at end of list (hasMoreTweets is still true)
-                    // 3. Not during startup phase
-                    let newTweetsLoaded = tweets.count > tweetCountBeforeServer
-                    if let lastTweetId = capturedLastTweetId,
-                       newTweetsLoaded,
-                       hasMoreTweets,
-                       !videoLoadingManager.isInStartupPhase {
-                        // Use a slight delay to ensure layout is complete
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            withAnimation(.easeOut(duration: 0.25)) {
-                                scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
-                            }
-                        }
-                    }
-                    lastVisibleTweetIdBeforeLoad = nil
                 }
             }
         }
@@ -1067,15 +1017,6 @@ struct TweetListView: View {
             if page == 0 {
                 isLoading = false
                 initialLoadComplete = true
-                // Prewarm video players in background to avoid blocking scroll gestures
-                // Defer during initial startup to prevent hangs
-                Task.detached(priority: .background) {
-                    // Wait 2 seconds after initial load before prewarming videos
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    await MainActor.run {
-                        self.prewarmFocusedVideoCacheFromFirstVideoIfNeeded()
-                    }
-                }
             }
 
         // BRANCH 2: No valid tweets AND partial page - server depleted
@@ -1106,32 +1047,6 @@ struct TweetListView: View {
             currentPage = page
             hasMoreTweets = true
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), FULL PAGE - trying next page")
-        }
-    }
-
-    @MainActor
-    private func prewarmFocusedVideoCacheFromFirstVideoIfNeeded() {
-        guard !didPrewarmFocusedVideoCache else { return }
-
-        // Find the first video/HLS attachment we can resolve to a URL.
-        for tweet in tweets {
-            guard let attachments = tweet.attachments else { continue }
-            let baseUrl = tweet.author?.baseUrl ?? hproseInstance.appUser.baseUrl ?? HproseInstance.baseUrl
-
-            for attachment in attachments where (attachment.type == .video || attachment.type == .hls_video) {
-                guard let url = attachment.getUrl(baseUrl) else { continue }
-
-                didPrewarmFocusedVideoCache = true
-
-                // Warm the shared proxy/cache path used by fullscreen-owned cold loads.
-                FullScreenVideoManager.shared.prewarmColdLoadCacheIfNeeded(
-                    url: url,
-                    mediaID: attachment.mid,
-                    tweetId: tweet.mid,
-                    mediaType: attachment.type
-                )
-                return
-            }
         }
     }
 

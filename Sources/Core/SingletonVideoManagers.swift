@@ -807,7 +807,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var isSeekingToRestoredPosition = false // Track if we're currently seeking to restored position
     private var isUsingBorrowedFeedPlayer = false
     private var prewarmedNextVideoMid: String?
-    private var prewarmedColdLoadMediaID: String?
     private var playbackSurfaceReadyMid: String?
     private var pendingSurfacePlayback: (player: AVPlayer, item: AVPlayerItem, log: String)?
     private var playbackSurfaceFallbackTask: Task<Void, Never>?
@@ -1048,19 +1047,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         singletonPlayer = AVPlayer()
         singletonPlayer?.isMuted = false
         
-    }
-
-    func prewarmColdLoadCacheIfNeeded(url: URL, mediaID: String, tweetId: String, mediaType: MediaType) {
-        guard prewarmedColdLoadMediaID != mediaID else { return }
-        prewarmedColdLoadMediaID = mediaID
-        initializePlayerEarly()
-        print("🔮 [FullScreenVideoManager] Prewarming fullscreen cold-load cache \(shortMID(mediaID))")
-        SharedAssetCache.shared.preloadPlayer(
-            for: url,
-            mediaID: mediaID,
-            tweetId: tweetId,
-            mediaType: mediaType
-        )
     }
 
     /// Load and play a video in the singleton player
