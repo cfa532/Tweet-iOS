@@ -257,6 +257,9 @@ class SharedAssetCache: ObservableObject {
     private var preloadedThumbnailMids: Set<String> = []
     private var decodedPreloadThumbnailMids: Set<String> = []
     private var backgroundPosterMids: Set<String> = []
+    /// MediaIDs whose cached thumbnail has already passed the black/white quality check.
+    /// Avoids re-running CIFilter GPU renders on every cachedThumbnail() read.
+    private var validatedThumbnailMids: Set<String> = []
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
 
     private enum VideoLoadKind: Hashable {
@@ -2658,14 +2661,17 @@ class SharedAssetCache: ObservableObject {
 
     /// Read a cached thumbnail for mediaID. Filters/clears dark frames so callers
     /// never treat black snapshots as valid poster images.
+    /// Uses validatedThumbnailMids to skip the GPU-backed CIFilter check on repeat reads.
     func cachedThumbnail(for mediaID: String) -> UIImage? {
         guard let image = VideoLastFrameCache.shared.image(for: mediaID) else { return nil }
+        if validatedThumbnailMids.contains(mediaID) { return image }
         if VideoFrameExtractor.isMostlyBlack(image) || VideoFrameExtractor.isMostlyWhite(image) {
             VideoLastFrameCache.shared.clear(for: mediaID)
             preloadedThumbnailMids.remove(mediaID)
             decodedPreloadThumbnailMids.remove(mediaID)
             return nil
         }
+        validatedThumbnailMids.insert(mediaID)
         return image
     }
 
@@ -2717,6 +2723,7 @@ class SharedAssetCache: ObservableObject {
         guard !VideoFrameExtractor.isMostlyBlack(image),
               !VideoFrameExtractor.isMostlyWhite(image) else { return }
         VideoLastFrameCache.shared.set(image, for: mediaID)
+        validatedThumbnailMids.insert(mediaID)
         if source == "preload" || source == "preload-decoded" {
             preloadedThumbnailMids.insert(mediaID)
             if source == "preload-decoded" {
@@ -3360,6 +3367,7 @@ class SharedAssetCache: ObservableObject {
         preloadedPlayerGraceExpirations.removeAll()
         preloadedThumbnailMids.formIntersection(visibleMidsForPosters)
         decodedPreloadThumbnailMids.formIntersection(visibleMidsForPosters)
+        validatedThumbnailMids.formIntersection(visibleMidsForPosters)
         backgroundPosterMids.removeAll()
 
         print("🌙 [SharedAssetCache] Background release: \(playerCount) players released, \(assetCount) assets cleared, \(mediaIDsToCancel.count) media downloads cancelled, \(visibleMidsForPosters.count) visible poster(s) kept")

@@ -3438,17 +3438,33 @@ final class HproseInstance: ObservableObject {
      */
     func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String {
         let entry = "delete_tweet"
+        let isAdminDeletingAnotherUsersTweet = tweetAuthorId != appUser.mid && Gadget.isResearchAdminUser(appUser)
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v3",
-            "userid": appUser.mid,
+            // The backend permanently deletes only when userid == authorid. Admin
+            // deletes are already gated client-side and routed to the author's host.
+            "userid": isAdminDeletingAnotherUsersTweet ? tweetAuthorId : appUser.mid,
+            "appuserid": isAdminDeletingAnotherUsersTweet ? tweetAuthorId : appUser.mid,
             "authorid": tweetAuthorId,
             "tweetid": tweetId
         ]
 
-        _ = try await appUser.resolveWritableUrl()
-        guard let client = appUser.writableClient else {
+        let requestUser: User
+        if isAdminDeletingAnotherUsersTweet {
+            guard let author = try await fetchUser(tweetAuthorId) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "Author fetch error")])
+            }
+            requestUser = author
+        } else {
+            requestUser = appUser
+        }
+
+        // Admin moderation deletes must run on the target author's writable host.
+        // resolveWritableUrl() resolves hostIds[0], not the read/access node.
+        _ = try await requestUser.resolveWritableUrl()
+        guard let client = requestUser.writableClient else {
             throw NSError(domain: "HproseClient", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "")])
         }

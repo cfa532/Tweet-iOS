@@ -45,18 +45,18 @@ class ProfileTweetsViewModel: ObservableObject {
                 )
             }.value
             
-            // Filter out pinned tweets from server response
-            let filteredTweets = serverTweets.filter { tweet in
+            // Preserve backend page length for pagination; nil entries are non-renderable.
+            let filteredTweets: [Tweet?] = serverTweets.map { (tweet: Tweet?) -> Tweet? in
                 if let tweet = tweet {
                     guard !TweetDeletionRegistry.shared.isDeleted(tweet.mid) else {
-                        return false
+                        return nil
                     }
                     let isPinned = pinnedTweetIds.contains(tweet.mid)
                     if isPinned {
                     }
-                    return !isPinned
+                    return isPinned ? nil : tweet
                 }
-                return true // Keep nil tweets
+                return nil
             }
             
             return filteredTweets

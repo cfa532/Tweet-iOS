@@ -1156,7 +1156,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             applyCachedVideoThumbnail(transitionPoster)
         }
         if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: attachment.mid) {
-            applyCachedVideoThumbnail(thumbnail)
+            applyCachedVideoThumbnail(thumbnail, preValidated: true)
         }
         requestFallbackVideoThumbnailIfNeeded(for: attachment.mid)
 
@@ -1236,14 +1236,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                       let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mediaID) else {
                     return
                 }
-                self.applyCachedVideoThumbnail(thumbnail)
+                self.applyCachedVideoThumbnail(thumbnail, preValidated: true)
             }
         }
     }
 
-    private func applyCachedVideoThumbnail(_ image: UIImage) {
+    private func applyCachedVideoThumbnail(_ image: UIImage, preValidated: Bool = false) {
         guard canShowCachedCoverForCurrentVideo else { return }
-        guard !isInvalidVideoCover(image) else { return }
+        if !preValidated { guard !isInvalidVideoCover(image) else { return } }
         if coordinatorWantsToPlay,
            player != nil,
            (videoCellState == .playerLoading || videoCellState == .playerReady || videoCellState == .playing),
@@ -4339,17 +4339,21 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 return .zero
             }
 
-            if currentTime.isValid,
-               currentSeconds.isFinite,
-               currentSeconds > 0.25 {
-                if resumeTime.seconds > currentSeconds + 0.75 {
-                    return resumeTime
-                }
-                pendingRecoverySeekTime = nil
-                return nil
-            }
-
-            return resumeTime
+            // Do NOT forward-seek to the saved resume time here. Feed videos use
+            // independent AVPlayer instances that are torn down on scroll-off and rebuilt
+            // from scratch on scroll-back (releaseCurrentIndependentPlayer →
+            // acquireIndependentPlayerAsync), so the new player starts at its natural
+            // position. Seeking it forward to an old saved time is what caused the
+            // "freeze then jump ahead" glitch: the layer renders the first frame (~0)
+            // before the async seek lands, then snaps to resumeTime.
+            // Resume-at-position is still honored where it matters:
+            //  • Fullscreen/detail return — live-surface handoff keeps the transferring
+            //    player's currentTime (shouldSuppressPositionRestore, handled above).
+            //  • App-foreground return — intentionally restarts (suppressFeedResumeUntil).
+            // Stall recovery (pendingRecoverySeekTime, below) is playback continuity, not
+            // initial resume, and stays active.
+            pendingRecoverySeekTime = nil
+            return nil
         }
 
         if currentTime.isValid,
