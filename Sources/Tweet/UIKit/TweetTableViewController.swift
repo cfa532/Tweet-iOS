@@ -100,9 +100,6 @@ class TweetTableViewController: UITableViewController {
     // Bottom pull-to-load state (manual pull past bottom edge)
     private var isBottomPullActive: Bool = false
     private var bottomPullThreshold: CGFloat = 50
-    // Row-count of regular tweets below the last visible cell at the previous scroll event.
-    // Reset to Int.max at gesture start so the threshold can fire in the new gesture.
-    private var previousRemainingRows: Int = Int.max
     // Trigger load-more when this many regular rows remain below the viewport (= 1 page).
     private let loadMoreTriggerRows = 10
     private var autoLoadMoreCountDuringCurrentScrollGesture: Int = 0
@@ -2743,20 +2740,24 @@ class TweetTableViewController: UITableViewController {
         let lastVisibleRow = tableView.indexPathsForVisibleRows?.last?.row ?? 0
         let totalRows = pinnedTweets.count + tweets.count
         let remainingRows = max(0, totalRows - 1 - lastVisibleRow)
-        // Fire when crossing downward into the 1-page buffer zone.
-        let crossedIntoNearBottom = previousRemainingRows >= loadMoreTriggerRows && remainingRows < loadMoreTriggerRows
+        // Sustained near-bottom check: fire on every scroll frame while in the buffer zone
+        // (instead of a one-shot crossing). The !isLoadingMore guard prevents burst;
+        // autoLoadMoreCountDuringCurrentScrollGesture caps pages per gesture.
+        // This lets the trigger retry when the first attempt was blocked by initialLoadComplete=false
+        // and the VC's isLoadingMore was reset to false by a subsequent SwiftUI sync.
+        let isNearBottom = remainingRows < loadMoreTriggerRows
 
         let isUserDrivenScroll = isUserDragging || isDecelerating || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
         if isUserDrivenScroll,
            autoLoadMoreCountDuringCurrentScrollGesture < maxAutoLoadMorePerScrollGesture,
            isMovingTowardBottom,
-           crossedIntoNearBottom,
+           isNearBottom,
            hasMoreTweets,
            !isLoadingMore {
             autoLoadMoreCountDuringCurrentScrollGesture += 1
             triggerAutoLoadMore()
         }
-        previousRemainingRows = remainingRows
+
 
         // Manual pull-to-load: user pulled past the bottom edge (works even when hasMoreTweets is false)
         if isUserDragging,
@@ -2816,7 +2817,6 @@ class TweetTableViewController: UITableViewController {
         cancelBackgroundResumeForUserScroll()
         isUserDragging = true
         isDecelerating = false
-        previousRemainingRows = Int.max  // allow threshold to fire in this new gesture
         autoLoadMoreCountDuringCurrentScrollGesture = 0
         lastCallbackOffset = scrollView.contentOffset.y
         // Directional preloads restart only after scrolling stops.
