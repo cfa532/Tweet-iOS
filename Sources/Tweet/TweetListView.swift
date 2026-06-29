@@ -107,7 +107,7 @@ struct TweetListView: View {
     let profileResyncedTweets: [Tweet]
     let profileResyncedTweetsToken: Int
     let emptyStateText: LocalizedStringKey?
-    private let pageSize: UInt = 5  // Smaller pages keep per-insert table work light
+    private let pageSize: UInt = 10
 
     // Navigation callbacks (passed through to UIKit cells)
     let onAvatarTap: ((User) -> Void)?

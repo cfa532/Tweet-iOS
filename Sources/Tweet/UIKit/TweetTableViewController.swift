@@ -100,7 +100,11 @@ class TweetTableViewController: UITableViewController {
     // Bottom pull-to-load state (manual pull past bottom edge)
     private var isBottomPullActive: Bool = false
     private var bottomPullThreshold: CGFloat = 50
-    private var previousDistanceFromBottom: CGFloat = .greatestFiniteMagnitude
+    // Row-count of regular tweets below the last visible cell at the previous scroll event.
+    // Reset to Int.max at gesture start so the threshold can fire in the new gesture.
+    private var previousRemainingRows: Int = Int.max
+    // Trigger load-more when this many regular rows remain below the viewport (= 1 page).
+    private let loadMoreTriggerRows = 10
     private var autoLoadMoreCountDuringCurrentScrollGesture: Int = 0
     private let maxAutoLoadMorePerScrollGesture: Int = 2
     
@@ -2581,20 +2585,21 @@ class TweetTableViewController: UITableViewController {
         // Directional image warmup is done at scroll stop. Starting network work
         // during active dragging/deceleration competes with visible media and video.
 
-        // Auto-load next page when scrolling near the bottom
+        // Auto-load next page when 1 page worth of rows remains below the viewport.
+        // Row-count threshold adapts to tweet height: tall media tweets give more pixel
+        // runway; short text tweets still guarantee one full page of buffer.
         let contentHeight = scrollView.contentSize.height
         let scrollViewHeight = scrollView.frame.size.height
-        let distanceFromBottom = contentHeight - scrollView.contentOffset.y - scrollViewHeight
         let contentInsetBottom = scrollView.contentInset.bottom
         let bottomOffset = scrollView.contentOffset.y + scrollViewHeight - contentHeight + contentInsetBottom
-
-        let autoLoadThreshold = scrollViewHeight * 2
-        let crossedIntoNearBottom = previousDistanceFromBottom >= autoLoadThreshold && distanceFromBottom < autoLoadThreshold
         let isMovingTowardBottom = frameDelta > 0
 
-        // Auto-load only when the user crosses into the near-bottom zone while moving
-        // downward. Layout/content-size changes can keep the table inside this zone and
-        // emit scroll events; those should not chain-load pages.
+        let lastVisibleRow = tableView.indexPathsForVisibleRows?.last?.row ?? 0
+        let totalRows = pinnedTweets.count + tweets.count
+        let remainingRows = max(0, totalRows - 1 - lastVisibleRow)
+        // Fire when crossing downward into the 1-page buffer zone.
+        let crossedIntoNearBottom = previousRemainingRows >= loadMoreTriggerRows && remainingRows < loadMoreTriggerRows
+
         let isUserDrivenScroll = isUserDragging || isDecelerating || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
         if isUserDrivenScroll,
            autoLoadMoreCountDuringCurrentScrollGesture < maxAutoLoadMorePerScrollGesture,
@@ -2605,7 +2610,7 @@ class TweetTableViewController: UITableViewController {
             autoLoadMoreCountDuringCurrentScrollGesture += 1
             triggerAutoLoadMore()
         }
-        previousDistanceFromBottom = distanceFromBottom
+        previousRemainingRows = remainingRows
 
         // Manual pull-to-load: user pulled past the bottom edge (works even when hasMoreTweets is false)
         if isUserDragging,
@@ -2665,8 +2670,7 @@ class TweetTableViewController: UITableViewController {
         cancelBackgroundResumeForUserScroll()
         isUserDragging = true
         isDecelerating = false
-        let distanceFromBottom = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.frame.size.height
-        previousDistanceFromBottom = max(distanceFromBottom, scrollView.frame.size.height * 2)
+        previousRemainingRows = Int.max  // allow threshold to fire in this new gesture
         autoLoadMoreCountDuringCurrentScrollGesture = 0
         lastCallbackOffset = scrollView.contentOffset.y
         // Directional preloads restart only after scrolling stops.
