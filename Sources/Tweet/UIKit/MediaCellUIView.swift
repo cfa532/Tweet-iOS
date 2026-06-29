@@ -832,7 +832,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard isVideoAttachment,
               self.player === player,
               imageView.image != nil else { return false }
-        guard playerHasDisplayableFrame(player) else { return false }
+        // Hide the cover only once the AVPlayerLayer is actually compositing a frame for
+        // this player. Removing it on a weaker signal (decoded buffer / sticky render
+        // flag) can reveal a not-yet-rendered layer for a frame → black flash / poster
+        // flicker right as playback starts. Requiring isLayerReadyForDisplay guarantees
+        // the video content is visible the instant the cover disappears.
+        guard videoPlayerView.isShowingPlayer(player),
+              videoPlayerView.isLayerReadyForDisplay else { return false }
 
         videoPlayerView.isHidden = false
         hideImageViewImmediately()

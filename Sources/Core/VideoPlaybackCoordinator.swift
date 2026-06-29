@@ -914,6 +914,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             continuePlaybackIdentifiers: continuePlaybackIdentifiers
         )
         reconcilePlaybackForCurrentVisibility()
+
+        // Warm covers for visible videos + directional preloads when idle. This is the
+        // initial-load trigger (refreshDirectionalPreloads is a no-op while scrolling).
+        refreshDirectionalPreloads(reason: "viewport", throttle: true)
     }
     
     /// Update which specific media cells are on-screen within the viewport.
@@ -1618,31 +1622,62 @@ class VideoPlaybackCoordinator: ObservableObject {
             lastDirectionalPreloadRefreshTime = now
         }
 
-        let preloadCount = max(0, directionalPlayerPreloadCount)
-        guard preloadCount > 0 else {
-            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
-            activePreloadMids.removeAll()
-            SharedAssetCache.shared.updateProtectedPreloadMids([])
+        let playerPreloadCount = max(0, directionalPlayerPreloadCount)
+        let coverPreloadCount = max(0, FeedPlaybackTuning.directionalVideoCoverPreloadCount)
+
+        // Visible videos that still lack a poster get a lightweight cover (AVAssetImageGenerator,
+        // off-main) so cells aren't blank while their own player buffers. Runs only when idle.
+        var warmupMids = Set<String>()
+        for video in visibleVideosLackingCovers() {
+            preloadVideoPoster(video)
+            warmupMids.insert(video.videoMid)
+        }
+
+        guard playerPreloadCount > 0 || coverPreloadCount > 0 else {
+            cancelTrackedPreloads(except: currentOnScreenVideoMids().union(warmupMids), reason: reason)
+            activePreloadMids = warmupMids
+            SharedAssetCache.shared.updateProtectedPreloadMids(warmupMids)
             return
         }
 
-        let nextVideos = getNextVideosInScrollDirection(count: preloadCount)
+        let nextVideos = getNextVideosInScrollDirection(count: playerPreloadCount + coverPreloadCount)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
 
-        // Keep on-screen work alive, then cancel any older directional preloads.
+        // Keep on-screen + visible-warmup work alive, then cancel any older preloads.
         let onScreenMids = currentOnScreenVideoMids()
-        let newAll = newPreloadMids.union(onScreenMids)
+        let newAll = newPreloadMids.union(onScreenMids).union(warmupMids)
         cancelTrackedPreloads(except: newAll, reason: reason)
 
-        activePreloadMids = newPreloadMids
-        SharedAssetCache.shared.updateProtectedPreloadMids(newPreloadMids)
+        activePreloadMids = newPreloadMids.union(warmupMids)
+        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids)
 
-        for video in nextVideos {
+        // First video(s) in the scroll direction get a full player preload (decoded frame +
+        // warm player). The exact-frame upgrade self-gates on canRunDirectionalExactFramePreloads
+        // (primary stable = app not busy) and retries, so it fires once startup settles.
+        let playerCandidates = Array(nextVideos.prefix(playerPreloadCount))
+        if !playerCandidates.isEmpty {
+            scheduleExactFrameUpgradeIfStable(for: playerCandidates)
+        }
+
+        // Remaining directional videos get a cover image only (no player).
+        let coverOnlyVideos = Array(nextVideos.dropFirst(playerCandidates.count))
+        for video in coverOnlyVideos {
             preloadVideoPoster(video)
         }
 
-        if !newPreloadMids.isEmpty {
-            print("🎬 [COORD] \(reason): preloading \(newPreloadMids.count) directional poster(s)")
+        if !newPreloadMids.isEmpty || !warmupMids.isEmpty {
+            print("🎬 [COORD] \(reason): \(warmupMids.count) visible cover(s), \(playerCandidates.count) player preload(s), \(coverOnlyVideos.count) directional cover(s)")
+        }
+    }
+
+    /// On-screen videos that do not yet have a cached poster thumbnail. These are warmed
+    /// with a lightweight cover so they are not blank before their player renders a frame.
+    private func visibleVideosLackingCovers() -> [VideoPlaybackInfo] {
+        guard !onScreenMediaCells.isEmpty else { return [] }
+        return allVideos.filter {
+            onScreenMediaCells.contains($0.identifier) &&
+            $0.isInVisibleMediaRange &&
+            SharedAssetCache.shared.cachedThumbnail(for: $0.videoMid) == nil
         }
     }
 
