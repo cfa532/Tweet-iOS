@@ -240,6 +240,8 @@ class TweetTableViewController: UITableViewController {
     private var expandedTweetIds = Set<String>()
     private var embeddedTweetPrefetchInFlight = Set<String>()
 
+    // (Text height pre-warming is handled globally by TweetHeightPrewarmer.shared)
+
     private var isReadyForFeedVideoResume: Bool {
         isViewLoaded && view.window != nil && tableView.window != nil
     }
@@ -1457,6 +1459,9 @@ class TweetTableViewController: UITableViewController {
         // called from scrollViewDidEndDragging / scrollViewDidEndDecelerating.
         if isTableVisibleForMutation, isScrollInteractionActive {
             deferredTweets = newTweets
+            // Pre-warm text heights while the user is still scrolling so that by the time
+            // scroll stops and insertRowsAtIndexPaths fires, estimatedHeightForRowAt is fast.
+            scheduleHeightPrewarm(for: newTweets)
             return
         }
 
@@ -1541,6 +1546,7 @@ class TweetTableViewController: UITableViewController {
             let afterNewOnes = Array(getNewIds().dropFirst(potentialPrependCount))
 
             if afterNewOnes == getOldIds() {
+                scheduleHeightPrewarm(for: Array(newTweets.prefix(potentialPrependCount)))
                 isTableViewUpdating = true
                 let indexPaths = (0..<potentialPrependCount).map { regularTweetIndexPath($0) }
                 if preservesScrollPositionOnPrepend {
@@ -1613,6 +1619,7 @@ class TweetTableViewController: UITableViewController {
                     needsFullReloadAfterAttach = true
                     return
                 }
+                scheduleHeightPrewarm(for: Array(newTweets.dropFirst(oldCount)))
                 isTableViewUpdating = true
                 let indexPaths = (oldCount..<newTweets.count).map { regularTweetIndexPath($0) }
                 tableView.insertRows(at: indexPaths, with: .none)
@@ -2150,14 +2157,153 @@ class TweetTableViewController: UITableViewController {
             return persistedHeight
         }
 
-        // Use deterministic calculation as estimate.
-        // willDisplay caches the actual Auto Layout height for future use,
-        // so subsequent calls will hit the cachedHeight path above.
-        return Self.calculateTweetHeight(
-            for: tweet,
-            rowWidth: layoutWidth,
-            cellHorizontalPadding: leadingPadding + trailingPadding
-        )
+        // Check if the per-tweet text-height cache (set by a prior calculateTweetHeight call) is
+        // warm for the display tweet. If it is, calculateTweetHeight skips both
+        // makeContentAttributedString and UILabel.sizeThatFits and runs in <0.1 ms.
+        //
+        // estimatedHeightForRowAt is called for EVERY row during insertRowsAtIndexPaths
+        // (UITableView needs the total section height for scroll indicators). For brand-new
+        // tweets whose text hasn't been typeset yet, the full calculateTweetHeight path takes
+        // ~15 ms/tweet — 50 new tweets = ~750 ms main-thread freeze. To avoid this, fall back
+        // to a cheap character-count estimate for cold tweets. heightForRowAt (called only for
+        // the ~7 visible rows) still runs the accurate calculateTweetHeight and populates the
+        // cache, so the estimate is only used once per tweet.
+        let padding = leadingPadding + trailingPadding
+        let contentWidth = layoutWidth - padding - 3 - 42 - 4
+
+        let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil
+        let hasOwnContent = (tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
+            || (tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true))
+        let isPureRetweet = isRetweet && !hasOwnContent
+        let displayTweet: Tweet
+        if isPureRetweet, let originalId = tweet.originalTweetId,
+           let original = Tweet.getInstance(for: originalId), original.author != nil {
+            displayTweet = original
+        } else {
+            displayTweet = tweet
+        }
+
+        // Fast path: text height already computed this session — calculateTweetHeight is cheap.
+        let textCacheWarm = displayTweet.cachedMeasuredTextHeight >= 0
+            && displayTweet.cachedMeasuredTextWidth == contentWidth
+        if textCacheWarm {
+            return Self.calculateTweetHeight(for: tweet, rowWidth: layoutWidth, cellHorizontalPadding: padding)
+        }
+
+        // Pre-warm path: background task has measured text height via boundingRect — better than
+        // char-count but doesn't replace UILabel-accurate measurement in calculateTweetHeight.
+        let prewarmTextH = TweetHeightPrewarmer.shared.get(tweetId: displayTweet.mid, width: contentWidth)
+
+        // Cold path: use a sub-millisecond character-count heuristic to avoid CoreText layout.
+        return Self.roughHeightEstimate(for: tweet, displayTweet: displayTweet,
+                                        isPureRetweet: isPureRetweet,
+                                        isRetweet: isRetweet, hasOwnContent: hasOwnContent,
+                                        rowWidth: layoutWidth, contentWidth: contentWidth,
+                                        cellHorizontalPadding: padding,
+                                        prewarmTextHeight: prewarmTextH)
+    }
+
+    /// Height estimate for tweets whose UILabel-accurate text height is not yet in cache.
+    ///
+    /// When prewarmTextHeight is provided (background boundingRect measurement), it replaces
+    /// the char-count heuristic for the text portion — accuracy within ~1 pt of UILabel.
+    /// When nil, falls back to a sub-millisecond character-count approximation.
+    /// Called only from estimatedHeightForRowAt; heightForRowAt uses calculateTweetHeight.
+    private static func roughHeightEstimate(
+        for tweet: Tweet,
+        displayTweet: Tweet,
+        isPureRetweet: Bool,
+        isRetweet: Bool,
+        hasOwnContent: Bool,
+        rowWidth: CGFloat,
+        contentWidth: CGFloat,
+        cellHorizontalPadding: CGFloat,
+        prewarmTextHeight: CGFloat? = nil
+    ) -> CGFloat {
+        var height: CGFloat = isPureRetweet ? 26 : 16
+        height += ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
+
+        var bodyHeight: CGFloat = 2
+        var hasTextContent = false
+
+        if let content = displayTweet.content,
+           !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            hasTextContent = true
+            if let prewarmH = prewarmTextHeight {
+                // Background boundingRect measurement — TextKit1, within ~1pt of UILabel.
+                bodyHeight += ceil(prewarmH)
+            } else {
+                // Fallback: approximate character width for 16pt system font (mixed script).
+                let approxCharsPerLine = max(1, Int(contentWidth / 8.5))
+                let lineCount = max(1, min(TweetBodyUIView.maxContentLines,
+                                           (content.count + approxCharsPerLine - 1) / approxCharsPerLine))
+                bodyHeight += ceil(CGFloat(lineCount) * TweetBodyUIView.contentFont.lineHeight)
+            }
+        }
+
+        let mediaAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
+        var hasCaptionLabel = false
+        if !mediaAttachments.isEmpty {
+            let mediaGridWidth = max(10, contentWidth - 2)
+            bodyHeight += hasTextContent ? 8 : 4
+            bodyHeight += MediaGridViewModel.calculateHeight(for: mediaAttachments, gridWidth: mediaGridWidth)
+            if mediaAttachments.count == 1 {
+                let att = mediaAttachments[0]
+                if att.type == .video || att.type == .hls_video {
+                    let hasTitle = displayTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    let hasFileName = att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    if hasTitle || (hasFileName && !hasTextContent) {
+                        bodyHeight += 2 + 17
+                        hasCaptionLabel = true
+                    }
+                }
+            }
+        }
+
+        let documentAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isDocumentType($0.type) } ?? []
+        if !documentAttachments.isEmpty {
+            let docCount = min(documentAttachments.count, 2)
+            let rowsHeight = CGFloat(docCount) * 32 + (docCount > 1 ? CGFloat(docCount - 1) * 2 : 0)
+            let ellipsisHeight: CGFloat = documentAttachments.count > 2 ? 24 : 0
+            if hasTextContent || !mediaAttachments.isEmpty { bodyHeight += 8 }
+            bodyHeight += rowsHeight + 8 + ellipsisHeight
+        }
+
+        height += bodyHeight
+        height += isRetweet && hasOwnContent ? 12 : (hasCaptionLabel ? 4 : 10)
+
+        if isRetweet && hasOwnContent {
+            if let originalId = tweet.originalTweetId,
+               let embeddedTweet = Tweet.getInstance(for: originalId),
+               embeddedTweet.author != nil {
+                // Rough embedded estimate: fixed header + approximate text + media.
+                let embeddedContentWidth = contentWidth - 12
+                let hasEmbeddedText = embeddedTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                var embeddedBodyH: CGFloat = 2
+                if hasEmbeddedText {
+                    let embeddedWidth = embeddedContentWidth
+                    let charsPerLine = max(1, Int(embeddedWidth / 8.5))
+                    let lineCount = max(1, min(TweetBodyUIView.maxContentLines,
+                                               ((embeddedTweet.content?.count ?? 0) + charsPerLine - 1) / charsPerLine))
+                    embeddedBodyH += ceil(CGFloat(lineCount) * TweetBodyUIView.contentFont.lineHeight)
+                }
+                let embeddedMedia = embeddedTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
+                if !embeddedMedia.isEmpty {
+                    let embeddedMediaGridWidth = max(10, contentWidth - 14)
+                    embeddedBodyH += hasEmbeddedText ? 8 : 4
+                    embeddedBodyH += MediaGridViewModel.calculateHeight(for: embeddedMedia, gridWidth: embeddedMediaGridWidth)
+                }
+                // Embedded header: single-line estimate (24pt).
+                let embeddedHeight: CGFloat = 8 + max(32, 24 + 4 + embeddedBodyH) + EmbeddedTweetUIView.contentBottomPadding
+                height += embeddedHeight
+            } else {
+                height += 60
+            }
+            height += 10
+        }
+
+        height += 30 + 8 + 1
+        return height
     }
 
     /// Shared UILabel for text height measurement — matches UILabel's exact rendering.
@@ -3040,9 +3186,15 @@ class TweetTableViewController: UITableViewController {
     }
     
     // MARK: - Height Estimation
-    
-    /// Preflight height estimates for new tweets to reduce initial layout jumps
-    
+
+    /// Falls back to per-feed content width in case it differs from the global standardContentWidth
+    /// (e.g., custom padding on iPad). All skipping/caching logic is in TweetHeightPrewarmer.
+    private func scheduleHeightPrewarm(for tweets: [Tweet]) {
+        let contentWidth = currentRowLayoutWidth - (leadingPadding + trailingPadding) - 3 - 42 - 4
+        guard contentWidth > 1 else { return }
+        TweetHeightPrewarmer.shared.prewarmFeedTweets(tweets, contentWidth: contentWidth)
+    }
+
     // MARK: - Video Playback Coordination
 
     private func rebuildVideoListAndRefreshVisibility(reason: String) {

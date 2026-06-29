@@ -484,7 +484,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
             
 
             
-            return getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
+            let instance = getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
                              timestamp: tweet.timestamp, title: tweet.title,
                              originalTweetId: tweet.originalTweetId, originalAuthorId: tweet.originalAuthorId,
                              author: tweet.author, favorites: tweet.favorites,
@@ -495,6 +495,8 @@ class Tweet: Identifiable, Codable, ObservableObject {
                              attachments: tweet.attachments,
                              isPrivate: tweet.isPrivate,
                              downloadable: tweet.downloadable)
+            TweetHeightPrewarmer.shared.prewarm(instance)
+            return instance
         } catch {
             print("Error converting dictionary to Tweet: \(error)")
             if let decodingError = error as? DecodingError {

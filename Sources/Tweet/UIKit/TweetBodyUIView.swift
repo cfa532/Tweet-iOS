@@ -589,8 +589,9 @@ class TweetBodyUIView: UIView {
 
     // MARK: - Truncation with "More>>" indicator
 
-    static let contentFont = UIFont.systemFont(ofSize: 16)
-    static let maxContentLines = 7
+    // nonisolated: constant values, safe to read from background threads.
+    nonisolated static let contentFont = UIFont.systemFont(ofSize: 16)
+    nonisolated static let maxContentLines = 7
 
     /// Shared UILabel for truncation detection — matches UILabel's TextKit2 rendering.
     /// NSLayoutManager (TextKit1) and UILabel (TextKit2) can disagree on line breaking,
@@ -712,7 +713,7 @@ class TweetBodyUIView: UIView {
         return result
     }
 
-    static func makeFullContentAttributedString(content: String) -> NSAttributedString {
+    nonisolated static func makeFullContentAttributedString(content: String) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 3
         paragraphStyle.lineBreakMode = .byWordWrapping
@@ -723,6 +724,92 @@ class TweetBodyUIView: UIView {
             .paragraphStyle: paragraphStyle,
         ])
         applyDetectedLinks(to: result, in: NSRange(location: 0, length: result.length))
+        return result
+    }
+
+    /// Background-safe variant of makeContentAttributedString.
+    // nonisolated: does not touch UIKit main-thread state — NSLayoutManager/NSTextStorage
+    // are created fresh per call, contentFont/XTheme are thread-safe value types.
+    /// Replaces the shared UILabel (TextKit2, main-thread-only) with a fresh NSLayoutManager
+    /// (TextKit1) for truncation detection. All objects are created fresh — safe to call from
+    /// any thread concurrently. The "More..." insertion point may differ by ±1 character vs the
+    /// UILabel variant (TextKit1 vs TextKit2 line-break disagreement) — irrelevant for height,
+    /// and the attributed string is corrected by makeContentAttributedString on first cell display.
+    nonisolated static func makeContentAttributedStringBackground(content: String, availableWidth: CGFloat) -> NSAttributedString {
+        let font = contentFont
+        let maxLines = maxContentLines
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 3
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        let textAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: XTheme.text,
+            .paragraphStyle: paragraphStyle
+        ]
+
+        let attrText = NSAttributedString(string: content, attributes: textAttributes)
+
+        let textStorage = NSTextStorage(attributedString: attrText)
+        let textContainer = NSTextContainer(size: CGSize(width: availableWidth, height: .greatestFiniteMagnitude))
+        textContainer.lineFragmentPadding = 0
+        let layoutManager = NSLayoutManager()
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        var lineGlyphRanges: [NSRange] = []
+        var glyphIndex = 0
+        while glyphIndex < layoutManager.numberOfGlyphs {
+            var lineRange = NSRange()
+            layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineRange)
+            lineGlyphRanges.append(lineRange)
+            glyphIndex = NSMaxRange(lineRange)
+        }
+
+        guard lineGlyphRanges.count > maxLines else {
+            return makeFullContentAttributedString(content: content)
+        }
+
+        let lastLineGlyphRange = lineGlyphRanges[maxLines - 1]
+        let lastLineCharRange = layoutManager.characterRange(forGlyphRange: lastLineGlyphRange, actualGlyphRange: nil)
+        let lastLineStart = lastLineCharRange.location
+
+        let moreString = " " + NSLocalizedString("More...", comment: "")
+        let moreWidth = NSAttributedString(string: moreString, attributes: [.font: font]).size().width
+        let targetWidth = availableWidth - moreWidth - 2
+
+        var lo = lastLineStart
+        var hi = NSMaxRange(lastLineCharRange)
+        while lo < hi {
+            let mid = lo + (hi - lo + 1) / 2
+            let lastLineText = (content as NSString).substring(with: NSRange(location: lastLineStart, length: mid - lastLineStart))
+            let lineWidth = NSAttributedString(string: lastLineText, attributes: [.font: font]).size().width
+            if lineWidth <= targetWidth { lo = mid } else { hi = mid - 1 }
+        }
+        let trimEnd = lo
+
+        var bodyText = (content as NSString).substring(to: trimEnd)
+        while bodyText.hasSuffix(" ") || bodyText.hasSuffix("\n") || bodyText.hasSuffix("\r") {
+            bodyText = String(bodyText.dropLast())
+        }
+
+        let bodyPs = NSMutableParagraphStyle()
+        bodyPs.lineSpacing = 3
+        bodyPs.lineBreakMode = .byWordWrapping
+
+        let result = NSMutableAttributedString(string: bodyText, attributes: [
+            .font: font,
+            .foregroundColor: XTheme.text,
+            .paragraphStyle: bodyPs
+        ])
+        result.append(NSAttributedString(string: moreString, attributes: [
+            .font: font,
+            .foregroundColor: XTheme.accent,
+            .moreLinkTap: true,
+        ]))
+        applyDetectedLinks(to: result, in: NSRange(location: 0, length: bodyText.utf16.count))
         return result
     }
 
@@ -759,11 +846,12 @@ class TweetBodyUIView: UIView {
 
     // NSDataDetector is expensive to initialize (regex compilation, ~10–50ms).
     // Reuse one instance across all calls — enumerateMatches is thread-safe for read-only use.
+    // Sendable type — no isolation annotation needed; accessed safely from background threads.
     private static let urlDetector: NSDataDetector? = try? NSDataDetector(
         types: NSTextCheckingResult.CheckingType.link.rawValue
     )
 
-    private static func applyDetectedLinks(to attributedString: NSMutableAttributedString, in range: NSRange) {
+    private nonisolated static func applyDetectedLinks(to attributedString: NSMutableAttributedString, in range: NSRange) {
         guard range.location >= 0,
               range.length > 0,
               NSMaxRange(range) <= attributedString.length,

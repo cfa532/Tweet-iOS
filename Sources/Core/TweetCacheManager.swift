@@ -793,7 +793,7 @@ extension Tweet {
             // This ensures that the same tweet loaded from cache vs server uses the same instance
             // Without this, profile view (from cache) and main feed (from server) would have different instances
             // causing retweet count updates to not sync across views
-            return Tweet.getInstance(
+            let instance = Tweet.getInstance(
                 mid: tweet.mid,
                 authorId: tweet.authorId,
                 content: tweet.content,
@@ -811,6 +811,8 @@ extension Tweet {
                 isPrivate: tweet.isPrivate,
                 downloadable: tweet.downloadable
             )
+            TweetHeightPrewarmer.shared.prewarm(instance)
+            return instance
         }
         throw NSError(domain: "TweetCacheManager", code: -1,
                       userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])

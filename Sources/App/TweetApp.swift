@@ -13,6 +13,10 @@ class AppState: ObservableObject {
         // Initialize basic components first (no network calls)
         HproseInstance.shared.preferenceHelper = PreferenceHelper()
         
+        // Cache screen width for background tweet height pre-warming.
+        // Formula: screenWidth - 8(leading) - 8(trailing) - 3 - 42(avatar) - 4 = screenWidth - 65.
+        TweetHeightPrewarmer.shared.standardContentWidth = UIScreen.main.bounds.width - 65
+
         // Let SwiftUI paint cached content immediately. User/cache/network
         // initialization continues below without holding the launch screen.
         canShowCachedContent = true
