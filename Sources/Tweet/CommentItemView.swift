@@ -34,9 +34,16 @@ struct CommentItemView: View {
     private var commentContent: some View {
         HStack(alignment: .top, spacing: 8) {
             if let user = comment.author {
-                if isInProfile || linkToComment {
-                    // Don't navigate if we're in the same profile or using NavigationLink for comment
+                if isInProfile {
+                    // Keep profile comment rows from pushing the same profile again.
                     Avatar(user: user)
+                } else if let onAvatarTap = onAvatarTap {
+                    Button {
+                        onAvatarTap(user)
+                    } label: {
+                        Avatar(user: user)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 } else {
                     NavigationLink(value: user) {
                         Avatar(user: user)

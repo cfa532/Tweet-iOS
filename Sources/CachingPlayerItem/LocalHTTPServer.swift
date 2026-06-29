@@ -1867,36 +1867,12 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         var isPrimary = isCurrentPrimary(mediaID)
-        if !isPrimary,
-           hasActiveProgressiveCacheWriter(for: mediaID) {
-            for _ in 0..<40 {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                switch connection.state { case .cancelled, .failed: return; default: break }
-
-                if serveProgressiveCacheIfAvailable(
-                    mediaID: mediaID,
-                    start: effectiveStart,
-                    end: effectiveEnd,
-                    rangeHeader: rangeHeader,
-                    method: method,
-                    connection: connection
-                ) {
-                    return
-                }
-
-                isPrimary = isCurrentPrimary(mediaID)
-                if isPrimary || !hasActiveProgressiveCacheWriter(for: mediaID) {
-                    break
-                }
-            }
-
-            if !isPrimary,
-               hasActiveProgressiveCacheWriter(for: mediaID) {
-                print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) deduplicated duplicate non-primary range \(rangeHeader ?? "full") while cache writer is active")
-                connection.cancel()
-                return
-            }
-        }
+        // The cache couldn't serve the full requested range (checked above), and a writer may
+        // still be filling it. Do NOT poll-then-cancel: AVPlayer rejects partial responses, and
+        // holding the connection without data times it out (NSURLErrorDomain -1001). Instead
+        // fall through to the live backend fetch below, which streams the COMPLETE requested
+        // range to AVPlayer. The fetch path skips re-caching while a writer is active
+        // (shouldCache is false), so the existing writer still owns the cache file.
 
         // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
         // Primary bypasses the preload cap, but still honors its own range cap.
