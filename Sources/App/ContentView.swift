@@ -319,7 +319,7 @@ struct ContentView: View {
     // MARK: - Notification Observer Management
 
     private var shouldShowMainFeedNewTweetsBanner: Bool {
-        !hproseInstance.appUser.isGuest && (selectedTab == 0 || isInProfileFromChat)
+        !hproseInstance.appUser.isGuest && selectedTab == 0 && navigationPath.isEmpty
     }
 
     private func openMainFeedAndShowNewTweets() {
