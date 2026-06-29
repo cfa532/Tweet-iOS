@@ -43,6 +43,8 @@ struct AdminTweetContentEditSheet: View {
                                             // uses the new content immediately.
                                             tweet.cachedContentAttributedString = nil
                                             tweet.cachedContentWidth = 0
+                                            tweet.cachedMeasuredTextHeight = -1
+                                            tweet.cachedMeasuredTextWidth = 0
                                             tweet.cachedHeight = nil
                                         }
                                         if let singleton = Tweet.getInstance(for: tweet.mid), singleton !== tweet {
@@ -50,6 +52,8 @@ struct AdminTweetContentEditSheet: View {
                                                 singleton.content = text
                                                 singleton.cachedContentAttributedString = nil
                                                 singleton.cachedContentWidth = 0
+                                                singleton.cachedMeasuredTextHeight = -1
+                                                singleton.cachedMeasuredTextWidth = 0
                                                 singleton.cachedHeight = nil
                                             }
                                         }

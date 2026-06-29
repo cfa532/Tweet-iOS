@@ -757,11 +757,17 @@ class TweetBodyUIView: UIView {
         UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
+    // NSDataDetector is expensive to initialize (regex compilation, ~10–50ms).
+    // Reuse one instance across all calls — enumerateMatches is thread-safe for read-only use.
+    private static let urlDetector: NSDataDetector? = try? NSDataDetector(
+        types: NSTextCheckingResult.CheckingType.link.rawValue
+    )
+
     private static func applyDetectedLinks(to attributedString: NSMutableAttributedString, in range: NSRange) {
         guard range.location >= 0,
               range.length > 0,
               NSMaxRange(range) <= attributedString.length,
-              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+              let detector = urlDetector else {
             return
         }
 

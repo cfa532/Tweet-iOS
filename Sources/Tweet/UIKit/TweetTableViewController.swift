@@ -1435,13 +1435,20 @@ class TweetTableViewController: UITableViewController {
     func updateTweets(_ newTweets: [Tweet]) {
         let oldCount = tweets.count
         let oldTweets = tweets
-        let isPaginationAppendDuringScroll = isScrollInteractionActive
-            && newTweets.count > oldCount
-            && oldTweets.enumerated().allSatisfy { index, tweet in
-                newTweets[index].mid == tweet.mid
-            }
 
-        if isTableVisibleForMutation, isScrollInteractionActive, !isPaginationAppendDuringScroll {
+        // Defer ALL structural table mutations while the user is scrolling.
+        //
+        // The old exception for "pagination append during scroll" (isPaginationAppendDuringScroll)
+        // allowed insertRows to fire while the finger was still moving. On profile feeds embedded
+        // in a SwiftUI UIViewControllerRepresentable, the UIKit/SwiftUI bridge can have a brief
+        // window where view.window != nil (passing isTableVisibleForMutation) yet UIKit internally
+        // marks the table outside its layout hierarchy. insertRows during that window triggers
+        // "UITableView was told to layout outside view hierarchy" — UIKit then forces a full
+        // re-layout of the entire table (expensive on large feeds) causing a ~1s freeze.
+        //
+        // Deferring until scroll stops is safe: applyDeferredTableChromeUpdatesAfterScroll is
+        // called from scrollViewDidEndDragging / scrollViewDidEndDecelerating.
+        if isTableVisibleForMutation, isScrollInteractionActive {
             deferredTweets = newTweets
             return
         }
@@ -1593,8 +1600,12 @@ class TweetTableViewController: UITableViewController {
         // Case 2: Tweets appended (pagination) - common for load more
         if newTweets.count > oldCount {
             let newIdsPrefix = Array(getNewIds().prefix(oldCount))
-            
+
             if newIdsPrefix == getOldIds() {
+                guard tableView.window != nil else {
+                    needsFullReloadAfterAttach = true
+                    return
+                }
                 isTableViewUpdating = true
                 let indexPaths = (oldCount..<newTweets.count).map { regularTweetIndexPath($0) }
                 tableView.insertRows(at: indexPaths, with: .none)
@@ -2217,10 +2228,19 @@ class TweetTableViewController: UITableViewController {
                 displayTweet.cachedContentAttributedString = attrString
                 displayTweet.cachedContentWidth = contentWidth
             }
-            // Use shared UILabel for exact height matching (avoids boundingRect vs UILabel diffs)
-            Self.measurementLabel.attributedText = attrString
-            let textSize = Self.measurementLabel.sizeThatFits(CGSize(width: contentWidth, height: .greatestFiniteMagnitude))
-            bodyHeight += ceil(textSize.height)
+            // Use shared UILabel for exact height matching (avoids boundingRect vs UILabel diffs).
+            // Cache the sizeThatFits result so repeated willDisplay / heightForRowAt calls skip
+            // the TextKit layout pass for already-measured tweets.
+            let measuredTextHeight: CGFloat
+            if displayTweet.cachedMeasuredTextWidth == contentWidth && displayTweet.cachedMeasuredTextHeight >= 0 {
+                measuredTextHeight = displayTweet.cachedMeasuredTextHeight
+            } else {
+                Self.measurementLabel.attributedText = attrString
+                measuredTextHeight = Self.measurementLabel.sizeThatFits(CGSize(width: contentWidth, height: .greatestFiniteMagnitude)).height
+                displayTweet.cachedMeasuredTextHeight = measuredTextHeight
+                displayTweet.cachedMeasuredTextWidth = contentWidth
+            }
+            bodyHeight += ceil(measuredTextHeight)
         }
 
         // Media attachments (filter to media-only, matching TweetBodyUIView)
@@ -2337,9 +2357,16 @@ class TweetTableViewController: UITableViewController {
                         embeddedTweet.cachedContentAttributedString = attrString
                         embeddedTweet.cachedContentWidth = embeddedWidth
                     }
-                    Self.measurementLabel.attributedText = attrString
-                    let textSize = Self.measurementLabel.sizeThatFits(CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude))
-                    embeddedBodyH += ceil(textSize.height)
+                    let embeddedTextHeight: CGFloat
+                    if embeddedTweet.cachedMeasuredTextWidth == embeddedWidth && embeddedTweet.cachedMeasuredTextHeight >= 0 {
+                        embeddedTextHeight = embeddedTweet.cachedMeasuredTextHeight
+                    } else {
+                        Self.measurementLabel.attributedText = attrString
+                        embeddedTextHeight = Self.measurementLabel.sizeThatFits(CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude)).height
+                        embeddedTweet.cachedMeasuredTextHeight = embeddedTextHeight
+                        embeddedTweet.cachedMeasuredTextWidth = embeddedWidth
+                    }
+                    embeddedBodyH += ceil(embeddedTextHeight)
                 }
 
                 if !embeddedMedia.isEmpty {
@@ -2462,6 +2489,15 @@ class TweetTableViewController: UITableViewController {
         // 2. Height sanity check: don't cache if significantly smaller than calculated estimate
         //    (indicates cell hasn't fully rendered — e.g., media grid not yet laid out)
         if cell.frame.height > 0 {
+            let cellWidth = cell.bounds.width > 0 ? cell.bounds.width : currentRowLayoutWidth
+            // Fast path: height already cached and matches the rendered cell — nothing to update.
+            // Skips the expensive calculateTweetHeight (sizeThatFits + maybe TextKit layout)
+            // on every willDisplay call for stable cells.
+            if let existing = cachedHeight(for: tweet, width: cellWidth),
+               abs(existing - cell.frame.height) <= 1 {
+                return
+            }
+
             let needsEmbeddedTweet = tweet.originalTweetId != nil
             let embeddedTweetLoaded = !needsEmbeddedTweet ||
                                      (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
@@ -2471,7 +2507,7 @@ class TweetTableViewController: UITableViewController {
                 // Don't cache — let Auto Layout re-determine on next display.
                 let expectedHeight = Self.calculateTweetHeight(
                     for: tweet,
-                    rowWidth: cell.bounds.width > 0 ? cell.bounds.width : self.currentRowLayoutWidth,
+                    rowWidth: cellWidth,
                     cellHorizontalPadding: self.leadingPadding + self.trailingPadding
                 )
                 let isReasonable = cell.frame.height >= expectedHeight - 20

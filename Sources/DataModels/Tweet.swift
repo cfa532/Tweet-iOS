@@ -129,6 +129,9 @@ class Tweet: Identifiable, Codable, ObservableObject {
     // Built once in calculateTweetHeight(), reused in TweetBodyUIView.configure()
     var cachedContentAttributedString: NSAttributedString?
     var cachedContentWidth: CGFloat = 0
+    // TRANSIENT: Cached sizeThatFits result to avoid repeated TextKit layout passes
+    var cachedMeasuredTextHeight: CGFloat = -1
+    var cachedMeasuredTextWidth: CGFloat = 0
     
     /// Update all attachments to observe the current author's baseUrl
     private func updateAttachmentsAuthor() {
