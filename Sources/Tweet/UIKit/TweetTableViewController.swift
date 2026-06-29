@@ -1498,7 +1498,6 @@ class TweetTableViewController: UITableViewController {
                 // OPTIMIZATION: Same tweets in same order - only hit counts changed
                 // Tweet.getInstance() already updated the @Published count properties
                 // SwiftUI will automatically re-render action buttons, no need to reload cells
-                rebuildVideoListAndRefreshVisibility(reason: "tweetsSameOrderVideoList")
                 scheduleVideoVisibilityRefresh(reason: "tweetsSameOrder")
                 return
             }
@@ -3002,7 +3001,9 @@ class TweetTableViewController: UITableViewController {
         videoVisibilityRefreshGeneration += 1
         let generation = videoVisibilityRefreshGeneration
         let isFeedReturn = reason == "viewDidAppear"
-        let isLightweightUpdate = reason == "tweetsSameOrder" || reason == "emptyDiff"
+        let isLightweightUpdate = reason == "tweetsSameOrder"
+            || reason == "emptyDiff"
+            || reason == "tweetsAppended"
         let delays: [TimeInterval]
         if isFeedReturn {
             delays = [0.18]

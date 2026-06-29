@@ -481,33 +481,26 @@ class TweetCellContentView: UIView {
                                   parentViewController: parentViewController,
                                   allowDeleteAll: allowDeleteAll)
         } else if !hasOwnContent {
-            if let cachedEmbeddedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
-                configurePureRetweet(tweet: tweet, originalTweet: cachedEmbeddedTweet,
-                                      hproseInstance: hproseInstance, isPinned: isPinned,
-                                      parentViewController: parentViewController,
-                                      allowDeleteAll: allowDeleteAll)
-            } else {
-                configureQuotedTweet(tweet: tweet, embeddedTweet: nil,
-                                      originalTweetId: originalTweetId,
-                                      originalAuthorId: originalAuthorId,
-                                      hproseInstance: hproseInstance, isPinned: isPinned,
-                                      parentViewController: parentViewController,
-                                      allowDeleteAll: allowDeleteAll)
+            configureQuotedTweet(tweet: tweet, embeddedTweet: nil,
+                                  originalTweetId: originalTweetId,
+                                  originalAuthorId: originalAuthorId,
+                                  hproseInstance: hproseInstance, isPinned: isPinned,
+                                  parentViewController: parentViewController,
+                                  allowDeleteAll: allowDeleteAll)
 
-                retweetLoadTask = Task { [weak self] in
-                    guard let loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId),
-                          !Task.isCancelled else { return }
-                    await MainActor.run {
-                        guard let self, self.currentTweetId == tweet.mid else { return }
-                        self.configurePureRetweet(
-                            tweet: tweet,
-                            originalTweet: loadedTweet,
-                            hproseInstance: hproseInstance,
-                            isPinned: isPinned,
-                            parentViewController: parentViewController,
-                            allowDeleteAll: allowDeleteAll
-                        )
-                    }
+            retweetLoadTask = Task { [weak self] in
+                guard let loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId),
+                      !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.currentTweetId == tweet.mid else { return }
+                    self.configurePureRetweet(
+                        tweet: tweet,
+                        originalTweet: loadedTweet,
+                        hproseInstance: hproseInstance,
+                        isPinned: isPinned,
+                        parentViewController: parentViewController,
+                        allowDeleteAll: allowDeleteAll
+                    )
                 }
             }
         } else {

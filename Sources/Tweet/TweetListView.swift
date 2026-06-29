@@ -198,8 +198,8 @@ struct TweetListView: View {
         candidateTweets.filter { !TweetDeletionRegistry.shared.isDeleted($0.mid) }
     }
 
-    private func mergePaginatedTweets(_ paginatedTweets: [Tweet]) {
-        if preserveOrder {
+    private func applyPaginatedTweets(_ paginatedTweets: [Tweet], page: UInt) {
+        if preserveOrder || page > 0 {
             tweets.appendTweetsPreservingOrder(paginatedTweets)
         } else {
             tweets.mergeTweets(paginatedTweets)
@@ -213,7 +213,7 @@ struct TweetListView: View {
         page: UInt,
         pageSize: UInt
     ) {
-        mergePaginatedTweets(cachedTweets)
+        applyPaginatedTweets(cachedTweets, page: page)
         if responseCount >= pageSize {
             hasMoreTweets = true
         }
@@ -225,7 +225,7 @@ struct TweetListView: View {
         page: UInt,
         pageSize: UInt
     ) {
-        mergePaginatedTweets(serverTweets)
+        applyPaginatedTweets(serverTweets, page: page)
         currentPage = page
         hasMoreTweets = responseCount >= pageSize
     }
