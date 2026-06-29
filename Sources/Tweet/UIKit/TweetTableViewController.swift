@@ -141,6 +141,9 @@ class TweetTableViewController: UITableViewController {
     
     // Header hosting controller
     private var headerHostingController: UIHostingController<AnyView>?
+    // Monotonic counter — incremented every time a deferred header-update Task is posted;
+    // the Task checks its captured value against the current counter and bails if stale.
+    private var headerUpdateGeneration = 0
     
     // Refresh control
     private var customRefreshControl: UIRefreshControl?
@@ -1798,51 +1801,54 @@ class TweetTableViewController: UITableViewController {
             // SUBSEQUENT UPDATES: Only update content, don't reassign tableHeaderView unless necessary
             // This prevents scroll position jumps
             headerHostingController?.rootView = headerBuilder()
-            
-            // Recalculate size with frame-based layout
-            if let headerView = headerHostingController?.view, let containerView = tableView.tableHeaderView {
-                let tableWidth = max(tableView.bounds.width, 100)
-                lastHeaderLayoutWidth = tableWidth
-                let contentWidth = tableWidth - (leadingPadding + trailingPadding)
-                
-                // Set fixed width before calculating height
+
+            // Defer the expensive SwiftUI measurement off the current run-loop turn.
+            // layoutIfNeeded() + sizeThatFits() on the hosting controller are synchronous
+            // SwiftUI layout passes that can block the main thread 200–500 ms on complex
+            // profile headers, causing "System gesture gate timed out" during scroll.
+            headerUpdateGeneration += 1
+            let generation = headerUpdateGeneration
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.headerUpdateGeneration == generation,
+                      self.isTableVisibleForMutation,
+                      let headerView = self.headerHostingController?.view,
+                      let containerView = self.tableView.tableHeaderView else { return }
+
+                let tableWidth = max(self.tableView.bounds.width, 100)
+                self.lastHeaderLayoutWidth = tableWidth
+                let contentWidth = tableWidth - (self.leadingPadding + self.trailingPadding)
+
                 headerView.frame.size.width = contentWidth
                 headerView.setNeedsLayout()
                 headerView.layoutIfNeeded()
-                
+
                 let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingExpandedSize.height)
-                let fittingSize = headerHostingController?.sizeThatFits(in: targetSize) ?? targetSize
-                
-                // Update frames if size changed
+                let fittingSize = self.headerHostingController?.sizeThatFits(in: targetSize)
+                    ?? CGSize(width: contentWidth, height: containerView.frame.height)
+
                 let oldHeight = containerView.frame.height
-                if abs(oldHeight - fittingSize.height) > 1 {
-                    
-                    // CRITICAL: Preserve scroll position when updating header
-                    let currentOffset = tableView.contentOffset
-                    let topInset = tableView.adjustedContentInset.top
-                    
-                    headerView.frame = CGRect(x: leadingPadding, y: 0, width: contentWidth, height: fittingSize.height)
-                    containerView.frame = CGRect(x: 0, y: 0, width: tableWidth, height: fittingSize.height)
-                    
-                    // Trigger table view layout update
-                    tableView.tableHeaderView = containerView
-                    
-                    // Only adjust scroll position if user has scrolled away from the top
-                    // If at the top (offset near 0 or -topInset), stay at the top
-                    let heightDiff = fittingSize.height - oldHeight
-                    let isAtTop = abs(currentOffset.y) < 10 || (topInset > 0 && abs(currentOffset.y + topInset) < 10)
-                    
-                    if isAtTop {
-                        // At the top: keep position at proper top (below nav bar) with smooth animation
-                        let properTopOffset = topInset > 0 ? -topInset : 0
-                        UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
-                            self.tableView.setContentOffset(CGPoint(x: 0, y: properTopOffset), animated: false)
-                        }, completion: nil)
-                    } else {
-                        // Scrolled down: preserve visible content by adjusting for height change (instant)
-                        let newOffset = CGPoint(x: currentOffset.x, y: currentOffset.y + heightDiff)
-                        tableView.setContentOffset(newOffset, animated: false)
+                guard abs(oldHeight - fittingSize.height) > 1 else { return }
+
+                let currentOffset = self.tableView.contentOffset
+                let topInset = self.tableView.adjustedContentInset.top
+
+                headerView.frame = CGRect(x: self.leadingPadding, y: 0, width: contentWidth, height: fittingSize.height)
+                containerView.frame = CGRect(x: 0, y: 0, width: tableWidth, height: fittingSize.height)
+
+                self.tableView.tableHeaderView = containerView
+
+                let heightDiff = fittingSize.height - oldHeight
+                let isAtTop = abs(currentOffset.y) < 10 || (topInset > 0 && abs(currentOffset.y + topInset) < 10)
+
+                if isAtTop {
+                    let properTopOffset = topInset > 0 ? -topInset : 0
+                    UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut) {
+                        self.tableView.setContentOffset(CGPoint(x: 0, y: properTopOffset), animated: false)
                     }
+                } else {
+                    let newOffset = CGPoint(x: currentOffset.x, y: currentOffset.y + heightDiff)
+                    self.tableView.setContentOffset(newOffset, animated: false)
                 }
             }
         }
