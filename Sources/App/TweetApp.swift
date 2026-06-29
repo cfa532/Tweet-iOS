@@ -12,20 +12,23 @@ class AppState: ObservableObject {
     func initialize() async {
         // Initialize basic components first (no network calls)
         HproseInstance.shared.preferenceHelper = PreferenceHelper()
-        
+
         // Cache screen width for background tweet height pre-warming.
         // Formula: screenWidth - 8(leading) - 8(trailing) - 3 - 42(avatar) - 4 = screenWidth - 65.
         TweetHeightPrewarmer.shared.standardContentWidth = UIScreen.main.bounds.width - 65
 
-        // Let SwiftUI paint cached content immediately. User/cache/network
-        // initialization continues below without holding the launch screen.
+        // Must complete before canShowCachedContent so the feed loads with the
+        // real appUser (correct cache key, non-guest path, correct pagination).
+        await HproseInstance.shared.initializeAppUser()
+
+        // Let SwiftUI paint cached content immediately. Network initialization
+        // continues below without holding the launch screen.
         canShowCachedContent = true
         isLoading = false
-        
+
         // Continue with full network initialization off the first paint path.
         Task.detached(priority: .userInitiated) {
             do {
-                await HproseInstance.shared.initializeAppUser()
                 try await HproseInstance.shared.initAppEntry()
                 await MainActor.run {
                     self.isInitialized = true

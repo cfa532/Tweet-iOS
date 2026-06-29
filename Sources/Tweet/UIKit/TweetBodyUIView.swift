@@ -16,6 +16,12 @@ extension NSAttributedString.Key {
     static let tweetDetectedURL = NSAttributedString.Key("com.tweet.detectedURL")
 }
 
+// NSDataDetector is expensive to initialize (regex compilation, ~10–50ms).
+// Reuse one instance across all calls — enumerateMatches is thread-safe for read-only use.
+private let _tweetBodyURLDetector: NSDataDetector? = try? NSDataDetector(
+    types: NSTextCheckingResult.CheckingType.link.rawValue
+)
+
 class TweetBodyUIView: UIView {
 
     // Internal stack view to manage all content
@@ -844,18 +850,11 @@ class TweetBodyUIView: UIView {
         UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
-    // NSDataDetector is expensive to initialize (regex compilation, ~10–50ms).
-    // Reuse one instance across all calls — enumerateMatches is thread-safe for read-only use.
-    // Sendable type — no isolation annotation needed; accessed safely from background threads.
-    private static let urlDetector: NSDataDetector? = try? NSDataDetector(
-        types: NSTextCheckingResult.CheckingType.link.rawValue
-    )
-
     private nonisolated static func applyDetectedLinks(to attributedString: NSMutableAttributedString, in range: NSRange) {
         guard range.location >= 0,
               range.length > 0,
               NSMaxRange(range) <= attributedString.length,
-              let detector = urlDetector else {
+              let detector = _tweetBodyURLDetector else {
             return
         }
 
