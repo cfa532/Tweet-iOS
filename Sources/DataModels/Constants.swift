@@ -48,7 +48,10 @@ enum FeedPlaybackTuning {
     static let tweetVisibleRatio: CGFloat = 0.50
 
     // Video playback visibility
-    static let videoWarmVisibilityRatio: CGFloat = 0.50
+    /// Any positively-visible video acquires a player (was 0.50). Overload is bounded by
+    /// MAX_PLAYER_CACHE_SIZE (8, LRU-evicts oldest non-visible/non-primary) and
+    /// MAX_CONCURRENT_PLAYER_CREATIONS (2). Autoplay still requires videoStartVisibilityRatio.
+    static let videoWarmVisibilityRatio: CGFloat = 0
     static let videoStartVisibilityRatio: CGFloat = 0.50
     static let videoContinueVisibilityRatio: CGFloat = 0.70
 
