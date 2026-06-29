@@ -2735,12 +2735,31 @@ class TweetTableViewController: UITableViewController {
         let currentCount = tableView.numberOfRows(inSection: 0)
         guard expectedCount == currentCount else { return }
 
+        // Anchor to the first visible cell so that height changes in rows above the
+        // viewport don't shift visible content.
+        var anchorIndexPath: IndexPath?
+        var anchorOffset: CGFloat = 0
+        if let firstVisible = tableView.indexPathsForVisibleRows?.first {
+            let cellTop = tableView.rectForRow(at: firstVisible).origin.y
+            anchorOffset = tableView.contentOffset.y - cellTop
+            anchorIndexPath = firstVisible
+        }
+
         pendingHeightRelayoutTweetIds.removeAll()
         UIView.performWithoutAnimation {
             isTableViewUpdating = true
             tableView.beginUpdates()
             tableView.endUpdates()
             isTableViewUpdating = false
+        }
+
+        // Restore position relative to the anchor cell to absorb any content-offset drift.
+        if let anchor = anchorIndexPath {
+            let newCellTop = tableView.rectForRow(at: anchor).origin.y
+            let newOffset = newCellTop + anchorOffset
+            if abs(newOffset - tableView.contentOffset.y) > 0.5 {
+                tableView.setContentOffset(CGPoint(x: 0, y: newOffset), animated: false)
+            }
         }
     }
 

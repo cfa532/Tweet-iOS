@@ -98,6 +98,8 @@ class EmbeddedTweetUIView: UIView {
 
     var onTap: ((Tweet) -> Void)?
     var onContentExpanded: (() -> Void)?
+    /// Called after async tweet load completes so the parent cell can trigger immediate height check.
+    var onAsyncConfigured: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -279,6 +281,7 @@ class EmbeddedTweetUIView: UIView {
                     self?.configure(tweet: cached, quotingTweetId: quotingTweet.mid,
                                     parentViewController: parentViewController)
                     self?.registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: cached)
+                    self?.onAsyncConfigured?()
                 }
                 return
             }
@@ -291,6 +294,7 @@ class EmbeddedTweetUIView: UIView {
                     self?.configure(tweet: serverTweet, quotingTweetId: quotingTweet.mid,
                                     parentViewController: parentViewController)
                     self?.registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: serverTweet)
+                    self?.onAsyncConfigured?()
                 }
             }
         }

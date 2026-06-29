@@ -114,6 +114,8 @@ class TweetCellContentView: UIView {
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)?
     var onContentExpanded: (() -> Void)?
+    /// Called when async content loads and may have changed cell height (retweet/embedded tweet).
+    var onContentDidChangeHeightAsync: (() -> Void)?
 
     // MARK: - Init
 
@@ -501,6 +503,7 @@ class TweetCellContentView: UIView {
                         parentViewController: parentViewController,
                         allowDeleteAll: allowDeleteAll
                     )
+                    self.onContentDidChangeHeightAsync?()
                 }
             }
         } else {
@@ -620,6 +623,7 @@ class TweetCellContentView: UIView {
             )
         }
         embeddedTweetView.onTap = { [weak self] t in self?.navigateToTweetDetail(t, source: "embeddedTweetTap") }
+        embeddedTweetView.onAsyncConfigured = { [weak self] in self?.onContentDidChangeHeightAsync?() }
 
         // Action bar on quoting tweet
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)

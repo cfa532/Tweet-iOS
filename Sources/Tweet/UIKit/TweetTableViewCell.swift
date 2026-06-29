@@ -189,6 +189,13 @@ class TweetTableViewCell: UITableViewCell {
         tweetContentView.onShowLogin = onShowLogin
         tweetContentView.onShowToast = onShowToast
         tweetContentView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
+        tweetContentView.onContentDidChangeHeightAsync = { [weak self] in
+            guard let self else { return }
+            self.lastHeightOverflowCheckTime = 0
+            self.pendingHeightOverflowCheck?.cancel()
+            self.pendingHeightOverflowCheck = nil
+            self.setNeedsLayout()
+        }
 
         tweetContentView.configure(
             tweet: tweet,
@@ -211,6 +218,7 @@ class TweetTableViewCell: UITableViewCell {
         onHeightChanged = nil
         shouldDeferHeightOverflowCheck = nil
         onContentExpanded = nil
+        tweetContentView.onContentDidChangeHeightAsync = nil
         currentTweetId = nil
         tweetContentView.prepareForReuse()
     }

@@ -1553,6 +1553,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Tracks only the next videos in the scroll direction so stale preloads are easy to cancel.
     func performPreloadOnScrollStop() {
         onScrollStopped()
+        // Re-evaluate primary from scratch after each scroll gesture. Clearing
+        // primaryBelowContinueIdentifier lets the topmost visible video win even if it
+        // previously fell below the 70% continuation threshold mid-scroll.
+        primaryBelowContinueIdentifier = nil
         promoteForegroundVisibleMedia(reason: "scroll stop")
         if phase == .idle && !visibleVideos.isEmpty {
             scheduleStartPrimary()
