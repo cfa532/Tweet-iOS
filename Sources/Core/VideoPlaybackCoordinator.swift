@@ -1622,6 +1622,17 @@ class VideoPlaybackCoordinator: ObservableObject {
             lastDirectionalPreloadRefreshTime = now
         }
 
+        // Don't generate covers while the autoplay primary is struggling for buffer — those
+        // AVAssetImageGenerator fetches would compete with the primary for bandwidth and
+        // worsen its stall. Covers resume once the primary is actually playing again (or
+        // when there is no primary yet, e.g. the initial feed load).
+        guard canPreloadCoversWithoutStarvingPrimary() else {
+            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "\(reason).primaryStarved")
+            activePreloadMids.removeAll()
+            SharedAssetCache.shared.updateProtectedPreloadMids([])
+            return
+        }
+
         let playerPreloadCount = max(0, directionalPlayerPreloadCount)
         let coverPreloadCount = max(0, FeedPlaybackTuning.directionalVideoCoverPreloadCount)
 
@@ -1672,13 +1683,28 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// On-screen videos that do not yet have a cached poster thumbnail. These are warmed
     /// with a lightweight cover so they are not blank before their player renders a frame.
+    /// The autoplay primary is excluded — it captures its own cover via playback, so
+    /// generating a poster for it would only steal bandwidth from the playback itself.
     private func visibleVideosLackingCovers() -> [VideoPlaybackInfo] {
         guard !onScreenMediaCells.isEmpty else { return [] }
+        let primaryId = primaryVideoId
         return allVideos.filter {
             onScreenMediaCells.contains($0.identifier) &&
             $0.isInVisibleMediaRange &&
+            $0.identifier != primaryId &&
             SharedAssetCache.shared.cachedThumbnail(for: $0.videoMid) == nil
         }
+    }
+
+    /// Whether it is safe to spend bandwidth on cover preloads right now. Returns true when
+    /// there is no autoplay primary yet (e.g. initial feed load) or the primary is actually
+    /// playing. While the primary is buffering/stalled, returns false so preloads don't
+    /// compete with it for bandwidth. `isActuallyPlaying` rides out brief HLS buffer gaps via
+    /// its grace window, so only sustained stalls pause preloading.
+    private func canPreloadCoversWithoutStarvingPrimary() -> Bool {
+        guard phase == .primaryPlaying, let primaryId = primaryVideoId else { return true }
+        guard let delegate = delegate(forIdentifier: primaryId) else { return true }
+        return delegate.isActuallyPlaying
     }
 
     private func scheduleExactFrameUpgradeIfStable(for nextVideos: [VideoPlaybackInfo]) {
