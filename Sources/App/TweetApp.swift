@@ -10,20 +10,18 @@ class AppState: ObservableObject {
     @Published var canShowCachedContent = false  // Allow showing cached content immediately
     
     func initialize() async {
-        isLoading = true  // Set loading state at start
-        
         // Initialize basic components first (no network calls)
-        // Initialize preference helper and basic app user (no network calls)
         HproseInstance.shared.preferenceHelper = PreferenceHelper()
-        await HproseInstance.shared.initializeAppUser()
         
-        // Allow showing cached content immediately
+        // Let SwiftUI paint cached content immediately. User/cache/network
+        // initialization continues below without holding the launch screen.
         canShowCachedContent = true
         isLoading = false
         
-        // Continue with full network initialization in background
-        Task.detached(priority: .background) {
+        // Continue with full network initialization off the first paint path.
+        Task.detached(priority: .userInitiated) {
             do {
+                await HproseInstance.shared.initializeAppUser()
                 try await HproseInstance.shared.initAppEntry()
                 await MainActor.run {
                     self.isInitialized = true
