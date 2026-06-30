@@ -1011,13 +1011,13 @@ final class HproseInstance: ObservableObject {
             "aid": appId, "ver": "last", "version": "v2",
             "hostid": authorHostId, "userid": parentTweet.authorId, "mid": commentId
         ]
-        _ = client.invoke("runMApp", withArgs: ["node_update_mid_by_score", updateParams])
+        _ = await invokeRunMApp(using: client, entry: "node_update_mid_by_score", params: updateParams)
 
         let retryParams: [String: Any] = [
             "aid": appId, "ver": "last", "version": "v2",
             "tweetid": commentId, "appuserid": appUser.mid
         ]
-        guard let raw = client.invoke("runMApp", withArgs: ["get_tweet", retryParams]),
+        guard let raw = await invokeRunMApp(using: client, entry: "get_tweet", params: retryParams),
               let unwrapped = try? Self.unwrapV2Response(raw),
               let dict = unwrapped as? [String: Any],
               let comment = try? await mergeTweetFromDict(dict) else {
@@ -1227,7 +1227,7 @@ final class HproseInstance: ObservableObject {
         accessClient.timeout = 15
 
         do {
-            let rawResponse = accessClient.invoke("runMApp", withArgs: [HproseInstance.updateFollowingTweetsEntry, accessParams])
+            let rawResponse = await invokeRunMApp(using: accessClient, entry: HproseInstance.updateFollowingTweetsEntry, params: accessParams)
             _ = try Self.unwrapV2Response(rawResponse)
             print("DEBUG: [update_following_tweets] Synced \(newTweetCount) tweets from home host \(homeHostId) to access host \(accessHostId)")
         } catch {
@@ -2712,7 +2712,7 @@ final class HproseInstance: ObservableObject {
             newClient.timeout = 30.0
 
             print("DEBUG: [login] Invoking login API...")
-            let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await self.invokeRunMApp(using: newClient, entry: entry, params: params)
             print("DEBUG: [login] Got raw response, unwrapping...")
 
             // Check if the response is nil (network error)
@@ -3243,7 +3243,7 @@ final class HproseInstance: ObservableObject {
         let originalTimeout = client.timeout
         client.timeout = 30.0
         defer { client.timeout = originalTimeout }
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         // Hprose syncInvoke returns the error object (not throws) on failure
         if let error = rawResponse as? NSError {
             throw error
@@ -3293,7 +3293,7 @@ final class HproseInstance: ObservableObject {
         let originalTimeout = client.timeout
         client.timeout = 30.0
         defer { client.timeout = originalTimeout }
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         // Hprose syncInvoke returns the error object (not throws) on failure
         if let error = rawResponse as? NSError {
             throw error
@@ -3403,7 +3403,7 @@ final class HproseInstance: ObservableObject {
             return nil
         }
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
             print("⚠️ [updateRetweetCount] Failed to unwrap v2 response")
             return nil
@@ -3452,7 +3452,7 @@ final class HproseInstance: ObservableObject {
         client.timeout = 30.0
         defer { client.timeout = originalTimeout }
 
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         print("[toggleTweetPrivacy] Raw response: \(String(describing: rawResponse))")
 
         // Unwrap v2 response
@@ -3534,7 +3534,7 @@ final class HproseInstance: ObservableObject {
         client.timeout = 30.0
         defer { client.timeout = originalTimeout }
 
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse: Any?
         do {
             unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -3632,7 +3632,7 @@ final class HproseInstance: ObservableObject {
         client.timeout = 30.0
         defer { client.timeout = originalTimeout }
 
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         print("[updateTweetContent] Updating as author \(requestUser.mid), raw response: \(String(describing: rawResponse))")
         _ = try Self.unwrapV2Response(rawResponse)
     }
@@ -3674,7 +3674,7 @@ final class HproseInstance: ObservableObject {
                 "tweetauthorid": author.mid
             ]
             let entry = "add_comment"
-            let rawResponse = commentClient.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: commentClient, entry: entry, params: params)
             
             if let err = rawResponse as? Error {
                 print("DEBUG: [addComment] invoke returned error: \(err)")
@@ -3791,7 +3791,7 @@ final class HproseInstance: ObservableObject {
         }
         print("DEBUG: [deleteComment] delete_comment via author's baseUrl (\(author.baseUrl?.absoluteString ?? "nil"))")
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         if let err = rawResponse as? Error {
             throw err
         }
@@ -6733,7 +6733,7 @@ final class HproseInstance: ObservableObject {
         }
         defer { client.timeout = originalTimeout }
         
-        let rawResponse = client.invoke("runMApp", withArgs: ["add_tweet", params])
+        let rawResponse = await invokeRunMApp(using: client, entry: "add_tweet", params: params)
             
         print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
         
@@ -7339,7 +7339,10 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweetId,
             "appuserid": appUser.mid,
         ]
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+        guard let pinClient = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        }
+        let rawResponse = await invokeRunMApp(using: pinClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         // For v2 API: server returns {success: true, data: {isPinned: bool}}
@@ -7474,7 +7477,7 @@ final class HproseInstance: ObservableObject {
         
         let unwrappedResponse: Any?
         do {
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             print("DEBUG: [registerUser] Unwrapped response: \(String(describing: unwrappedResponse))")
         } catch {
@@ -7630,8 +7633,11 @@ final class HproseInstance: ObservableObject {
             let snippet = String(userJsonString[startIndex..<endIndex])
             print("DEBUG: updateUserCore - JSON snippet around domainToShare: ...\(snippet)...")
         }
-        
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+
+        guard let updateClient = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        }
+        let rawResponse = await invokeRunMApp(using: updateClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
@@ -7749,8 +7755,11 @@ final class HproseInstance: ObservableObject {
             "version": "v2",
             "user": userJsonString
         ]
-        
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+
+        guard let profileClient = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        }
+        let rawResponse = await invokeRunMApp(using: profileClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
@@ -7784,8 +7793,11 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "avatar": avatar
         ]
-        
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+
+        guard let avatarClient = appUser.hproseClient else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
+        }
+        let rawResponse = await invokeRunMApp(using: avatarClient, entry: entry, params: params)
         guard rawResponse != nil else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
         }
@@ -7911,7 +7923,7 @@ final class HproseInstance: ObservableObject {
             return nil
         }
         
-        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: hproseClient, entry: entry, params: params)
         guard let response = rawResponse else {
             print("DEBUG: [_getHostIP] No response from server.")
             return nil
@@ -8068,7 +8080,7 @@ final class HproseInstance: ObservableObject {
             
             print("[sendMessage] 📤 Sending to sender node (attempt \(attempt + 1)/\(maxRetries + 1)) - baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
             
-            let rawResponse = senderClient.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: senderClient, entry: entry, params: params)
             let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
             let response = unwrappedResponse ?? rawResponse
             
@@ -8218,7 +8230,7 @@ final class HproseInstance: ObservableObject {
             
             print("[sendMessage] 📤 Sending to recipient node (attempt \(attempt + 1)/\(maxRetries + 1)) - baseUrl: \(recipient.baseUrl?.absoluteString ?? "nil")")
             
-            let rawReceiptResponse = recipientClient.invoke("runMApp", withArgs: [receiptEntry, receiptParams])
+            let rawReceiptResponse = await invokeRunMApp(using: recipientClient, entry: receiptEntry, params: receiptParams)
             let receiptResponseUnwrapped = try? Self.unwrapV2Response(rawReceiptResponse)
             let receiptResponse = receiptResponseUnwrapped ?? rawReceiptResponse
             
@@ -8391,7 +8403,7 @@ final class HproseInstance: ObservableObject {
             "senderid": senderId
         ]
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         // Handle new response format: {success: false, error: e.message}
@@ -8555,7 +8567,7 @@ final class HproseInstance: ObservableObject {
             "blocked": userId
         ]
         
-        client.invoke("runMApp", withArgs: [entry, params])
+        _ = await invokeRunMApp(using: client, entry: entry, params: params)
         print("[blockUser] Backend call completed for user: \(userId)")
     }
     
@@ -8572,7 +8584,7 @@ final class HproseInstance: ObservableObject {
             "version": "v2",
             "userid": appUser.mid
         ]
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
         return unwrappedResponse as? [String: Any] ?? [:]
     }
