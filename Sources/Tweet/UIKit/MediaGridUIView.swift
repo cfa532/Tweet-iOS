@@ -583,9 +583,9 @@ class MediaGridUIView: UIView {
         }
     }
 
-    func prepareMediaForBackground() {
+    func prepareMediaForBackground(aggressive: Bool = false) {
         for cell in cellViews {
-            cell.prepareForBackground()
+            cell.prepareForBackground(aggressive: aggressive)
         }
     }
 

@@ -190,6 +190,7 @@ class TweetTableViewController: UITableViewController {
     private var didBecomeActiveObserver: NSObjectProtocol?
     private var reloadVisibleVideosObserver: NSObjectProtocol?
     private var needsVideoLayerRefresh = false
+    private var foregroundVideoLayerRefreshRetryCount = 0
     private var pendingBackgroundResumeRestoreWorks: [DispatchWorkItem] = []
     private var backgroundResumeRestoreGeneration: Int = 0
 
@@ -575,8 +576,13 @@ class TweetTableViewController: UITableViewController {
             forName: .prepareVisibleVideosForBackground,
             object: nil,
             queue: nil
-        ) { [weak self] _ in
-            self?.prepareVisibleVideosForBackground(reason: "preGlobalMemoryRelease")
+        ) { [weak self] notification in
+            let aggressive = notification.userInfo?["aggressive"] as? Bool ?? false
+            guard aggressive else { return }
+            self?.prepareVisibleVideosForBackground(
+                reason: "preGlobalMemoryRelease",
+                aggressive: true
+            )
         }
 
         // Restore scroll position and video players when app returns to foreground
@@ -627,16 +633,10 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
-        // Log memory before cleanup
-        print("🌙 [BACKGROUND] App entering background - starting aggressive memory cleanup")
+        print("🌙 [BACKGROUND] App entering background - deferring media cleanup to grace window")
 
         // Save the current scroll position before backgrounding
         saveScrollPositionIfNeeded()
-
-        // Directional image preloads are useful only while actively scrolling the feed.
-        // AppDelegate/MemoryCapManager clears global media caches on background; cancel
-        // these direct warmup tasks here so they do not keep network work alive.
-        prepareVisibleVideosForBackground(reason: "didEnterBackground")
 
         // End background task after a short delay to allow cleanup to complete
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -648,7 +648,7 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    private func prepareVisibleVideosForBackground(reason: String) {
+    private func prepareVisibleVideosForBackground(reason: String, aggressive: Bool = false) {
         guard videoCoordinator.isFeedVisible else { return }
         guard isTableAttachedForLayout else { return }
 
@@ -661,12 +661,13 @@ class TweetTableViewController: UITableViewController {
         var preparedCount = 0
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
-            tweetCell.tweetContentView.prepareMediaForBackground()
+            tweetCell.tweetContentView.prepareMediaForBackground(aggressive: aggressive)
             preparedCount += 1
         }
 
         if preparedCount > 0 {
-            print("🌙 [BACKGROUND] Prepared \(preparedCount) visible tweet cell(s) for background (\(reason))")
+            let mode = aggressive ? "aggressive" : "short"
+            print("🌙 [BACKGROUND] Prepared \(preparedCount) visible tweet cell(s) for \(mode) background (\(reason))")
         }
     }
 
@@ -682,6 +683,7 @@ class TweetTableViewController: UITableViewController {
         // Cancel background task if still active
         endBackgroundTask()
         needsVideoLayerRefresh = true
+        foregroundVideoLayerRefreshRetryCount = 0
 
         let currentPosition = tableView.contentOffset.y
         lastContentOffset = currentPosition
@@ -691,12 +693,34 @@ class TweetTableViewController: UITableViewController {
     @MainActor
     private func handleAppDidBecomeActive() {
         guard needsVideoLayerRefresh else { return }
-        guard videoCoordinator.isFeedVisible else { return }
+        guard videoCoordinator.isFeedVisible else {
+            scheduleForegroundVideoLayerRefreshRetryIfNeeded()
+            return
+        }
         guard AppDelegate.isVideoInfrastructureReady,
               isReadyForFeedVideoResume,
-              !isTableViewUpdating else { return }
+              !isTableViewUpdating else {
+            scheduleForegroundVideoLayerRefreshRetryIfNeeded()
+            return
+        }
         needsVideoLayerRefresh = false
+        foregroundVideoLayerRefreshRetryCount = 0
         refreshVisibleVideoLayersAfterForeground()
+        videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+    }
+
+    @MainActor
+    private func scheduleForegroundVideoLayerRefreshRetryIfNeeded() {
+        guard needsVideoLayerRefresh else { return }
+        guard foregroundVideoLayerRefreshRetryCount < 8 else { return }
+
+        foregroundVideoLayerRefreshRetryCount += 1
+        let delay = min(0.25 * Double(foregroundVideoLayerRefreshRetryCount), 1.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleAppDidBecomeActive()
+            }
+        }
     }
 
     @MainActor

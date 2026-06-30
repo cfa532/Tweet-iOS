@@ -21,9 +21,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private var isRestartingInfrastructure = false
 
     private var backgroundCleanupTask: UIBackgroundTaskIdentifier = .invalid
+    private var pendingBackgroundCleanupWorkItem: DispatchWorkItem?
     /// True once background memory release has actually run.
     /// When false on foreground return, players and server are still intact → fast path.
     private(set) static var didPerformAggressiveCleanup = false
+    private let shortBackgroundVideoGracePeriod: TimeInterval = 20
     
     private enum BackgroundMessageCheck {
         static let identifier = "com.example.ZZ.messageCheck"
@@ -594,45 +596,60 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
 
-        // Note: TweetTableViewController's background handler shows cached thumbnails
-        // on visible video cells before this runs, preventing black player layers.
+        // Short backgrounds keep video infrastructure alive so existing players can resume.
+        // If the app stays backgrounded past the grace window, the delayed cleanup below
+        // tears down players and stops the local proxy to release memory.
         AppDelegate.didPerformAggressiveCleanup = false
-        AppDelegate.isVideoInfrastructureReady = false
-
-        NotificationCenter.default.post(name: .prepareVisibleVideosForBackground, object: nil)
+        AppDelegate.isVideoInfrastructureReady = true
 
         if backgroundCleanupTask == .invalid {
             backgroundCleanupTask = UIApplication.shared.beginBackgroundTask(withName: "BackgroundMemoryRelease") { [weak self] in
                 print("⚠️ [AppDelegate] Background memory release time expired")
-                self?.endBackgroundCleanupTask()
+                DispatchQueue.main.async {
+                    self?.performBackgroundMemoryReleaseIfStillBackground(reason: "background task expiration")
+                }
             }
         }
 
-        // Run on the next main turn so view controllers can prepare the app-switcher snapshot first.
-        DispatchQueue.main.async { [weak self] in
-            guard UIApplication.shared.applicationState == .background else {
-                // App returned to foreground before cleanup ran — the foreground recovery task
-                // already owns isVideoInfrastructureReady and will set it true when the proxy
-                // is confirmed healthy.  Do NOT set it here: doing so causes cells to create
-                // players against a potentially unhealthy server before recovery completes.
-                print("⚡ [AppDelegate] Background memory release skipped; app returned before cleanup")
-                self?.endBackgroundCleanupTask()
-                return
-            }
-
-            print("🔥 [AppDelegate] Performing immediate background memory release")
-            MemoryCapManager.shared.performBackgroundMemoryRelease()
-            AppDelegate.didPerformAggressiveCleanup = true
-
-            print("[AppDelegate] 📅 Scheduling background message check after cleanup")
-            self?.scheduleNextMessageCheck()
-
-            self?.endBackgroundCleanupTask()
-            print("✅ [AppDelegate] Background memory release complete")
+        pendingBackgroundCleanupWorkItem?.cancel()
+        let cleanupWorkItem = DispatchWorkItem { [weak self] in
+            self?.performBackgroundMemoryReleaseIfStillBackground(reason: "grace period elapsed")
         }
+        pendingBackgroundCleanupWorkItem = cleanupWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + shortBackgroundVideoGracePeriod, execute: cleanupWorkItem)
+    }
+
+    @MainActor
+    private func performBackgroundMemoryReleaseIfStillBackground(reason: String) {
+        guard pendingBackgroundCleanupWorkItem?.isCancelled != true else { return }
+        pendingBackgroundCleanupWorkItem = nil
+
+        guard UIApplication.shared.applicationState == .background else {
+            print("⚡ [AppDelegate] Background memory release skipped; app returned before cleanup")
+            endBackgroundCleanupTask()
+            return
+        }
+
+        print("🔥 [AppDelegate] Performing background memory release after \(reason)")
+        AppDelegate.isVideoInfrastructureReady = false
+        NotificationCenter.default.post(
+            name: .prepareVisibleVideosForBackground,
+            object: nil,
+            userInfo: ["aggressive": true]
+        )
+        MemoryCapManager.shared.performBackgroundMemoryRelease()
+        AppDelegate.didPerformAggressiveCleanup = true
+
+        print("[AppDelegate] 📅 Scheduling background message check after cleanup")
+        scheduleNextMessageCheck()
+
+        endBackgroundCleanupTask()
+        print("✅ [AppDelegate] Background memory release complete")
     }
 
     private func endBackgroundCleanupTask() {
+        pendingBackgroundCleanupWorkItem?.cancel()
+        pendingBackgroundCleanupWorkItem = nil
         if backgroundCleanupTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundCleanupTask)
             backgroundCleanupTask = .invalid
@@ -709,6 +726,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // gone >5 minutes, the NWListener is likely dead. Fall through to slow path.
         if !AppDelegate.didPerformAggressiveCleanup {
             let timeInBackground = Int(Date().timeIntervalSince(backgroundDate))
+
+            if TimeInterval(timeInBackground) < shortBackgroundVideoGracePeriod {
+                print("⚡ [AppDelegate] Short background fast resume (\(timeInBackground)s) — keeping existing video players and proxy")
+                AppDelegate.isVideoInfrastructureReady = true
+
+                Task {
+                    print("[AppDelegate] 📬 Checking for new messages on foreground return")
+                    await checkMessagesForBadgeOnly()
+                }
+                Task.detached(priority: .background) { [weak self] in
+                    await self?.refreshAppUserIP()
+                }
+                return
+            }
 
             if timeInBackground < 300 {
                 print("⚡ [AppDelegate] Fast recovery (\(timeInBackground)s) — checking proxy health")
@@ -894,12 +925,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func restartVideoInfrastructure() {
         print("[AppDelegate] Restarting video infrastructure after long background")
         
-        // CRITICAL: Clear ALL video players FIRST to release their URLs
-        // This prevents players from trying to use old port numbers after server restart
+        // Snapshot resume metadata before detaching player items, then clear all
+        // players so they cannot keep using old port numbers after server restart.
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
         SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-        
-        // DON'T clear VideoStateCache - it stores playback position/state
-        // Preserving it allows videos to resume from where they left off after reload
         
         // Stop the server completely and wait for cleanup
         LocalHTTPServer.shared.stop()
@@ -927,14 +956,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] Restarting video infrastructure asynchronously (non-blocking)")
         let startTime = Date()
 
-        // CRITICAL: Clear ALL video players FIRST to release their URLs (async for speed)
-        // Run clearing in parallel with server operations
+        // Run player cleanup in parallel with server operations. Snapshot resume
+        // metadata before detaching items so recovery can continue playback.
         let clearTask = Task.detached(priority: .userInitiated) { @MainActor in
+            // Long hibernation can skip the didEnterBackground cleanup turn. Drop
+            // any surviving cached AVPlayers here while keeping resume metadata.
+            VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
             SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
         }
-
-        // DON'T clear VideoStateCache - it stores playback position/state
-        // Preserving it allows videos to resume from where they left off after reload
 
         // Check if cancelled
         guard !Task.isCancelled else {

@@ -1297,9 +1297,9 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func handleAppBackgrounded() {
-        // Background cleanup should be absolute. Visible cells will reload from
-        // memory/disk/network on foreground; no image request should keep the app alive.
-        prepareForBackground()
+        // AppDelegate owns the background grace window. Quick backgrounds leave
+        // image/video loading state alone; MemoryCapManager calls prepareForBackground()
+        // only after the aggressive cleanup path is reached.
     }
     
     private func handleAppForegrounded() {

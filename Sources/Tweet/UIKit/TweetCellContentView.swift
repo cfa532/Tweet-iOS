@@ -930,10 +930,10 @@ class TweetCellContentView: UIView {
         }
     }
 
-    func prepareMediaForBackground() {
-        bodyView.mediaGridView.prepareMediaForBackground()
+    func prepareMediaForBackground(aggressive: Bool = false) {
+        bodyView.mediaGridView.prepareMediaForBackground(aggressive: aggressive)
         if !embeddedTweetWrapper.isHidden {
-            embeddedTweetView.prepareMediaForBackground()
+            embeddedTweetView.prepareMediaForBackground(aggressive: aggressive)
         }
     }
 

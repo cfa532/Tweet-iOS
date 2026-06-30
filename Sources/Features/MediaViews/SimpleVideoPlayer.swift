@@ -242,13 +242,71 @@ class VideoStateCache {
         finishedVideoIdentifiers.removeAll()
     }
 
-    /// Clear only cached player/time references for memory pressure.
+    /// Clear only cached player references for memory pressure.
     /// Finished-video bookkeeping is intentionally preserved so foreground resume
-    /// does not auto-replay videos that already completed in the feed.
+    /// does not auto-replay videos that already completed in the feed. Playback
+    /// metadata is kept so long-background recovery can recreate players at the
+    /// previous position without retaining AVPlayer/AVPlayerItem buffers.
     func clearPlaybackCacheForMemoryPressure() {
-        cache.removeAll()
+        var releasedPlayers = Set<ObjectIdentifier>()
+        var playbackOnlyCache = cache
+
+        for (mid, cachedState) in cache {
+            guard let player = cachedState.player else { continue }
+            let duration = player.currentItem?.duration
+            let refreshedTime = refreshedResumeTime(cachedTime: cachedState.time, player: player, duration: duration)
+            let canResume = isUsableResumeTime(refreshedTime, duration: duration)
+            let wasPlaying = (cachedState.wasPlaying || player.rate > 0 || player.timeControlStatus == .playing) && canResume
+
+            let identifier = ObjectIdentifier(player)
+            if releasedPlayers.insert(identifier).inserted {
+                player.pause()
+                player.rate = 0
+                player.currentItem?.asset.cancelLoading()
+                player.replaceCurrentItem(with: nil)
+            }
+
+            playbackOnlyCache[mid] = (
+                player: nil,
+                time: canResume ? refreshedTime : .zero,
+                wasPlaying: wasPlaying,
+                originalMuteState: cachedState.originalMuteState,
+                timestamp: Date()
+            )
+        }
+
+        cache = playbackOnlyCache
         visibleVideoMids.removeAll()
         stoppedByCoordinatorMids.removeAll()
+    }
+
+    private func refreshedResumeTime(cachedTime: CMTime, player: AVPlayer, duration: CMTime?) -> CMTime {
+        let playerTime = player.currentTime()
+        if isUsableResumeTime(playerTime, duration: duration) {
+            return playerTime
+        }
+        if isUsableResumeTime(cachedTime, duration: duration) {
+            return cachedTime
+        }
+        return cachedTime.isValid && cachedTime.seconds.isFinite ? cachedTime : .zero
+    }
+
+    private func isUsableResumeTime(_ time: CMTime, duration: CMTime?) -> Bool {
+        guard time.isValid,
+              time.seconds.isFinite,
+              time.seconds > 0.25 else {
+            return false
+        }
+
+        guard let duration,
+              duration.isValid,
+              !duration.isIndefinite,
+              duration.seconds.isFinite,
+              duration.seconds > 0 else {
+            return true
+        }
+
+        return duration.seconds - time.seconds > 5.0
     }
     
     /// Clear stale cached states (older than expiration interval)

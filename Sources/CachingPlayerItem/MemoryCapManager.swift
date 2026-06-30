@@ -286,13 +286,13 @@ class MemoryCapManager {
         logger.info("Performing background memory release at \(beforeMB, privacy: .public)MB")
 
         GlobalImageLoadManager.shared.prepareForBackground()
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
         SharedAssetCache.shared.releaseForBackground()
         LocalHTTPServer.shared.stopImmediatelyForBackground()
         ImageCacheManager.shared.clearMemoryCache()
         SDImageCache.shared.clearMemory()
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
-        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
 
         updateMemoryUsage()
         let afterMB = currentMemoryUsage / (1024 * 1024)

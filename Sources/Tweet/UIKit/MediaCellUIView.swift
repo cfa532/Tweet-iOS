@@ -5641,25 +5641,27 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     /// Release foreground media state before the global background cleanup runs.
     /// Video cells keep a poster, and image cells keep only a small cover image for the app switcher.
-    func prepareForBackground() {
+    func prepareForBackground(aggressive: Bool = false) {
         if isVideoAttachment {
-            prepareVideoForBackground()
+            prepareVideoForBackground(aggressive: aggressive)
         } else if attachment?.type == .image {
             prepareImageForBackground()
         }
     }
 
-    /// Save playback state, cover the cell with a poster, and release local player state.
-    /// Background cleanup drops every AVPlayer; the onscreen snapshot should be an image.
-    private func prepareVideoForBackground() {
+    /// Save playback state and cover the cell with a poster.
+    /// Short backgrounds keep the player attached for quick resume; aggressive
+    /// cleanup tears down the local player before global AVPlayer release.
+    private func prepareVideoForBackground(aggressive: Bool) {
         guard isVideoAttachment, isVisible else { return }
-        guard videoCellState == .playing || videoCellState == .paused || videoCellState == .playerReady else { return }
+        guard aggressive || videoCellState == .playing || videoCellState == .paused || videoCellState == .playerReady else { return }
+        guard !aggressive || player != nil || setupPlayerTask != nil else { return }
         guard let mid = attachment?.mid else { return }
 
         if let player {
             saveCurrentPosition(player: player, wasPlaying: player.rate > 0 || coordinatorWantsToPlay)
             player.pause()
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = !aggressive
         }
 
         let didCaptureCover = preserveReleaseCoverForCurrentVideo(reason: "background", showCover: true)
@@ -5673,6 +5675,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             videoPlayerView.isHidden = false
             hideImageViewImmediately()
         }
+
+        guard aggressive else {
+            cancelDelayedPrimarySpinner()
+            loadingSpinner.stopAnimating()
+            return
+        }
+
         coordinatorWantsToPlay = false
         playbackStartupRecoveryTask?.cancel()
         playbackStartupRecoveryTask = nil
@@ -5722,7 +5731,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return
         }
 
-        guard videoCellState == .playerLoading ||
+        let isHeldBackgroundCover = videoCellState == .thumbnail
+            && isHoldingBackgroundVideoCover
+            && backgroundVideoCoverMid == attachment?.mid
+        guard isHeldBackgroundCover ||
+              videoCellState == .playerLoading ||
               videoCellState == .playerReady ||
               videoCellState == .paused ||
               videoCellState == .playing else { return }
@@ -5735,6 +5748,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             )
             return
         }
+        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
 
         let didSettleCachedPlayer = settleForegroundCachedPlayerIfReady(player, reason: "foreground-layer-start")
 

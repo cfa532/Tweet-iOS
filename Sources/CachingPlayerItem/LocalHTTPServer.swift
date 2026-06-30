@@ -1426,6 +1426,12 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func handleRequest(_ request: String, connection: NWConnection, completion: @escaping () -> Void) async {
+        guard isRunning else {
+            connection.cancel()
+            completion()
+            return
+        }
+
         let lines = request.components(separatedBy: .newlines)
         guard let firstLine = lines.first else {
             completion()
