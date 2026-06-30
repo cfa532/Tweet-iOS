@@ -212,29 +212,39 @@ final class BlackList: @unchecked Sendable {
         }
     }
     
-    /// Save blacklist data to UserDefaults first, then mirror to iCloud as backup
-    /// UserDefaults is the authoritative store; iCloud is best-effort backup
+    /// Save blacklist data to UserDefaults first, then mirror to iCloud as backup.
+    /// UserDefaults is the authoritative store; iCloud is best-effort backup.
+    ///
+    /// Snapshots are taken under the caller's barrier (cheap, consistent), then the
+    /// encode + UserDefaults write run on a utility queue. Previously the encode and
+    /// UserDefaults.set ran synchronously while holding the reader/writer barrier;
+    /// once the UI stopped freezing, video/image loads began firing recordFailure
+    /// from many threads at once, contending that lock and trapping
+    /// (EXC_BREAKPOINT) inside UserDefaults.set.
+    /// Persist blacklist + candidates to UserDefaults.
+    ///
+    /// The encode + write MUST run on the main thread. A previous version ran them on a
+    /// background `@Sendable` `DispatchQueue.global` queue; once the feed stopped freezing
+    /// and video/image loads began firing `recordFailure` from many threads, that
+    /// background write trapped with `EXC_BREAKPOINT` inside `UserDefaults.set`. This was
+    /// not heap corruption (Address/Thread Sanitizer found nothing; disabling persistence
+    /// fully fixed the app with no other crashes) — empirically a background-thread
+    /// `UserDefaults` write in this Swift 6 target. Main-thread writes are stable and are
+    /// the canonical pattern. Snapshots are still taken under the caller's reader/writer
+    /// barrier so the encoded view is consistent.
     private func saveToStorageLocked() {
         let blacklistArray = Array(blacklist).map { $0 }
         let candidatesArray = Array(candidates.values)
-        
-        // Encode data
-        guard let blacklistData = try? JSONEncoder().encode(blacklistArray),
-              let candidatesData = try? JSONEncoder().encode(candidatesArray) else {
-            print("[BlackList] Failed to encode data for storage")
-            return
+
+        DispatchQueue.main.async {
+            guard let blacklistData = try? JSONEncoder().encode(blacklistArray),
+                  let candidatesData = try? JSONEncoder().encode(candidatesArray) else {
+                print("[BlackList] Failed to encode data for storage")
+                return
+            }
+            UserDefaults.standard.set(blacklistData, forKey: "BlackList.blacklist")
+            UserDefaults.standard.set(candidatesData, forKey: "BlackList.candidates")
         }
-        
-        // Save to UserDefaults first (authoritative)
-        let localStore = UserDefaults.standard
-        localStore.set(blacklistData, forKey: "BlackList.blacklist")
-        localStore.set(candidatesData, forKey: "BlackList.candidates")
-        
-        // Mirror to iCloud as backup (best-effort; survives reinstallation)
-        guard let iCloudStore = iCloudStoreIfAvailable() else { return }
-        iCloudStore.set(blacklistData, forKey: "BlackList.blacklist")
-        iCloudStore.set(candidatesData, forKey: "BlackList.candidates")
-        iCloudStore.synchronize()
     }
 }
 

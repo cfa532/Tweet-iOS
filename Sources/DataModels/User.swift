@@ -19,13 +19,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     @Published var mid: MimeiId
     @Published var baseUrl: URL? {
         didSet {
-            let userId = mid
-            Task { @MainActor in
-                if baseUrl != oldValue {
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if baseUrl != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
@@ -37,13 +32,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     @Published var password: String?
     @Published var avatar: MimeiId? {
         didSet {
-            let userId = mid
-            Task { @MainActor in
-                if avatar != oldValue {
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if avatar != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
@@ -56,121 +46,41 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     
     @Published var tweetCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = tweetCount, count < 0 {
-                tweetCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when tweetCount changes
-                if let newValue = tweetCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.tweetCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = tweetCount, count < 0 { tweetCount = 0; return }
+            if tweetCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var followingCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = followingCount, count < 0 {
-                followingCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when followingCount changes
-                if let newValue = followingCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.followingCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = followingCount, count < 0 { followingCount = 0; return }
+            if followingCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var followersCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = followersCount, count < 0 {
-                followersCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when followersCount changes
-                if let newValue = followersCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.followersCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = followersCount, count < 0 { followersCount = 0; return }
+            if followersCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var bookmarksCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = bookmarksCount, count < 0 {
-                bookmarksCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when bookmarksCount changes
-                if let newValue = bookmarksCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.bookmarksCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = bookmarksCount, count < 0 { bookmarksCount = 0; return }
+            if bookmarksCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var favoritesCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = favoritesCount, count < 0 {
-                favoritesCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when favoritesCount changes
-                if let newValue = favoritesCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.favoritesCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = favoritesCount, count < 0 { favoritesCount = 0; return }
+            if favoritesCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
@@ -248,37 +158,15 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     @Published var followingList: [MimeiId]? // List of MimeiId
     @Published var bookmarkedTweets: [MimeiId]? {
         didSet {
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when bookmarkedTweets changes
-                if bookmarkedTweets != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.bookmarkedTweets = bookmarkedTweets
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if bookmarkedTweets != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var favoriteTweets: [MimeiId]? {
         didSet {
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when favoriteTweets changes
-                if favoriteTweets != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.favoriteTweets = favoriteTweets
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if favoriteTweets != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
@@ -294,7 +182,27 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     }
     
     var id: String { mid }  // Computed property that returns mid
-    
+
+    /// Coalesces persistence of property changes into a single deferred `saveUser`.
+    ///
+    /// `mergeUserData` sets many @Published fields in one synchronous batch. Calling
+    /// `saveUser` inline from every didSet ran JSONEncoder + NSManagedObjectContext.perform
+    /// re-entrantly in each setter on the @MainActor, starving UI input and the video
+    /// coordinator during feed/appUser refresh. This defers the save to the next run-loop
+    /// tick and collapses a whole batch of property changes into a single cache write.
+    /// Only the app user is persisted (matches the previous guard).
+    private var persistScheduled = false
+    private func schedulePersistIfAppUser() {
+        guard mid == HproseInstance.shared.appUser.mid else { return }
+        guard !persistScheduled else { return }
+        persistScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.persistScheduled = false
+            TweetCacheManager.shared.saveUser(self)
+        }
+    }
+
     // MARK: - Initialization
     init(
         mid: MimeiId = Constants.GUEST_ID,

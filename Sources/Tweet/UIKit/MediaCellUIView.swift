@@ -1418,18 +1418,27 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func acquirePlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
-        guard isVisible else { return }
-        guard !deferVideoWorkUntilInfrastructureReady(reason: "acquirePlayer") else { return }
+        print("\(logPrefix) 🔍 acquirePlayer: enter isVisible=\(isVisible) independent=\(usesIndependentPlayerInstance) infra=\(AppDelegate.isVideoInfrastructureReady)")
+        guard isVisible else {
+            print("\(logPrefix) 🔍 acquirePlayer: → not visible")
+            return
+        }
+        guard !deferVideoWorkUntilInfrastructureReady(reason: "acquirePlayer") else {
+            print("\(logPrefix) 🔍 acquirePlayer: → deferred (infra not ready)")
+            return
+        }
 
         let mid = attachment.mid
 
         if usesIndependentPlayerInstance {
+            print("\(logPrefix) 🔍 acquirePlayer: → independent path")
             acquireIndependentPlayer(attachment: attachment, url: url, parentTweet: parentTweet)
             return
         }
 
         // TIER 1: Synchronous cache hit (VideoStateCache)
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            print("\(logPrefix) 🔍 acquirePlayer: → Tier1 VideoStateCache hit, itemNil=\(cachedState.player.currentItem == nil)")
             let cachedPlayer = cachedState.player
             cachedPlayer.isMuted = MuteState.shared.isMuted
 
@@ -1470,8 +1479,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         // TIER 2: Synchronous directional-preload cache hit
-        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
-           cachedPlayer.currentItem != nil {
+        let tier2Player = SharedAssetCache.shared.getCachedPlayer(for: mid)
+        print("\(logPrefix) 🔍 acquirePlayer: Tier2 check cachedPlayer=\(tier2Player != nil) itemNil=\(tier2Player?.currentItem == nil)")
+        if let cachedPlayer = tier2Player, cachedPlayer.currentItem != nil {
+            print("\(logPrefix) 🔍 acquirePlayer: → Tier2 SharedAssetCache hit")
             cachedPlayer.isMuted = MuteState.shared.isMuted
             if shouldRebuildCachedFeedPlayer(cachedPlayer, mid: mid, source: "SharedAssetCache") {
                 guard rebuildCachedFeedPlayer(cachedPlayer, mid: mid, reason: "SharedAssetCache cached player wedged") else { return }
@@ -1492,10 +1503,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         // TIER 3: Async loading
+        print("\(logPrefix) 🔍 acquirePlayer: → Tier3 async")
         acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
     }
 
     private func acquireIndependentPlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
+        print("\(logPrefix) 🔍 acquireIndependentPlayer: shouldAcquire=\(shouldAcquirePlayer)")
         guard shouldAcquirePlayer else { return }
         acquireIndependentPlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
     }
@@ -1720,6 +1733,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func acquirePlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
+        print("\(logPrefix) 🔍 acquirePlayerAsync: enter shouldAcquire=\(shouldAcquirePlayer)")
         guard shouldAcquirePlayer else { return }
 
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
@@ -1729,9 +1743,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let expectedMid = attachment.mid
 
         setupPlayerTask?.cancel()
+        let logPfx = logPrefix
+        print("\(logPfx) 🔍 acquirePlayerAsync: creating Task for \(expectedMid)")
         setupPlayerTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
+                if Task.isCancelled {
+                    print("\(logPfx) 🔍 acquirePlayerAsync Task: cancelled before start")
+                    return
+                }
                 try Task.checkCancellation()
+                print("\(logPfx) 🔍 acquirePlayerAsync Task: calling getOrCreatePlayer")
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
                     for: uniqueURL, mediaID: expectedMid, tweetId: tweetId, mediaType: mediaType
                 )

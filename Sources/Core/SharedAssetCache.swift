@@ -1413,6 +1413,7 @@ class SharedAssetCache: ObservableObject {
     /// Get cached player or create new one. Bandwidth is managed by NodeConnectionPool in
     /// LocalHTTPServer — no slot throttling needed here.
     func getOrCreatePlayer(for url: URL, mediaID explicitMediaID: String? = nil, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
+        print("🎥 [getOrCreatePlayer] REACHED for \(shortMID(explicitMediaID ?? "?"))")
         guard let mediaID = explicitMediaID ?? extractMediaID(from: url) else {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL"])
         }
@@ -1956,65 +1957,57 @@ class SharedAssetCache: ObservableObject {
     
     /// Check if we have cached HLS playlist locally (to avoid network requests for cached videos)
     private func checkCachedHLSPlaylist(for mediaID: String, baseURL: URL) async -> URL? {
-        // Get the cache directory for this media
+        // Run all disk I/O off @MainActor so we don't block the main thread.
+        // Task.detached creates a real suspension point: @MainActor is released while
+        // the cooperative pool thread scans the cache directory and reads playlist files.
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-        
-        // Check if cache directory exists
-        guard FileManager.default.fileExists(atPath: mediaCacheDir.path) else {
-            return nil
-        }
-        
-        // Look for cached playlist files in order of preference
-        // Playlists may be in subdirectories like /720p, /480p, etc.
-        let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "playlist.m3u8", "_playlist.m3u8"]
-        
-        // Search recursively for playlists in subdirectories
-        guard let enumerator = FileManager.default.enumerator(
-            at: mediaCacheDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-        
-        // Collect all valid playlists found
-        var foundPlaylists: [(url: URL, name: String)] = []
-        
-        while let fileURL = enumerator.nextObject() as? URL {
-            let fileName = fileURL.lastPathComponent
-            
-            if possiblePlaylistNames.contains(fileName) {
-                // Validate that the cached playlist is not empty and contains valid content
-                if let data = try? Data(contentsOf: fileURL),
-                   let playlistString = String(data: data, encoding: .utf8) {
-                    
-                    // More lenient validation - just check for #EXTM3U header
-                    // Don't require .ts or .m3u8 in content since some playlists might use different formats
-                    if playlistString.contains("#EXTM3U") {
+        let mediaCacheDirPath = cacheDir.appendingPathComponent(mediaID).path
+        let baseURLAbsoluteString = baseURL.absoluteString
+        let shortId = shortMID(mediaID)
+
+        return await Task.detached(priority: .userInitiated) {
+            let mediaCacheDir = URL(fileURLWithPath: mediaCacheDirPath)
+
+            guard FileManager.default.fileExists(atPath: mediaCacheDirPath) else {
+                return nil
+            }
+
+            let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "playlist.m3u8", "_playlist.m3u8"]
+
+            guard let enumerator = FileManager.default.enumerator(
+                at: mediaCacheDir,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return nil
+            }
+
+            var foundPlaylists: [(url: URL, name: String)] = []
+
+            while let fileURL = enumerator.nextObject() as? URL {
+                let fileName = fileURL.lastPathComponent
+                if possiblePlaylistNames.contains(fileName) {
+                    if let data = try? Data(contentsOf: fileURL),
+                       let playlistString = String(data: data, encoding: .utf8),
+                       playlistString.contains("#EXTM3U") {
                         foundPlaylists.append((url: fileURL, name: fileName))
                     }
                 }
             }
-        }
-        
-        // Return the highest priority playlist found
-        for playlistName in possiblePlaylistNames {
-            if let found = foundPlaylists.first(where: { $0.name == playlistName }) {
-                // Remove underscore prefix from filename only (e.g., _master.m3u8 -> master.m3u8)
-                let cachedFileName = found.url.lastPathComponent
-                let fileName = cachedFileName.hasPrefix("_") ? String(cachedFileName.dropFirst()) : cachedFileName
 
-                // baseURL already contains the full path including mediaID (e.g., http://.../ipfs/QmHash)
-                // We just need to append the filename directly
-                let reconstructedURL = baseURL.appendingPathComponent(fileName)
-                print("🏁 [HLS PLAYLIST CACHE] \(shortMID(mediaID)) using cached \(fileName)")
-
-                return reconstructedURL
+            for playlistName in possiblePlaylistNames {
+                if let found = foundPlaylists.first(where: { $0.name == playlistName }) {
+                    let cachedFileName = found.url.lastPathComponent
+                    let fileName = cachedFileName.hasPrefix("_") ? String(cachedFileName.dropFirst()) : cachedFileName
+                    guard let baseURL = URL(string: baseURLAbsoluteString) else { return nil }
+                    let reconstructedURL = baseURL.appendingPathComponent(fileName)
+                    print("🏁 [HLS PLAYLIST CACHE] \(shortId) using cached \(fileName)")
+                    return reconstructedURL
+                }
             }
-        }
-        
-        return nil
+
+            return nil
+        }.value
     }
     
     /// Resolve HLS URL by racing the common playlist targets.

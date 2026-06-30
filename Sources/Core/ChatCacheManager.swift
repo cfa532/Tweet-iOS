@@ -319,12 +319,8 @@ extension ChatCacheManager {
     /// Delete media files associated with a chat message
     private func deleteMediaForChatMessage(_ message: ChatMessage) {
         guard let attachments = message.attachments else { return }
-        
-        var mediaIds: [String] = []
-        for attachment in attachments {
-            mediaIds.append(attachment.mid)
-        }
-        
+
+        let mediaIds: [String] = attachments.map { $0.mid }
         if mediaIds.isEmpty { return }
         
         print("DEBUG: [ChatCacheManager] Deleting \(mediaIds.count) media files for chat message \(message.id)")

@@ -675,6 +675,9 @@ class TweetCellContentView: UIView {
     private func requestAuthorRefreshIfNeeded(authorId: String, hproseInstance: HproseInstance) {
         guard Self.beginAuthorRefresh(authorId) else { return }
         Task(priority: .background) {
+            // Yield before the first @MainActor hop so the initial render frame
+            // and UIKit event processing can complete before background refreshes pile on.
+            await Task.yield()
             _ = try? await hproseInstance.fetchUser(authorId)
             Self.endAuthorRefresh(authorId)
         }

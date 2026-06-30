@@ -26,6 +26,11 @@ class AppState: ObservableObject {
         canShowCachedContent = true
         isLoading = false
 
+        // Yield so SwiftUI can process the isLoading=false state change and paint
+        // ContentView before initAppEntry starts making @MainActor calls (fetchUser
+        // hops back to @MainActor repeatedly and would otherwise delay the first paint).
+        await Task.yield()
+
         // Continue with full network initialization off the first paint path.
         Task.detached(priority: .userInitiated) {
             do {

@@ -2851,8 +2851,13 @@ final class HproseInstance: ObservableObject {
         guard let client = user.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
-        let rawResponse = client.invoke("runMApp", withArgs: [entry.rawValue, params])
+
+        // Route the synchronous hprose invoke through invokeRunMApp so it runs on a
+        // background queue. getListByType reads @MainActor User properties (user.mid /
+        // user.hproseClient) and is therefore @MainActor-isolated; calling client.invoke
+        // directly here blocked the main thread until the server replied, freezing the UI
+        // and stranding every other @MainActor continuation (feed fetch, video setup).
+        let rawResponse = await invokeRunMApp(using: client, entry: entry.rawValue, params: params)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -2898,11 +2903,11 @@ final class HproseInstance: ObservableObject {
             }
             
             attemptedBaseUrl = user.baseUrl?.absoluteString
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
+
             // Unwrap v2 response
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
+
             // Handle empty array case - server returns empty array when user has no followings
             let response: [[String: Any]]
             if let arrayResponse = unwrappedResponse as? [[String: Any]] {
@@ -2993,9 +2998,9 @@ final class HproseInstance: ObservableObject {
             }
             
             attemptedBaseUrl = user.baseUrl?.absoluteString
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
+
             // Handle empty array case - server returns empty array when user has no fans
             let response: [[String: Any]]
             if let arrayResponse = unwrappedResponse as? [[String: Any]] {

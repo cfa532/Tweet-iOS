@@ -537,14 +537,16 @@ extension TweetCacheManager {
             return
         }
 
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        guard let tweetData = try? encoder.encode(record) else {
-            print("ERROR: [TweetCacheManager] Failed to encode tweet record \(tweetId), skipping cache")
-            return
-        }
-        
+        // JSON encoding is moved inside context.perform so it runs on the CoreData
+        // background queue rather than on @MainActor, preventing startup freezes when
+        // saveTweet is called in a tight loop for many tweets.
         context.perform {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            guard let tweetData = try? encoder.encode(record) else {
+                print("ERROR: [TweetCacheManager] Failed to encode tweet record \(tweetId), skipping cache")
+                return
+            }
             // A tweet can belong to multiple cached lists at the same time: main feed,
             // the author's profile, bookmarks, favorites, etc. Keep list membership
             // keyed by (tweet id, cache key) so saving one list does not move the tweet
@@ -877,15 +879,13 @@ extension Tweet {
 /// Might need to update baseUrl of cached user, which might be outdated.
 extension TweetCacheManager {
     func fetchUser(mid: String) async -> User {
-        let fallbackUser = await MainActor.run {
-            UserStore.shared.user(mid: mid)
-        }
-
-        if let userSingleton = await MainActor.run(body: { () -> User? in
+        // Single @MainActor hop for the fast path: returns immediately if singleton has a username.
+        let (fallbackUser, cachedSingleton) = await MainActor.run {
             let user = UserStore.shared.user(mid: mid)
-            return user.username != nil ? user : nil
-        }) {
-            return userSingleton
+            return (user, user.username != nil ? user : nil)
+        }
+        if let cachedSingleton {
+            return cachedSingleton
         }
 
         let cachedRecord = await withCheckedContinuation { (continuation: CheckedContinuation<UserRecord?, Never>) in
