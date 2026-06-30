@@ -18,6 +18,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     // Track ongoing infrastructure restart to prevent overlapping restarts
     private var infrastructureRestartTask: Task<Void, Never>?
+    private var isRecoveringVideoInfrastructure = false
     private var isRestartingInfrastructure = false
 
     private var backgroundCleanupTask: UIBackgroundTaskIdentifier = .invalid
@@ -570,11 +571,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 let timeInactive = Date().timeIntervalSince(resignActiveDate)
                 print("[AppDelegate] Screen lock recovery detected - inactive for \(Int(timeInactive))s")
                 
-                AppDelegate.isVideoInfrastructureReady = false
-                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                    let kind = timeInactive > 300 ? "long" : "short"
-                    await self.recoverVideoInfrastructureAfterForeground(reason: "\(kind) screen lock \(Int(timeInactive))s")
-                }
+                let kind = timeInactive > 300 ? "long" : "short"
+                scheduleVideoInfrastructureRecovery(reason: "\(kind) screen lock \(Int(timeInactive))s")
             }
         }
         
@@ -702,11 +700,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             if didLaunchInBackground {
                 print("⚠️ [AppDelegate] Background-launched app entered foreground without timestamp - running foreground recovery")
                 didLaunchInBackground = false
-                AppDelegate.isVideoInfrastructureReady = false
                 scheduleMainFeedCheckAfterForegroundReturn()
-                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                    await self.recoverVideoInfrastructureAfterForeground(reason: "foreground after background launch without timestamp")
-                }
+                scheduleVideoInfrastructureRecovery(reason: "foreground after background launch without timestamp")
                 Task {
                     print("[AppDelegate] 📬 Checking for new messages on foreground return")
                     await checkMessagesForBadgeOnly()
@@ -743,10 +738,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
             if timeInBackground < 300 {
                 print("⚡ [AppDelegate] Fast recovery (\(timeInBackground)s) — checking proxy health")
-                AppDelegate.isVideoInfrastructureReady = false
-                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                    await self.recoverVideoInfrastructureAfterForeground(reason: "fast foreground \(timeInBackground)s")
-                }
+                scheduleVideoInfrastructureRecovery(reason: "fast foreground \(timeInBackground)s")
 
                 // Refresh IP and check messages in background (non-blocking)
                 Task {
@@ -774,18 +766,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
         if timeInBackground > 300 {  // 5 minutes
             print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - checking proxy health")
-            AppDelegate.isVideoInfrastructureReady = false
-            infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                await self.recoverVideoInfrastructureAfterForeground(reason: "long foreground \(Int(timeInBackground))s")
-            }
+            scheduleVideoInfrastructureRecovery(reason: "long foreground \(Int(timeInBackground))s")
         } else {
             // SHORT background (<5min) but aggressive cleanup happened
             print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - recovery after aggressive cleanup")
 
-            AppDelegate.isVideoInfrastructureReady = false
-            infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                await self.recoverVideoInfrastructureAfterForeground(reason: "short foreground after cleanup \(Int(timeInBackground))s")
-            }
+            scheduleVideoInfrastructureRecovery(reason: "short foreground after cleanup \(Int(timeInBackground))s")
         }
 
         // Check for new messages when returning to foreground (only updates badge, no notifications)
@@ -805,6 +791,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             }
         }
         print("[AppDelegate] Scheduled foreground main feed get_tweet_feed check")
+    }
+
+    private func scheduleVideoInfrastructureRecovery(reason: String) {
+        guard !isRecoveringVideoInfrastructure else {
+            print("[AppDelegate] Video infrastructure recovery already in progress; skipping \(reason)")
+            return
+        }
+
+        isRecoveringVideoInfrastructure = true
+        AppDelegate.isVideoInfrastructureReady = false
+        infrastructureRestartTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            await self.recoverVideoInfrastructureAfterForeground(reason: reason)
+            await MainActor.run {
+                self.isRecoveringVideoInfrastructure = false
+            }
+        }
     }
     
     /// Refresh appUser's provider IP when app returns from background
