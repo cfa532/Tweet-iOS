@@ -7,16 +7,15 @@
 import SwiftUI
 
 // MARK: - Global Mute State
+@MainActor
 class MuteState: ObservableObject {
     static let shared = MuteState()
     @Published var isMuted: Bool = true { // Default to muted (matches PreferenceHelper default)
         didSet {
-            Task { @MainActor in
-                // Save to preferences whenever the mute state changes
-                if oldValue != isMuted {
-                    HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
-                    print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
-                }
+            // Save to preferences whenever the mute state changes
+            if oldValue != isMuted {
+                HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
+                print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
             }
         }
     }
@@ -57,10 +56,8 @@ class MuteState: ObservableObject {
         }
         
         if self.isMuted != newMuteState {
-            DispatchQueue.main.async {
-                self.isMuted = newMuteState
-                print("DEBUG: [MUTE STATE] Synced from UserDefaults change: \(newMuteState)")
-            }
+            self.isMuted = newMuteState
+            print("DEBUG: [MUTE STATE] Synced from UserDefaults change: \(newMuteState)")
         }
     }
     

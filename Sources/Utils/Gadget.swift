@@ -22,7 +22,7 @@ extension String {
 }
 
 // MARK: - Gadget Utility
-class Gadget {
+final class Gadget: Sendable {
     static let shared = Gadget()
     
     private init() {}
@@ -226,11 +226,13 @@ class Gadget {
 
     /// TweetWeb uses `loginUser.username === 'admin'` for moderation UI.
     /// Here we also require non-App-Store install so App Store distribution hides it.
+    @MainActor
     static func isResearchAdminUser(_ user: User) -> Bool {
         user.username == "admin" && isNonAppStoreInstall
     }
 
     /// Delete menu: own tweet or (debug admin only) any tweet — matches TweetWeb corner menu rules.
+    @MainActor
     static func canShowTweetDeleteMenu(appUser: User, tweetAuthorId: String, allowDeleteAll: Bool) -> Bool {
         if tweetAuthorId == appUser.mid { return true }
         if allowDeleteAll { return true }

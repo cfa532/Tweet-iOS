@@ -203,14 +203,16 @@ struct SimpleAudioPlayer: View {
         let time = CMTime(seconds: 0.1, preferredTimescale: timeScale)
         
         timeObserver = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { time in
-            self.currentTime = time.seconds
-            
-            // Check if playback finished using helper function
-            if self.isAudioAtEnd() {
-                self.isPlaying = false
-                self.wantsPlayback = false
-                self.currentTime = 0
-                self.player?.seek(to: .zero)
+            MainActor.assumeIsolated {
+                self.currentTime = time.seconds
+                
+                // Check if playback finished using helper function
+                if self.isAudioAtEnd() {
+                    self.isPlaying = false
+                    self.wantsPlayback = false
+                    self.currentTime = 0
+                    self.player?.seek(to: .zero)
+                }
             }
         }
         
@@ -743,7 +745,9 @@ struct CompactAudioPlaylistPlayer: View {
         guard let player else { return }
         let interval = CMTime(seconds: 0.2, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            currentTime = time.seconds.isFinite ? time.seconds : 0
+            MainActor.assumeIsolated {
+                currentTime = time.seconds.isFinite ? time.seconds : 0
+            }
         }
     }
 

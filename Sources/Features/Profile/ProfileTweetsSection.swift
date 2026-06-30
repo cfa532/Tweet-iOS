@@ -2,7 +2,8 @@ import SwiftUI
 
 // MARK: - ProfileTweetsViewModel
 @available(iOS 16.0, *)
-class ProfileTweetsViewModel: ObservableObject {
+@MainActor
+final class ProfileTweetsViewModel: ObservableObject {
     @Published var tweets: [Tweet] = []
     @Published var isLoading: Bool = false
     private let hproseInstance: HproseInstance
@@ -35,15 +36,11 @@ class ProfileTweetsViewModel: ObservableObject {
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
         do {
-            let hproseInstance = hproseInstance
-            let user = user
-            let serverTweets = try await Task.detached(priority: .utility) {
-                try await hproseInstance.fetchUserTweets(
-                    user: user,
-                    pageNumber: page,
-                    pageSize: pageSize
-                )
-            }.value
+            let serverTweets = try await hproseInstance.fetchUserTweets(
+                user: user,
+                pageNumber: page,
+                pageSize: pageSize
+            )
             
             // Preserve backend page length for pagination; nil entries are non-renderable.
             let filteredTweets: [Tweet?] = serverTweets.map { (tweet: Tweet?) -> Tweet? in
@@ -110,7 +107,7 @@ class ProfileTweetsViewModel: ObservableObject {
 }
 
 private struct TweetListScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }

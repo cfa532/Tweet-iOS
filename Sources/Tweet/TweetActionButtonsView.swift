@@ -15,6 +15,14 @@ struct ShareSheetData: Identifiable {
     let items: [Any]
 }
 
+struct SharePreviewMetadata {
+    let tweetId: String
+    let title: String?
+    let content: String?
+    let attachmentText: String
+    let attachmentCount: Int
+}
+
 // Global function to format count with abbreviations
 func formatCount(_ count: Int) -> String {
     if count < 1000 {
@@ -49,6 +57,7 @@ func formatCount(_ count: Int) -> String {
 }
 
 // Global function to compose attachment type text
+@MainActor
 func composeAttachmentTypeText(for tweet: Tweet) -> String {
     // Get attachments from the tweet or its original tweet
     var attachments: [MimeiFileType]?
@@ -642,7 +651,11 @@ struct TweetActionButtonsView: View {
 
     private func createCustomShareItem() -> CustomShareItem {
         let shareText = tweetShareText(tweet)
-        return CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
+        return CustomShareItem(
+            shareText: shareText,
+            metadata: sharePreviewMetadata(for: tweet),
+            previewImage: attachmentPreviewImage
+        )
     }
     
     private func shareActivityItems() -> [Any] {
@@ -680,13 +693,13 @@ struct TweetActionButtonsView: View {
             object: nil,
             queue: .main
         ) { _ in
-            // Only reload if share sheet is currently active
-            guard self.shareSheetItems != nil else { return }
-            
-            print("DEBUG: [SHARE] App returned to foreground with share sheet active - checking resources")
-            
-            // Check if preview image was released by system
             Task { @MainActor in
+                // Only reload if share sheet is currently active
+                guard self.shareSheetItems != nil else { return }
+
+                print("DEBUG: [SHARE] App returned to foreground with share sheet active - checking resources")
+
+                // Check if preview image was released by system
                 // If preview image is nil but we had one before (share sheet is showing), regenerate it
                 if self.attachmentPreviewImage == nil {
                     print("DEBUG: [SHARE] Preview image was released - regenerating")
@@ -1049,11 +1062,9 @@ struct TweetActionButtonsView: View {
             let mediaType: MediaType = isHLS ? .hls_video : .video
             let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mediaID, tweetId: tweet.mid, mediaType: mediaType)
             
-            // Load duration and tracks to ensure video is ready
-            async let durationLoad = asset.load(.duration)
-            async let tracksLoad = asset.load(.tracks)
-            
-            let (duration, tracks) = try await (durationLoad, tracksLoad)
+            // AVAsset is non-Sendable, so keep property loading sequential.
+            let duration = try await asset.load(.duration)
+            let tracks = try await asset.load(.tracks)
             let durationSeconds = CMTimeGetSeconds(duration)
             
             print("DEBUG: [SHARE] Video duration: \(durationSeconds)s, tracks: \(tracks.count)")
@@ -1507,6 +1518,23 @@ struct TweetActionButtonsView: View {
             return typeTexts.joined(separator: ", ")
         }
     }
+
+    private func sharePreviewMetadata(for tweet: Tweet) -> SharePreviewMetadata {
+        var attachmentCount = tweet.attachments?.count ?? 0
+        if attachmentCount == 0,
+           let originalTweetId = tweet.originalTweetId,
+           let original = Tweet.getInstance(for: originalTweetId) {
+            attachmentCount = original.attachments?.count ?? 0
+        }
+
+        return SharePreviewMetadata(
+            tweetId: "\(tweet.mid)",
+            title: tweet.title,
+            content: tweet.content,
+            attachmentText: composeAttachmentTypeText(for: tweet),
+            attachmentCount: attachmentCount
+        )
+    }
     
     /// Get an IPv4-preferred baseUrl for sharing from detail view
     /// If the current baseUrl is IPv6, resolves IPv4 via getProviderIP and updates user's baseUrl
@@ -1640,16 +1668,38 @@ struct ShareSheetView: UIViewControllerRepresentable {
     }
 }
 
-class CustomShareItem: NSObject, UIActivityItemSource {
+final class CustomShareItem: NSObject, UIActivityItemSource {
     let shareText: String
-    let tweet: Tweet
+    let metadata: SharePreviewMetadata
     let previewImage: UIImage?
     
-    init(shareText: String, tweet: Tweet, previewImage: UIImage?) {
+    init(shareText: String, metadata: SharePreviewMetadata, previewImage: UIImage?) {
         self.shareText = shareText
-        self.tweet = tweet
+        self.metadata = metadata
         self.previewImage = previewImage
         super.init()
+    }
+
+    @MainActor
+    convenience init(shareText: String, tweet: Tweet, previewImage: UIImage?) {
+        var attachmentCount = tweet.attachments?.count ?? 0
+        if attachmentCount == 0,
+           let originalTweetId = tweet.originalTweetId,
+           let original = Tweet.getInstance(for: originalTweetId) {
+            attachmentCount = original.attachments?.count ?? 0
+        }
+
+        self.init(
+            shareText: shareText,
+            metadata: SharePreviewMetadata(
+                tweetId: "\(tweet.mid)",
+                title: tweet.title,
+                content: tweet.content,
+                attachmentText: composeAttachmentTypeText(for: tweet),
+                attachmentCount: attachmentCount
+            ),
+            previewImage: previewImage
+        )
     }
     
     func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
@@ -1665,13 +1715,13 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         var previewText = ""
         
         // Priority: title > content > attachment types
-        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let title = metadata.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use title if available
             let maxLength = 40
             let truncatedTitle = title.count > maxLength ? String(title.prefix(maxLength)) + "..." : title
             previewText = truncatedTitle
             print("DEBUG: [SHARE] Subject from title: \(truncatedTitle)")
-        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        } else if let content = metadata.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use content if title is not available
             let maxLength = 40
             // Replace newlines with spaces in the content
@@ -1681,7 +1731,7 @@ class CustomShareItem: NSObject, UIActivityItemSource {
             print("DEBUG: [SHARE] Subject from content: \(truncatedContent)")
         } else {
             // No title or content, use attachment types
-            previewText = composeAttachmentTypeText(for: tweet)
+            previewText = metadata.attachmentText
             print("DEBUG: [SHARE] Subject from attachments: '\(previewText)'")
         }
         
@@ -1698,41 +1748,42 @@ class CustomShareItem: NSObject, UIActivityItemSource {
     
     @available(iOS 13.0, *)
     func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
-        let metadata = LPLinkMetadata()
+        let shareMetadata = metadata
+        let linkMetadata = LPLinkMetadata()
 
         // Extract URL from shareText for metadata — required for share sheet to display icon
         if let range = shareText.range(of: "http", options: .backwards),
            let url = URL(string: String(shareText[range.lowerBound...])) {
-            metadata.url = url
+            linkMetadata.url = url
         }
 
-        print("DEBUG: [SHARE] Creating link metadata for tweet: \(tweet.mid)")
-        print("DEBUG: [SHARE] Tweet title: '\(tweet.title ?? "nil")'")
-        print("DEBUG: [SHARE] Tweet content: '\(tweet.content ?? "nil")'")
-        print("DEBUG: [SHARE] Tweet attachments count: \(tweet.attachments?.count ?? 0)")
+        print("DEBUG: [SHARE] Creating link metadata for tweet: \(shareMetadata.tweetId)")
+        print("DEBUG: [SHARE] Tweet title: '\(shareMetadata.title ?? "nil")'")
+        print("DEBUG: [SHARE] Tweet content: '\(shareMetadata.content ?? "nil")'")
+        print("DEBUG: [SHARE] Tweet attachments count: \(shareMetadata.attachmentCount)")
         
         // Set the title
-        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            metadata.title = title
+        if let title = shareMetadata.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            linkMetadata.title = title
             print("DEBUG: [SHARE] Link metadata title from tweet title: \(title)")
-        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        } else if let content = shareMetadata.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let maxLength = 80
             let cleanedContent = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
             let truncated = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
-            metadata.title = truncated
+            linkMetadata.title = truncated
             print("DEBUG: [SHARE] Link metadata title from tweet content: \(truncated)")
         } else {
             // No title or content, compose from first 3 attachment types
-            let attachmentText = composeAttachmentTypeText(for: tweet)
-            metadata.title = attachmentText.isEmpty ? nil : attachmentText
+            let attachmentText = shareMetadata.attachmentText
+            linkMetadata.title = attachmentText.isEmpty ? nil : attachmentText
             print("DEBUG: [SHARE] Link metadata title from attachments: '\(attachmentText)'")
-            print("DEBUG: [SHARE] Final metadata.title value: '\(metadata.title ?? "nil")'")
+            print("DEBUG: [SHARE] Final metadata.title value: '\(linkMetadata.title ?? "nil")'")
         }
         
         // Set the icon/thumbnail image
         if let previewImage = previewImage {
-            metadata.iconProvider = NSItemProvider(object: previewImage)
-            metadata.imageProvider = NSItemProvider(object: previewImage)
+            linkMetadata.iconProvider = NSItemProvider(object: previewImage)
+            linkMetadata.imageProvider = NSItemProvider(object: previewImage)
             print("DEBUG: [SHARE] Link metadata created with preview image")
         } else if let appIcon = UIImage(named: "ic_splash_r") {
             // No attachments - use app icon as default
@@ -1745,12 +1796,12 @@ class CustomShareItem: NSObject, UIActivityItemSource {
             appIcon.draw(in: CGRect(origin: .zero, size: size))
             opaqueIcon = UIGraphicsGetImageFromCurrentImageContext() ?? appIcon
             UIGraphicsEndImageContext()
-            metadata.iconProvider = NSItemProvider(object: opaqueIcon)
-            metadata.imageProvider = NSItemProvider(object: opaqueIcon)
+            linkMetadata.iconProvider = NSItemProvider(object: opaqueIcon)
+            linkMetadata.imageProvider = NSItemProvider(object: opaqueIcon)
             print("DEBUG: [SHARE] Link metadata created with app icon fallback (no attachments)")
         }
         
-        return metadata
+        return linkMetadata
     }
 }
 

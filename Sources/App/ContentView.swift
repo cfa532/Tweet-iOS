@@ -350,7 +350,9 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { _ in
-                self.openMainFeedAndShowNewTweets()
+                MainActor.assumeIsolated {
+                    self.openMainFeedAndShowNewTweets()
+                }
             }
         )
 
@@ -360,13 +362,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                MainActor.assumeIsolated {
+                    if let message {
                     self.toastMessage = message
                     self.toastType = .success
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -379,15 +386,20 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String,
-                   let typeString = notification.userInfo?["type"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                let typeString = notification.userInfo?["type"] as? String
+                MainActor.assumeIsolated {
+                    if let message, let typeString {
                     self.toastMessage = message
                     self.toastType = typeString == "error" ? .error : .success
                     self.showToast = true
                     
                     let delay = typeString == "error" ? 5.0 : 2.0
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -400,12 +412,14 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let isVisible = notification.userInfo?["isVisible"] as? Bool {
+                let isVisible = notification.userInfo?["isVisible"] as? Bool
+                let hideHeight = notification.userInfo?["hideHeight"] as? Bool ?? false
+                let animated = notification.userInfo?["animated"] as? Bool ?? true
+                MainActor.assumeIsolated {
+                    if let isVisible {
                     guard self.isNavigationVisible != isVisible else { return }
                     
                     // Check if TweetDetailView wants height hidden (only affects TweetDetailView)
-                    let hideHeight = notification.userInfo?["hideHeight"] as? Bool ?? false
-                    let animated = notification.userInfo?["animated"] as? Bool ?? true
                     
                     print("[ContentView] Navigation visibility changed to: \(isVisible), hideHeight: \(hideHeight)")
                     if animated {
@@ -423,8 +437,11 @@ struct ContentView: View {
                             self.shouldHideHeight = hideHeight && !isVisible // Only hide height when hidden and flag is set
                         }
                         DispatchQueue.main.async {
-                            self.animateNavigationVisibility = true
+                            MainActor.assumeIsolated {
+                                self.animateNavigationVisibility = true
+                            }
                         }
+                    }
                     }
                 }
             }
@@ -437,13 +454,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if notification.userInfo?["tweet"] is Tweet {
+                let hasTweet = notification.userInfo?["tweet"] is Tweet
+                MainActor.assumeIsolated {
+                    if hasTweet {
                     self.toastMessage = NSLocalizedString("Tweet posted successfully", comment: "Tweet upload success")
                     self.toastType = .success
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -456,13 +478,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if notification.userInfo?["comment"] is Tweet {
+                let hasComment = notification.userInfo?["comment"] is Tweet
+                MainActor.assumeIsolated {
+                    if hasComment {
                     self.toastMessage = NSLocalizedString("Comment posted successfully", comment: "Comment upload success")
                     self.toastType = .success
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -475,13 +502,20 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let error = notification.userInfo?["error"] as? Error {
-                    self.toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                let errorMessage = (notification.userInfo?["error"] as? Error).map {
+                    ErrorMessageHelper.userFriendlyMessage(from: $0)
+                }
+                MainActor.assumeIsolated {
+                    if let errorMessage {
+                    self.toastMessage = errorMessage
                     self.toastType = .error
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -494,17 +528,27 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                guard let error = notification.object as? NSError,
-                      error.domain == "TweetDeletion" else {
-                    return
+                let deletionErrorMessage: String?
+                if let error = notification.object as? NSError,
+                   error.domain == "TweetDeletion" {
+                    deletionErrorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                } else {
+                    deletionErrorMessage = nil
                 }
+                MainActor.assumeIsolated {
+                    guard let deletionErrorMessage else {
+                        return
+                    }
 
-                self.toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
-                self.toastType = .error
-                self.showToast = true
+                    self.toastMessage = deletionErrorMessage
+                    self.toastType = .error
+                    self.showToast = true
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                    withAnimation { self.showToast = false }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                 }
             }
         )
@@ -516,13 +560,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                MainActor.assumeIsolated {
+                    if let message {
                     self.toastMessage = message
                     self.toastType = .warning
                     self.showToast = true
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -535,13 +584,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                MainActor.assumeIsolated {
+                    if let message {
                     self.toastMessage = message
                     self.toastType = .warning
                     self.showToast = true
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -554,8 +608,10 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let memoryMB = notification.userInfo?["memoryMB"] as? UInt64,
-                   let severity = notification.userInfo?["severity"] as? String {
+                let memoryMB = notification.userInfo?["memoryMB"] as? UInt64
+                let severity = notification.userInfo?["severity"] as? String
+                MainActor.assumeIsolated {
+                    if let memoryMB, let severity {
                     
                     let memoryGB = String(format: "%.1f", Double(memoryMB) / 1024.0)
                     
@@ -569,7 +625,10 @@ struct ContentView: View {
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -582,8 +641,10 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { _ in
-                self.isNavigationVisible = true
-                self.checkForPendingUpload()
+                MainActor.assumeIsolated {
+                    self.isNavigationVisible = true
+                    self.checkForPendingUpload()
+                }
             }
         )
         
@@ -594,13 +655,15 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { _ in
-                guard self.hproseInstance.appUser.isGuest else { return }
-                guard self.navigationPath.isEmpty else { return }
-                guard let alphaId = Gadget.getAlphaIds().first else { return }
-                let alphaUser = User.getInstance(mid: alphaId)
-                guard alphaUser.username != nil else { return }
-                self.selectedTab = 0
-                self.navigationPath.append(alphaUser)
+                MainActor.assumeIsolated {
+                    guard self.hproseInstance.appUser.isGuest else { return }
+                    guard self.navigationPath.isEmpty else { return }
+                    guard let alphaId = Gadget.getAlphaIds().first else { return }
+                    let alphaUser = User.getInstance(mid: alphaId)
+                    guard alphaUser.username != nil else { return }
+                    self.selectedTab = 0
+                    self.navigationPath.append(alphaUser)
+                }
             }
         )
 
@@ -611,12 +674,15 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                print("[ContentView] ✅ Received deeplink notification")
-                if let url = notification.userInfo?["url"] as? URL {
-                    print("[ContentView] URL from notification: \(url.absoluteString)")
-                    self.handleDeeplink(url)
-                } else {
-                    print("[ContentView] ⚠️ No URL found in notification userInfo")
+                let url = notification.userInfo?["url"] as? URL
+                MainActor.assumeIsolated {
+                    print("[ContentView] ✅ Received deeplink notification")
+                    if let url {
+                        print("[ContentView] URL from notification: \(url.absoluteString)")
+                        self.handleDeeplink(url)
+                    } else {
+                        print("[ContentView] ⚠️ No URL found in notification userInfo")
+                    }
                 }
             }
         )
@@ -628,13 +694,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                MainActor.assumeIsolated {
+                    if let message {
                     self.toastMessage = message
                     self.toastType = .error
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -647,12 +718,14 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { _ in
-                self.selectedTab = 0
-                self.navigationPath = NavigationPath()
-                self.chatNavigationPath = NavigationPath()
-                self.isInChatScreen = false
-                self.isInProfileFromChat = false
-                NotificationCenter.default.post(name: .scrollToTop, object: nil)
+                MainActor.assumeIsolated {
+                    self.selectedTab = 0
+                    self.navigationPath = NavigationPath()
+                    self.chatNavigationPath = NavigationPath()
+                    self.isInChatScreen = false
+                    self.isInProfileFromChat = false
+                    NotificationCenter.default.post(name: .scrollToTop, object: nil)
+                }
             }
         )
     }

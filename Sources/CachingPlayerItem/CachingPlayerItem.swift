@@ -38,7 +38,8 @@ import Network
 public final class CachingPlayerItem: AVPlayerItem {
     private let cachingPlayerItemScheme = "cachingPlayerItemScheme"
 
-    private var resourceLoaderDelegate: ResourceLoaderDelegate?
+    private nonisolated(unsafe) var resourceLoaderDelegate: ResourceLoaderDelegate?
+    private nonisolated(unsafe) var resourceLoader: AVAssetResourceLoader?
     private let url: URL
     private let initialScheme: String?
     private let saveFilePath: String
@@ -49,7 +50,7 @@ public final class CachingPlayerItem: AVPlayerItem {
     internal var urlRequestHeaders: [String: String]?
     
     // Task management for proper cleanup
-    private var activeTasks: Set<Task<Void, Never>> = []
+    private nonisolated(unsafe) var activeTasks: Set<Task<Void, Never>> = []
 
     /// Useful for keeping relevant model associated with CachingPlayerItem instance. This is a **strong** reference, be mindful not to create a **retain cycle**.
     public var passOnObject: Any?
@@ -66,9 +67,7 @@ public final class CachingPlayerItem: AVPlayerItem {
         removeObservers()
         
         // Clean up resource loader delegate to prevent weak reference issues
-        if let urlAsset = asset as? AVURLAsset {
-            urlAsset.resourceLoader.setDelegate(nil, queue: nil)
-        }
+        resourceLoader?.setDelegate(nil, queue: nil)
 
         // Cancel download only for caching inits
         guard initialScheme != nil else { return }
@@ -90,7 +89,17 @@ public final class CachingPlayerItem: AVPlayerItem {
      - parameter url: URL referencing the media file.
      */
     public convenience init(url: URL) {
-        self.init(url: url, saveFilePath: Self.randomFilePath(withExtension: url.pathExtension), customFileExtension: nil, avUrlAssetOptions: nil)
+        self.init(nonCachingPlayerURL: url)
+    }
+
+    private nonisolated init(nonCachingPlayerURL url: URL) {
+        self.url = url
+        self.saveFilePath = ""
+        self.initialScheme = nil
+        self.isHLS = false
+        self.mediaID = nil
+        super.init(url: url)
+        addObservers()
     }
 
     /**
@@ -185,6 +194,7 @@ public final class CachingPlayerItem: AVPlayerItem {
         // HLS uses LocalHTTPServer directly (no intercept needed!)
         if useResourceLoaderDelegate {
             resourceLoaderDelegate = ResourceLoaderDelegate(url: url, mediaID: mediaID, saveFilePath: saveFilePath, owner: self)
+            resourceLoader = asset.resourceLoader
             asset.resourceLoader.setDelegate(resourceLoaderDelegate, queue: DispatchQueue.main)
             // Removed repetitive logs - logged only on errors
         } else {
@@ -326,7 +336,7 @@ public final class CachingPlayerItem: AVPlayerItem {
 
     // MARK: KVO
 
-    private var playerItemContext = 0
+    private nonisolated(unsafe) var playerItemContext = 0
 
     public override func observeValue(forKeyPath keyPath: String?,
                                of object: Any?,
@@ -372,12 +382,12 @@ public final class CachingPlayerItem: AVPlayerItem {
 
     // MARK: Private methods
 
-    private func addObservers() {
+    private nonisolated func addObservers() {
         addObserver(self, forKeyPath: #keyPath(AVPlayerItem.status), options: .new, context: &playerItemContext)
         NotificationCenter.default.addObserver(self, selector: #selector(playbackStalledHandler), name: .AVPlayerItemPlaybackStalled, object: self)
     }
 
-    private func removeObservers() {
+    private nonisolated func removeObservers() {
         removeObserver(self, forKeyPath: #keyPath(AVPlayerItem.status))
         NotificationCenter.default.removeObserver(self)
     }
@@ -387,7 +397,7 @@ public final class CachingPlayerItem: AVPlayerItem {
     }
 
     /// Generates a random file path in caches directory with the provided `fileExtension`.
-    private static func randomFilePath(withExtension fileExtension: String) -> String {
+    private nonisolated static func randomFilePath(withExtension fileExtension: String) -> String {
         guard var cachesDirectory = try? FileManager.default.url(for: .cachesDirectory,
                                                                  in: .userDomainMask,
                                                                  appropriateFor: nil,
@@ -403,7 +413,7 @@ public final class CachingPlayerItem: AVPlayerItem {
     }
     
     /// Generates a file path for HLS playlist in caches directory.
-    public static func hlsPlaylistPath(for mediaID: String) -> String {
+    public nonisolated static func hlsPlaylistPath(for mediaID: String) -> String {
         guard var cachesDirectory = try? FileManager.default.url(for: .cachesDirectory,
                                                                  in: .userDomainMask,
                                                                  appropriateFor: nil,
@@ -419,7 +429,7 @@ public final class CachingPlayerItem: AVPlayerItem {
     }
     
     /// Generates a directory path for HLS segments in caches directory.
-    public static func hlsSegmentsPath(for mediaID: String) -> String {
+    public nonisolated static func hlsSegmentsPath(for mediaID: String) -> String {
         guard var cachesDirectory = try? FileManager.default.url(for: .cachesDirectory,
                                                                  in: .userDomainMask,
                                                                  appropriateFor: nil,
@@ -439,7 +449,7 @@ public final class CachingPlayerItem: AVPlayerItem {
     
     
     /// Clear all cached HLS content for a specific mediaID
-    public static func clearHLSCache(for mediaID: String) {
+    public nonisolated static func clearHLSCache(for mediaID: String) {
         let playlistPath = hlsPlaylistPath(for: mediaID)
         let segmentsPath = hlsSegmentsPath(for: mediaID)
         
@@ -452,7 +462,7 @@ public final class CachingPlayerItem: AVPlayerItem {
     }
     
     /// Clear all cached content (both HLS and progressive videos)
-    public static func clearAllCache() {
+    public nonisolated static func clearAllCache() {
         guard let cachesDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             print("DEBUG: [CachingPlayerItem] Failed to access caches directory")
             return

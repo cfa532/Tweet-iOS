@@ -9,7 +9,7 @@
 import SwiftUI
 import UIKit
 
-struct MediaGridView: View, Equatable {
+struct MediaGridView: View, @MainActor Equatable {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
     let isEmbedded: Bool // Flag to indicate this is an embedded tweet (prevents video loading)
@@ -244,6 +244,7 @@ struct MediaGridViewModel {
 
     /// Calculate precise height for MediaGrid given attachments and whether it's embedded
     /// This uses screen-width-based estimates - prefer the gridWidth variant when actual width is known
+    @MainActor
     static func calculateHeight(
         for attachments: [MimeiFileType],
         isEmbedded: Bool,
@@ -260,6 +261,7 @@ struct MediaGridViewModel {
         )
     }
 
+    @MainActor
     static func defaultGridWidth(
         isEmbedded: Bool,
         cellHorizontalPadding: CGFloat = 16

@@ -12,7 +12,7 @@ import Foundation
 /// Pool of nodes indexed by node MID
 /// Each node maintains an array of valid IP addresses (IPv4 and IPv6)
 /// The pool persists and acts as the source of truth for node connectivity
-class NodePool {
+final class NodePool: @unchecked Sendable {
     static let shared = NodePool()
     
     private var nodes: [String: NodeInfo] = [:]  // [nodeMID: NodeInfo]
@@ -21,7 +21,7 @@ class NodePool {
     private init() {}
     
     /// Information about a network node
-    struct NodeInfo {
+    struct NodeInfo: Sendable {
         let mid: String           // Node MID
         var ips: [String]         // Array of valid IP addresses (IPv6 and IPv4)
         var lastUpdate: Date      // When we last updated this node's IPs
@@ -66,6 +66,7 @@ class NodePool {
     
     /// Check if user's current IP is valid in the pool
     /// Only checks access node (hostIds[1]) - the node we read data from
+    @MainActor
     func isUserIPValid(for user: User) -> Bool {
         guard let baseUrlString = user.baseUrl?.absoluteString,
               let hostIds = user.hostIds,
@@ -94,6 +95,7 @@ class NodePool {
     
     /// Get a valid IP from the user's access node in the pool
     /// Only uses access node (hostIds[1]) - the node we read data from
+    @MainActor
     func getIPFromNode(for user: User) -> String? {
         guard let hostIds = user.hostIds, hostIds.count > 1 else {
             print("DEBUG: [NodePool] User has no access node (hostIds[1])")
@@ -183,6 +185,7 @@ class NodePool {
     
     /// Update node info from user's hostIds after successful fetch
     /// Only tracks access node (hostIds[1]) - the node we read data from
+    @MainActor
     func updateFromUser(_ user: User) {
         guard let baseUrlString = user.baseUrl?.absoluteString,
               let hostIds = user.hostIds,

@@ -34,13 +34,8 @@ class AppState: ObservableObject {
                     self.isInitialized = true
                 }
                 
-                // Chat sessions will be loaded lazily when chat screens are accessed
-                // Check for new messages (only updates badge, no notifications)
-                await ChatSessionManager.shared.checkBackendForNewMessages(suppressNotifications: true)
-                print("[TweetApp] ✅ Initial message check completed after app initialization")
-                
                 // Refresh mute state from preferences after HproseInstance is ready
-                MuteState.shared.refreshFromPreferences()
+                await MuteState.shared.refreshFromPreferences()
                 
                 // Refresh theme state from preferences after HproseInstance is ready
                 await ThemeManager.shared.refreshFromPreferences()
@@ -68,7 +63,7 @@ class AppState: ObservableObject {
             }
             
             // Always start periodic tasks (idempotent inside HproseInstance)
-            HproseInstance.shared.startPeriodicBlackListProcessing()
+            await HproseInstance.shared.startPeriodicBlackListProcessing()
         }
     }
 }

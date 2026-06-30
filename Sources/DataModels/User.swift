@@ -9,7 +9,8 @@ enum UserCacheStatus: String {
     case refreshFailed
 }
 
-class User: ObservableObject, Codable, Identifiable, Hashable {
+@MainActor
+class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @MainActor Hashable {
     // MARK: - Singleton Dictionary
     private static var userInstances: [MimeiId: User] = [:]
     static let userInstancesQueue = DispatchQueue(label: "user.instances.queue")
@@ -428,7 +429,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
     }
 
-    static func sanitizedAvatarId(_ value: String?) -> MimeiId? {
+    nonisolated static func sanitizedAvatarId(_ value: String?) -> MimeiId? {
         guard let value else { return nil }
 
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)

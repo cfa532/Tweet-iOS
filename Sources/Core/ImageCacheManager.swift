@@ -118,13 +118,7 @@ class ImageCacheManager: @unchecked Sendable {
             return nil
         }
         
-        let scale: CGFloat = {
-            if Thread.isMainThread {
-                return UIScreen.main.scale
-            } else {
-                return DispatchQueue.main.sync { UIScreen.main.scale }
-            }
-        }()
+        let scale: CGFloat = 1
         let maxPixelSize = max(1, Int(maxDimension))
         let downsampleOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -234,16 +228,10 @@ class ImageCacheManager: @unchecked Sendable {
     
     /// Check if an image ID belongs to a private tweet
     private func isPrivateTweet(imageID: String) -> Bool {
-        // Check if this image ID belongs to a private tweet
-        if let tweet = findTweetByMediaID(imageID) {
-            return tweet.isPrivate ?? false
-        }
+        // Private/bookmarked/favorited images are retained by markImageIDsAsPermanent(_:)
+        // when tweets are saved. Cache cleanup runs off the main actor and must not
+        // inspect live Tweet UI models.
         return false
-    }
-    
-    /// Find a tweet by its media ID
-    private func findTweetByMediaID(_ mediaID: String) -> Tweet? {
-        return Tweet.getInstance(for: mediaID)
     }
     
     func cleanupOldCache() {

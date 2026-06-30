@@ -47,7 +47,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     private var visibleCommentVideos: [String: (info: CommentVideoInfo, ratio: CGFloat, yPosition: CGFloat)] = [:]
 
     /// Debounce timer for visibility updates
-    private var visibilityDebounceTimer: Timer?
+    private nonisolated(unsafe) var visibilityDebounceTimer: Timer?
     private let debounceInterval = FeedPlaybackTuning.videoVisibilityThrottleInterval
 
     /// New videos can start once half of the media is visible.

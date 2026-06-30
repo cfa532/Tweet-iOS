@@ -9,14 +9,16 @@ import SwiftUI
 import AVKit
 
 // Navigation wrapper to pass both comment and parent tweet
-struct CommentNavigation: Hashable {
+struct CommentNavigation: @MainActor Hashable {
     let comment: Tweet
     let parentTweet: Tweet
     
+    @MainActor
     static func == (lhs: CommentNavigation, rhs: CommentNavigation) -> Bool {
         lhs.comment.mid == rhs.comment.mid && lhs.parentTweet.mid == rhs.parentTweet.mid
     }
     
+    @MainActor
     func hash(into hasher: inout Hasher) {
         hasher.combine(comment.mid)
         hasher.combine(parentTweet.mid)

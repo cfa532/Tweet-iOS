@@ -5,7 +5,7 @@
 //  Created by Tomás Hongo on 2025/5/17.
 //
 
-enum MediaType: String, Codable {
+enum MediaType: String, Codable, Sendable {
     case image = "Image"
     case video = "Video"
     case hls_video = "hls_video"

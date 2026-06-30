@@ -11,7 +11,7 @@ struct UserListView: View {
     // MARK: - Properties
     let title: String
     let userId: String // Profile owner whose baseUrl we watch for refresh
-    let userFetcher: @Sendable (Int, Int) async throws -> [String]
+    let userFetcher: @MainActor @Sendable (Int, Int) async throws -> [String]
     let onFollowToggle: ((User) async -> Void)?
     let onUserTap: ((User) -> Void)?
 
@@ -41,7 +41,7 @@ struct UserListView: View {
     init(
         title: String,
         userId: String,
-        userFetcher: @escaping @Sendable (Int, Int) async throws -> [String],
+        userFetcher: @escaping @MainActor @Sendable (Int, Int) async throws -> [String],
         navigationPath: Binding<NavigationPath>,
         onFollowToggle: ((User) async -> Void)? = nil,
         onUserTap: ((User) -> Void)? = nil

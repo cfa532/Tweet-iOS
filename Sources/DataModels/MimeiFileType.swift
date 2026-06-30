@@ -18,25 +18,8 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         return aspectRatio ?? 1.0  // Default to 1.0 for all media types as fallback
     }
     
-    // Make url a computed property that updates when author's baseUrl changes
+    // Cached URL for callers that need a pre-resolved attachment URL.
     @Published private var _cachedUrl: String?
-    private var baseUrlCancellable: AnyCancellable?
-    private weak var author: User? {
-        didSet {
-            // Cancel previous subscription if any
-            baseUrlCancellable?.cancel()
-            
-            // Subscribe to author's baseUrl changes
-            if let author = author {
-                baseUrlCancellable = author.$baseUrl
-                    .sink { [weak self] newBaseUrl in
-                        self?.updateUrl(with: newBaseUrl)
-                    }
-                // Initial URL update
-                updateUrl(with: author.baseUrl)
-            }
-        }
-    }
     
     var url: String? {
         get { _cachedUrl }
@@ -60,9 +43,10 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         }
     }
     
-    /// Set the author for this attachment to enable reactive URL updates
+    /// Snapshot the author's current base URL for callers that read `url` directly.
+    @MainActor
     func setAuthor(_ author: User) {
-        self.author = author
+        updateUrl(with: author.baseUrl)
     }
     
     enum CodingKeys: String, CodingKey {
@@ -75,7 +59,7 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         case url
     }
     
-    init(mid: MimeiId, mediaType: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), aspectRatio: Float? = nil, url: String? = nil, author: User? = nil) {
+    init(mid: MimeiId, mediaType: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), aspectRatio: Float? = nil, url: String? = nil) {
         self.mid = mid
         self.type = mediaType
         self.size = size
@@ -83,22 +67,10 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         self.timestamp = timestamp
         self.aspectRatio = aspectRatio
         self._cachedUrl = url
-        
-        // Set author and start observing if provided
-        if let author = author {
-            self.author = author
-            // Initial URL update
-            updateUrl(with: author.baseUrl)
-            // Subscribe to baseUrl changes
-            baseUrlCancellable = author.$baseUrl
-                .sink { [weak self] newBaseUrl in
-                    self?.updateUrl(with: newBaseUrl)
-                }
-        }
     }
     
     // Convenience initializer that accepts String for backward compatibility during transition
-    init(mid: String, type: String, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), aspectRatio: Float? = nil, url: String? = nil, author: User? = nil) {
+    init(mid: String, type: String, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), aspectRatio: Float? = nil, url: String? = nil) {
         self.mid = mid
         self.type = MediaType.fromString(type)
         self.size = size
@@ -106,18 +78,6 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         self.timestamp = timestamp
         self.aspectRatio = aspectRatio
         self._cachedUrl = url
-        
-        // Set author and start observing if provided
-        if let author = author {
-            self.author = author
-            // Initial URL update
-            updateUrl(with: author.baseUrl)
-            // Subscribe to baseUrl changes
-            baseUrlCancellable = author.$baseUrl
-                .sink { [weak self] newBaseUrl in
-                    self?.updateUrl(with: newBaseUrl)
-                }
-        }
     }
     
     required init(from decoder: Decoder) throws {
@@ -148,7 +108,7 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
             timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
         }
         
-        // Note: author is not decoded - it must be set after decoding via setAuthor()
+        // Note: author is not decoded; callers may snapshot its base URL via setAuthor().
     }
     
     func encode(to encoder: Encoder) throws {

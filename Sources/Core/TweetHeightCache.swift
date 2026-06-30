@@ -3,7 +3,7 @@ import UIKit
 
 /// Persists measured tweet cell heights to UserDefaults so they survive app restarts.
 /// Mirrors the TweetAccessTimes pattern in TweetCacheManager.
-final class TweetHeightCache: NSObject {
+final class TweetHeightCache: NSObject, @unchecked Sendable {
     static let shared = TweetHeightCache()
 
     private let userDefaultsKey = "TweetHeightCache.v2"

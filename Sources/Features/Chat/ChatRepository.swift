@@ -1,12 +1,13 @@
 import Foundation
 import CoreData
 
-class ChatRepository: ObservableObject {
+@MainActor
+final class ChatRepository: ObservableObject {
     @Published var chatSessions: [ChatSession] = []
     @Published var chatMessages: [ChatMessage] = []
     
     private let hproseInstance = HproseInstance.shared
-    @MainActor private let chatSessionManager = ChatSessionManager.shared
+    private let chatSessionManager = ChatSessionManager.shared
     private let chatCacheManager = ChatCacheManager.shared
     
     /// Load chat sessions for the current user

@@ -14,7 +14,7 @@ struct ThumbnailView: View {
 
     // Thread-safe static cache to avoid regenerating thumbnails for the same item
     // Using a more robust cache key that includes both item ID and media type
-    private static var thumbnailCache: [String: UIImage] = [:]
+    private nonisolated(unsafe) static var thumbnailCache: [String: UIImage] = [:]
     private static let cacheQueue = DispatchQueue(label: "com.tweet.thumbnailcache", attributes: .concurrent)
     
     // Thread-safe cache access methods

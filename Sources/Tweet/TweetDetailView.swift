@@ -20,7 +20,8 @@ private final class TweetDetailCommentsCache {
 
 // MARK: - Bottom bar scroll tracker
 // Observes scroll view and updates SwiftUI state for bottom bar visibility
-private class BottomBarScrollObserver: NSObject {
+@MainActor
+private final class BottomBarScrollObserver: NSObject {
     private var observation: NSKeyValueObservation?
     private var previousOffset: CGFloat = 0
     weak var scrollView: UIScrollView?
@@ -29,19 +30,18 @@ private class BottomBarScrollObserver: NSObject {
     func attachToScrollView(_ scrollView: UIScrollView) {
         self.scrollView = scrollView
         observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, change in
-            guard let self = self, let y = change.newValue?.y else { return }
-            let delta = y - self.previousOffset
-            self.previousOffset = y
-            
-            // Check if we're at the bottom (within 50pt threshold)
-            let contentHeight = scrollView.contentSize.height
-            let scrollViewHeight = scrollView.bounds.height
-            let contentOffsetY = y
-            let isAtBottom = (contentHeight > 0 && scrollViewHeight > 0) && 
-                            (contentOffsetY + scrollViewHeight >= contentHeight - 50)
-            
-            // Ensure callback runs on main thread for SwiftUI updates
-            DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard let self = self, let y = change.newValue?.y else { return }
+                let delta = y - self.previousOffset
+                self.previousOffset = y
+
+                // Check if we're at the bottom (within 50pt threshold)
+                let contentHeight = scrollView.contentSize.height
+                let scrollViewHeight = scrollView.bounds.height
+                let contentOffsetY = y
+                let isAtBottom = (contentHeight > 0 && scrollViewHeight > 0) &&
+                                (contentOffsetY + scrollViewHeight >= contentHeight - 50)
+
                 self.onScrollChange?(y, delta, isAtBottom)
             }
         }
@@ -60,14 +60,16 @@ private class BottomBarScrollObserver: NSObject {
 // Uses a real UIView for the nav bar to bypass SwiftUI rendering pipeline entirely.
 // KVO on UIScrollView.contentOffset drives the UIView transform directly.
 
-private class LargeHitButton: UIButton {
+@MainActor
+private final class LargeHitButton: UIButton {
     var hitInset: UIEdgeInsets = UIEdgeInsets(top: -12, left: -16, bottom: -12, right: -24)
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         bounds.inset(by: hitInset).contains(point)
     }
 }
 
-private class NavBarUIView: UIView {
+@MainActor
+private final class NavBarUIView: UIView {
     private let titleLabel = UILabel()
     private let backButton = LargeHitButton(type: .system)
     private var onBack: (() -> Void)?
@@ -117,8 +119,10 @@ private class NavBarUIView: UIView {
     func attachToScrollView(_ scrollView: UIScrollView) {
         self.scrollView = scrollView
         observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, change in
-            guard let self = self, let y = change.newValue?.y else { return }
-            self.handleScroll(y, scrollView: scrollView)
+            MainActor.assumeIsolated {
+                guard let self = self, let y = change.newValue?.y else { return }
+                self.handleScroll(y, scrollView: scrollView)
+            }
         }
     }
 
@@ -553,11 +557,13 @@ struct DetailMediaCell: View {
             object: nil,
             queue: .main
         ) { _ in
-            // Only reload if image was released
-            guard self.image == nil, self.attachment.type == .image else { return }
-            
-            print("DEBUG: [DetailMediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
-            self.loadImage()
+            MainActor.assumeIsolated {
+                // Only reload if image was released
+                guard self.image == nil, self.attachment.type == .image else { return }
+                
+                print("DEBUG: [DetailMediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
+                self.loadImage()
+            }
         }
     }
 
@@ -570,9 +576,12 @@ struct DetailMediaCell: View {
             object: nil,
             queue: .main
         ) { notification in
-            guard notification.userInfo?["avatarId"] as? String == self.attachment.mid else { return }
-            if self.image == nil || self.loading {
-                self.updateImageFromMemoryCache()
+            let avatarId = notification.userInfo?["avatarId"] as? String
+            MainActor.assumeIsolated {
+                guard avatarId == self.attachment.mid else { return }
+                if self.image == nil || self.loading {
+                    self.updateImageFromMemoryCache()
+                }
             }
         }
     }

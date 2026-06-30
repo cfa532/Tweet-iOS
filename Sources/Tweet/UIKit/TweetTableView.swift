@@ -47,10 +47,12 @@ struct TweetTableView: UIViewControllerRepresentable {
         var lastHeaderRefreshToken: Int?
         weak var controller: TweetTableViewController?
 
+        @MainActor
         func triggerLoadMore() {
             controller?.triggerLoadMore()
         }
 
+        @MainActor
         func showNoMoreTweetsMessage() {
             controller?.showNoMoreTweetsMessageIfNeeded()
         }

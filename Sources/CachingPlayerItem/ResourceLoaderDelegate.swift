@@ -1,7 +1,7 @@
 import Foundation
 import AVFoundation
 
-public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
+public final class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
     private let url: URL
     private let mediaID: String?
     private let saveFilePath: String
@@ -153,7 +153,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Downloading playlist from \(actualPlaylistURL.absoluteString)")
 
         let session = URLSession.shared
-        var taskId: Int = 0
+        let taskId = UUID().hashValue
         let task = session.dataTask(with: actualPlaylistURL) { [weak self] data, response, error in
             defer { self?.removeTask(identifier: taskId) }
             guard let self = self else { return }
@@ -214,8 +214,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             loadingRequest.finishLoading()
         }
 
-        taskId = task.taskIdentifier
-        trackTask(task)
+        trackTask(task, identifier: taskId)
         task.resume()
         return true
     }
@@ -292,7 +291,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         config.timeoutIntervalForRequest = 60.0  // 60 seconds
         config.timeoutIntervalForResource = 300.0  // 5 minutes
         let session = URLSession(configuration: config)
-        var taskId: Int = 0
+        let taskId = UUID().hashValue
         let task = session.dataTask(with: url) { [weak self] data, response, error in
             defer { self?.removeTask(identifier: taskId) }
             guard let self = self else { return }
@@ -342,8 +341,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             print("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for downloaded segment: \(localURL.absoluteString)")
         }
 
-        taskId = task.taskIdentifier
-        trackTask(task)
+        trackTask(task, identifier: taskId)
         task.resume()
         return true
     }
@@ -557,7 +555,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         config.timeoutIntervalForRequest = 60.0  // 60 seconds
         config.timeoutIntervalForResource = 300.0  // 5 minutes
         let session = URLSession(configuration: config)
-        var taskId: Int = 0
+        let taskId = UUID().hashValue
         let task = session.dataTask(with: playlistURL) { [weak self] data, response, error in
             defer { self?.removeTask(identifier: taskId) }
             guard let self = self else { return }
@@ -616,9 +614,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             }
         }
 
-        taskId = task.taskIdentifier
-
-        trackTask(task)
+        trackTask(task, identifier: taskId)
         task.resume()
     }
     
@@ -825,9 +821,9 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     
     // MARK: - Task Tracking for Memory Management
 
-    private func trackTask(_ task: URLSessionDataTask) {
+    private func trackTask(_ task: URLSessionDataTask, identifier: Int) {
         taskLock.lock()
-        activeTasks[task.taskIdentifier] = task
+        activeTasks[identifier] = task
         taskLock.unlock()
     }
 

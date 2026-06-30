@@ -1,6 +1,6 @@
 import Foundation
 
-struct ChatMessage: Identifiable, Codable, Hashable {
+struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let authorId: MimeiId
     let receiptId: MimeiId
@@ -227,7 +227,7 @@ extension ChatMessage {
     }
 }
 
-struct ChatSession: Identifiable, Codable {
+struct ChatSession: Identifiable, Codable, Sendable {
     let id: String
     let userId: MimeiId
     let receiptId: MimeiId

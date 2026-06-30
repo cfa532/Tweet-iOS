@@ -80,6 +80,8 @@
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
+		46AA00012F5B000100000001 /* Records.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AA00002F5B000100000001 /* Records.swift */; };
+		46AA00032F5B000100000001 /* ModelStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AA00022F5B000100000001 /* ModelStores.swift */; };
 		469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99542DEC744200954049 /* ProfileTweetsSection.swift */; };
 		469A99562DEC744200954049 /* ProfileHeaderSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99522DEC744200954049 /* ProfileHeaderSection.swift */; };
 		469A995F2DEF300900954049 /* TweetCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A995E2DEF300900954049 /* TweetCacheManager.swift */; };
@@ -235,6 +237,8 @@
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
+		46AA00002F5B000100000001 /* Records.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Records.swift; sourceTree = "<group>"; };
+		46AA00022F5B000100000001 /* ModelStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelStores.swift; sourceTree = "<group>"; };
 		469A99522DEC744200954049 /* ProfileHeaderSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileHeaderSection.swift; sourceTree = "<group>"; };
 		469A99542DEC744200954049 /* ProfileTweetsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTweetsSection.swift; sourceTree = "<group>"; };
 		469A995E2DEF300900954049 /* TweetCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetCacheManager.swift; sourceTree = "<group>"; };
@@ -452,6 +456,8 @@
 				46704DE12DD8CEF7001D69B9 /* MediaType.swift */,
 				4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */,
 				4608E2D92DD5CD920051A92D /* User.swift */,
+				46AA00002F5B000100000001 /* Records.swift */,
+				46AA00022F5B000100000001 /* ModelStores.swift */,
 				46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */,
 			);
 			path = DataModels;
@@ -954,6 +960,8 @@
 				468CF2222E39C99200D49038 /* ChatScreen.swift in Sources */,
 				46E5B36D2DE3617400AEF31F /* AvatarFullScreenView.swift in Sources */,
 				469A99502DEBFBC100954049 /* Tweet.swift in Sources */,
+				46AA00012F5B000100000001 /* Records.swift in Sources */,
+				46AA00032F5B000100000001 /* ModelStores.swift in Sources */,
 				46B25DF12F35836100F0EE94 /* TweetHeightCache.swift in Sources */,
 				46E5B3512DDCA00000AEF31F /* Settings.swift in Sources */,
 				46E5B3672DE2DD2900AEF31F /* TweetListView.swift in Sources */,
@@ -1198,7 +1206,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				jjjj = "";
 			};
@@ -1256,7 +1264,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				jjjj = "";
 			};

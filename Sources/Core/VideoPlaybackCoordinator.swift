@@ -24,6 +24,7 @@ extension Notification.Name {
 // MARK: - Delegate-Based Communication (Phase 3)
 
 /// Protocol for video control communication between VideoPlaybackCoordinator and MediaCell
+@MainActor
 protocol MediaCellDelegate {
     /// Called when a video should start/resume playing
     func shouldPlayVideo(withMid mid: String)
@@ -295,8 +296,8 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
     
     /// Debounced restart after an overlay is dismissed.
-    private var overlayUncoverPlaybackTimer: Timer?
-    private var primarySelectionWorkItem: DispatchWorkItem?
+    private nonisolated(unsafe) var overlayUncoverPlaybackTimer: Timer?
+    private nonisolated(unsafe) var primarySelectionWorkItem: DispatchWorkItem?
     private var primarySelectionGeneration = 0
     private let primarySelectionDebounceDelay: TimeInterval = 0.20
 
@@ -350,7 +351,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Stored observer tokens for proper cleanup
-    private var notificationObservers: [NSObjectProtocol] = []
+    private nonisolated(unsafe) var notificationObservers: [NSObjectProtocol] = []
     
     /// Is currently scrolling
     private var isScrolling: Bool = false
@@ -373,8 +374,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            let videoMid = notification.userInfo?["videoMid"] as? String
+            let videoIdentifier = notification.userInfo?["videoIdentifier"] as? String
             Task { @MainActor in
-                self?.handleVideoFinished(notification)
+                self?.handleVideoFinished(videoMid: videoMid, videoIdentifier: videoIdentifier)
             }
         }
         notificationObservers.append(videoFinishedObserver)
@@ -393,8 +396,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            let isCovered = notification.userInfo?["isCovered"] as? Bool
+            let source = notification.userInfo?["source"] as? String
             Task { @MainActor in
-                self?.handleOverlayCoverageChanged(notification)
+                self?.handleOverlayCoverageChanged(isCovered: isCovered, source: source)
             }
         }
         notificationObservers.append(overlayCoverageObserver)
@@ -426,10 +431,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         primarySelectionWorkItem?.cancel()
     }
     
-    @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
-        guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
-        let source = notification.userInfo?["source"] as? String
-                
+    private func handleOverlayCoverageChanged(isCovered: Bool?, source: String?) {
+        guard let isCovered else { return }
+
         isPlaybackSuppressedByOverlay = isCovered
         
         // Cancel any pending "resume after overlay" timer.
@@ -710,40 +714,36 @@ class VideoPlaybackCoordinator: ObservableObject {
         return nil
     }
 
-    /// Build video list from tweets (including pinned tweets)
-    /// Now runs asynchronously to avoid blocking UI
+    /// Build video list from tweets (including pinned tweets).
+    /// This stays on the main actor because it reads main-actor Tweet models.
     func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = [], completion: (() -> Void)? = nil) {
-        // Run expensive operation in background
-        Task.detached(priority: .userInitiated) {
+        Task(priority: .userInitiated) { @MainActor in
             let videos = await self.buildVideoListAsync(tweets: tweets, pinnedTweets: pinnedTweets)
 
-            // Update state on main actor
-            await MainActor.run {
-                self.setVideoList(videos)
+            self.setVideoList(videos)
 
-                // Clear caches when video list is rebuilt
-                self.cachedVisibilityRatios.removeAll()
-                self.clearPreloadedTracking()
-                self.primaryBelowContinueIdentifier = nil
+            // Clear caches when video list is rebuilt
+            self.cachedVisibilityRatios.removeAll()
+            self.clearPreloadedTracking()
+            self.primaryBelowContinueIdentifier = nil
 
-                // Store tweet list for embedded tweet lookup
-                self.currentTweets = pinnedTweets + tweets
+            // Store tweet list for embedded tweet lookup
+            self.currentTweets = pinnedTweets + tweets
 
-                // Call completion handler BEFORE auto-playback check
-                // This allows caller to update visibleTweetIds first
-                completion?()
+            // Call completion handler BEFORE auto-playback check
+            // This allows caller to update visibleTweetIds first
+            completion?()
 
-                // Trigger playback update after video list is rebuilt if in idle phase and videos are visible.
-                // Clear finished/skipped gates first so a video that played to completion before backgrounding
-                // is not permanently excluded from autoplay selection when the feed returns to foreground.
-                if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
-                    self.clearFinishedAutoplayGateForForeground()
-                    self.scheduleStartPrimary()
-                }
-
-                // NOTE: Directional preloading is intentionally started only after
-                // real scroll-stop events, not during first paint.
+            // Trigger playback update after video list is rebuilt if in idle phase and videos are visible.
+            // Clear finished/skipped gates first so a video that played to completion before backgrounding
+            // is not permanently excluded from autoplay selection when the feed returns to foreground.
+            if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
+                self.clearFinishedAutoplayGateForForeground()
+                self.scheduleStartPrimary()
             }
+
+            // NOTE: Directional preloading is intentionally started only after
+            // real scroll-stop events, not during first paint.
         }
     }
     
@@ -1916,6 +1916,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // No need to cancel preload downloads here.
 
         delegate.shouldPlayVideo(withMid: primary.videoMid)
+        print("🎬 [COORD] startPrimary: delegated play to \(shortMID(primary.videoMid))")
     }
 
     /// Identify the primary video based on scroll direction.
@@ -2078,12 +2079,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Handle video finished notification.
     /// Match by full identifier (outerTweetId_mediaTweetId_videoMid_attachmentIndex) so the same video in different cells is distinct.
-    @objc private func handleVideoFinished(_ notification: Notification) {
-        guard let videoMid = notification.userInfo?["videoMid"] as? String else {
+    private func handleVideoFinished(videoMid: String?, videoIdentifier: String?) {
+        guard let videoMid else {
             return
         }
-
-        let videoIdentifier = notification.userInfo?["videoIdentifier"] as? String
 
         if phase == .primaryPlaying,
            let primaryId = primaryVideoId {

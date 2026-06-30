@@ -10,14 +10,14 @@ import Combine
 import Foundation
 
 @MainActor
-class VideoLoadingManager: ObservableObject {
+final class VideoLoadingManager: ObservableObject {
     static let shared = VideoLoadingManager()
 
     @Published private(set) var isInStartupPhase: Bool = true
 
     private var activeLoadingCount: Int = 0
     private var loadCountInLastMinute: Int = 0
-    private var monitoringTimer: Timer?
+    private nonisolated(unsafe) var monitoringTimer: Timer?
 
     private init() {
         monitoringTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in

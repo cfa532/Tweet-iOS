@@ -18,8 +18,9 @@ struct VideoConversionStatus {
     let cid: String?
 }
 
-/// Manager class for handling all tweet and media uploads
-class TweetUploadManager {
+/// Main-actor upload coordinator for UI-owned tweet/user models and upload progress state.
+@MainActor
+final class TweetUploadManager {
     // Reference to parent HproseInstance for accessing shared properties
     weak var hproseInstance: HproseInstance?
     
@@ -68,7 +69,7 @@ class TweetUploadManager {
         fileName: String? = nil,
         referenceId: String? = nil,
         noResample: Bool = false,
-        progressCallback: ((String, Int) -> Void)? = nil
+        progressCallback: (@Sendable (String, Int) -> Void)? = nil
     ) async throws -> (MimeiFileType?, String?) {
         guard let hproseInstance = hproseInstance else {
             throw NSError(domain: "TweetUploadManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "HproseInstance not available"])
@@ -227,7 +228,7 @@ class TweetUploadManager {
                     }
                     
                     // Start background polling for video jobs (same as tweets)
-                    Task.detached(priority: .background) {
+                    Task(priority: .background) { @MainActor in
                         await self.pollVideoJobsAndSubmitComment(
                             comment: comment,
                             to: tweet,
@@ -264,7 +265,7 @@ class TweetUploadManager {
                 }
                 
                 // Submit comment in background (non-blocking)
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     guard let hproseInstance = self.hproseInstance else { return }
                     
                     print("📝 [Background Submit] Submitting comment with image attachments...")
@@ -479,7 +480,7 @@ extension TweetUploadManager {
                 await removePendingUpload()
                 
                 // Continue polling in background
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     await self.pollAllJobsAndSubmitTweet(
                         tweet: tweet,
                         itemData: itemData,
@@ -560,7 +561,7 @@ extension TweetUploadManager {
                 
                 // Start background polling for ALL jobs (non-blocking)
                 // If polling fails, it will show toast and won't save pending upload again
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     await self.pollAllJobsAndSubmitTweet(
                         tweet: tweet,
                         itemData: updatedItemData,
@@ -598,7 +599,7 @@ extension TweetUploadManager {
             await removePendingUpload()
             
             // Submit tweet in background (non-blocking)
-            Task.detached(priority: .background) {
+            Task(priority: .background) { @MainActor in
                 guard let hproseInstance = self.hproseInstance else { return }
                 
                 print("📝 [Background Submit] Submitting tweet with image attachments...")
@@ -660,7 +661,7 @@ extension TweetUploadManager {
                 }
                 
                 let delay = UInt64(retryCount + 1) * 2_000_000_000
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     try? await Task.sleep(nanoseconds: delay)
                     await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
                 }
@@ -1411,7 +1412,7 @@ extension TweetUploadManager {
                 }
                 
                 // Start background polling for video jobs
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     await self.pollVideoJobsAndSendChatMessage(
                         message: message,
                         itemData: updatedItemData,
@@ -1523,7 +1524,7 @@ extension TweetUploadManager {
                     if isImage {
                         // Cache the image immediately so it's available for display
                         // Use Task to avoid blocking the upload flow
-                        Task.detached(priority: .userInitiated) {
+                        Task(priority: .userInitiated) { @MainActor in
                             ImageCacheManager.shared.cacheImageData(item.data, for: fileType)
                             print("💾 [Upload] Cached image locally for immediate display: \(fileType.mid)")
                         }
@@ -1558,8 +1559,8 @@ extension TweetUploadManager {
                     typeIdentifier: itemData.typeIdentifier,
                     fileName: itemData.fileName,
                     noResample: itemData.noResample,
-                    progressCallback: { message, progress in
-                        print("DEBUG: Upload progress for \(itemData.fileName): \(message) (\(progress)%)")
+                    progressCallback: { [fileName = itemData.fileName] message, progress in
+                        print("DEBUG: Upload progress for \(fileName): \(message) (\(progress)%)")
                     }
                 )
                 return result
@@ -1713,8 +1714,8 @@ extension TweetUploadManager {
                         typeIdentifier: item.typeIdentifier,
                         fileName: item.fileName,
                         noResample: item.noResample,
-                        progressCallback: { message, progress in
-                            print("DEBUG: Upload progress for \(item.fileName): \(message) (\(progress)%)")
+                        progressCallback: { [fileName = item.fileName] message, progress in
+                            print("DEBUG: Upload progress for \(fileName): \(message) (\(progress)%)")
                         }
                     )
                     if let fileType = result {

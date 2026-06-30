@@ -70,7 +70,8 @@ class SharedDisplayLinkManager: NSObject {
 }
 
 // Global video visibility manager
-class VideoVisibilityManager: ObservableObject {
+@MainActor
+final class VideoVisibilityManager: ObservableObject {
     static let shared = VideoVisibilityManager()
     
     private init() {}
@@ -89,7 +90,7 @@ class VideoVisibilityManager: ObservableObject {
 
 /// Closure type for providing a video list for fullscreen navigation.
 /// Parameters: (videoMid, outerTweetId, mediaTweetId, attachmentIndex) → (list, startIndex)?
-typealias VideoListProvider = (_ videoMid: String, _ outerTweetId: String, _ mediaTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
+typealias VideoListProvider = @MainActor @Sendable (_ videoMid: String, _ outerTweetId: String, _ mediaTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
 
 private struct VideoListProviderKey: EnvironmentKey {
     static let defaultValue: VideoListProvider? = nil
@@ -103,7 +104,7 @@ extension EnvironmentValues {
 }
 
 // MARK: - MediaCell
-struct MediaCell: View, Equatable, MediaCellDelegate {
+struct MediaCell: View, @MainActor Equatable, @MainActor MediaCellDelegate {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
@@ -514,10 +515,12 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             object: nil,
             queue: .main
         ) { _ in
-            // Only reload if cell is visible and image was released
-            guard self.isVisible, self.image == nil, self.attachment.type == .image else { return }
-            
-            self.loadImage()
+            MainActor.assumeIsolated {
+                // Only reload if cell is visible and image was released
+                guard self.isVisible, self.image == nil, self.attachment.type == .image else { return }
+                
+                self.loadImage()
+            }
         }
     }
     
@@ -748,7 +751,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     
     // Preference key to track video frame changes
     private struct VideoFramePreferenceKey: PreferenceKey {
-        static var defaultValue: CGRect = .zero
+        static let defaultValue: CGRect = .zero
         static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
             value = nextValue()
         }

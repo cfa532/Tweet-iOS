@@ -365,7 +365,7 @@ struct DocumentAttachmentsView: View {
         task.resume()
     }
     
-    private func getDefaultFileName(for type: MediaType) -> String {
+    nonisolated private func getDefaultFileName(for type: MediaType) -> String {
         switch type {
         case .pdf:
             return "Document.pdf"

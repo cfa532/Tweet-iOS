@@ -752,11 +752,13 @@ struct MediaBrowserView: View {
         
         // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated properly
         controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            // Hide close button for ALL content types after 3 seconds
-            // but only if share sheet isn't visible anymore
-            if !isShareSheetVisible {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    showControls = false
+            MainActor.assumeIsolated {
+                // Hide close button for ALL content types after 3 seconds
+                // but only if share sheet isn't visible anymore
+                if !isShareSheetVisible {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showControls = false
+                    }
                 }
             }
         }
@@ -1422,29 +1424,32 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
 
         // Let AVPlayerViewController keep its native tap handling while the app
         // overlay is also revealed for fullscreen actions such as bookmarking.
+        let coordinator = context.coordinator
         let tapRecognizer = UITapGestureRecognizer(
-            target: context.coordinator,
+            target: coordinator,
             action: #selector(Coordinator.handlePlayerTap(_:))
         )
         tapRecognizer.cancelsTouchesInView = false
         tapRecognizer.delaysTouchesBegan = false
         tapRecognizer.delaysTouchesEnded = false
-        tapRecognizer.delegate = context.coordinator
+        tapRecognizer.delegate = coordinator
         controller.view.addGestureRecognizer(tapRecognizer)
         
         // Setup observer to auto-play when ready
-        setupPlayerItemObserver(player: player, context: context)
+        setupPlayerItemObserver(player: player, coordinator: coordinator)
         
         // Observe currentItem changes to set up observer for new items
-        context.coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
-            setupPlayerItemObserver(player: player, context: context)
+        coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
+            Task { @MainActor in
+                setupPlayerItemObserver(player: player, coordinator: coordinator)
+            }
         }
         
         return controller
     }
     
-    private func setupPlayerItemObserver(player: AVPlayer, context: Context) {
-        context.coordinator.statusObserver?.invalidate()
+    private func setupPlayerItemObserver(player: AVPlayer, coordinator: Coordinator) {
+        coordinator.statusObserver?.invalidate()
         
         // Don't auto-play here - let FullScreenVideoManager handle playback after restoring position
         // FullScreenVideoManager will check for saved state and seek/play accordingly
@@ -1452,13 +1457,16 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             if playerItem.status == .readyToPlay {
                 // FullScreenVideoManager will handle playback after checking for saved state
             } else {
-                context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
-                    if item.status == .readyToPlay {
-                        // FullScreenVideoManager will handle playback after checking for saved state
-                        context.coordinator.statusObserver?.invalidate()
-                        context.coordinator.statusObserver = nil
-                    } else if item.status == .failed {
-                        print("ERROR: [SingletonVideoPlayer] Player item failed")
+                coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { [weak coordinator] item, _ in
+                    let status = item.status
+                    Task { @MainActor in
+                        if status == .readyToPlay {
+                            // FullScreenVideoManager will handle playback after checking for saved state
+                            coordinator?.statusObserver?.invalidate()
+                            coordinator?.statusObserver = nil
+                        } else if status == .failed {
+                            print("ERROR: [SingletonVideoPlayer] Player item failed")
+                        }
                     }
                 }
             }
@@ -1483,16 +1491,20 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             uiViewController.player = player
             
             // Setup observer for new player - don't auto-play, let FullScreenVideoManager handle it
-            context.coordinator.statusObserver?.invalidate()
+            let coordinator = context.coordinator
+            coordinator.statusObserver?.invalidate()
             if let playerItem = player.currentItem {
                 if playerItem.status == .readyToPlay {
                     // FullScreenVideoManager will handle playback after checking for saved state
                 } else {
-                    context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
-                        if item.status == .readyToPlay {
-                            // FullScreenVideoManager will handle playback after checking for saved state
-                            context.coordinator.statusObserver?.invalidate()
-                            context.coordinator.statusObserver = nil
+                    coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { [weak coordinator] item, _ in
+                        let status = item.status
+                        Task { @MainActor in
+                            if status == .readyToPlay {
+                                // FullScreenVideoManager will handle playback after checking for saved state
+                                coordinator?.statusObserver?.invalidate()
+                                coordinator?.statusObserver = nil
+                            }
                         }
                     }
                 }

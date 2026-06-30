@@ -1,7 +1,7 @@
 import Foundation
 
 /// Manages automatic cleanup of disk-based video caches with privacy-aware retention policies
-class DiskCacheCleanupManager {
+final class DiskCacheCleanupManager: @unchecked Sendable {
     static let shared = DiskCacheCleanupManager()
     
     private init() {
@@ -11,7 +11,7 @@ class DiskCacheCleanupManager {
     // MARK: - Configuration
     private let publicTweetRetentionInterval: TimeInterval = 7 * 24 * 60 * 60 // 1 week
     private let cleanupCheckInterval: TimeInterval = 24 * 60 * 60 // Check daily
-    private var cleanupTimer: Timer?
+    private nonisolated(unsafe) var cleanupTimer: Timer?
     
     // Set of media IDs from bookmarked/favorited tweets (never expire)
     private var permanentMediaIDs: Set<String> = []
@@ -203,32 +203,10 @@ class DiskCacheCleanupManager {
     
     /// Check if a media ID belongs to a private tweet
     private func isPrivateTweet(mediaID: String) -> Bool {
-        // Check if this media ID belongs to a private tweet
-        // We'll look for the tweet in the Tweet singleton instances
-        
-        // Extract the tweet ID from the media ID if possible
-        // Media IDs are typically IPFS hashes, so we need to find the associated tweet
-        
-        // For now, we'll check if there's a cached Tweet instance for this media ID
-        // This is a simplified approach - in a real implementation, you might want to
-        // maintain a separate mapping of mediaID -> tweetID -> isPrivate
-        
-        if let tweet = findTweetByMediaID(mediaID) {
-            return tweet.isPrivate ?? false
-        }
-        
-        // If we can't find the tweet, default to public (safer for cleanup)
+        // Private/bookmarked/favorited media is retained by markMediaIDsAsPermanent(_:)
+        // when tweets are saved. Disk cleanup must not read live Tweet UI models from
+        // its background queue.
         return false
-    }
-    
-    /// Find a tweet by its media ID
-    private func findTweetByMediaID(_ mediaID: String) -> Tweet? {
-        // This is a simplified approach - in practice, you might need to maintain
-        // a better mapping between media IDs and tweets
-        
-        // For now, we'll check if the media ID matches any tweet's ID
-        // This works if media IDs are the same as tweet IDs
-        return Tweet.getInstance(for: mediaID)
     }
     
     /// Get cache statistics

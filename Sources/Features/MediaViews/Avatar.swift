@@ -204,7 +204,7 @@ struct Avatar: View {
         isLoading = true  // Set synchronously to prevent multiple Tasks from starting
 
         loadTask?.cancel()
-        loadTask = Task {
+        loadTask = Task.detached(priority: .userInitiated) { [expectedAvatarId, urlString, avatarAttachment] in
             // Check disk cache first (async, non-blocking)
             if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
                 await MainActor.run {

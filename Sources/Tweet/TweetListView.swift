@@ -2,16 +2,16 @@
 import SwiftUI
 import UIKit
 
-struct TweetListNotification {
+struct TweetListNotification: Sendable {
     let name: Notification.Name
     let key: String
-    let shouldAccept: (Tweet) -> Bool
-    let action: (Tweet) -> Void
+    let shouldAccept: @MainActor @Sendable (Tweet) -> Bool
+    let action: @MainActor @Sendable (Tweet) -> Void
 }
 
 // Preference key to track content height
 private struct TweetContentHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
@@ -85,7 +85,7 @@ private struct ProfileNewTweetsBanner: View {
 struct TweetListView: View {
     // MARK: - Properties
     let title: String
-    let tweetFetcher: @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
+    let tweetFetcher: @MainActor @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
     let onForegroundRefresh: (() async -> Void)?
     let showTitle: Bool
     let header: (() -> AnyView)?
@@ -189,7 +189,7 @@ struct TweetListView: View {
                 
                 // Also cleanup old tweet instances to prevent memory growth
                 let activeTweetIds = await MainActor.run { Set(self.tweets.map { $0.mid }) }
-                Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
+                await Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
             }
         }
     }
@@ -426,7 +426,7 @@ struct TweetListView: View {
     init(
         title: String,
         tweets: Binding<[Tweet]>,
-        tweetFetcher: @escaping @Sendable (UInt, UInt, Bool) async throws -> [Tweet?],
+        tweetFetcher: @escaping @MainActor @Sendable (UInt, UInt, Bool) async throws -> [Tweet?],
         onForegroundRefresh: (() async -> Void)? = nil,
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
@@ -734,47 +734,54 @@ struct TweetListView: View {
             ) { notif in
                 // Find matching notification handlers for this notification name
                 for notification in notificationHandlers where notification.name == name {
-                    if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
-                        if name == .newTweetCreated, shouldUseProfileNewTweetsBanner {
-                            let stagingResult = stageProfileNewTweetsBehindBannerIfNeeded([tweet], reason: "newTweetCreated notification")
-                            if !stagingResult.deferredTweetIds.contains(tweet.mid) {
+                    let tweetPayload = notif.userInfo?[notification.key] as? Tweet
+                    let tweetIdPayload = notif.userInfo?[notification.key] as? String
+                    MainActor.assumeIsolated {
+                        if let tweet = tweetPayload, notification.shouldAccept(tweet) {
+                            if name == .newTweetCreated, shouldUseProfileNewTweetsBanner {
+                                let stagingResult = stageProfileNewTweetsBehindBannerIfNeeded([tweet], reason: "newTweetCreated notification")
+                                if !stagingResult.deferredTweetIds.contains(tweet.mid) {
+                                    notification.action(tweet)
+                                }
+                            } else {
                                 notification.action(tweet)
                             }
-                            continue
                         }
-                        notification.action(tweet)
-                    }
-                    // Special case: tweetId notifications send String instead of Tweet
-                    if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
-                        // Find tweet once for efficiency (avoid multiple O(n) searches)
-                        let tweetIndex = tweetsBinding.wrappedValue.firstIndex(where: { $0.mid == tweetId })
-                        
-                        if notification.name == .tweetDeleted {
-                            TweetDeletionRegistry.shared.markDeleted(tweetId)
-                            // For tweet deletion, handle directly in TweetListView
-                            if let index = tweetIndex {
-                                tweetsBinding.wrappedValue.remove(at: index)
-                            }
-                            TweetCacheManager.shared.deleteTweet(mid: tweetId)
-                        } else if notification.name == .tweetPrivacyChanged {
-                            // For privacy changes, handle removal directly here
-                            if let index = tweetIndex {
-                                let tweetToRemove = tweetsBinding.wrappedValue[index]
-                                tweetsBinding.wrappedValue.remove(at: index)
-                                // Call custom handler with the tweet that was removed
-                                notification.action(tweetToRemove)
-                            }
-                        } else {
-                            // For other notifications, call the custom handler
-                            if let index = tweetIndex {
-                                notification.action(tweetsBinding.wrappedValue[index])
+                        // Special case: tweetId notifications send String instead of Tweet
+                        if notification.key == "tweetId", let tweetId = tweetIdPayload {
+                            // Find tweet once for efficiency (avoid multiple O(n) searches)
+                            let tweetIndex = tweetsBinding.wrappedValue.firstIndex(where: { $0.mid == tweetId })
+                            
+                            if notification.name == .tweetDeleted {
+                                TweetDeletionRegistry.shared.markDeleted(tweetId)
+                                // For tweet deletion, handle directly in TweetListView
+                                if let index = tweetIndex {
+                                    tweetsBinding.wrappedValue.remove(at: index)
+                                }
+                                TweetCacheManager.shared.deleteTweet(mid: tweetId)
+                            } else if notification.name == .tweetPrivacyChanged {
+                                // For privacy changes, handle removal directly here
+                                if let index = tweetIndex {
+                                    let tweetToRemove = tweetsBinding.wrappedValue[index]
+                                    tweetsBinding.wrappedValue.remove(at: index)
+                                    // Call custom handler with the tweet that was removed
+                                    notification.action(tweetToRemove)
+                                }
+                            } else {
+                                // For other notifications, call the custom handler
+                                if let index = tweetIndex {
+                                    notification.action(tweetsBinding.wrappedValue[index])
+                                }
                             }
                         }
                     }
                 }
                 // Special case: blockUser may send blockedUserId to remove all tweets from that user
-                if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
-                    tweetsBinding.wrappedValue.removeAll { $0.authorId == blockedUserId }
+                let blockedUserId = notif.userInfo?["blockedUserId"] as? String
+                MainActor.assumeIsolated {
+                    if let blockedUserId {
+                        tweetsBinding.wrappedValue.removeAll { $0.authorId == blockedUserId }
+                    }
                 }
             }
             
@@ -788,11 +795,13 @@ struct TweetListView: View {
             queue: .main
         ) { notif in
             guard let tweetId = notif.userInfo?["tweetId"] as? String else { return }
-            TweetDeletionRegistry.shared.unmarkDeleted(tweetId)
-            // Only restore if not already in the list
-            guard !tweetsBinding.wrappedValue.contains(where: { $0.mid == tweetId }) else { return }
-            if let tweet = Tweet.getInstance(for: tweetId) {
-                tweetsBinding.wrappedValue.mergeTweets([tweet])
+            MainActor.assumeIsolated {
+                TweetDeletionRegistry.shared.unmarkDeleted(tweetId)
+                // Only restore if not already in the list
+                guard !tweetsBinding.wrappedValue.contains(where: { $0.mid == tweetId }) else { return }
+                if let tweet = Tweet.getInstance(for: tweetId) {
+                    tweetsBinding.wrappedValue.mergeTweets([tweet])
+                }
             }
         }
         notificationObservers.append(restoredObserver)
@@ -819,16 +828,18 @@ struct TweetListView: View {
             object: nil,
             queue: .main
         ) { _ in
-            // Only fetch if initial load has completed (avoid interfering with app startup)
-            guard self.initialLoadComplete else {
-                print("📱 [FOREGROUND] Skipping fetch - initial load not complete")
-                return
-            }
-            
-            // Fetch new tweets when app comes to foreground
-            print("📱 [FOREGROUND] App became active - fetching new tweets...")
-            Task {
-                await self.fetchNewTweetsOnForeground()
+            MainActor.assumeIsolated {
+                // Only fetch if initial load has completed (avoid interfering with app startup)
+                guard self.initialLoadComplete else {
+                    print("📱 [FOREGROUND] Skipping fetch - initial load not complete")
+                    return
+                }
+                
+                // Fetch new tweets when app comes to foreground
+                print("📱 [FOREGROUND] App became active - fetching new tweets...")
+                Task {
+                    await self.fetchNewTweetsOnForeground()
+                }
             }
         }
     }
@@ -1127,17 +1138,15 @@ struct TweetListView: View {
             // Step 2: Refresh from server in the background (always, even after a cache hit).
             // If there was a cache miss, server response also clears the spinner.
             let hadCachedTweets = !tweetsFromCache.isEmpty
-            Task.detached(priority: .utility) {
+            Task(priority: .utility) { @MainActor in
                 await loadFromServer(page: page, pageSize: pageSize, completion: completion)
 
                 // Only update loading state here when there was no cache hit.
                 // On a cache hit isLoadingMore is already false; setting it again is harmless
                 // but produces an unnecessary SwiftUI re-render.
                 if !hadCachedTweets {
-                    await MainActor.run {
-                        isLoadingMore = false
-                        loadingStartTime = nil
-                    }
+                    isLoadingMore = false
+                    loadingStartTime = nil
                 }
             }
         }

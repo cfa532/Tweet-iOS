@@ -22,7 +22,7 @@ struct BackgroundFeedResumeSnapshot: Codable {
     let createdAt: Date
 }
 
-final class BackgroundResumeStateStore {
+final class BackgroundResumeStateStore: @unchecked Sendable {
     static let shared = BackgroundResumeStateStore()
 
     private let snapshotKey = "backgroundFeedResumeSnapshot"
@@ -256,6 +256,10 @@ class TweetTableViewController: UITableViewController {
         isTableAttachedForLayout && videoCoordinator.isFeedVisible
     }
 
+    private var isTableAttachedForDataMutation: Bool {
+        isTableAttachedForLayout
+    }
+
     private var currentRowLayoutWidth: CGFloat {
         tableView.bounds.width > 0 ? tableView.bounds.width : UIScreen.main.bounds.width
     }
@@ -360,52 +364,54 @@ class TweetTableViewController: UITableViewController {
     }
     
     deinit {
-        // End any active background task
-        endBackgroundTask()
+        MainActor.assumeIsolated {
+            // End any active background task
+            endBackgroundTask()
 
-        // Remove notification observers
-        if let observer = scrollToTopObserver {
-            NotificationCenter.default.removeObserver(observer)
+            // Remove notification observers
+            if let observer = scrollToTopObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            if let observer = memoryWarningObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            if let observer = backgroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            if let observer = prepareVisibleVideosForBackgroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            if let observer = didBecomeActiveObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            if let observer = reloadVisibleVideosObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            if let observer = feedViewDidAppearObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            if let observer = overlayCoverageObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+
+            // Clean up timers
+            noMoreTweetsMessageTimer?.invalidate()
+            loadingTimeoutTimer?.invalidate()
+            embeddedTweetPrefetchInFlight.removeAll()
+            cancelDirectionalImagePreloads()
+            cancelPendingBackgroundResumeRestores()
         }
-
-        if let observer = memoryWarningObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        if let observer = foregroundObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        if let observer = backgroundObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        if let observer = prepareVisibleVideosForBackgroundObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        if let observer = didBecomeActiveObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        if let observer = reloadVisibleVideosObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        if let observer = feedViewDidAppearObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        if let observer = overlayCoverageObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-
-        // Clean up timers
-        noMoreTweetsMessageTimer?.invalidate()
-        loadingTimeoutTimer?.invalidate()
-        embeddedTweetPrefetchInFlight.removeAll()
-        cancelDirectionalImagePreloads()
-        cancelPendingBackgroundResumeRestores()
 
         // NOTE: Removed .shouldStopAllVideos notification from deinit
         // This was causing issues when navigating back from profile - it would stop
@@ -419,28 +425,33 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            let targetFeedId = notification.userInfo?["feedIdentifier"] as? String
+            let scrollTarget = notification.userInfo?["scrollTarget"] as? String
+            let targetTweetId = notification.userInfo?["targetTweetId"] as? String
             guard let self = self else { return }
 
-            // Check if this notification is for this specific feed
-            if let targetFeedId = notification.userInfo?["feedIdentifier"] as? String {
-                // Only scroll if the notification targets this feed
-                if targetFeedId == self.feedIdentifier {
-                    self.handleScrollToTopNotification(notification)
-                }
-            } else {
-                // No target specified - scroll if this is the main feed
-                if self.feedIdentifier == "mainFeed" {
-                    self.handleScrollToTopNotification(notification)
+            MainActor.assumeIsolated {
+                // Check if this notification is for this specific feed
+                if let targetFeedId {
+                    // Only scroll if the notification targets this feed
+                    if targetFeedId == self.feedIdentifier {
+                        self.handleScrollToTopNotification(scrollTarget: scrollTarget, targetTweetId: targetTweetId)
+                    }
+                } else {
+                    // No target specified - scroll if this is the main feed
+                    if self.feedIdentifier == "mainFeed" {
+                        self.handleScrollToTopNotification(scrollTarget: scrollTarget, targetTweetId: targetTweetId)
+                    }
                 }
             }
         }
     }
 
-    private func handleScrollToTopNotification(_ notification: Notification) {
-        if (notification.userInfo?["scrollTarget"] as? String) == "tweetId",
-           let targetTweetId = notification.userInfo?["targetTweetId"] as? String {
+    private func handleScrollToTopNotification(scrollTarget: String?, targetTweetId: String?) {
+        if scrollTarget == "tweetId",
+           let targetTweetId {
             scrollToTweet(targetTweetId)
-        } else if (notification.userInfo?["scrollTarget"] as? String) == "firstRegularTweet" {
+        } else if scrollTarget == "firstRegularTweet" {
             scrollToFirstRegularTweet()
         } else {
             scrollToTop()
@@ -453,15 +464,21 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let self,
-                  let isCovered = notification.userInfo?["isCovered"] as? Bool,
-                  !isCovered,
-                  let source = notification.userInfo?["source"] as? String,
-                  source.contains("MediaBrowser") else { return }
+            let isCovered = notification.userInfo?["isCovered"] as? Bool
+            let source = notification.userInfo?["source"] as? String
+            MainActor.assumeIsolated {
+                guard let self,
+                      let isCovered,
+                      !isCovered,
+                      let source,
+                      source.contains("MediaBrowser") else { return }
 
-            self.remeasureVisibleRowsAfterOverlayDismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                self?.remeasureVisibleRowsAfterOverlayDismiss()
+                self.remeasureVisibleRowsAfterOverlayDismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                    MainActor.assumeIsolated {
+                        self?.remeasureVisibleRowsAfterOverlayDismiss()
+                    }
+                }
             }
         }
     }
@@ -491,13 +508,7 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let self = self else { return }
-
-            // Only process if this notification targets our feed
-            if let feedId = notification.userInfo?["feedIdentifier"] as? String,
-               feedId != self.feedIdentifier {
-                return
-            }
+            let feedId = notification.userInfo?["feedIdentifier"] as? String
 
             // When the same video was playing on the profile we left, main feed and profile share
             // one AVPlayer (SharedAssetCache). The profile's SimpleVideoPlayer.onDisappear runs
@@ -506,6 +517,10 @@ class TweetTableViewController: UITableViewController {
             // can run afterward and pause the player again. Delay so teardown completes first.
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                // Only process if this notification targets our feed
+                if let feedId, feedId != self.feedIdentifier {
+                    return
+                }
                 let hasLiveHandoff = VideoSurfaceHandoffRegistry.shared.hasActiveTransfer()
                 self.scheduleFeedPlaybackResume(
                     after: hasLiveHandoff ? 0.05 : 0.4,
@@ -545,10 +560,12 @@ class TweetTableViewController: UITableViewController {
             NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
 
             // Force reload visible cells to reclaim memory
-            if let self, self.tableView.window != nil, let visibleIndexPaths = self.tableView.indexPathsForVisibleRows {
-                self.isTableViewUpdating = true
-                self.tableView.reloadRows(at: visibleIndexPaths, with: .none)
-                self.isTableViewUpdating = false
+            MainActor.assumeIsolated {
+                if let self, self.tableView.window != nil, let visibleIndexPaths = self.tableView.indexPathsForVisibleRows {
+                    self.isTableViewUpdating = true
+                    self.tableView.reloadRows(at: visibleIndexPaths, with: .none)
+                    self.isTableViewUpdating = false
+                }
             }
         }
     }
@@ -579,10 +596,12 @@ class TweetTableViewController: UITableViewController {
         ) { [weak self] notification in
             let aggressive = notification.userInfo?["aggressive"] as? Bool ?? false
             guard aggressive else { return }
-            self?.prepareVisibleVideosForBackground(
-                reason: "preGlobalMemoryRelease",
-                aggressive: true
-            )
+            Task { @MainActor [weak self] in
+                self?.prepareVisibleVideosForBackground(
+                    reason: "preGlobalMemoryRelease",
+                    aggressive: true
+                )
+            }
         }
 
         // Restore scroll position and video players when app returns to foreground
@@ -758,6 +777,7 @@ class TweetTableViewController: UITableViewController {
         guard AppDelegate.isVideoInfrastructureReady else { return }
         guard isReadyForFeedVideoResume, !isTableViewUpdating else {
             pendingFeedPlaybackResumeReason = reason
+            schedulePendingFeedPlaybackResumeRetry(reason: reason)
             return
         }
 
@@ -774,6 +794,32 @@ class TweetTableViewController: UITableViewController {
         // and so that coordinatorWantsToPlay is authoritative (set by requestResume below).
         refreshVisibleVideoLayersAfterForeground()
         videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+    }
+
+    @MainActor
+    private func schedulePendingFeedPlaybackResumeRetry(reason: String) {
+        feedPlaybackResumeGeneration += 1
+        let generation = feedPlaybackResumeGeneration
+        let delays: [TimeInterval] = [0.1, 0.35, 0.8, 1.5]
+        for delay in delays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.feedPlaybackResumeGeneration == generation,
+                          self.pendingFeedPlaybackResumeReason == reason,
+                          AppDelegate.isVideoInfrastructureReady,
+                          self.isReadyForFeedVideoResume,
+                          !self.isTableViewUpdating else { return }
+
+                    self.pendingFeedPlaybackResumeReason = nil
+                    if reason == "reloadVisibleVideosOnly" || reason.hasPrefix("backgroundResumeRestore") {
+                        self.recoverVideoCoordinatorAfterForeground(reason: "\(reason)-deferredReady")
+                    } else {
+                        self.scheduleFeedPlaybackResume(after: 0, reason: "\(reason)-deferredReady")
+                    }
+                }
+            }
+        }
     }
 
     private func refreshVisibleVideoLayersAfterForeground() {
@@ -951,6 +997,10 @@ class TweetTableViewController: UITableViewController {
         schedulePendingBackgroundResumeRestore(reason: "viewDidAppear")
         scheduleVideoVisibilityRefresh(reason: "viewDidAppear")
         if let pendingReason = pendingFeedPlaybackResumeReason {
+            guard AppDelegate.isVideoInfrastructureReady else {
+                schedulePendingFeedPlaybackResumeRetry(reason: pendingReason)
+                return
+            }
             pendingFeedPlaybackResumeReason = nil
             if pendingReason == "reloadVisibleVideosOnly" || pendingReason.hasPrefix("backgroundResumeRestore") {
                 recoverVideoCoordinatorAfterForeground(reason: "\(pendingReason)-windowReady")
@@ -1388,7 +1438,7 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Public API
     
     func updatePinnedTweets(_ tweets: [Tweet]) {
-        if isTableVisibleForMutation, isScrollInteractionActive {
+        if isTableAttachedForDataMutation, isScrollInteractionActive {
             deferredPinnedTweets = tweets
             return
         }
@@ -1398,7 +1448,7 @@ class TweetTableViewController: UITableViewController {
         let oldOriginalTweetIds = Set(oldPinnedTweets.compactMap(\.originalTweetId))
         self.pinnedTweets = tweets
 
-        guard isTableVisibleForMutation else {
+        guard isTableAttachedForDataMutation else {
             needsFullReloadAfterAttach = true
             return
         }
@@ -1485,7 +1535,7 @@ class TweetTableViewController: UITableViewController {
         //
         // Deferring until scroll stops is safe: applyDeferredTableChromeUpdatesAfterScroll is
         // called from scrollViewDidEndDragging / scrollViewDidEndDecelerating.
-        if isTableVisibleForMutation, isScrollInteractionActive {
+        if isTableAttachedForDataMutation, isScrollInteractionActive {
             deferredTweets = newTweets
             // Pre-warm text heights while the user is still scrolling so that by the time
             // scroll stops and insertRowsAtIndexPaths fires, estimatedHeightForRowAt is fast.
@@ -1497,15 +1547,15 @@ class TweetTableViewController: UITableViewController {
         // This can happen when a pending SwiftUI update fires after navigation has already
         // popped this view (e.g. immediately after logout). Updating a detached table view
         // causes UITableView row-count assertion failures.
-        guard isTableVisibleForMutation else {
+        guard isTableAttachedForDataMutation else {
             tweets = newTweets
             needsFullReloadAfterAttach = true
             return
         }
 
         // Cleanup old tweet instances to prevent memory growth
-        Task.detached(priority: .background) {
-            let activeTweetIds = Set(newTweets.map { $0.mid })
+        let activeTweetIds = Set(newTweets.map { $0.mid })
+        Task(priority: .background) { @MainActor in
             Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
         }
 
@@ -1758,16 +1808,20 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func applyPendingDetachedTableReloadIfNeeded(reason: String) {
-        guard needsFullReloadAfterAttach, isTableVisibleForMutation else { return }
+        guard needsFullReloadAfterAttach, isTableAttachedForDataMutation else { return }
         guard !isScrollInteractionActive else { return }
 
         needsFullReloadAfterAttach = false
         isTableViewUpdating = true
         tableView.reloadData()
         isTableViewUpdating = false
-        rebuildVideoListAndRefreshVisibility(reason: "\(reason)DetachedReload")
+        if videoCoordinator.isFeedVisible {
+            rebuildVideoListAndRefreshVisibility(reason: "\(reason)DetachedReload")
+        }
         scheduleInitialSavedScrollPositionRestoreIfNeeded(reason: reason)
-        scheduleVideoVisibilityRefresh(reason: "\(reason)DetachedReload")
+        if videoCoordinator.isFeedVisible {
+            scheduleVideoVisibilityRefresh(reason: "\(reason)DetachedReload")
+        }
     }
 
     private func applyPendingScrollRequestIfNeeded() {
@@ -1961,9 +2015,11 @@ class TweetTableViewController: UITableViewController {
             // Start timeout timer as safety measure
             loadingTimeoutTimer?.invalidate()
             loadingTimeoutTimer = Timer.scheduledTimer(withTimeInterval: maximumLoadingTime, repeats: false) { [weak self] _ in
-                guard let self = self else { return }
-                if self.isLoadingMore {
-                    self.updateLoadingState(isLoading: self.isLoading, isLoadingMore: false, hasMoreTweets: self.hasMoreTweets)
+                MainActor.assumeIsolated {
+                    guard let self = self else { return }
+                    if self.isLoadingMore {
+                        self.updateLoadingState(isLoading: self.isLoading, isLoadingMore: false, hasMoreTweets: self.hasMoreTweets)
+                    }
                 }
             }
 
@@ -3561,21 +3617,25 @@ class TweetTableViewController: UITableViewController {
 
         // Auto-hide after 2 seconds
         noMoreTweetsMessageTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
+            MainActor.assumeIsolated {
+                guard let self = self else { return }
 
-            UIView.animate(withDuration: 0.3, animations: {
-                footerView.alpha = 0
-                footerView.transform = CGAffineTransform(translationX: 0, y: -10)
-            }) { _ in
-                if self.tableView.tableFooterView === footerView {
-                    self.tableView.tableFooterView = nil
-                }
-                self.isShowingNoMoreTweetsMessage = false
+                UIView.animate(withDuration: 0.3, animations: {
+                    footerView.alpha = 0
+                    footerView.transform = CGAffineTransform(translationX: 0, y: -10)
+                }) { _ in
+                    if self.tableView.tableFooterView === footerView {
+                        self.tableView.tableFooterView = nil
+                    }
+                    self.isShowingNoMoreTweetsMessage = false
 
-                // Small delay to prevent immediate spinner flash after message removal
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    if self.isLoadingMore && self.hasMoreTweets {
-                        self.updateLoadingState(isLoading: self.isLoading, isLoadingMore: self.isLoadingMore, hasMoreTweets: self.hasMoreTweets)
+                    // Small delay to prevent immediate spinner flash after message removal
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        MainActor.assumeIsolated {
+                            if self.isLoadingMore && self.hasMoreTweets {
+                                self.updateLoadingState(isLoading: self.isLoading, isLoadingMore: self.isLoadingMore, hasMoreTweets: self.hasMoreTweets)
+                            }
+                        }
                     }
                 }
             }

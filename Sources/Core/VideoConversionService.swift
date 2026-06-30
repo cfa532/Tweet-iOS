@@ -21,7 +21,7 @@ struct ConversionProgress {
     let estimatedTimeRemaining: TimeInterval?
 }
 
-class VideoConversionService {
+final class VideoConversionService: @unchecked Sendable {
     static let shared = VideoConversionService()
     
     // Bitrate constants
@@ -29,7 +29,7 @@ class VideoConversionService {
     static let minBitrate = 600  // Minimum bitrate in kbps for lower-resolution variants
     
     private var currentConversion: Task<Void, Never>?
-    private var progressCallback: ((ConversionProgress) -> Void)?
+    private var progressCallback: (@Sendable (ConversionProgress) -> Void)?
 
     private init() {
         // FFmpegKit configuration
@@ -43,8 +43,8 @@ class VideoConversionService {
         singleVariant480p: Bool = false,
         sourceVideoResolution: Int,
         isNormalized: Bool = false,
-        progressCallback: @escaping (ConversionProgress) -> Void,
-        completion: @escaping (HLSConversionResult) -> Void
+        progressCallback: @escaping @Sendable (ConversionProgress) -> Void,
+        completion: @escaping @Sendable (HLSConversionResult) -> Void
     ) {
         print("DEBUG: [VIDEO CONVERSION] Starting foreground conversion for \(inputURL.lastPathComponent)")
         
@@ -284,7 +284,7 @@ class VideoConversionService {
         videoInfo: (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)?,
         singleVariant480p: Bool,
         isNormalized: Bool,
-        completion: @escaping (HLSConversionResult) -> Void
+        completion: @escaping @Sendable (HLSConversionResult) -> Void
     ) async {
         // Calculate actual resolutions based on source video and aspect ratio
         // If source resolution is lower than target, preserve it
@@ -667,7 +667,7 @@ class VideoConversionService {
         aspectRatio: Float?,
         cachedVideoInfo: (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)?,
         isNormalized: Bool,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping @Sendable (Bool) -> Void
     ) {
         Task {
             let targetResolution = Int(resolution) ?? 720
@@ -735,9 +735,7 @@ class VideoConversionService {
                     outputURL: outputURL
                 )
 
-                await MainActor.run {
-                    self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, completion: completion)
-                }
+                self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, completion: completion)
             } else {
                 print("========== \(targetResolution)p VARIANT: RE-ENCODING (VideoToolbox H.264) ==========")
                 print("  Method: h264_videotoolbox re-encoding")
@@ -809,9 +807,7 @@ class VideoConversionService {
                     scaleFilter: scaleFilter
                 )
 
-                await MainActor.run {
-                    self.executeFFmpegCommand(command: h264Command, outputURL: outputURL, resolution: resolution, completion: completion)
-                }
+                self.executeFFmpegCommand(command: h264Command, outputURL: outputURL, resolution: resolution, completion: completion)
             }
         }
     }
@@ -895,7 +891,7 @@ class VideoConversionService {
         command: String,
         outputURL: URL,
         resolution: String,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping @Sendable (Bool) -> Void
     ) {
         print("🎬 [FFMPEG] Starting conversion to \(resolution)")
         print("  Full command: \(command)")
@@ -957,7 +953,7 @@ class VideoConversionService {
     
     func getVideoInfo(
         inputURL: URL,
-        completion: @escaping (VideoInfo?) -> Void
+        completion: @escaping @Sendable (VideoInfo?) -> Void
     ) {
         let command = "-i \"\(inputURL.path)\" -f null -"
         
@@ -1018,7 +1014,7 @@ class VideoConversionService {
     }
 }
 
-final class DynamicFFmpegKit {
+final class DynamicFFmpegKit: @unchecked Sendable {
     static let shared = DynamicFFmpegKit()
 
     private enum LoaderError: Error, CustomStringConvertible {
@@ -1048,7 +1044,7 @@ final class DynamicFFmpegKit {
 
     private init() {}
 
-    func executeAsync(_ command: String, completion: @escaping (DynamicFFmpegSession?) -> Void) {
+    func executeAsync(_ command: String, completion: @escaping @Sendable (DynamicFFmpegSession?) -> Void) {
         do {
             let ffmpegClass: AnyClass = try loadFFmpegKitClass()
             let selector = NSSelectorFromString("executeAsync:withCompleteCallback:")

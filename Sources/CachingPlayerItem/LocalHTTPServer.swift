@@ -22,21 +22,21 @@ private actor LocalHTTPServerReadinessRecovery {
 }
 
 // MARK: - Streaming Download Delegate
-private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
+private final class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let connection: NWConnection
     private let mediaID: String
     private let cacheStart: Int64
     private let cacheFileHandle: FileHandle?
     private let cacheFilePath: String?
     private let initialCachedSize: Int64
-    private let contiguousSizeUpdate: (Int64) -> Void
-    private let sessionCleanup: () -> Void
-    private let buildHeaders: (Int, [String: String]) -> Data
-    private let onTotalSizeKnown: ((Int64) -> Void)?
+    private let contiguousSizeUpdate: @Sendable (Int64) -> Void
+    private let sessionCleanup: @Sendable () -> Void
+    private let buildHeaders: @Sendable (Int, [String: String]) -> Data
+    private let onTotalSizeKnown: (@Sendable (Int64) -> Void)?
     private let sendsResponseHeaders: Bool
     /// Called once when AVPlayer closes the proxy connection (either normally or mid-stream).
     /// Used to release the NodeConnectionPool slot early so subsequent downloads aren't blocked.
-    var onConnectionDead: (() -> Void)?
+    private var onConnectionDead: (@Sendable () -> Void)?
 
     private var sentBytesCount: Int64 = 0
     private var cachedBytesCount: Int64
@@ -54,10 +54,10 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         cacheFileHandle: FileHandle?,
         cacheFilePath: String?,
         initialCachedSize: Int64,
-        contiguousSizeUpdate: @escaping (Int64) -> Void,
-        sessionCleanup: @escaping () -> Void,
-        buildHeaders: @escaping (Int, [String: String]) -> Data,
-        onTotalSizeKnown: ((Int64) -> Void)?,
+        contiguousSizeUpdate: @escaping @Sendable (Int64) -> Void,
+        sessionCleanup: @escaping @Sendable () -> Void,
+        buildHeaders: @escaping @Sendable (Int, [String: String]) -> Data,
+        onTotalSizeKnown: (@Sendable (Int64) -> Void)?,
         sendsResponseHeaders: Bool = true
     ) {
         self.connection = connection
@@ -76,7 +76,7 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     }
 
     private func markClientConnectionDead() {
-        var release: (() -> Void)?
+        var release: (@Sendable () -> Void)?
         connectionStateLock.lock()
         if !clientConnectionDead {
             clientConnectionDead = true
@@ -453,6 +453,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     private let networkFailureLock = NSLock()
     private var _consecutiveNetworkFailures: Int = 0
     private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
+    private let initializationSnapshotLock = NSLock()
+    private var appInitializedSnapshot = false
+    private var appUserBaseHostSnapshot: String?
     private var connectionPool: URLSession {
         connectionPoolLock.lock()
         defer { connectionPoolLock.unlock() }
@@ -490,9 +493,21 @@ public class LocalHTTPServer: @unchecked Sendable {
             print("🔄 [LocalHTTPServer] Refreshed upstream connection pool for retry (\(reason)) mediaID=\(mediaID)")
         }
     }
+
+    func updateInitializationSnapshot(isAppInitialized: Bool, appUserBaseURL: URL?) {
+        initializationSnapshotLock.lock()
+        appInitializedSnapshot = isAppInitialized
+        appUserBaseHostSnapshot = appUserBaseURL?.host
+        initializationSnapshotLock.unlock()
+    }
     
     private func canBypassInitialization(for mediaID: String? = nil, url: URL? = nil) -> Bool {
-        if HproseInstance.shared.isAppInitialized {
+        initializationSnapshotLock.lock()
+        let isInitialized = appInitializedSnapshot
+        let appUserBaseHost = appUserBaseHostSnapshot
+        initializationSnapshotLock.unlock()
+
+        if isInitialized {
             return true
         }
         
@@ -512,7 +527,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        if let baseHost = HproseInstance.shared.appUser.baseUrl?.host,
+        if let baseHost = appUserBaseHost,
            !baseHost.isEmpty {
             return true
         }
@@ -560,6 +575,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         )
     }
     
+    @MainActor
     @objc private func handleWillResignActive() {
         didEnterBackground = false
         
@@ -572,6 +588,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
+    @MainActor
     @objc private func handleDidEnterBackground() {
         didEnterBackground = true
         // Once the app is truly backgrounded, AppDelegate performs a deterministic
@@ -579,6 +596,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         endBackgroundTask()
     }
     
+    @MainActor
     @objc private func handleDidBecomeActive() {
         // End background task - no longer needed
         endBackgroundTask()
@@ -599,8 +617,11 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func endBackgroundTask() {
         if backgroundTaskID != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            let taskID = backgroundTaskID
             backgroundTaskID = .invalid
+            Task { @MainActor in
+                UIApplication.shared.endBackgroundTask(taskID)
+            }
         }
     }
     
@@ -1259,13 +1280,28 @@ public class LocalHTTPServer: @unchecked Sendable {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
 
-            // Use a flag to ensure continuation is only resumed once
-            var hasResumed = false
-            let resumeOnce: (Bool) -> Void = { result in
-                guard !hasResumed else { return }
-                hasResumed = true
-                continuation.resume(returning: result)
+            // NWListener and the timeout task can race; resume the continuation exactly once.
+            final class ResumeOnceBox: @unchecked Sendable {
+                private let lock = NSLock()
+                private var hasResumed = false
+                private let continuation: CheckedContinuation<Bool, Never>
+
+                init(_ continuation: CheckedContinuation<Bool, Never>) {
+                    self.continuation = continuation
+                }
+
+                func resume(_ result: Bool) {
+                    lock.lock()
+                    guard !hasResumed else {
+                        lock.unlock()
+                        return
+                    }
+                    hasResumed = true
+                    lock.unlock()
+                    continuation.resume(returning: result)
+                }
             }
+            let resumeOnce = ResumeOnceBox(continuation)
 
             do {
                 let listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
@@ -1300,7 +1336,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 listener.stateUpdateHandler = { [weak self] state in
                     guard let self = self else {
                         timeoutTaskBox.cancel()
-                        resumeOnce(false)
+                        resumeOnce.resume(false)
                         return
                     }
 
@@ -1309,22 +1345,24 @@ public class LocalHTTPServer: @unchecked Sendable {
                         timeoutTaskBox.cancel()
                         self.isRunning = true
                         // Save successful port to preferences
-                        self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
+                        Task { @MainActor in
+                            PreferenceHelper().setLocalHTTPServerPort(tryPort)
+                        }
                         // Store the listener
                         self.listener = listener
-                        resumeOnce(true)
+                        resumeOnce.resume(true)
                     case .failed, .cancelled:
                         timeoutTaskBox.cancel()
                         self.isRunning = false
                         listener.cancel()
-                        resumeOnce(false)
+                        resumeOnce.resume(false)
                     case .waiting, .setup:
                         break
                     @unknown default:
                         timeoutTaskBox.cancel()
                         self.isRunning = false
                         listener.cancel()
-                        resumeOnce(false)
+                        resumeOnce.resume(false)
                     }
                 }
 
@@ -1341,7 +1379,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         try await Task.sleep(nanoseconds: 1_000_000_000) // 1s timeout
                         // If we get here, timeout occurred - cancel listener
                         listener.cancel()
-                        resumeOnce(false)
+                        resumeOnce.resume(false)
                     } catch {
                         // Task was cancelled, ignore
                     }
@@ -1349,7 +1387,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 timeoutTaskBox.set(timeoutTask)
 
             } catch {
-                resumeOnce(false)
+                resumeOnce.resume(false)
             }
         }
     }
@@ -1769,19 +1807,24 @@ public class LocalHTTPServer: @unchecked Sendable {
         let slotGuard = SlotReleaseGuard()
 
         print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) fetching \(logPath) from upstream")
-        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method,
-                      onConnectionDead: slotAcquired ? {
-                          Task { if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) } }
-                      } : nil) {
+        let releaseSegmentSlot: @Sendable () -> Void = {
             Task {
-                if slotAcquired {
-                    if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) }
+                if await slotGuard.tryRelease() {
+                    await pool.releaseSlot(mediaID: mediaID)
                 }
             }
         }
+        fetchAndServe(
+            url: fullRealURL,
+            cachePath: cachePath,
+            connection: connection,
+            method: method,
+            onConnectionDead: releaseSegmentSlot,
+            completion: releaseSegmentSlot
+        )
     }
     
-    private func fetchHEADWithRetry(url: URL, mediaID: String, attempt: Int = 1, maxAttempts: Int = 3, completion: @escaping (HTTPURLResponse?) -> Void) {
+    private func fetchHEADWithRetry(url: URL, mediaID: String, attempt: Int = 1, maxAttempts: Int = 3, completion: @escaping @Sendable (HTTPURLResponse?) -> Void) {
         var headRequest = URLRequest(url: url)
         headRequest.httpMethod = "HEAD"
         headRequest.timeoutInterval = 10
@@ -1901,7 +1944,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
-            if slotAcquired { await pool.releaseSlot(mediaID: mediaID) }
+            await pool.releaseSlot(mediaID: mediaID)
             return
         }
         
@@ -1940,7 +1983,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
 
-        let contiguousUpdate: (Int64) -> Void = { [weak self] newSize in
+        let contiguousUpdate: @Sendable (Int64) -> Void = { [weak self] newSize in
             guard let self = self else { return }
             self.queue.async {
                 self.storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: newSize)
@@ -1949,7 +1992,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Use a unique session key per connection so parallel connections don't clobber each other
         let sessionKey = "\(mediaID)_\(requestedStart)_\(ObjectIdentifier(connection).hashValue)"
-        let sessionCleanup: () -> Void = { [weak self] in
+        let sessionCleanup: @Sendable () -> Void = { [weak self] in
             guard let self = self else { return }
             self.streamingSessionsLock.lock()
             self.streamingSessions.removeValue(forKey: sessionKey)
@@ -1961,7 +2004,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 self.progressiveCacheWritersLock.unlock()
             }
             // Release node connection pool slot so the next preload (or primary) can proceed.
-            if slotAcquired { Task { await pool.releaseSlot(mediaID: mediaID) } }
+            Task { await pool.releaseSlot(mediaID: mediaID) }
         }
 
         let delegate = StreamingDownloadDelegate(
@@ -2542,7 +2585,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         fileURL: URL,
         offset: Int64,
         length: Int64,
-        completion: (() -> Void)? = nil
+        completion: (@Sendable () -> Void)? = nil
     ) {
         switch connection.state {
         case .cancelled, .failed:
@@ -2583,7 +2626,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         connection: NWConnection,
         fileHandle: FileHandle,
         remaining: Int64,
-        completion: (() -> Void)? = nil
+        completion: (@Sendable () -> Void)? = nil
     ) {
         guard remaining > 0 else {
             try? fileHandle.close()
@@ -2630,7 +2673,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         fileURL: URL,
         offset: Int64,
         length: Int64,
-        completion: (() -> Void)? = nil
+        completion: (@Sendable () -> Void)? = nil
     ) {
         guard length > 0 else {
             completion?()
@@ -2677,7 +2720,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         return mediaDir.appendingPathComponent(filename).path
     }
     
-    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, onConnectionDead: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
+    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, onConnectionDead: (@Sendable () -> Void)? = nil, completion: (@Sendable () -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
         guard canBypassInitialization(url: url) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
@@ -2710,7 +2753,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
 
     /// Download and cache file without serving (for background downloads when connection is closing)
-    private func downloadAndCacheOnly(url: URL, cachePath: String, completion: (() -> Void)? = nil) {
+    private func downloadAndCacheOnly(url: URL, cachePath: String, completion: (@Sendable () -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
         guard canBypassInitialization(url: url) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing download for \(url.path)")
@@ -2728,7 +2771,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     /// Download and cache without serving (used when connection is closing)
-    private func downloadWithRetry(url: URL, cachePath: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
+    private func downloadWithRetry(url: URL, cachePath: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (@Sendable () -> Void)?) {
         let taskKey = UUID()
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else {
@@ -2857,8 +2900,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         mediaID: String,
         attempt: Int,
         maxAttempts: Int,
-        onConnectionDead: (() -> Void)?,
-        completion: (() -> Void)?
+        onConnectionDead: (@Sendable () -> Void)?,
+        completion: (@Sendable () -> Void)?
     ) {
         let taskKey = UUID()
         let logPath = hlsLogPath(for: url, mediaID: mediaID)
@@ -3047,7 +3090,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         task.resume()
     }
 
-    private func fetchWithRetry(url: URL, cachePath: String, connection: NWConnection, method: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
+    private func fetchWithRetry(url: URL, cachePath: String, connection: NWConnection, method: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (@Sendable () -> Void)?) {
 
         let taskKey = UUID()
         let isPlaylist = cachePath.hasSuffix(".m3u8")
@@ -3323,8 +3366,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         fileURL: URL,
         fileSize: Int64,
         method: String,
-        onConnectionDead: (() -> Void)? = nil,
-        completion: (() -> Void)? = nil
+        onConnectionDead: (@Sendable () -> Void)? = nil,
+        completion: (@Sendable () -> Void)? = nil
     ) {
         switch connection.state {
         case .cancelled, .failed:
@@ -3504,7 +3547,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         return response.data(using: .utf8) ?? Data()
     }
     
-    private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (() -> Void)? = nil) {
+    private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (@Sendable () -> Void)? = nil) {
         // Guard: skip send on dead connections to avoid NWConnection
         // "Socket is not connected" warnings from the network framework.
         switch connection.state {

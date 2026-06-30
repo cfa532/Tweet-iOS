@@ -736,24 +736,10 @@ struct ProfileView: View {
 
         print("DEBUG: [ProfileView] Starting to refresh pinned tweets for user: \(profileUser.mid)")
         do {
-            let pinnedTweetData = try await Task.detached(priority: .utility) {
-                try await hproseInstance.getPinnedTweets(user: profileUser)
-            }.value
-            print("DEBUG: [ProfileView] Got \(pinnedTweetData.count) pinned tweet data items from server")
+            let pinnedTweets = try await hproseInstance.getPinnedTweets(user: profileUser)
+            print("DEBUG: [ProfileView] Got \(pinnedTweets.count) pinned tweets from server")
             
-            var pinnedTweets: [Tweet] = []
-            var pinnedTweetIds: [String] = []
-            
-            // Extract tweets and IDs from the response
-            for (index, tweetData) in pinnedTweetData.enumerated() {
-                if let tweet = tweetData["tweet"] as? Tweet {
-                    print("DEBUG: [ProfileView] Successfully extracted tweet: \(tweet.mid)")
-                    pinnedTweets.append(tweet)
-                    pinnedTweetIds.append(tweet.mid)
-                } else {
-                    print("DEBUG: [ProfileView] Failed to extract tweet from data item \(index)")
-                }
-            }
+            let pinnedTweetIds = pinnedTweets.map(\.mid)
             
             print("DEBUG: [ProfileView] Final pinned tweets count: \(pinnedTweets.count), IDs: \(pinnedTweetIds)")
             

@@ -8,7 +8,7 @@ import UIKit
 ///   • Set standardContentWidth once at app start (main thread).
 ///   • Call prewarm(_:) each time a Tweet is decoded from network/cache.
 ///   • TweetTableViewController.estimatedHeightForRowAt queries get(tweetId:width:).
-final class TweetHeightPrewarmer {
+final class TweetHeightPrewarmer: @unchecked Sendable {
     static let shared = TweetHeightPrewarmer()
     private init() {}
 
@@ -16,10 +16,19 @@ final class TweetHeightPrewarmer {
     /// Formula: UIScreen.main.bounds.width - leadingPadding - trailingPadding - 3 - 42 - 4
     ///          = screenWidth - 65 (assuming default 8+8 cell padding).
     /// Set from the main thread before the first feed render.
-    var standardContentWidth: CGFloat = 0
-
     private let lock = NSLock()
+    private var _standardContentWidth: CGFloat = 0
     private var cache: [String: CGFloat] = [:]  // "mid:\(Int(width))" → text height
+    var standardContentWidth: CGFloat {
+        get {
+            lock.lock(); defer { lock.unlock() }
+            return _standardContentWidth
+        }
+        set {
+            lock.lock(); defer { lock.unlock() }
+            _standardContentWidth = newValue
+        }
+    }
 
     // MARK: - Public API
 
@@ -31,6 +40,7 @@ final class TweetHeightPrewarmer {
 
     /// Called right after a tweet is decoded from network data or CoreData.
     /// Enqueues a background measurement if the text height is not yet cached.
+    @MainActor
     func prewarm(_ tweet: Tweet) {
         let width = standardContentWidth
         guard width > 1 else { return }
@@ -39,6 +49,7 @@ final class TweetHeightPrewarmer {
 
     /// Called from TweetTableViewController when new tweets arrive while scrolling.
     /// Uses .utility priority so measurements finish before scroll stops.
+    @MainActor
     func prewarmFeedTweets(_ tweets: [Tweet], contentWidth: CGFloat) {
         guard contentWidth > 1 else { return }
         for tweet in tweets {
@@ -64,6 +75,7 @@ final class TweetHeightPrewarmer {
         return cache[key] != nil
     }
 
+    @MainActor
     private func prewarm(_ tweet: Tweet, width: CGFloat, priority: TaskPriority) {
         // Resolve display tweet (pure retweet → measure the original's content).
         let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil

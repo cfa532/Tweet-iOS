@@ -30,8 +30,8 @@ class UploadProgressManager: ObservableObject {
     @Published var uploadType: String = "" // "tweet", "comment", "chat"
 
     private var uploadStartTime: Date?
-    private var backgroundObserver: NSObjectProtocol?
-    private var foregroundObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var backgroundObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var foregroundObserver: NSObjectProtocol?
     private var wasBackgrounded: Bool = false
     private var userInteractionDisabled: Bool = false
     
@@ -254,7 +254,7 @@ class UploadProgressManager: ObservableObject {
         HproseInstance.shared.uploadManager.cancelCurrentUpload()
         
         // Remove pending upload file
-        Task {
+        Task { @MainActor in
             await HproseInstance.shared.uploadManager.removePendingUpload()
         }
         
@@ -346,4 +346,3 @@ class UploadProgressManager: ObservableObject {
         }
     }
 }
-

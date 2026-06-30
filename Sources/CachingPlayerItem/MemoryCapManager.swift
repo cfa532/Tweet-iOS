@@ -4,7 +4,7 @@ import os.log
 import SDWebImage
 
 /// Manages memory usage with a 2GB cap to prevent OS termination
-class MemoryCapManager {
+final class MemoryCapManager: @unchecked Sendable {
     static let shared = MemoryCapManager()
     
     private init() {
@@ -21,7 +21,7 @@ class MemoryCapManager {
     private let duplicateBlockThreshold: Double = 0.80 // Foreground can use more memory before throttling
     
     // MARK: - State
-    private var monitoringTimer: Timer?
+    private nonisolated(unsafe) var monitoringTimer: Timer?
     private var currentMemoryUsage: UInt64 = 0
     private var isMemoryWarningActive = false
     private let logger = Logger(subsystem: "Tweet", category: "MemoryCapManager")

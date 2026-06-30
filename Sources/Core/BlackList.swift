@@ -2,7 +2,7 @@ import Foundation
 
 /// Manages blacklisted resources to avoid repeated failed access attempts
 /// Once a resource fails 14+ times over 1+ week, it's permanently blacklisted and never tried again
-class BlackList {
+final class BlackList: @unchecked Sendable {
     static let shared = BlackList()
     private let queue = DispatchQueue(label: "com.zz.BlackList", attributes: .concurrent)
     
@@ -13,7 +13,7 @@ class BlackList {
     // MARK: - Data Structures
     
     /// Entry in the candidate list with failure tracking
-    struct CandidateEntry {
+    struct CandidateEntry: Sendable {
         let mimeiId: MimeiId
         let failureCount: Int
         let firstFailureTimestamp: TimeInterval
@@ -165,15 +165,21 @@ class BlackList {
     }
     
     // MARK: - Persistence
+
+    private func iCloudStoreIfAvailable() -> NSUbiquitousKeyValueStore? {
+        // The target currently has no KVS entitlement. Initializing
+        // NSUbiquitousKeyValueStore without it logs a client bug during launch.
+        nil
+    }
     
     /// Load blacklist data preferring UserDefaults, with iCloud as backup
     /// UserDefaults is the source of truth; iCloud is only a secondary backup
     private func loadFromStorage() {
         let localStore = UserDefaults.standard
-        let iCloudStore = NSUbiquitousKeyValueStore.default
+        let iCloudStore = iCloudStoreIfAvailable()
         
         // Sync iCloud in background; we still read local first
-        iCloudStore.synchronize()
+        iCloudStore?.synchronize()
         
         // Load blacklist - prefer UserDefaults, fallback to iCloud
         if let blacklistData = localStore.data(forKey: "BlackList.blacklist"),
@@ -182,7 +188,7 @@ class BlackList {
                 blacklist = Set(blacklistArray.map { MimeiId($0) })
                 print("[BlackList] Loaded \(blacklist.count) blacklisted items from UserDefaults")
             }
-        } else if let blacklistData = iCloudStore.data(forKey: "BlackList.blacklist"),
+        } else if let blacklistData = iCloudStore?.data(forKey: "BlackList.blacklist"),
                   let blacklistArray = try? JSONDecoder().decode([String].self, from: blacklistData) {
             queue.sync(flags: .barrier) {
                 blacklist = Set(blacklistArray.map { MimeiId($0) })
@@ -197,7 +203,7 @@ class BlackList {
                 candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
                 print("[BlackList] Loaded \(candidates.count) candidates from UserDefaults")
             }
-        } else if let candidatesData = iCloudStore.data(forKey: "BlackList.candidates"),
+        } else if let candidatesData = iCloudStore?.data(forKey: "BlackList.candidates"),
                   let candidatesArray = try? JSONDecoder().decode([CandidateEntry].self, from: candidatesData) {
             queue.sync(flags: .barrier) {
                 candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
@@ -225,7 +231,7 @@ class BlackList {
         localStore.set(candidatesData, forKey: "BlackList.candidates")
         
         // Mirror to iCloud as backup (best-effort; survives reinstallation)
-        let iCloudStore = NSUbiquitousKeyValueStore.default
+        guard let iCloudStore = iCloudStoreIfAvailable() else { return }
         iCloudStore.set(blacklistData, forKey: "BlackList.blacklist")
         iCloudStore.set(candidatesData, forKey: "BlackList.candidates")
         iCloudStore.synchronize()

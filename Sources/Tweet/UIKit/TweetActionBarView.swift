@@ -856,9 +856,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             let mediaType: MediaType = isHLS ? .hls_video : .video
             let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mediaID, tweetId: tweet.mid, mediaType: mediaType)
 
-            async let durationLoad = asset.load(.duration)
-            async let tracksLoad = asset.load(.tracks)
-            let (duration, tracks) = try await (durationLoad, tracksLoad)
+            let duration = try await asset.load(.duration)
+            let tracks = try await asset.load(.tracks)
             let durationSeconds = CMTimeGetSeconds(duration)
 
             guard durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite else { return nil }

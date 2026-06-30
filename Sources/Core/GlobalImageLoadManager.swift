@@ -66,7 +66,7 @@ struct ImageLoadRequest {
 
 // MARK: - Global Image Load Manager
 @MainActor
-class GlobalImageLoadManager: ObservableObject {
+final class GlobalImageLoadManager: ObservableObject {
     static let shared = GlobalImageLoadManager()
     
     // MARK: - Configuration
@@ -651,8 +651,8 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func startLoading(_ request: ImageLoadRequest) {
-        let task = Task(priority: request.priority.taskPriority) {
-            // Check if image is already cached
+        let task = Task.detached(priority: request.priority.taskPriority) { [self] in
+            // Check if image is already cached (disk I/O runs off main actor in detached task)
             if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                 await MainActor.run {
                     guard !Task.isCancelled else {
@@ -670,9 +670,9 @@ class GlobalImageLoadManager: ObservableObject {
                 }
                 return
             }
-            
+
             // Load from network
-            let image = await loadImageFromNetwork(request)
+            let image = await self.loadImageFromNetwork(request)
             
             await MainActor.run {
                 let mediaID = MimeiId(request.attachment.mid)
@@ -789,12 +789,12 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func startLoadingOptimized(_ request: ImageLoadRequest, maxSize: CGSize) {
-        let task = Task(priority: request.priority.taskPriority) {
+        let task = Task.detached(priority: request.priority.taskPriority) { [self] in
             do {
                 // Check cancellation early
                 try Task.checkCancellation()
-                
-                // Check if image is already cached
+
+                // Check if image is already cached (disk I/O runs off main actor in detached task)
                 if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                     await MainActor.run {
                         // Check cancellation again before completing
@@ -813,12 +813,12 @@ class GlobalImageLoadManager: ObservableObject {
                     }
                     return
                 }
-                
+
                 // Check cancellation before network request
                 try Task.checkCancellation()
-                
+
                 // Load from network with size optimization
-                let optimizedImage = try await loadImageFromNetworkOptimized(request, maxSize: maxSize)
+                let optimizedImage = try await self.loadImageFromNetworkOptimized(request, maxSize: maxSize)
                 
                 await MainActor.run {
                     // Check cancellation before completing - don't call completion if cancelled
@@ -1154,7 +1154,7 @@ class GlobalImageLoadManager: ObservableObject {
     
     // MARK: - Periodic Cleanup
 
-    private var periodicCleanupTimer: Timer?
+    private nonisolated(unsafe) var periodicCleanupTimer: Timer?
 
     /// MEMORY LEAK FIX: Periodically trim tracking sets that grow unbounded during a session
     private func startPeriodicCleanup() {

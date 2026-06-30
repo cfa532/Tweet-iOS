@@ -40,7 +40,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
     private static let logFileName = "app.log"
     private static let legacyLogFileNames = ["app-debug.log"]
-    private static let logRetentionInterval: TimeInterval = 72 * 60 * 60
+    nonisolated private static let logRetentionInterval: TimeInterval = 72 * 60 * 60
     private static var consoleMirror: ConsoleMirror?
 
     private final class ConsoleMirror {
@@ -289,12 +289,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             self.scheduleNextMainFeedCheck()
         }
         
-        didLaunchInBackground = application.applicationState == .background
+        let launchedForBackgroundWork = Self.hasBackgroundLaunchOption(launchOptions)
+        didLaunchInBackground = application.applicationState == .background && launchedForBackgroundWork
         if didLaunchInBackground {
             print("[AppDelegate] App launched in background - preserving background timestamp for foreground recovery")
         } else {
-            // CRITICAL: Clear any stale background timestamp from previous session
-            // This ensures normal app startup is not misclassified as returning from background.
+            if application.applicationState == .background {
+                print("[AppDelegate] Launch state was background without a background launch option - treating as normal startup")
+            }
+            // Clear stale timestamps from previous sessions so a normal startup is not
+            // misclassified as a long foreground recovery.
             UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
         }
         
@@ -411,6 +415,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @MainActor
     private func noteBackgroundLaunchIfNeeded() {
         didLaunchInBackground = didLaunchInBackground || UIApplication.shared.applicationState == .background
+    }
+
+    private static func hasBackgroundLaunchOption(_ launchOptions: [UIApplication.LaunchOptionsKey : Any]?) -> Bool {
+        guard let launchOptions else { return false }
+
+        return launchOptions[.remoteNotification] != nil ||
+            launchOptions[.location] != nil ||
+            launchOptions[.bluetoothCentrals] != nil ||
+            launchOptions[.bluetoothPeripherals] != nil
     }
     
     @MainActor
@@ -713,6 +726,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
         didLaunchInBackground = false
+        UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
 
         scheduleMainFeedCheckAfterForegroundReturn()
 
@@ -1030,8 +1044,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             // Check for new messages after app is initialized (only updates badge, no notifications)
-            Task {
-                print("[AppDelegate] 📬 Checking for new messages after app initialization")
+            Task(priority: .background) {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                print("[AppDelegate] 📬 Checking for new messages after startup settle")
                 await self?.checkMessagesForBadgeOnly()
             }
         }
@@ -1046,8 +1061,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             // Fetch and set app URLs after appUser is initialized
-            Task {
-                print("[AppDelegate] 🔧 AppUser initialized - fetching app URLs")
+            Task(priority: .background) {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                print("[AppDelegate] 🔧 AppUser initialized - fetching app URLs after startup settle")
                 await self?.fetchAndSetAppUrls()
             }
         }

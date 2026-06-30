@@ -34,19 +34,18 @@ class SimpleVideoPlayerStateHelper: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            guard let userInfo = notification.userInfo,
+                  let videoMid = userInfo["videoMid"] as? String,
+                  let contextString = userInfo["context"] as? String else {
+                return
+            }
             Task { @MainActor in
-                self?.handleSavePosition(notification)
+                self?.handleSavePosition(videoMid: videoMid, contextString: contextString)
             }
         }
     }
     
-    private func handleSavePosition(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let videoMid = userInfo["videoMid"] as? String,
-              let contextString = userInfo["context"] as? String else {
-            return
-        }
-        
+    private func handleSavePosition(videoMid: String, contextString: String) {
         // Get the player from DetailVideoManager.
         // This guard may fail during normal deactivation: TweetDetailView.onDisappear calls
         // deactivate() → clearCurrentVideo() (which saves state and nils the player) before

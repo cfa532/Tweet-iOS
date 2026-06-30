@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-final class TweetDeletionRegistry {
+final class TweetDeletionRegistry: @unchecked Sendable {
     static let shared = TweetDeletionRegistry()
 
     private let lock = NSLock()

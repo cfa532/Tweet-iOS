@@ -2,7 +2,7 @@ import CoreData
 import Foundation
 import UIKit
 
-class ChatCacheManager {
+final class ChatCacheManager: @unchecked Sendable {
     static let shared = ChatCacheManager()
     private let coreDataManager = CoreDataManager.shared
 
@@ -43,23 +43,16 @@ extension ChatCacheManager {
     }
     
     func fetchChatSessions(for userId: String) -> [ChatSession] {
-        var sessions: [ChatSession] = []
         context.performAndWait {
             let request: NSFetchRequest<CDChatSession> = CDChatSession.fetchRequest()
             request.predicate = NSPredicate(format: "userId == %@", userId)
             request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
             
             if let cdSessions = try? context.fetch(request) {
-                for cdSession in cdSessions {
-                    if let session = convertToChatSession(cdSession) {
-                        sessions.append(session)
-                    }
-                }
+                return cdSessions.compactMap { convertToChatSession($0) }
             }
-            
-            
+            return []
         }
-        return sessions
     }
     
     func deleteChatSession(id: String) {
@@ -138,15 +131,14 @@ extension ChatCacheManager {
     }
     
     private func fetchLastMessage(for messageId: String) -> ChatMessage {
-        var lastMessage: ChatMessage?
-        
-        context.performAndWait {
+        let lastMessage = context.performAndWait {
             let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
             request.predicate = NSPredicate(format: "id == %@", messageId)
             
             if let cdMessage = try? context.fetch(request).first {
-                lastMessage = convertToChatMessage(cdMessage)
+                return convertToChatMessage(cdMessage)
             }
+            return nil
         }
         
         // If we can't find the actual message, create a fallback
@@ -218,7 +210,6 @@ extension ChatCacheManager {
     }
     
     func fetchMessages(for receiptId: String, userId: String) -> [ChatMessage] {
-        var messages: [ChatMessage] = []
         context.performAndWait {
             let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
             request.predicate = NSPredicate(format: "(authorId == %@ AND receiptId == %@) OR (authorId == %@ AND receiptId == %@)",
@@ -226,14 +217,10 @@ extension ChatCacheManager {
             request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
             
             if let cdMessages = try? context.fetch(request) {
-                for cdMessage in cdMessages {
-                    if let message = convertToChatMessage(cdMessage) {
-                        messages.append(message)
-                    }
-                }
+                return cdMessages.compactMap { convertToChatMessage($0) }
             }
+            return []
         }
-        return messages
     }
     
     func deleteMessagesForConversation(authorId: String, receiptId: String) {
@@ -266,8 +253,6 @@ extension ChatCacheManager {
     
     /// Fetch all message IDs from Core Data
     func fetchAllMessageIds() -> [String] {
-        var messageIds: [String] = []
-        
         context.performAndWait {
             let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
             request.propertiesToFetch = ["id"]
@@ -275,13 +260,11 @@ extension ChatCacheManager {
             
             do {
                 let results = try context.fetch(request) as? [[String: Any]] ?? []
-                messageIds = results.compactMap { $0["id"] as? String }
+                return results.compactMap { $0["id"] as? String }
             } catch {
-                // Handle error silently
+                return []
             }
         }
-        
-        return messageIds
     }
     
     private func convertToChatMessage(_ cdMessage: CDChatMessage) -> ChatMessage? {

@@ -23,16 +23,15 @@ extension String {
 // Note: LocalizedStringKey already has proper initializers, so we don't need to extend it
 
 // MARK: - Localization Manager
-class LocalizationManager: ObservableObject {
+@MainActor
+final class LocalizationManager: ObservableObject {
     static let shared = LocalizationManager()
     
     @Published var currentLanguage: String {
         didSet {
-            Task { @MainActor in
-                UserDefaults.standard.set(currentLanguage, forKey: "AppLanguage")
-                UserDefaults.standard.set([currentLanguage], forKey: "AppleLanguages")
-                UserDefaults.standard.synchronize()
-            }
+            UserDefaults.standard.set(currentLanguage, forKey: "AppLanguage")
+            UserDefaults.standard.set([currentLanguage], forKey: "AppleLanguages")
+            UserDefaults.standard.synchronize()
         }
     }
     

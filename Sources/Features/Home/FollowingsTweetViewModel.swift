@@ -25,6 +25,7 @@ private actor PageZeroFetchGate {
 }
 
 @available(iOS 16.0, *)
+@MainActor
 class FollowingsTweetViewModel: ObservableObject {
     private static let followingTweetsBannerEntry = "update_following_tweets"
 
@@ -320,31 +321,23 @@ class FollowingsTweetViewModel: ObservableObject {
     private func fetchFollowingTweetsForBanner(pageSize: UInt) async throws -> [Tweet] {
         guard !hproseInstance.appUser.isGuest else { return [] }
 
-        let hproseInstance = hproseInstance
-        let appUser = hproseInstance.appUser
-        let followingTweets = try await Task.detached(priority: .utility) {
-            try await hproseInstance.fetchTweetFeed(
-                user: appUser,
-                pageNumber: 0,
-                pageSize: pageSize,
-                entry: Self.followingTweetsBannerEntry
-            )
-        }.value
+        let followingTweets = try await hproseInstance.fetchTweetFeed(
+            user: hproseInstance.appUser,
+            pageNumber: 0,
+            pageSize: pageSize,
+            entry: Self.followingTweetsBannerEntry
+        )
         let updatedFollowingTweets = followingTweets.compactMap { $0 }
         print("DEBUG: [FollowingsTweetViewModel] Banner candidates from \(Self.followingTweetsBannerEntry)=\(updatedFollowingTweets.count)")
         return updatedFollowingTweets
     }
 
     private func fetchForegroundMainFeedTweets(pageSize: UInt) async throws -> [Tweet] {
-        let hproseInstance = hproseInstance
-        let appUser = hproseInstance.appUser
-        let serverTweets = try await Task.detached(priority: .utility) {
-            try await hproseInstance.fetchTweetFeed(
-                user: appUser,
-                pageNumber: 0,
-                pageSize: pageSize
-            )
-        }.value
+        let serverTweets = try await hproseInstance.fetchTweetFeed(
+            user: hproseInstance.appUser,
+            pageNumber: 0,
+            pageSize: pageSize
+        )
         let filteredTweets = serverTweets.compactMap { $0 }
         print("DEBUG: [FollowingsTweetViewModel] Foreground get_tweet_feed returned \(filteredTweets.count) valid tweet(s)")
         return filteredTweets
@@ -361,21 +354,12 @@ class FollowingsTweetViewModel: ObservableObject {
         let startTime = Date()
         print("🌐 [SERVER FETCH] fetchTweets START - page: \(page), pageSize: \(pageSize)")
         
-        // Wait for app initialization with timeout — don't block forever when server is unreachable.
-        // fetchTweetFeed has a built-in cache fallback for !isInitializationComplete,
-        // so proceeding after timeout still returns cached tweets instead of hanging.
+        // Do not wait here during cold start. The first cached page is already on
+        // screen, and HproseInstance.fetchTweetFeed has its own cache fallback while
+        // app initialization is incomplete. Waiting here keeps the feed in a
+        // half-loaded state and can block normal interaction during Swift 6 actor hops.
         if !hproseInstance.isAppInitialized {
-            print("⏳ [SERVER FETCH] Waiting for app initialization (max 10s)...")
-            var waitCount = 0
-            while !hproseInstance.isAppInitialized && waitCount < 100 { // 100 × 100ms = 10s
-                try? await Task.sleep(nanoseconds: 100_000_000) // Check every 100ms
-                waitCount += 1
-            }
-            if hproseInstance.isAppInitialized {
-                print("✅ [SERVER FETCH] App initialization complete, proceeding with fetch")
-            } else {
-                print("⚠️ [SERVER FETCH] Timed out waiting for app initialization, proceeding with cache fallback")
-            }
+            print("⚠️ [SERVER FETCH] App initialization not complete, using fetchTweetFeed cache fallback")
         }
         
         // fetch tweets from server
@@ -383,14 +367,9 @@ class FollowingsTweetViewModel: ObservableObject {
         if hproseInstance.appUser.isGuest {
             do {
                 print("[HproseInstance] Loading tweets for guest user from alphaId")
-                let hproseInstance = hproseInstance
-                let adminUser = try await Task.detached(priority: .utility) {
-                    try await hproseInstance.fetchUser(Gadget.getAlphaIds().first ?? "")
-                }.value
+                let adminUser = try await hproseInstance.fetchUser(Gadget.getAlphaIds().first ?? "")
                 if let adminUser {
-                    let serverTweets = try await Task.detached(priority: .utility) {
-                        try await hproseInstance.fetchUserTweets(user: adminUser, pageNumber: page, pageSize: pageSize)
-                    }.value
+                    let serverTweets = try await hproseInstance.fetchUserTweets(user: adminUser, pageNumber: page, pageSize: pageSize)
                     print("[HproseInstance] Loaded \(serverTweets.compactMap { $0 }.count) tweets for guest user")
                     return serverTweets
                 }
@@ -405,15 +384,11 @@ class FollowingsTweetViewModel: ObservableObject {
             /// The backend may return an array containing nils. If the returned array size is less than pageSize, it means there are no more tweets on the backend.
             /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
             print("🌐 [API CALL] fetchTweetFeed - userId: \(hproseInstance.appUser.mid), page: \(page), pageSize: \(pageSize)")
-            let hproseInstance = hproseInstance
-            let appUser = hproseInstance.appUser
-            let serverTweets = try await Task.detached(priority: .utility) {
-                try await hproseInstance.fetchTweetFeed(
-                    user: appUser,
-                    pageNumber: page,
-                    pageSize: pageSize
-                )
-            }.value
+            let serverTweets = try await hproseInstance.fetchTweetFeed(
+                user: hproseInstance.appUser,
+                pageNumber: page,
+                pageSize: pageSize
+            )
             print("🌐 [API RESPONSE] Received \(serverTweets.count) items (including nils)")
             let filteredTweets = serverTweets.compactMap{ $0 }
             print("🌐 [API RESPONSE] After filtering: \(filteredTweets.count) valid tweets")
@@ -449,7 +424,7 @@ class FollowingsTweetViewModel: ObservableObject {
     }
 
     private func refreshFollowingTweets(pageSize: UInt) {
-        Task.detached(priority: .utility) { [weak self] in
+        Task { [weak self] in
             guard let self = self else { return }
             await self.refreshFollowingTweetsAsync(pageSize: pageSize)
         }
@@ -457,16 +432,12 @@ class FollowingsTweetViewModel: ObservableObject {
 
     private func refreshFollowingTweetsAsync(pageSize: UInt) async {
         do {
-            let hproseInstance = hproseInstance
-            let appUser = hproseInstance.appUser
-            let newTweets = try await Task.detached(priority: .utility) {
-                try await hproseInstance.fetchTweetFeed(
-                    user: appUser,
-                    pageNumber: 0,
-                    pageSize: pageSize,
-                    entry: Self.followingTweetsBannerEntry
-                )
-            }.value
+            let newTweets = try await hproseInstance.fetchTweetFeed(
+                user: hproseInstance.appUser,
+                pageNumber: 0,
+                pageSize: pageSize,
+                entry: Self.followingTweetsBannerEntry
+            )
             let filteredTweets = newTweets.compactMap { $0 }
             guard !filteredTweets.isEmpty else { return }
 
@@ -539,14 +510,11 @@ class FollowingsTweetViewModel: ObservableObject {
             print("[FollowingsTweetViewModel] Fetching recent tweets from newly followed user: \(user.mid)")
             
             // Fetch first page of user's tweets (10 tweets should be enough for initial display)
-            let hproseInstance = hproseInstance
-            let userTweets = try await Task.detached(priority: .utility) {
-                try await hproseInstance.fetchUserTweets(
-                    user: user,
-                    pageNumber: 0,
-                    pageSize: 10
-                )
-            }.value
+            let userTweets = try await hproseInstance.fetchUserTweets(
+                user: user,
+                pageNumber: 0,
+                pageSize: 10
+            )
             
             // Filter out nils and private tweets
             let validTweets = userTweets.compactMap { $0 }.filter { !($0.isPrivate ?? false) }

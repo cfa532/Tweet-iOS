@@ -51,7 +51,7 @@ class NavigationStateManager {
 
 // MARK: - Shared App Lifecycle Protocol
 @MainActor
-protocol VideoPlayerLifecycleManager: AnyObject {
+protocol VideoPlayerLifecycleManager: AnyObject, Sendable {
     var savedPlaybackState: (wasPlaying: Bool, time: CMTime)? { get set }
     var hasRecoveredThisCycle: Bool { get set }
     
@@ -178,7 +178,7 @@ extension VideoPlayerLifecycleManager {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.handleAppWillResignActive()
             }
         }
@@ -188,7 +188,7 @@ extension VideoPlayerLifecycleManager {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.handleAppDidEnterBackground()
             }
         }
@@ -198,7 +198,7 @@ extension VideoPlayerLifecycleManager {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.handleAppWillEnterForeground()
             }
         }
@@ -208,7 +208,7 @@ extension VideoPlayerLifecycleManager {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.handleAppDidBecomeActive()
             }
         }
@@ -341,7 +341,7 @@ enum FullscreenVideoVisualState {
 /// Singleton video manager for fullscreen video playback with auto-advance
 /// Uses a dedicated singleton player instance independent from MediaCell players
 @MainActor
-class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
+final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     static let shared = FullScreenVideoManager()
     private init() {
         // Pre-create player so it's ready when fullscreen opens (no creation delay)
@@ -1320,7 +1320,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         
         // Helper to update buffering state
-        let updateBufferingState = { [weak self, weak player, weak playerItem] () in
+        let updateBufferingState: @MainActor @Sendable () -> Void = { [weak self, weak player, weak playerItem] in
             guard let self = self,
                   let player = player,
                   let item = playerItem,
@@ -1419,43 +1419,53 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Observe playbackBufferEmpty - most reliable indicator
         playbackBufferEmptyObserver = playerItem.observe(\.isPlaybackBufferEmpty, options: [.new, .initial]) { _, _ in
             DispatchQueue.main.async {
-                updateBufferingState()
+                MainActor.assumeIsolated {
+                    updateBufferingState()
+                }
             }
         }
         
         // Observe playbackLikelyToKeepUp
         playbackLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new, .initial]) { _, _ in
             DispatchQueue.main.async {
-                updateBufferingState()
+                MainActor.assumeIsolated {
+                    updateBufferingState()
+                }
             }
         }
         
         // Observe loadedTimeRanges to catch when data arrives
         self.loadedTimeRangesObserver = playerItem.observe(\.loadedTimeRanges, options: [.new]) { _, _ in
             DispatchQueue.main.async {
-                updateBufferingState()
+                MainActor.assumeIsolated {
+                    updateBufferingState()
+                }
             }
         }
         
         // Observe item status changes
         self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async {
-                guard let self else { return }
-                print("🎬 [FullScreenVideoManager] itemStatus \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(player, item: playerItem))")
-                if playerItem.status == .failed {
-                    self.failFullscreenVideoLoad(reason: "item status failed", deleteDiskCache: true, advanceToNext: false)
-                    return
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    print("🎬 [FullScreenVideoManager] itemStatus \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(player, item: playerItem))")
+                    if playerItem.status == .failed {
+                        self.failFullscreenVideoLoad(reason: "item status failed", deleteDiskCache: true, advanceToNext: false)
+                        return
+                    }
+                    updateBufferingState()
                 }
-                updateBufferingState()
             }
         }
         
         // Observe timeControlStatus as backup
         timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] _, _ in
             DispatchQueue.main.async {
-                guard let self else { return }
-                print("🎬 [FullScreenVideoManager] timeControl \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(player, item: playerItem))")
-                updateBufferingState()
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    print("🎬 [FullScreenVideoManager] timeControl \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(player, item: playerItem))")
+                    updateBufferingState()
+                }
             }
         }
 
@@ -2178,7 +2188,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     }
 
     /// Check if video is at the end and rewind if needed before playing
-    private func checkAndRewindIfAtEnd(completion: @escaping () -> Void) {
+    private func checkAndRewindIfAtEnd(completion: @escaping @MainActor @Sendable () -> Void) {
         guard let player = singletonPlayer, let playerItem = player.currentItem else {
             completion()
             return
@@ -2202,11 +2212,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // If within 0.5 seconds of end, rewind to beginning
             if timeRemaining <= 0.5 {
                 player.seek(to: .zero) { [weak self] finished in
-                    guard finished, let _ = self else {
+                    Task { @MainActor in
+                        guard finished, let _ = self else {
+                            completion()
+                            return
+                        }
                         completion()
-                        return
                     }
-                    completion()
                 }
                 return
             }
@@ -2560,7 +2572,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
 /// Singleton video manager for detail view context
 @MainActor
-class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManager {
+final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManager {
     static let shared = DetailVideoManager()
     private override init() {
         super.init()
@@ -4317,7 +4329,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         // Activate audio session for video playback
         AudioSessionManager.shared.activateForVideoPlayback()
         
-        detailLoadTask = Task.detached(priority: .userInitiated) {
+        detailLoadTask = Task(priority: .userInitiated) { @MainActor in
             do {
                 try Task.checkCancellation()
                 
@@ -4326,73 +4338,69 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 // but create our own independent player instance
                 let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: mid)
                 try Task.checkCancellation()
-                let playerItem = await AVPlayerItem(asset: asset)
+                let playerItem = AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 
-                await MainActor.run {
-                    guard !Task.isCancelled,
-                          self.loadGeneration == generation,
-                          self.currentVideoMid == mid else {
-                        newPlayer.pause()
-                        newPlayer.replaceCurrentItem(with: nil)
-                        return
-                    }
-                    self.detailLoadTask = nil
-                    // Store the new player (independent from MediaCell)
-                    self.currentPlayer = newPlayer
+                guard !Task.isCancelled,
+                      self.loadGeneration == generation,
+                      self.currentVideoMid == mid else {
+                    newPlayer.pause()
+                    newPlayer.replaceCurrentItem(with: nil)
+                    return
+                }
+                self.detailLoadTask = nil
+                // Store the new player (independent from MediaCell)
+                self.currentPlayer = newPlayer
+                
+                // Configure the player
+                self.currentPlayer?.isMuted = false // Always unmuted in detail
+                
+                // Add observers for the player item
+                if let playerItem = self.currentPlayer?.currentItem {
+                    // Add KVO observer for player item status
+                    playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
+                    self.hasKVOObserver = true
                     
-                    // Configure the player
-                    self.currentPlayer?.isMuted = false // Always unmuted in detail
+                    // Add video completion observer
+                    self.setupVideoCompletionObserver(playerItem)
                     
-                    // Add observers for the player item
-                    if let playerItem = self.currentPlayer?.currentItem {
-                        // Add KVO observer for player item status
-                        playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
-                        self.hasKVOObserver = true
-                        
-                        // Add video completion observer
-                        self.setupVideoCompletionObserver(playerItem)
-                        
-                        // Check if player item is ready immediately
-                        if playerItem.status == .readyToPlay {
-                            // Restore saved position if available
-                            if hasSavedState,
-                               let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) {
-                                print("🔄 [DETAIL VIDEO MANAGER] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
-                                self.currentPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                                    guard finished, let self = self else { return }
-                                    Task { @MainActor in
-                                        if autoPlay || savedState.wasPlaying {
-                                            self.currentPlayer?.play()
-                                            self.isPlaying = true
-                                            print("▶️ [DETAIL VIDEO MANAGER] Resumed playback from saved position")
-                                        }
+                    // Check if player item is ready immediately
+                    if playerItem.status == .readyToPlay {
+                        // Restore saved position if available
+                        if hasSavedState,
+                           let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) {
+                            print("🔄 [DETAIL VIDEO MANAGER] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
+                            self.currentPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                                guard finished, let self = self else { return }
+                                Task { @MainActor in
+                                    if autoPlay || savedState.wasPlaying {
+                                        self.currentPlayer?.play()
+                                        self.isPlaying = true
+                                        print("▶️ [DETAIL VIDEO MANAGER] Resumed playback from saved position")
                                     }
                                 }
-                            } else if autoPlay {
-                                self.currentPlayer?.play()
-                                self.isPlaying = true
                             }
+                        } else if autoPlay {
+                            self.currentPlayer?.play()
+                            self.isPlaying = true
                         }
                     }
-                    
-                    // Auto-play immediately if requested and no saved state
-                    if autoPlay && !hasSavedState {
-                        self.currentPlayer?.play()
-                        self.isPlaying = true
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Auto-playing player for mediaID: \(mid)")
-                    }
+                }
+                
+                // Auto-play immediately if requested and no saved state
+                if autoPlay && !hasSavedState {
+                    self.currentPlayer?.play()
+                    self.isPlaying = true
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Auto-playing player for mediaID: \(mid)")
                 }
             } catch {
                 if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
                     return
                 }
-                await MainActor.run {
-                    guard self.loadGeneration == generation,
-                          self.currentVideoMid == mid else { return }
-                    self.detailLoadTask = nil
-                    print("ERROR: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
-                }
+                guard self.loadGeneration == generation,
+                      self.currentVideoMid == mid else { return }
+                self.detailLoadTask = nil
+                print("ERROR: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
             }
         }
     }
@@ -4510,7 +4518,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             object: playerItem,
             queue: .main
         ) { [weak self] notification in
-            Task { @MainActor [weak self] in
+            let notificationObjectDescription = String(describing: notification.object ?? "nil")
+            MainActor.assumeIsolated {
                 guard let self = self else { return }
                 guard let player = self.currentPlayer else { 
                     print("DEBUG: [DETAIL VIDEO MANAGER] No current player when video finished")
@@ -4542,7 +4551,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 }
                 
                 print("✅ [DETAIL VIDEO MANAGER] Video legitimately finished for \(currentMid ?? "unknown") - current: \(currentTime.seconds)s, duration: \(duration.seconds)s")
-                print("DEBUG: [DETAIL VIDEO MANAGER] Notification object: \(notification.object ?? "nil")")
+                print("DEBUG: [DETAIL VIDEO MANAGER] Notification object: \(notificationObjectDescription)")
                 print("DEBUG: [DETAIL VIDEO MANAGER] Player current item: \(player.currentItem?.description ?? "nil")")
                 
                 // Just pause - no automatic rewind
@@ -4571,16 +4580,21 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     // MARK: - KVO Observer
     
     override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-        if keyPath == "status" {
-            if let playerItem = object as? AVPlayerItem {
-                if playerItem.status == .readyToPlay {
-                    if let player = currentPlayer, player.currentItem == playerItem {
+        guard keyPath == "status",
+              let playerItem = object as? AVPlayerItem else { return }
+        let observedItemID = ObjectIdentifier(playerItem)
+        let observedStatus = playerItem.status
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if observedStatus == .readyToPlay {
+                if let player = currentPlayer,
+                   let currentItem = player.currentItem,
+                   ObjectIdentifier(currentItem) == observedItemID {
                         player.play()
                         isPlaying = true
-                    }
-                } else if playerItem.status == .failed {
-                    print("ERROR: [DETAIL VIDEO MANAGER] Player item failed to load")
                 }
+            } else if observedStatus == .failed {
+                print("ERROR: [DETAIL VIDEO MANAGER] Player item failed to load")
             }
         }
     }
@@ -4788,8 +4802,10 @@ class ChatVideoManager: ObservableObject {
     }
 
     deinit {
-        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        lifecycleObservers.removeAll()
+        MainActor.assumeIsolated {
+            lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            lifecycleObservers.removeAll()
+        }
     }
 
     // Track active chat sessions and their video states

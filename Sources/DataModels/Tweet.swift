@@ -1,6 +1,7 @@
 import Foundation
 
-class Tweet: Identifiable, Codable, ObservableObject {
+@MainActor
+class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     // MARK: - Singleton
     private static var instances: [MimeiId: Tweet] = [:]
     private static let instanceLock = NSLock()
@@ -105,7 +106,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     // Media attachments
     var attachments: [MimeiFileType]? {
         didSet {
-            // When attachments change, update them to observe the author's baseUrl
+            // When attachments change, snapshot the author's current baseUrl onto them.
             updateAttachmentsAuthor()
         }
     }
@@ -115,7 +116,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     // Display only properties
     @Published var author: User? {
         didSet {
-            // When author changes, update all attachments to observe the new author's baseUrl
+            // When author changes, snapshot the new baseUrl onto all attachments.
             updateAttachmentsAuthor()
         }
     }
@@ -133,7 +134,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     var cachedMeasuredTextHeight: CGFloat = -1
     var cachedMeasuredTextWidth: CGFloat = 0
     
-    /// Update all attachments to observe the current author's baseUrl
+    /// Update all attachments with the current author's baseUrl snapshot.
     private func updateAttachmentsAuthor() {
         guard let author = author else { return }
         attachments?.forEach { attachment in
@@ -260,7 +261,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         self.isPrivate = isPrivate
         self.downloadable = downloadable
         
-        // Update attachments to observe author's baseUrl if both are present
+        // Update attachments with the author's baseUrl if both are present.
         if author != nil {
             updateAttachmentsAuthor()
         }
@@ -577,6 +578,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     }
 }
 // MARK: - Tweet Array Extension
+@MainActor
 extension Array where Element == Tweet {
     /// Determines whether `candidate` should appear before `other` in a descending timeline order.
     private func shouldPlace(_ candidate: Tweet, before other: Tweet) -> Bool {
@@ -697,13 +699,13 @@ extension Array where Element == Tweet {
     }
 }
 
-extension Tweet: Equatable {
+extension Tweet: @MainActor Equatable {
     static func == (lhs: Tweet, rhs: Tweet) -> Bool {
         return lhs.mid == rhs.mid
     }
 }
 
-extension Tweet: Hashable {
+extension Tweet: @MainActor Hashable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(mid)
     }

@@ -83,6 +83,7 @@ class PreferenceHelper {
         return 8080 // Default port
     }
     
+    @MainActor
     func setLocalHTTPServerPort(_ port: UInt16) {
         userDefaults.set(Int(port), forKey: "localHTTPServerPort")
         print("DEBUG: [PreferenceHelper] Saved LocalHTTPServer port: \(port)")

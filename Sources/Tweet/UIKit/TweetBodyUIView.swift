@@ -102,15 +102,17 @@ class TweetBodyUIView: UIView {
     }
 
     deinit {
-        if let hostingController = audioHostingController {
-            hostingController.willMove(toParent: nil)
-            hostingController.view.removeFromSuperview()
-            hostingController.removeFromParent()
-        }
-        if let hostingController = documentHostingController {
-            hostingController.willMove(toParent: nil)
-            hostingController.view.removeFromSuperview()
-            hostingController.removeFromParent()
+        MainActor.assumeIsolated {
+            if let hostingController = audioHostingController {
+                hostingController.willMove(toParent: nil)
+                hostingController.view.removeFromSuperview()
+                hostingController.removeFromParent()
+            }
+            if let hostingController = documentHostingController {
+                hostingController.willMove(toParent: nil)
+                hostingController.view.removeFromSuperview()
+                hostingController.removeFromParent()
+            }
         }
     }
 

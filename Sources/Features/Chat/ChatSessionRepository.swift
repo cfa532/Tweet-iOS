@@ -2,7 +2,7 @@ import Foundation
 import Combine
 
 // MARK: - Chat Session Entity (Database Model)
-struct ChatSessionEntity: Codable {
+struct ChatSessionEntity: Codable, Sendable {
     let userId: MimeiId
     let receiptId: MimeiId
     let lastMessageId: String
@@ -11,7 +11,7 @@ struct ChatSessionEntity: Codable {
 }
 
 // MARK: - Chat Message Entity (Database Model)
-struct ChatMessageEntity: Codable {
+struct ChatMessageEntity: Codable, Sendable {
     let id: String
     let authorId: MimeiId
     let receiptId: MimeiId
@@ -20,27 +20,28 @@ struct ChatMessageEntity: Codable {
 }
 
 // MARK: - Data Access Objects (DAO)
-protocol ChatSessionDao {
+protocol ChatSessionDao: Sendable {
     func getAllSessions(for userId: MimeiId) async -> [ChatSessionEntity]
     func getSession(userId: MimeiId, receiptId: MimeiId) async -> ChatSessionEntity?
     func updateSession(userId: MimeiId, receiptId: MimeiId, timestamp: TimeInterval, lastMessageId: String, hasNews: Bool) async
     func insertSession(_ session: ChatSessionEntity) async
 }
 
-protocol ChatMessageDao {
+protocol ChatMessageDao: Sendable {
     func getMessageById(_ id: String) async -> ChatMessageEntity?
     func getLatestMessage(userId: MimeiId, receiptId: MimeiId) async -> ChatMessageEntity?
 }
 
 // MARK: - Chat Session Repository
-class ChatSessionRepository: ObservableObject {
-    private let chatSessionDao: ChatSessionDao
-    private let chatMessageDao: ChatMessageDao
+@MainActor
+final class ChatSessionRepository: ObservableObject {
+    private let chatSessionDao: any ChatSessionDao
+    private let chatMessageDao: any ChatMessageDao
     private let hproseInstance = HproseInstance.shared
     
     @Published var chatSessions: [ChatSession] = []
     
-    init(chatSessionDao: ChatSessionDao, chatMessageDao: ChatMessageDao) {
+    init(chatSessionDao: any ChatSessionDao, chatMessageDao: any ChatMessageDao) {
         self.chatSessionDao = chatSessionDao
         self.chatMessageDao = chatMessageDao
     }

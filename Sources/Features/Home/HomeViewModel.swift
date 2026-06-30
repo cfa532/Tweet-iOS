@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 struct ScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
@@ -277,14 +277,16 @@ struct HomeView: View {
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
-        ) { [self] _ in
-            // Always reset navigation to visible when returning from background
-            isNavigationVisible = true
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": true]
-            )
+        ) { _ in
+            MainActor.assumeIsolated {
+                // Always reset navigation to visible when returning from background
+                isNavigationVisible = true
+                NotificationCenter.default.post(
+                    name: .navigationVisibilityChanged,
+                    object: nil,
+                    userInfo: ["isVisible": true]
+                )
+            }
         }
     }
 }

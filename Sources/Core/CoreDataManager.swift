@@ -1,7 +1,7 @@
 import CoreData
 import Foundation
 
-class CoreDataManager {
+final class CoreDataManager: @unchecked Sendable {
     static let shared = CoreDataManager()
     
     let container: NSPersistentContainer
@@ -38,7 +38,7 @@ class CoreDataManager {
         }
 
         container.viewContext.automaticallyMergesChangesFromParent = true
-        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        container.viewContext.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
     }
     
     private func recoverFromError() throws {
@@ -54,7 +54,7 @@ class CoreDataManager {
 
     lazy var cacheContext: NSManagedObjectContext = {
         let context = container.newBackgroundContext()
-        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
         context.automaticallyMergesChangesFromParent = true
         context.name = "TweetCacheManager.cacheContext"
         return context
@@ -62,7 +62,7 @@ class CoreDataManager {
 
     lazy var cacheReadContext: NSManagedObjectContext = {
         let context = container.newBackgroundContext()
-        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
         context.automaticallyMergesChangesFromParent = true
         context.name = "TweetCacheManager.cacheReadContext"
         return context

@@ -481,11 +481,13 @@ struct ChatImageThumbnail: View {
             object: nil,
             queue: .main
         ) { _ in
-            // Only reload if image was released
-            guard self.image == nil else { return }
-            
-            print("DEBUG: [ChatImageThumbnail] App returned to foreground, image released - reloading: \(self.attachment.mid)")
-            self.loadImage()
+            MainActor.assumeIsolated {
+                // Only reload if image was released
+                guard self.image == nil else { return }
+                
+                print("DEBUG: [ChatImageThumbnail] App returned to foreground, image released - reloading: \(self.attachment.mid)")
+                self.loadImage()
+            }
         }
     }
     
@@ -975,9 +977,11 @@ struct ChatVideoContainer: View {
             object: player.currentItem,
             queue: .main
         ) { _ in
-            // Video finished — seek back to start so next tap replays
-            isPlaying = false
-            player.seek(to: .zero)
+            MainActor.assumeIsolated {
+                // Video finished — seek back to start so next tap replays
+                isPlaying = false
+                player.seek(to: .zero)
+            }
         }
     }
     
@@ -1434,7 +1438,7 @@ struct ChatAttachmentLoader: View {
         return "\(start)\(ellipsis)\(end)"
     }
     
-    private func getDefaultFileName() -> String {
+    nonisolated private func getDefaultFileName() -> String {
         switch attachment.type {
         case .pdf:
             return "Document.pdf"

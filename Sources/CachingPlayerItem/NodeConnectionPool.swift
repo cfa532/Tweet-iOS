@@ -124,7 +124,7 @@ actor NodeConnectionPool {
 
 /// Maps "host:port" strings to their NodeConnectionPool actors.
 /// Pools are created lazily and never removed (nodes are long-lived).
-class NodePoolRegistry {
+final class NodePoolRegistry: @unchecked Sendable {
     static let shared = NodePoolRegistry()
     private init() {}
 

@@ -19,7 +19,7 @@ final class TweetCacheManager: @unchecked Sendable {
     private let coreDataManager = CoreDataManager.shared
     private let maxCacheAge: TimeInterval = 14 * 24 * 60 * 60 // 14 days (2 weeks) for auto-cleanup
     private let maxCacheSize: Int = 5000 // Maximum number of tweets to cache
-    private var cleanupTimer: Timer?
+    private nonisolated(unsafe) var cleanupTimer: Timer?
     
     // Track last access time for tweets (in memory, persisted to UserDefaults)
     private var tweetAccessTimes: [String: Date] = [:]
@@ -101,6 +101,7 @@ final class TweetCacheManager: @unchecked Sendable {
     
     // MARK: - Media Cleanup
 
+    @MainActor
     private func clearHeightCache(for tweetId: String) {
         if let tweet = Tweet.getInstance(for: tweetId) {
             tweet.cachedHeight = nil
@@ -109,6 +110,7 @@ final class TweetCacheManager: @unchecked Sendable {
         TweetHeightCache.shared.removeHeight(for: tweetId)
     }
 
+    @MainActor
     private func clearHeightCache(for tweet: Tweet) {
         tweet.cachedHeight = nil
         tweet.cachedHeightWidth = 0
@@ -116,6 +118,7 @@ final class TweetCacheManager: @unchecked Sendable {
     }
 
     /// Delete media files associated with a tweet
+    @MainActor
     private func deleteMediaForTweet(_ tweet: Tweet) {
         // Collect all media IDs from attachments
         var mediaIds: [String] = []
@@ -142,10 +145,28 @@ final class TweetCacheManager: @unchecked Sendable {
             ImageCacheManager.shared.clearCache(for: mediaId)
         }
     }
+
+    private func deleteMediaForTweetRecord(_ tweet: TweetRecord) {
+        let mediaIds = tweet.attachments?.map(\.mid) ?? []
+        guard !mediaIds.isEmpty else { return }
+
+        print("DEBUG: [TweetCacheManager] Deleting \(mediaIds.count) media files for tweet \(tweet.mid)")
+
+        Task { @MainActor in
+            for mediaId in mediaIds {
+                SharedAssetCache.shared.clearAssetCache(for: mediaId)
+            }
+        }
+
+        for mediaId in mediaIds {
+            ImageCacheManager.shared.clearCache(for: mediaId)
+        }
+    }
     
     // MARK: - Manual Cleanup (Settings Screen)
     
     /// Manual cleanup from settings screen - clears everything including private tweets
+    @MainActor
     func manualClearAllCache() {
         print("DEBUG: [TweetCacheManager] Manual cache clear - clearing EVERYTHING")
 
@@ -164,8 +185,8 @@ final class TweetCacheManager: @unchecked Sendable {
 
                 for cdTweet in allTweets {
                     // Delete associated media (clears from caches per media ID)
-                    if let tweet = try? Tweet.from(cdTweet: cdTweet) {
-                        deleteMediaForTweet(tweet)
+                    if let tweet = try? decodeTweetRecord(from: cdTweet) {
+                        deleteMediaForTweetRecord(tweet)
                     }
 
                     // Delete tweet from CoreData
@@ -206,6 +227,7 @@ final class TweetCacheManager: @unchecked Sendable {
     // MARK: - Signout Cleanup
     
     /// Clear everything on signout
+    @MainActor
     func clearCacheOnSignout() {
         print("DEBUG: [TweetCacheManager] Signout - clearing EVERYTHING")
         manualClearAllCache()
@@ -215,9 +237,34 @@ final class TweetCacheManager: @unchecked Sendable {
 // MARK: - Tweet Caching
 extension TweetCacheManager {
     /// One Core Data row maps to either no list slot (skipped) or one slot in `[Tweet?]` (tweet or `nil` placeholder).
+    private struct CachedTweetPayload: Sendable {
+        var tweet: TweetRecord
+        var author: UserRecord?
+        var originalTweet: TweetRecord?
+        var originalAuthor: UserRecord?
+    }
+
     private enum CachedTweetListSlot {
         case skip
-        case emit(Tweet?)
+        case emit(CachedTweetPayload?)
+    }
+
+    /// Maps a cached row to a profile/main-feed list slot using the same rules as `fetchCachedTweets`.
+    private func decodeTweetRecord(from cdTweet: CDTweet) throws -> TweetRecord {
+        guard let tweetData = cdTweet.tweetData else {
+            throw NSError(domain: "TweetCacheManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cached tweet row has no tweetData"])
+        }
+        return try TweetRecord.fromCacheData(tweetData)
+    }
+
+    private func cachedUserRecord(mid: String, in context: NSManagedObjectContext) -> UserRecord? {
+        let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+        userRequest.predicate = NSPredicate(format: "mid == %@", mid)
+        guard let cdUser = try? context.fetch(userRequest).first,
+              let userData = cdUser.userData else {
+            return nil
+        }
+        return try? UserRecord.fromCacheData(userData)
     }
 
     /// Maps a cached row to a profile/main-feed list slot using the same rules as `fetchCachedTweets`.
@@ -229,32 +276,24 @@ extension TweetCacheManager {
         in context: NSManagedObjectContext
     ) -> CachedTweetListSlot {
         do {
-            let tweet = try Tweet.from(cdTweet: cdTweet)
+            let tweet = try decodeTweetRecord(from: cdTweet)
 
             if shouldFilterByAuthorId && tweet.authorId != userId {
                 return .skip
             }
 
-            if tweet.author == nil {
-                let authorSingleton = User.getInstance(mid: tweet.authorId)
-                if authorSingleton.username == nil {
-                    let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                    userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
-                    if let cdUser = try? context.fetch(userRequest).first {
-                        _ = User.from(cdUser: cdUser)
-                    }
-                }
-                tweet.author = User.getInstance(mid: tweet.authorId)
-            }
+            let authorRecord = cachedUserRecord(mid: tweet.authorId, in: context)
 
+            var originalTweetRecord: TweetRecord?
+            var originalAuthorRecord: UserRecord?
             if let originalTweetId = tweet.originalTweetId, tweet.originalAuthorId != nil {
-                if Tweet.getInstance(for: originalTweetId) == nil {
-                    let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-                    origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
-                    origRequest.fetchLimit = 1
-                    if let cdOrigTweet = try? context.fetch(origRequest).first {
-                        _ = try? Tweet.from(cdTweet: cdOrigTweet)
-                    }
+                let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
+                origRequest.fetchLimit = 1
+                if let cdOrigTweet = try? context.fetch(origRequest).first,
+                   let decodedOriginal = try? decodeTweetRecord(from: cdOrigTweet) {
+                    originalTweetRecord = decodedOriginal
+                    originalAuthorRecord = cachedUserRecord(mid: decodedOriginal.authorId, in: context)
                 }
             }
 
@@ -267,12 +306,12 @@ extension TweetCacheManager {
 
             if tweet.isPrivate == true && !isBookmarkOrFavorite {
                 if shouldFilterByAuthorId && currentUserId != nil && userId == currentUserId {
-                    return .emit(tweet)
+                    return .emit(CachedTweetPayload(tweet: tweet, author: authorRecord, originalTweet: originalTweetRecord, originalAuthor: originalAuthorRecord))
                 } else {
                     return .skip
                 }
             } else {
-                return .emit(tweet)
+                return .emit(CachedTweetPayload(tweet: tweet, author: authorRecord, originalTweet: originalTweetRecord, originalAuthor: originalAuthorRecord))
             }
         } catch {
             print("Error processing tweet: \(error)")
@@ -281,7 +320,7 @@ extension TweetCacheManager {
     }
 
     func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil, isProfileView: Bool = false) async -> [Tweet?] {
-        return await withCheckedContinuation { continuation in
+        let cachedSlots = await withCheckedContinuation { (continuation: CheckedContinuation<[CachedTweetPayload?], Never>) in
             let readContext = self.readContext
             readContext.perform {
                 readContext.refreshAllObjects()
@@ -311,7 +350,7 @@ extension TweetCacheManager {
                     // Profile: offset/limit on Core Data rows does NOT match filtered list slots (skipped rows
                     // don't count). Paginate by advancing through sorted CD rows in batches and counting emitted slots.
                     var slotIndex = 0
-                    var pageTweets: [Tweet?] = []
+                    var pageTweets: [CachedTweetPayload?] = []
                     var cdOffset = 0
                     let batchSize = max(pageSizeInt * 4, 64)
 
@@ -351,7 +390,7 @@ extension TweetCacheManager {
                 request.fetchOffset = startSlot
 
                 if let cdTweets = try? readContext.fetch(request) {
-                    var tweets: [Tweet?] = []
+                    var tweets: [CachedTweetPayload?] = []
                     for cdTweet in cdTweets {
                         switch self.cachedTweetListSlot(
                             cdTweet: cdTweet,
@@ -373,6 +412,24 @@ extension TweetCacheManager {
                 }
             }
         }
+
+        return await MainActor.run {
+            cachedSlots.map { payload in
+                guard let payload else { return nil }
+
+                if let originalTweet = payload.originalTweet {
+                    let originalAuthor = payload.originalAuthor.map {
+                        UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
+                    } ?? UserStore.shared.user(mid: originalTweet.authorId)
+                    _ = TweetStore.shared.merge(originalTweet, author: originalAuthor)
+                }
+
+                let author = payload.author.map {
+                    UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
+                } ?? UserStore.shared.user(mid: payload.tweet.authorId)
+                return TweetStore.shared.merge(payload.tweet, author: author)
+            }
+        }
     }
 
     /// Fetch a tweet by its mid (tweet ID) from cache
@@ -384,14 +441,15 @@ extension TweetCacheManager {
     /// Synchronously fetch tweet from cache (in-memory singleton or Core Data)
     /// Used for height estimation and other synchronous operations
     /// Returns nil if tweet is not cached
+    @MainActor
     func fetchTweetSync(mid: String) -> Tweet? {
         // First check in-memory singleton
-        if let tweetInstance = Tweet.getInstance(for: mid) {
+        if let tweetInstance = TweetStore.shared.tweet(mid: mid) {
             return tweetInstance
         }
         
         // Otherwise, load from Core Data cache synchronously
-        return context.performAndWait {
+        let cachedPayload = context.performAndWait { () -> (tweet: TweetRecord, author: UserRecord?)? in
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", mid)
             request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
@@ -401,85 +459,60 @@ extension TweetCacheManager {
             }
             
             do {
-                let tweet = try Tweet.from(cdTweet: cdTweet)
-                
-                // Load author from cache if available
-                if tweet.author == nil {
-                    let authorSingleton = User.getInstance(mid: tweet.authorId)
-                    
-                    if authorSingleton.username == nil {
-                        let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                        userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
-                        if let cdUser = try? context.fetch(userRequest).first {
-                            _ = User.from(cdUser: cdUser)
-                        }
-                    }
-                    
-                    tweet.author = User.getInstance(mid: tweet.authorId)
-                }
-                
-                return tweet
+                let tweet = try decodeTweetRecord(from: cdTweet)
+                let author = cachedUserRecord(mid: tweet.authorId, in: context)
+                return (tweet, author)
             } catch {
                 print("Error processing tweet synchronously: \(error)")
                 return nil
             }
         }
+
+        guard let cachedPayload else { return nil }
+        let author = cachedPayload.author.map {
+            UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
+        } ?? UserStore.shared.user(mid: cachedPayload.tweet.authorId)
+        return TweetStore.shared.merge(cachedPayload.tweet, author: author)
     }
     
     func fetchTweet(mid: String) async -> Tweet? {
-        return await withCheckedContinuation { continuation in
-            // First check in-memory singleton
-            if let tweetInstance = Tweet.getInstance(for: mid) {
-                // Tweet is already in memory, return it immediately
-                continuation.resume(returning: tweetInstance)
-                return
-            }
-            
-            // Otherwise, load from Core Data cache
-            // Search by tid (tweet ID) across ALL caches, not filtered by userId
+        if let tweetInstance = await MainActor.run(body: { TweetStore.shared.tweet(mid: mid) }) {
+            return tweetInstance
+        }
+
+        let cachedPayload = await withCheckedContinuation { (continuation: CheckedContinuation<(tweet: TweetRecord, author: UserRecord?)?, Never>) in
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                 request.predicate = NSPredicate(format: "tid == %@", mid)
                 request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
-                
-                // Get the tweet and convert it
-                if let cdTweet = try? self.context.fetch(request).first {
-                    do {
-                        let tweet = try Tweet.from(cdTweet: cdTweet)
-                        
-                        // Load author from cache (Core Data) if available, otherwise use singleton
-                        // This ensures cached user data is used as placeholder until refreshed from server
-                        if tweet.author == nil {
-                            // First get the singleton
-                            let authorSingleton = User.getInstance(mid: tweet.authorId)
-                            
-                            // If singleton doesn't have data, try to load from Core Data cache
-                            if authorSingleton.username == nil {
-                                let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                                userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
-                                if let cdUser = try? self.context.fetch(userRequest).first {
-                                    // Update singleton with cached data (even if expired)
-                                    _ = User.from(cdUser: cdUser)
-                                }
-                            }
-                            
-                            // Use the singleton (either populated from cache or skeleton)
-                            tweet.author = User.getInstance(mid: tweet.authorId)
-                        }
-                        
-                        // Then update the cache time in a separate operation
-                        cdTweet.timeCached = Date()
-                        try? self.context.save()
-                        
-                        continuation.resume(returning: tweet)
-                    } catch {
-                        print("Error processing tweet: \(error)")
-                        continuation.resume(returning: nil)
-                    }
-                } else {
+
+                guard let cdTweet = try? self.context.fetch(request).first else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                do {
+                    let tweetRecord = try self.decodeTweetRecord(from: cdTweet)
+                    let authorRecord = self.cachedUserRecord(mid: tweetRecord.authorId, in: self.context)
+
+                    cdTweet.timeCached = Date()
+                    try? self.context.save()
+
+                    continuation.resume(returning: (tweetRecord, authorRecord))
+                } catch {
+                    print("Error processing tweet: \(error)")
                     continuation.resume(returning: nil)
                 }
             }
+        }
+
+        guard let cachedPayload else { return nil }
+
+        return await MainActor.run {
+            let author = cachedPayload.author.map {
+                UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
+            } ?? UserStore.shared.user(mid: cachedPayload.tweet.authorId)
+            return TweetStore.shared.merge(cachedPayload.tweet, author: author)
         }
     }
 
@@ -490,10 +523,24 @@ extension TweetCacheManager {
     ///   - userId: The cache key (e.g., "main_feed_userId", "bookmark_list_userId", or user's mid)
     ///   - timeCached: Optional timestamp to use for timeCached. If nil, uses current Date().
     ///                 For bookmarks/favorites, this should be set to preserve server order.
+    @MainActor
     func saveTweet(_ tweet: Tweet, userId: String, timeCached: Date? = nil) {
+        let record = TweetRecord(tweet: tweet)
+        let tweetId = record.mid
+        let timestamp = record.timestamp
+        let attachments = record.attachments ?? []
+        let isPrivate = record.isPrivate == true
+
         // Validate timestamp before caching
-        if tweet.timestamp.timeIntervalSince1970 <= 0 {
-            print("ERROR: [TweetCacheManager] Attempting to cache tweet with invalid timestamp: \(tweet.timestamp), skipping cache")
+        if timestamp.timeIntervalSince1970 <= 0 {
+            print("ERROR: [TweetCacheManager] Attempting to cache tweet with invalid timestamp: \(timestamp), skipping cache")
+            return
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        guard let tweetData = try? encoder.encode(record) else {
+            print("ERROR: [TweetCacheManager] Failed to encode tweet record \(tweetId), skipping cache")
             return
         }
         
@@ -503,33 +550,27 @@ extension TweetCacheManager {
             // keyed by (tweet id, cache key) so saving one list does not move the tweet
             // out of another list's cache.
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+            request.predicate = NSPredicate(format: "tid == %@", tweetId)
             let existingRows = (try? self.context.fetch(request)) ?? []
             let cdTweet = existingRows.first { $0.uid == userId } ?? CDTweet(context: self.context)
 
-            // Always save the current in-memory tweet state to cache
-            // This ensures that any updates made to the tweet in memory are preserved
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .millisecondsSince1970
-            if let tweetData = try? encoder.encode(tweet) {
-                let rowAlreadyExists = existingRows.contains { $0.objectID == cdTweet.objectID }
-                let rowsToUpdate = rowAlreadyExists ? existingRows : existingRows + [cdTweet]
-                if rowsToUpdate.contains(where: { $0.tweetData != nil && $0.tweetData != tweetData }) {
-                    DispatchQueue.main.async {
-                        self.clearHeightCache(for: tweet)
-                    }
+            let rowAlreadyExists = existingRows.contains { $0.objectID == cdTweet.objectID }
+            let rowsToUpdate = rowAlreadyExists ? existingRows : existingRows + [cdTweet]
+            if rowsToUpdate.contains(where: { $0.tweetData != nil && $0.tweetData != tweetData }) {
+                Task { @MainActor in
+                    self.clearHeightCache(for: tweetId)
                 }
-                for row in rowsToUpdate {
-                    row.tweetData = tweetData
-                    row.tid = tweet.mid
-                    row.timestamp = tweet.timestamp
-                }
+            }
+            for row in rowsToUpdate {
+                row.tweetData = tweetData
+                row.tid = tweetId
+                row.timestamp = timestamp
             }
                         
             // Update this list's membership fields.
-            cdTweet.tid = tweet.mid
+            cdTweet.tid = tweetId
             cdTweet.uid = userId
-            cdTweet.timestamp = tweet.timestamp
+            cdTweet.timestamp = timestamp
             // Use provided timeCached, or current time if not provided
             // For bookmarks/favorites, timeCached should be set to preserve server order
             cdTweet.timeCached = timeCached ?? Date()
@@ -538,10 +579,9 @@ extension TweetCacheManager {
         }
         
         // Mark media as permanent for: private tweets OR bookmarks/favorites
-        let isPrivate = tweet.isPrivate == true
         let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
         
-        if (isPrivate || isBookmarkOrFavorite), let attachments = tweet.attachments {
+        if isPrivate || isBookmarkOrFavorite {
             // Mark videos as permanent
             let videoIDs = attachments.filter { $0.type == .video || $0.type == .hls_video }.compactMap { $0.mid }
             if !videoIDs.isEmpty {
@@ -561,6 +601,7 @@ extension TweetCacheManager {
     /// Update a tweet in cache for main feed.
     /// Main feed tweets are cached under a dedicated list key for efficient loading.
     /// Profile tweets should use saveTweet directly with their authorId.
+    @MainActor
     func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
         saveTweet(tweet, userId: Self.mainFeedCacheKey(appUserId: appUserId))
     }
@@ -578,7 +619,7 @@ extension TweetCacheManager {
                     guard let tweetId = cdTweet.tid else { continue }
                     
                     // Decode tweet to check if it's private
-                    guard let tweet = try? Tweet.from(cdTweet: cdTweet) else { continue }
+                    guard let tweet = try? decodeTweetRecord(from: cdTweet) else { continue }
                     
                     // NEVER auto-delete: private tweets OR bookmarks/favorites
                     let isPrivate = tweet.isPrivate == true
@@ -601,11 +642,13 @@ extension TweetCacheManager {
                         print("DEBUG: [TweetCacheManager] Deleting expired tweet: \(tweetId) (last access: \(lastAccess))")
                         
                         // Delete associated media files
-                        deleteMediaForTweet(tweet)
+                        deleteMediaForTweetRecord(tweet)
                         
                         // Remove from access times
                         tweetAccessTimes.removeValue(forKey: tweetId)
-                        clearHeightCache(for: tweetId)
+                        Task { @MainActor in
+                            self.clearHeightCache(for: tweetId)
+                        }
                         
                         // Delete tweet from CoreData
                         context.delete(cdTweet)
@@ -632,7 +675,9 @@ extension TweetCacheManager {
                 print("ERROR: [TweetCacheManager] Found \(invalidTweets.count) tweets with invalid timestamps, deleting them")
                 for tweet in invalidTweets {
                     if let tweetId = tweet.tid {
-                        clearHeightCache(for: tweetId)
+                        Task { @MainActor in
+                            self.clearHeightCache(for: tweetId)
+                        }
                     }
                     context.delete(tweet)
                 }
@@ -649,7 +694,9 @@ extension TweetCacheManager {
             if let cdTweets = try? context.fetch(request) {
                 for cdTweet in cdTweets {
                     if let tweetId = cdTweet.tid {
-                        clearHeightCache(for: tweetId)
+                        Task { @MainActor in
+                            self.clearHeightCache(for: tweetId)
+                        }
                     }
                     context.delete(cdTweet)
                 }
@@ -672,10 +719,12 @@ extension TweetCacheManager {
                 var deletedCount = 0
                 for cdTweet in cdTweets {
                     // Decode tweet to check authorId
-                    if let tweet = try? Tweet.from(cdTweet: cdTweet), tweet.authorId == userId {
+                    if let tweet = try? decodeTweetRecord(from: cdTweet), tweet.authorId == userId {
                         // Remove from access times
                         tweetAccessTimes.removeValue(forKey: tweet.mid)
-                        clearHeightCache(for: tweet.mid)
+                        Task { @MainActor in
+                            self.clearHeightCache(for: tweet.mid)
+                        }
                         context.delete(cdTweet)
                         deletedCount += 1
                     }
@@ -706,6 +755,7 @@ extension TweetCacheManager {
     }
     
     /// Clear only memory cache (for memory management)
+    @MainActor
     func clearMemoryCache() {
         // Clear in-memory tweet instances
         Tweet.clearAllInstances()
@@ -728,7 +778,9 @@ extension TweetCacheManager {
                 
                 for tweet in tweetsToRemove {
                     if let tweetId = tweet.tid {
-                        clearHeightCache(for: tweetId)
+                        Task { @MainActor in
+                            self.clearHeightCache(for: tweetId)
+                        }
                     }
                     context.delete(tweet)
                 }
@@ -745,7 +797,9 @@ extension TweetCacheManager {
             if let userTweets = try? context.fetch(request) {
                 for tweet in userTweets {
                     if let tweetId = tweet.tid {
-                        clearHeightCache(for: tweetId)
+                        Task { @MainActor in
+                            self.clearHeightCache(for: tweetId)
+                        }
                     }
                     context.delete(tweet)
                 }
@@ -823,29 +877,39 @@ extension Tweet {
 /// Might need to update baseUrl of cached user, which might be outdated.
 extension TweetCacheManager {
     func fetchUser(mid: String) async -> User {
-        return await withCheckedContinuation { continuation in
-            // First check in-memory singleton
-            let userSingleton = User.getInstance(mid: mid)
-            
-            // If singleton has data (username is not nil), return it immediately
-            if userSingleton.username != nil {
-                continuation.resume(returning: userSingleton)
-                return
-            }
-            
-            // Otherwise, load from Core Data cache
-            // Capture only mid (Sendable) instead of userSingleton (non-Sendable)
+        let fallbackUser = await MainActor.run {
+            UserStore.shared.user(mid: mid)
+        }
+
+        if let userSingleton = await MainActor.run(body: { () -> User? in
+            let user = UserStore.shared.user(mid: mid)
+            return user.username != nil ? user : nil
+        }) {
+            return userSingleton
+        }
+
+        let cachedRecord = await withCheckedContinuation { (continuation: CheckedContinuation<UserRecord?, Never>) in
             context.perform {
                 let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
                 request.predicate = NSPredicate(format: "mid == %@", mid)
-                
-                if let cdUser = try? self.context.fetch(request).first {
-                    // Update singleton with cached data
-                    _ = User.from(cdUser: cdUser)
+
+                guard let cdUser = try? self.context.fetch(request).first,
+                      let userData = cdUser.userData,
+                      let record = try? UserRecord.fromCacheData(userData) else {
+                    continuation.resume(returning: nil)
+                    return
                 }
-                // Always return the singleton (updated or not)
-                continuation.resume(returning: User.getInstance(mid: mid))
+
+                continuation.resume(returning: record)
             }
+        }
+
+        guard let cachedRecord else {
+            return fallbackUser
+        }
+
+        return await MainActor.run {
+            UserStore.shared.merge(cachedRecord, shouldUpdateBaseUrl: true)
         }
     }
     
@@ -867,31 +931,33 @@ extension TweetCacheManager {
         }
     }
 
+    @MainActor
     func saveUser(_ user: User) {
-        guard user.hasValidUsername else {
-            print("DEBUG: [TweetCacheManager] Skipping invalid user cache write for \(user.mid): username is empty")
+        let record = UserRecord(user: user)
+        guard record.hasValidUsername else {
+            print("DEBUG: [TweetCacheManager] Skipping invalid user cache write for \(record.mid): username is empty")
             return
         }
 
         // Use async perform to avoid blocking the main thread
         context.perform {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-            request.predicate = NSPredicate(format: "mid == %@", user.mid)
+            request.predicate = NSPredicate(format: "mid == %@", record.mid)
             let cdUser = (try? self.context.fetch(request).first) ?? CDUser(context: self.context)
-            cdUser.mid = user.mid
+            cdUser.mid = record.mid
             cdUser.timeCached = Date()
 
-            var encodedUserData = try? JSONEncoder().encode(user)
-            if User.sanitizedAvatarId(user.avatar) == nil,
+            var recordToSave = record
+            if User.sanitizedAvatarId(record.avatar) == nil,
                let existingData = cdUser.userData,
-               let existingUser = try? JSONDecoder().decode(User.self, from: existingData),
-               let existingAvatar = User.sanitizedAvatarId(existingUser.avatar),
-               let userData = encodedUserData,
-               var userDictionary = (try? JSONSerialization.jsonObject(with: userData)) as? [String: Any] {
-                userDictionary["avatar"] = existingAvatar
-                encodedUserData = try? JSONSerialization.data(withJSONObject: userDictionary)
+               let existingUser = try? UserRecord.fromCacheData(existingData),
+               let existingAvatar = User.sanitizedAvatarId(existingUser.avatar) {
+                recordToSave.avatar = existingAvatar
             }
 
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let encodedUserData = try? encoder.encode(recordToSave)
             if let userData = encodedUserData {
                 cdUser.userData = userData
             }
@@ -932,6 +998,7 @@ extension TweetCacheManager {
     /// Search for users by partial username or name match
     /// Only returns users with valid usernames (username is required, name is optional)
     /// Uses multi-source search with relevance scoring (matches Android implementation)
+    @MainActor
     func searchUsers(query: String, limit: Int = 25) async -> [User] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return []
@@ -985,23 +1052,26 @@ extension TweetCacheManager {
         
         // Step 2: Search cached users in Core Data
         if scoredResults.count < limit {
-            let coreDataUsers = await withCheckedContinuation { (continuation: CheckedContinuation<[User], Never>) in
+            let coreDataUserRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[UserRecord], Never>) in
                 context.perform {
                     let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
                     request.fetchLimit = 100 // Get more candidates for better results
                     
-                    var users: [User] = []
+                    var users: [UserRecord] = []
                     if let cdUsers = try? self.context.fetch(request) {
                         for cdUser in cdUsers {
-                            let user = User.from(cdUser: cdUser)
+                            guard let userData = cdUser.userData,
+                                  let user = try? UserRecord.fromCacheData(userData) else { continue }
                             users.append(user)
                         }
                     }
                     continuation.resume(returning: users)
                 }
             }
-            
-            // Consider users outside the closure to avoid Sendable warnings
+
+            let coreDataUsers = await MainActor.run {
+                coreDataUserRecords.map { UserStore.shared.merge($0, shouldUpdateBaseUrl: true) }
+            }
             for user in coreDataUsers {
                 if scoredResults.count >= limit { break }
                 consider(user)
@@ -1021,7 +1091,7 @@ extension TweetCacheManager {
                         // Collect unique author IDs from recent tweets by decoding tweet data
                         for cdTweet in cdTweets {
                             if let tweetData = cdTweet.tweetData,
-                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                               let tweet = try? TweetRecord.fromCacheData(tweetData) {
                                 userIds.insert(tweet.authorId)
                             }
                             if userIds.count >= 50 { break }
@@ -1061,10 +1131,11 @@ extension TweetCacheManager {
     
     /// Search for users incrementally, calling the callback after each source completes
     /// This provides a responsive UI by showing results as they're found
+    @MainActor
     func searchUsersIncremental(
         query: String,
         limit: Int = 25,
-        onResults: @escaping ([User]) async -> Void
+        onResults: @escaping @MainActor @Sendable ([User]) async -> Void
     ) async {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             await onResults([])
@@ -1140,23 +1211,26 @@ extension TweetCacheManager {
         
         // Step 2: Search cached users in Core Data - update UI
         if scoredResults.count < limit {
-            let coreDataUsers = await withCheckedContinuation { (continuation: CheckedContinuation<[User], Never>) in
+            let coreDataUserRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[UserRecord], Never>) in
                 context.perform {
                     let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
                     request.fetchLimit = 100
                     
-                    var users: [User] = []
+                    var users: [UserRecord] = []
                     if let cdUsers = try? self.context.fetch(request) {
                         for cdUser in cdUsers {
-                            let user = User.from(cdUser: cdUser)
+                            guard let userData = cdUser.userData,
+                                  let user = try? UserRecord.fromCacheData(userData) else { continue }
                             users.append(user)
                         }
                     }
                     continuation.resume(returning: users)
                 }
             }
-            
-            // Consider users outside the closure to avoid Sendable warnings
+
+            let coreDataUsers = await MainActor.run {
+                coreDataUserRecords.map { UserStore.shared.merge($0, shouldUpdateBaseUrl: true) }
+            }
             for user in coreDataUsers {
                 if scoredResults.count >= limit { break }
                 consider(user)
@@ -1179,7 +1253,7 @@ extension TweetCacheManager {
                         // Collect unique author IDs from recent tweets by decoding tweet data
                         for cdTweet in cdTweets {
                             if let tweetData = cdTweet.tweetData,
-                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                               let tweet = try? TweetRecord.fromCacheData(tweetData) {
                                 userIds.insert(tweet.authorId)
                             }
                             if userIds.count >= 50 { break }
@@ -1207,6 +1281,7 @@ extension TweetCacheManager {
     
     /// Search for tweets by content and title only (not author username/name)
     /// Matches Android implementation - only searches in content and title
+    @MainActor
     func searchTweets(query: String, limit: Int = 40) async -> [Tweet] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return []
@@ -1262,17 +1337,17 @@ extension TweetCacheManager {
         
         // Step 2: Search cached tweets in Core Data
         if scoredResults.count < limit {
-            let coreDataTweets = await withCheckedContinuation { (continuation: CheckedContinuation<[Tweet], Never>) in
+            let coreDataTweetRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[TweetRecord], Never>) in
                 context.perform {
                     let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                     request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
                     request.fetchLimit = 400 // Get more candidates for better results
                     
-                    var tweets: [Tweet] = []
+                    var tweets: [TweetRecord] = []
                     if let cdTweets = try? self.context.fetch(request) {
                         for cdTweet in cdTweets {
                             if let tweetData = cdTweet.tweetData,
-                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                               let tweet = try? TweetRecord.fromCacheData(tweetData) {
                                 tweets.append(tweet)
                             }
                             if tweets.count >= 400 { break }
@@ -1281,8 +1356,12 @@ extension TweetCacheManager {
                     continuation.resume(returning: tweets)
                 }
             }
-            
-            // Consider tweets outside the closure to avoid Sendable warnings
+
+            let coreDataTweets = await MainActor.run {
+                coreDataTweetRecords.map { record in
+                    TweetStore.shared.merge(record)
+                }
+            }
             for tweet in coreDataTweets {
                 if scoredResults.count >= limit { break }
                 consider(tweet)

@@ -252,7 +252,7 @@ class SharedAssetCache: ObservableObject {
     private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // mediaID -> Delegate
     private var cachingPlayerItems: [String: CachingPlayerItem] = [:] // mediaID -> CachingPlayerItem
     private var resourceLoaderDelegates: [String: ResourceLoaderDelegate] = [:] // mediaID -> ResourceLoaderDelegate
-    private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
+    private var loadingTasks: [String: Task<Void, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var preloadedThumbnailMids: Set<String> = []
     private var decodedPreloadThumbnailMids: Set<String> = []
@@ -718,9 +718,12 @@ class SharedAssetCache: ObservableObject {
         // Check if there's already a loading task
         if let existingTask = loadingTasks[cacheKey] {
             do {
-                let asset = try await existingTask.value
+                try await existingTask.value
                 cacheTimestamps[cacheKey] = Date() // Update access time
-                return asset
+                if let asset = assetCache[cacheKey] {
+                    return asset
+                }
+                throw NSError(domain: "SharedAssetCache", code: -2, userInfo: [NSLocalizedDescriptionKey: "Asset load completed without cached asset"])
             } catch {
                 loadingTasks.removeValue(forKey: cacheKey)
                 // Fall through to create new task
@@ -730,11 +733,9 @@ class SharedAssetCache: ObservableObject {
         beginVideoLoad(mediaID: cacheKey, kind: .asset)
         
         // Create new loading task
-        let task = Task<AVAsset, Error> {
+        let task = Task { @MainActor in
             defer {
-                Task { @MainActor in
-                    self.finishVideoLoad(mediaID: cacheKey, kind: .asset)
-                }
+                self.finishVideoLoad(mediaID: cacheKey, kind: .asset)
             }
 
             // Check cancellation before starting
@@ -755,7 +756,7 @@ class SharedAssetCache: ObservableObject {
                 try Task.checkCancellation()
 
                 // Resolve HLS URL, using persisted extension when available
-                let cachedFilename = await MainActor.run { self.hlsExtensions[mediaID] }
+                let cachedFilename = self.hlsExtensions[mediaID]
                 let resolvedURL: URL
                 let resolvedFilename: String?
                 if let cachedFilename {
@@ -780,14 +781,12 @@ class SharedAssetCache: ObservableObject {
                 try Task.checkCancellation()
 
                 // Store caching player item to prevent deallocation
-                await MainActor.run {
-                    // Check cancellation on main actor
-                    guard !Task.isCancelled else { return }
-                    self.cachingPlayerItems[mediaID] = cachingPlayerItem
-                    // Persist the resolved extension alongside the cached asset
-                    if let filename = resolvedFilename {
-                        self.hlsExtensions[mediaID] = filename
-                    }
+                // Check cancellation on main actor
+                guard !Task.isCancelled else { return }
+                self.cachingPlayerItems[mediaID] = cachingPlayerItem
+                // Persist the resolved extension alongside the cached asset
+                if let filename = resolvedFilename {
+                    self.hlsExtensions[mediaID] = filename
                 }
             } else {
                 // Check cancellation before progressive video setup
@@ -814,37 +813,35 @@ class SharedAssetCache: ObservableObject {
             try Task.checkCancellation()
             
             // Cache the asset
-            await MainActor.run {
-                // Check cancellation on main actor - don't cache if cancelled
-                guard !Task.isCancelled else {
-                    // Clean up task tracking if cancelled
-                    self.loadingTasks.removeValue(forKey: cacheKey)
-                    return
-                }
-                
-                self.assetCache[cacheKey] = asset
-                self.cacheTimestamps[cacheKey] = Date()
+            // Check cancellation on main actor - don't cache if cancelled
+            guard !Task.isCancelled else {
+                // Clean up task tracking if cancelled
                 self.loadingTasks.removeValue(forKey: cacheKey)
-
-                // Reset network failure counter on successful load
-                self.consecutiveNetworkFailures = 0
-
-                // Save cache metadata to persist across app restarts
-                self.saveCacheMetadata()
-
+                return
             }
-            
-            return asset
+
+            self.assetCache[cacheKey] = asset
+            self.cacheTimestamps[cacheKey] = Date()
+            self.loadingTasks.removeValue(forKey: cacheKey)
+
+            // Reset network failure counter on successful load
+            self.consecutiveNetworkFailures = 0
+
+            // Save cache metadata to persist across app restarts
+            self.saveCacheMetadata()
         }
         
         // Store the task
         loadingTasks[cacheKey] = task
         
         do {
-            let asset = try await task.value
+            try await task.value
             // ✅ CRITICAL MEMORY FIX: Remove completed task to prevent memory leak
             loadingTasks.removeValue(forKey: cacheKey)
-            return asset
+            if let asset = assetCache[cacheKey] {
+                return asset
+            }
+            throw NSError(domain: "SharedAssetCache", code: -2, userInfo: [NSLocalizedDescriptionKey: "Asset load completed without cached asset"])
         } catch {
             // ✅ CRITICAL MEMORY FIX: Remove failed task to prevent memory leak
             loadingTasks.removeValue(forKey: cacheKey)
@@ -2280,8 +2277,9 @@ class SharedAssetCache: ObservableObject {
             let task = Task {
                 defer { preloadTasks.removeValue(forKey: cacheKey) }
                 do {
-                    let asset = try await loadingTask.value
+                    try await loadingTask.value
                     guard !Task.isCancelled,
+                          let asset = assetCache[cacheKey],
                           cachedThumbnail(for: mediaID) == nil else { return }
                     generateThumbnail(from: asset, for: mediaID)
                 } catch {
@@ -2603,11 +2601,14 @@ class SharedAssetCache: ObservableObject {
         for _ in 0..<80 {
             if Task.isCancelled { return nil }
 
-            let state = await MainActor.run { () -> (asset: AVAsset?, failed: Bool) in
-                guard let item = player.currentItem else { return (nil, true) }
-                if item.status == .readyToPlay { return (item.asset, false) }
-                if item.status == .failed { return (nil, true) }
-                return (nil, false)
+            guard let item = player.currentItem else { return nil }
+            let state: (asset: AVAsset?, failed: Bool)
+            if item.status == .readyToPlay {
+                state = (item.asset, false)
+            } else if item.status == .failed {
+                state = (nil, true)
+            } else {
+                state = (nil, false)
             }
 
             if let asset = state.asset { return asset }
@@ -3214,40 +3215,42 @@ class SharedAssetCache: ObservableObject {
     }
     
     deinit {
-        // Invalidate timers
-        cleanupTimer?.invalidate()
-        cleanupTimer = nil
-        memoryMonitorTimer?.invalidate()
-        memoryMonitorTimer = nil
-        
-        for task in loadingTasks.values {
-            task.cancel()
-        }
-        loadingTasks.removeAll()
-        for task in preloadTasks.values {
-            task.cancel()
-        }
-        preloadTasks.removeAll()
-        for tasks in activeCreationTasks.values {
-            for task in tasks.values {
+        MainActor.assumeIsolated {
+            // Invalidate timers
+            cleanupTimer?.invalidate()
+            cleanupTimer = nil
+            memoryMonitorTimer?.invalidate()
+            memoryMonitorTimer = nil
+            
+            for task in loadingTasks.values {
                 task.cancel()
             }
+            loadingTasks.removeAll()
+            for task in preloadTasks.values {
+                task.cancel()
+            }
+            preloadTasks.removeAll()
+            for tasks in activeCreationTasks.values {
+                for task in tasks.values {
+                    task.cancel()
+                }
+            }
+            activeCreationTasks.removeAll()
+            activeVideoLoadTickets.removeAll()
+            
+            // Pause and clean up all cached players
+            for (_, player) in playerCache {
+                player.pause()
+            }
+            playerCache.removeAll()
+            
+            // Clear all caches
+            assetCache.removeAll()
+            cacheTimestamps.removeAll()
+            
+            // Remove NotificationCenter observers
+            NotificationCenter.default.removeObserver(self)
         }
-        activeCreationTasks.removeAll()
-        activeVideoLoadTickets.removeAll()
-        
-        // Pause and clean up all cached players
-        for (_, player) in playerCache {
-            player.pause()
-        }
-        playerCache.removeAll()
-        
-        // Clear all caches
-        assetCache.removeAll()
-        cacheTimestamps.removeAll()
-        
-        // Remove NotificationCenter observers
-        NotificationCenter.default.removeObserver(self)
     }
     
     private func handleAppWillEnterForeground() {

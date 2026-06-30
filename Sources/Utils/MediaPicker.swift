@@ -551,7 +551,7 @@ struct VideoThumbnailView: View {
     @State private var hasError = false
 
     // Thread-safe static cache to avoid regenerating thumbnails for the same video
-    private static var thumbnailCache: [String: UIImage] = [:]
+    private nonisolated(unsafe) static var thumbnailCache: [String: UIImage] = [:]
     private static let cacheQueue = DispatchQueue(label: "com.tweet.videothumbnailcache", attributes: .concurrent)
     
     // Thread-safe cache access methods
