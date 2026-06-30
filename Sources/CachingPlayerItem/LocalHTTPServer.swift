@@ -1359,78 +1359,68 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: queue)
-        Task {
-            await receiveNextRequest(connection: connection)
-        }
+        receiveNextRequest(connection: connection)
     }
-    
-    private func receiveNextRequest(connection: NWConnection) async {
-        await withCheckedContinuation { continuation in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-                guard let self = self else {
-                    continuation.resume()
-                    return
-                }
 
-                if let error = error {
-                    let nwCode = (error as NSError).code
-                    // Only count non-benign errors toward emergency cleanup.
-                    // Code 54 (connection reset) and 89 (cancelled) are normal
-                    // when AVPlayer closes/reopens local connections.
-                    let isBenign = (nwCode == 54 || nwCode == 89 || nwCode == NSURLErrorCancelled)
-                    if !isBenign {
-                        var shouldCleanup = false
-                        self.networkFailureLock.lock()
-                        self._consecutiveNetworkFailures += 1
-                        let count = self._consecutiveNetworkFailures
-                        if count >= self.maxConsecutiveFailures {
-                            shouldCleanup = true
-                            self._consecutiveNetworkFailures = 0
-                        }
-                        self.networkFailureLock.unlock()
+    // Purely callback-based — no withCheckedContinuation, no cooperative thread blocked.
+    // When stopInternal() cancels the listener, outstanding NWConnection receive callbacks
+    // fire with an error and fall through to connection.cancel(); nothing can be leaked.
+    private func receiveNextRequest(connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self else {
+                connection.cancel()
+                return
+            }
 
-                        print("DEBUG: [LocalHTTPServer] Network failure count: \(count)/\(self.maxConsecutiveFailures)")
-                        if shouldCleanup {
-                            print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
-                            self.handleNetworkFailureCleanup()
-                        }
-                    }
-
-                    // Only log unexpected errors (suppress connection-reset 54 and operation-canceled 89)
-                    if nwCode != 54 && nwCode != 89 {
-                        print("DEBUG: [LocalHTTPServer] Receive error (code \(nwCode)): \(error)")
-                    }
-                } else {
-                    // Reset network failure counter on successful receive
+            if let error = error {
+                let nwCode = (error as NSError).code
+                // Only count non-benign errors toward emergency cleanup.
+                // Code 54 (connection reset) and 89 (cancelled) are normal
+                // when AVPlayer closes/reopens local connections.
+                let isBenign = (nwCode == 54 || nwCode == 89 || nwCode == NSURLErrorCancelled)
+                if !isBenign {
+                    var shouldCleanup = false
                     self.networkFailureLock.lock()
-                    self._consecutiveNetworkFailures = 0
+                    self._consecutiveNetworkFailures += 1
+                    let count = self._consecutiveNetworkFailures
+                    if count >= self.maxConsecutiveFailures {
+                        shouldCleanup = true
+                        self._consecutiveNetworkFailures = 0
+                    }
                     self.networkFailureLock.unlock()
-                }
 
-                if let data = data, !data.isEmpty {
-                    let request = String(data: data, encoding: .utf8) ?? ""
-
-                    // Handle the request
-                    Task {
-                        await self.handleRequest(request, connection: connection) {
-                            // With Connection: close, each NWConnection handles exactly one
-                            // request-response cycle. Synchronous handlers (sendResponse /
-                            // serveFile) already send TCP FIN. Progressive range streams
-                            // manage connection lifecycle themselves.
-                            // Do NOT cancel here — it kills progressive streams mid-flight.
-                        }
-                        continuation.resume()
-                    }
-                } else if isComplete || error != nil {
-                    connection.cancel()
-                    continuation.resume()
-                } else {
-                    // No data yet, keep waiting
-                    Task {
-                        await self.receiveNextRequest(connection: connection)
-                        continuation.resume()
+                    print("DEBUG: [LocalHTTPServer] Network failure count: \(count)/\(self.maxConsecutiveFailures)")
+                    if shouldCleanup {
+                        print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
+                        self.handleNetworkFailureCleanup()
                     }
                 }
+
+                // Only log unexpected errors (suppress connection-reset 54 and operation-canceled 89)
+                if nwCode != 54 && nwCode != 89 {
+                    print("DEBUG: [LocalHTTPServer] Receive error (code \(nwCode)): \(error)")
+                }
+            } else {
+                // Reset network failure counter on successful receive
+                self.networkFailureLock.lock()
+                self._consecutiveNetworkFailures = 0
+                self.networkFailureLock.unlock()
+            }
+
+            if let data = data, !data.isEmpty {
+                let request = String(data: data, encoding: .utf8) ?? ""
+                // Dispatch async request handling without holding a continuation.
+                // With Connection: close each NWConnection is one request-response cycle;
+                // sendResponse/serveFile/stream handlers manage their own TCP FIN.
+                Task {
+                    await self.handleRequest(request, connection: connection) { }
+                }
+            } else if isComplete || error != nil {
+                connection.cancel()
+            } else {
+                // No data yet — register next read without recursing on the stack.
+                // This call returns immediately; the callback fires later on queue.
+                self.receiveNextRequest(connection: connection)
             }
         }
     }
