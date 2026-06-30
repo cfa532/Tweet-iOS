@@ -1715,7 +1715,19 @@ class TweetTableViewController: UITableViewController {
             hasPendingSpinnerHide = false
             let shouldShow = pendingSpinnerShouldShowMessage
             pendingSpinnerShouldShowMessage = false
-            hideSpinner(shouldShowMessage: shouldShow)
+            // Respect the minimum display time even on the deferred path.
+            if let startTime = loadingSpinnerStartTime {
+                let remaining = max(0, minimumSpinnerDisplayTime - Date().timeIntervalSince(startTime))
+                if remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
+                        self?.hideSpinner(shouldShowMessage: shouldShow)
+                    }
+                } else {
+                    hideSpinner(shouldShowMessage: shouldShow)
+                }
+            } else {
+                hideSpinner(shouldShowMessage: shouldShow)
+            }
         }
 
         applyPendingScrollRequestIfNeeded()
