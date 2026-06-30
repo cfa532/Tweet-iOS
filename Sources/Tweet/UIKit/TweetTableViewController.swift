@@ -734,7 +734,6 @@ class TweetTableViewController: UITableViewController {
         }
 
         needsVideoLayerRefresh = false
-        refreshVisibleVideoLayersAfterForeground()
         videoCoordinator.validatePlayersAfterBackground()
         videoCoordinator.resetForForegroundInfrastructureRecovery(reason: reason)
         lastVisibleTweetIds = []
@@ -742,6 +741,10 @@ class TweetTableViewController: UITableViewController {
         lastContinuePlaybackVideoIds = []
         lastOnScreenVideoIds = []
         updateVisibleTweetsForVideoPlayback()
+        // Refresh layers AFTER the coordinator is reset and allVideos is rebuilt so that
+        // any onReadyForDisplay callbacks cells set up see consistent coordinator state,
+        // and so that coordinatorWantsToPlay is authoritative (set by requestResume below).
+        refreshVisibleVideoLayersAfterForeground()
         videoCoordinator.requestResumePrimaryPlaybackIfVisible()
     }
 

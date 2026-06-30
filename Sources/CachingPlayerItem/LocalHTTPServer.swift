@@ -580,12 +580,18 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     @objc private func handleDidBecomeActive() {
-        let _ = !didEnterBackground  // Track if this was screen lock vs background
-        
         // End background task - no longer needed
         endBackgroundTask()
-        
-        // Check server health and restart if needed
+
+        // AppDelegate drives all foreground infrastructure recovery when
+        // isVideoInfrastructureReady == false.  Running verifyServerHealth concurrently
+        // creates a double-restart race: both paths serialise through the server queue,
+        // causing an unnecessary stop→start→stop→start sequence that delays playback
+        // and can make AppDelegate's isHealthyAsync() check return false mid-restart.
+        guard AppDelegate.isVideoInfrastructureReady else { return }
+
+        // Check server health and restart if needed (only when AppDelegate is not
+        // already managing a recovery cycle).
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.verifyServerHealth()
         }

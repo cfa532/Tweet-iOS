@@ -522,10 +522,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppWillResignActive() {
         print("[AppDelegate] App will resign active - storing timestamp for screen lock detection")
         
-        // Cancel any ongoing infrastructure restart task
+        // Cancel any ongoing infrastructure restart task.
+        // Do NOT write isRestartingInfrastructure here — it is also written from inside
+        // Task.detached bodies (background threads), making that a data race.  The task
+        // cancellation is sufficient; the flag resets itself via the task's own error path.
         infrastructureRestartTask?.cancel()
         infrastructureRestartTask = nil
-        isRestartingInfrastructure = false
         
         // Store timestamp when app loses focus (screen lock or background)
         // This helps distinguish between screen lock and background scenarios
@@ -609,8 +611,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Run on the next main turn so view controllers can prepare the app-switcher snapshot first.
         DispatchQueue.main.async { [weak self] in
             guard UIApplication.shared.applicationState == .background else {
+                // App returned to foreground before cleanup ran — the foreground recovery task
+                // already owns isVideoInfrastructureReady and will set it true when the proxy
+                // is confirmed healthy.  Do NOT set it here: doing so causes cells to create
+                // players against a potentially unhealthy server before recovery completes.
                 print("⚡ [AppDelegate] Background memory release skipped; app returned before cleanup")
-                AppDelegate.isVideoInfrastructureReady = true
                 self?.endBackgroundCleanupTask()
                 return
             }
@@ -845,7 +850,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
 
-        guard !isRestartingInfrastructure else {
+        let alreadyRestarting = await MainActor.run { isRestartingInfrastructure }
+        guard !alreadyRestarting else {
             print("[AppDelegate] Proxy health failed after \(reason), but infrastructure restart is already in progress")
             return
         }
@@ -910,30 +916,31 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Check if already cancelled
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled before starting")
-            isRestartingInfrastructure = false
+            await MainActor.run { isRestartingInfrastructure = false }
             return false
         }
-        
-        // Mark as restarting
-        isRestartingInfrastructure = true
-        
+
+        // isRestartingInfrastructure is always written via MainActor.run to avoid a data race
+        // with handleAppWillResignActive which runs on the main thread.
+        await MainActor.run { isRestartingInfrastructure = true }
+
         print("[AppDelegate] Restarting video infrastructure asynchronously (non-blocking)")
         let startTime = Date()
-        
+
         // CRITICAL: Clear ALL video players FIRST to release their URLs (async for speed)
         // Run clearing in parallel with server operations
         let clearTask = Task.detached(priority: .userInitiated) { @MainActor in
             SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
         }
-        
+
         // DON'T clear VideoStateCache - it stores playback position/state
         // Preserving it allows videos to resume from where they left off after reload
-        
+
         // Check if cancelled
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled before proxy restart")
             await clearTask.value
-            isRestartingInfrastructure = false
+            await MainActor.run { isRestartingInfrastructure = false }
             return false
         }
 
@@ -945,31 +952,29 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 didRestartProxy = await LocalHTTPServer.shared.forceRestartAndWaitAsync()
             }
         }
-        
+
         // Check if cancelled
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled after proxy restart")
             await clearTask.value
-            isRestartingInfrastructure = false
+            await MainActor.run { isRestartingInfrastructure = false }
             return false
         }
-        
+
         // Wait for player clearing to complete (runs in parallel)
         await clearTask.value
-        
+
         // Check if cancelled before restarting
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled before restart")
-            isRestartingInfrastructure = false
+            await MainActor.run { isRestartingInfrastructure = false }
             return false
         }
-        
+
         let elapsed = Date().timeIntervalSince(startTime)
         print("[AppDelegate] Video infrastructure restart complete (async) in \(String(format: "%.2f", elapsed))s")
-        
-        // Mark as complete
-        isRestartingInfrastructure = false
-        infrastructureRestartTask = nil
+
+        await MainActor.run { isRestartingInfrastructure = false }
         return didRestartProxy
     }
     
