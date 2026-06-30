@@ -2636,23 +2636,26 @@ final class HproseInstance: ObservableObject {
             "password": loginUser.password!
         ]
 
-        guard let baseUrl = loginUser.baseUrl else {
-            print("ERROR: [login] Nil user baseUrl")
+        // Prefer hostIds[0] (the writable home node where data_of_author lives).
+        // Fall back to baseUrl (access node) if resolution fails or hostIds is absent.
+        let loginUrl: URL
+        if let resolved = try? await loginUser.resolveWritableUrl() {
+            loginUrl = resolved
+            print("DEBUG: [login] Using writable node URL (hostIds[0]): \(loginUrl.absoluteString)")
+        } else if let fallback = loginUser.baseUrl {
+            loginUrl = fallback
+            print("DEBUG: [login] hostIds[0] not resolved, falling back to baseUrl: \(loginUrl.absoluteString)")
+        } else {
+            print("ERROR: [login] No URL available for login")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
 
-        print("DEBUG: [login] Starting login API call to baseUrl: \(baseUrl.absoluteString)")
+        print("DEBUG: [login] Starting login API call to: \(loginUrl.absoluteString)")
 
         return try await retryOperation(maxRetries: 3) {
-            print("DEBUG: [login] Creating client for baseUrl: \(baseUrl.absoluteString)")
-            let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            newClient.timeout = 30.0  // 30 seconds (login can be slow due to remote node communication)
-
-            // Release client back to pool when done (no need to close)
-            defer {
-                // Note: Not releasing back to pool since timeout is configured differently
-                // Let the pool manage lifecycle naturally
-            }
+            print("DEBUG: [login] Creating client for: \(loginUrl.absoluteString)")
+            let newClient = self.clientPool.getClientByUrl(for: loginUrl.absoluteString)
+            newClient.timeout = 30.0
 
             print("DEBUG: [login] Invoking login API...")
             let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
