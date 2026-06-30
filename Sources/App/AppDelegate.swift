@@ -862,7 +862,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func recoverVideoInfrastructureAfterForeground(reason: String) async {
         guard !Task.isCancelled else { return }
 
-        let isProxyHealthy = await LocalHTTPServer.shared.isHealthyAsync()
+        let forceRestart = shouldForceVideoInfrastructureRestart(reason: reason)
+        if forceRestart {
+            print("🔄 [AppDelegate] Forcing video infrastructure restart after \(reason)")
+        }
+
+        let isProxyHealthy = forceRestart ? false : await LocalHTTPServer.shared.isHealthyAsync()
         if isProxyHealthy {
             await MainActor.run {
                 AppDelegate.isVideoInfrastructureReady = true
@@ -911,6 +916,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] 🔄 Refreshing appUser IP after video recovery...")
         await refreshAppUserIP()
         print("[AppDelegate] ✅ AppUser IP refresh complete")
+    }
+
+    private func shouldForceVideoInfrastructureRestart(reason: String) -> Bool {
+        reason.hasPrefix("long foreground")
+            || reason.hasPrefix("long screen lock")
+            || reason.hasPrefix("foreground after background launch")
     }
 
     private func shouldRefreshAppUserBeforeForegroundVideoReload(reason: String) -> Bool {
