@@ -2635,44 +2635,44 @@ final class HproseInstance: ObservableObject {
             "username": loginUser.username!,
             "password": loginUser.password!
         ]
-        
+
         guard let baseUrl = loginUser.baseUrl else {
             print("ERROR: [login] Nil user baseUrl")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
-        
+
         print("DEBUG: [login] Starting login API call to baseUrl: \(baseUrl.absoluteString)")
-        
+
         return try await retryOperation(maxRetries: 3) {
             print("DEBUG: [login] Creating client for baseUrl: \(baseUrl.absoluteString)")
             let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
             newClient.timeout = 30.0  // 30 seconds (login can be slow due to remote node communication)
-            
+
             // Release client back to pool when done (no need to close)
-            defer { 
+            defer {
                 // Note: Not releasing back to pool since timeout is configured differently
                 // Let the pool manage lifecycle naturally
             }
-            
+
             print("DEBUG: [login] Invoking login API...")
             let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
             print("DEBUG: [login] Got raw response, unwrapping...")
-            
+
             // Check if the response is nil (network error)
             guard rawResponse != nil else {
                 print("ERROR: [login] Network request failed - nil response (timeout or connection error)")
                 throw NSError(domain: "NSURLErrorDomain", code: -1001, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Request timed out", comment: "Network timeout error")])
             }
-            
+
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
+
             guard let response = unwrappedResponse as? [String: Any] else {
                 print("ERROR: [login] Invalid response format from server")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
-            
+
             print("DEBUG: [login] Response received: \(response)")
-            
+
             // Handle v2 format: check success field first, then status field for backward compatibility
             if let success = response["success"] as? Bool {
                 if !success {
@@ -2695,7 +2695,7 @@ final class HproseInstance: ObservableObject {
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
-            
+
             // Check for status field (alternate response format)
             if let status = response["status"] as? String {
                 if status == "failure" {
@@ -2717,7 +2717,7 @@ final class HproseInstance: ObservableObject {
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
-            
+
             print("DEBUG: [login] Login failed - no success field or no user data")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
