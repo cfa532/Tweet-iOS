@@ -1097,7 +1097,8 @@ struct TweetListView: View {
             do {
                 tweetsFromCache = try await tweetFetcher(page, pageSize, true)
 
-                // If we got cached tweets, show them immediately
+                // If we got cached tweets, show them immediately and hide the spinner.
+                // The network refresh (below) is then a silent background update.
                 if !tweetsFromCache.isEmpty {
                     await MainActor.run {
                         // For preserveOrder lists (bookmarks/favorites), append in server order
@@ -1109,6 +1110,12 @@ struct TweetListView: View {
                             page: page,
                             pageSize: pageSize
                         )
+                        // Cache supplied the tweets — spinner can go once they render.
+                        // hasPendingSpinnerHide in TweetTableViewController will hold the
+                        // spinner until the deferred rows are committed if the user is
+                        // still dragging.
+                        isLoadingMore = false
+                        loadingStartTime = nil
                     }
                     print("✅ [PAGINATION] Loaded \(tweetsFromCache.count) tweets from cache for page \(page)")
                 }
@@ -1117,18 +1124,20 @@ struct TweetListView: View {
                 print("⚠️ [PAGINATION] Cache fetch failed for page \(page): \(error), will try server")
             }
 
-            // CRITICAL: Let UI render cached tweets BEFORE continuing with server fetch
-            // By spawning the rest in a detached task, cached tweets render immediately
-            // without resuming backend work on SwiftUI's main actor.
+            // Step 2: Refresh from server in the background (always, even after a cache hit).
+            // If there was a cache miss, server response also clears the spinner.
+            let hadCachedTweets = !tweetsFromCache.isEmpty
             Task.detached(priority: .utility) {
-                // Step 2: Load from server to get fresh data (always try, even if cache failed)
-                // Keep isLoadingMore = true until server responds so spinner stays visible
                 await loadFromServer(page: page, pageSize: pageSize, completion: completion)
 
-                // Now that server has responded, clear loading state
-                await MainActor.run {
-                    isLoadingMore = false
-                    loadingStartTime = nil
+                // Only update loading state here when there was no cache hit.
+                // On a cache hit isLoadingMore is already false; setting it again is harmless
+                // but produces an unnecessary SwiftUI re-render.
+                if !hadCachedTweets {
+                    await MainActor.run {
+                        isLoadingMore = false
+                        loadingStartTime = nil
+                    }
                 }
             }
         }

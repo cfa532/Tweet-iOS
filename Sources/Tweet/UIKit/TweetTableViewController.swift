@@ -229,6 +229,10 @@ class TweetTableViewController: UITableViewController {
     private var isTableViewUpdating: Bool = false
     private var deferredPinnedTweets: [Tweet]?
     private var deferredTweets: [Tweet]?
+    /// True when updateLoadingState(isLoadingMore:false) was called while deferredTweets
+    /// were pending. The spinner stays visible until the deferred rows are actually inserted.
+    private var hasPendingSpinnerHide = false
+    private var pendingSpinnerShouldShowMessage = false
     private var needsFullReloadAfterAttach: Bool = false
     private var pendingHeightRelayoutTweetIds = Set<String>()
     /// Tweet IDs whose content is currently expanded by the user ("More..." tapped).
@@ -1689,6 +1693,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func applyDeferredTableChromeUpdatesAfterScroll() {
+        let hadDeferredTweets = deferredTweets != nil
         if let deferredTweets {
             self.deferredTweets = nil
             updateTweets(deferredTweets)
@@ -1701,6 +1706,16 @@ class TweetTableViewController: UITableViewController {
         if let deferredPinnedTweets {
             self.deferredPinnedTweets = nil
             updatePinnedTweets(deferredPinnedTweets)
+        }
+
+        // Hide the spinner now that deferred rows are in the table.
+        // We only do this when there actually were deferred tweets so that a
+        // spurious scroll-end event doesn't race with a legitimate pending hide.
+        if hasPendingSpinnerHide && hadDeferredTweets {
+            hasPendingSpinnerHide = false
+            let shouldShow = pendingSpinnerShouldShowMessage
+            pendingSpinnerShouldShowMessage = false
+            hideSpinner(shouldShowMessage: shouldShow)
         }
 
         applyPendingScrollRequestIfNeeded()
@@ -1951,6 +1966,19 @@ class TweetTableViewController: UITableViewController {
                     canShowMessage = Date().timeIntervalSince(lastShown) > noMoreTweetsMessageCooldown
                 } else {
                     canShowMessage = true
+                }
+
+                // If new rows are deferred behind an active scroll gesture, keep the spinner
+                // visible until applyDeferredTableChromeUpdatesAfterScroll commits them.
+                // Hiding now creates a gap: spinner gone but rows still pending finger lift.
+                if deferredTweets != nil {
+                    if !hasPendingSpinnerHide {
+                        hasPendingSpinnerHide = true
+                        pendingSpinnerShouldShowMessage = shouldShowMessage && canShowMessage
+                        loadingTimeoutTimer?.invalidate()
+                        loadingTimeoutTimer = nil
+                    }
+                    return
                 }
 
                 if remainingTime > 0 {
