@@ -3214,20 +3214,30 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // This ensures tweets are sorted correctly when retrieved from cache
         let isBookmarkOrFavorite = type == .BOOKMARKS || type == .FAVORITES
         let baseTime = Date()
+        var scheduledBackgroundAuthorFetches = Set<String>()
+        func scheduleBackgroundAuthorFetch(authorId: String) {
+            guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
+
+            Task(priority: .utility) { [weak self] in
+                await Task.yield()
+                do {
+                    _ = try await self?.fetchUser(authorId)
+                } catch {
+                    print("DEBUG: [HproseInstance] getUserTweetsByType - Background author fetch failed for \(authorId): \(error)")
+                }
+            }
+        }
         
         var tweetsWithAuthors: [Tweet?] = []
         for (index, dict) in response.enumerated() {
             if let item = dict {
                 do {
                     let tweet = try await mergeTweetFromDict(item)
-                    let needsAuthor = await MainActor.run { tweet.author == nil }
-                    if needsAuthor {
-                        if let author = try? await fetchUser(tweet.authorId) {
-                            await MainActor.run {
-                                tweet.author = author  // Set on main thread since author is @Published
-                            }
-                        }
+                    let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
+                    await MainActor.run {
+                        tweet.author = cachedAuthor
                     }
+                    scheduleBackgroundAuthorFetch(authorId: tweet.authorId)
                     // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed.
                     // Use format: "bookmark_list_userId" or "favorite_list_userId".
                     // saveTweet will automatically mark media as permanent based on the prefix
