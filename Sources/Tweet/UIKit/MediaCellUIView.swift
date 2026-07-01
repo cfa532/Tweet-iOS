@@ -2449,6 +2449,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return max(0, bestBufferAhead)
     }
 
+    private func publishMediaBufferHealthIfNeeded(for player: AVPlayer) {
+        guard let mid = attachment?.mid else { return }
+        LocalHTTPServer.shared.updateMediaBufferHealth(
+            mediaID: mid,
+            bufferedAhead: bufferedTimeAhead(for: player)
+        )
+    }
+
     private func applyAVPlayerBufferDefaults(to player: AVPlayer) {
         if Date() >= startupBufferReleaseUntil {
             player.automaticallyWaitsToMinimizeStalling = true
@@ -4097,6 +4105,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                       self.player === player,
                       player.currentItem === item else { return }
                 self.removeVideoCoverIfLoadedAndDisplayable(player, reason: "loadedTimeRanges")
+                self.publishMediaBufferHealthIfNeeded(for: player)
             }
         }
 
@@ -4689,6 +4698,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.recordPlaybackProgress(currentTime: time)
+                if let player = self.player {
+                    self.publishMediaBufferHealthIfNeeded(for: player)
+                }
                 if self.isSingleMedia {
                     self.updateTimerLabel(currentTime: time)
                 }
@@ -5377,6 +5389,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 if attachment.getUrl(effectiveBaseUrl) != nil {
                     SharedAssetCache.shared.markAsVisible(attachment.mid)
                     VideoStateCache.shared.markAsVisible(attachment.mid)
+                    LocalHTTPServer.shared.markMediaVisible(attachment.mid)
                 }
                 if shouldAcquirePlayer {
                     _ = attachCachedPlayerIfAvailable(reason: "becameVisible")
@@ -5482,6 +5495,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 if attachment.getUrl(effectiveBaseUrl) != nil {
                     SharedAssetCache.shared.markAsNotVisible(attachment.mid)
                     VideoStateCache.shared.markAsNotVisible(attachment.mid)
+                    LocalHTTPServer.shared.markMediaNotVisible(attachment.mid)
                     SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet?.mid ?? "")
                 }
 

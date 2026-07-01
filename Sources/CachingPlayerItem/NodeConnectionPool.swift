@@ -3,19 +3,19 @@
 //
 // Per-node IPFS bandwidth manager.
 //
-// Separate caps for primary and preload downloads per node:
-// Primary video:
-//   - Never waits — acquires a slot immediately.
-//   - Capped at primarySlotCap concurrent slots: 3 for HLS, 2 for progressive.
-//   - Primary slots do NOT count toward the preload cap.
-// Non-primary (preloads):
-//   - Soft cap of maxPreloadSlots (3) concurrent downloads, counting only non-primary slots.
-//   - Acquires immediately if nonPrimaryActive < maxPreloadSlots, otherwise returns false.
-//   - Polling and primary-promotion handled by the proxy handler (not the pool).
-//   - When primary changes, forceReleaseNonPrimary clears stale slot counts so
-//     preloads see capacity (old IPFS downloads continue to disk cache uncounted).
+// Priority model:
+// - Primary gets its own lane and never competes with visible/preload work.
+// - Visible non-primary videos get a small lane so on-screen media can buffer.
+// - Off-screen preloads are allowed only after LocalHTTPServer says primary and
+//   visible non-primary buffers are healthy.
 
 import Foundation
+
+enum NodeDownloadPriority: Sendable, Equatable {
+    case primary
+    case visible
+    case preload
+}
 
 // MARK: - NodeConnectionPool (actor, one per IPFS node host:port)
 
@@ -26,104 +26,111 @@ actor NodeConnectionPool {
 #else
     private static let verboseLogsEnabled = false
 #endif
-    /// Cap on concurrent preload downloads. Primary slots are separate and don't count here.
-    private let maxPreloadSlots = 3
 
-    /// Count of active IPFS slot holds per mediaID.
-    private var activeSlots: [String: Int] = [:]
+    private let maxVisibleSlots = 2
+    private let maxPreloadSlots = 2
 
-    /// The currently-playing primary mediaID. Its slots are excluded from the preload cap.
+    private var primarySlots: [String: Int] = [:]
+    private var visibleSlots: [String: Int] = [:]
+    private var preloadSlots: [String: Int] = [:]
+
     private var primaryMediaID: String?
+    private var preloadsAllowed = true
 
     init(nodeHost: String) {
         self.nodeHost = nodeHost
     }
 
-    // MARK: - Public API
-
-    /// Acquire a slot before starting an IPFS download. Non-blocking.
-    ///
-    /// Returns `true` if a slot was occupied (caller must call `releaseSlot` when done).
-    /// Returns `false` in two cases (caller must NOT call `releaseSlot`):
-    ///   - Primary at `primarySlotCap`: download still proceeds (no slot needed).
-    ///   - Non-primary rejected (preload pool full): caller should poll and retry.
-    ///
-    /// - Primary (`isPrimary: true`): granted immediately; slots don't count toward preload cap.
-    /// - Non-primary (`isPrimary: false`): granted if nonPrimaryActive < maxPreloadSlots,
-    ///   otherwise returns `false`. Caller (proxy handler) manages retry polling.
     @discardableResult
-    func acquireSlot(mediaID: String, isPrimary: Bool, primarySlotCap: Int = 1) -> Bool {
+    func acquireSlot(mediaID: String, priority: NodeDownloadPriority, primarySlotCap: Int = 1) -> Bool {
         let short = String(mediaID.prefix(8))
-        if isPrimary {
+        switch priority {
+        case .primary:
             primaryMediaID = mediaID
-            let current = activeSlots[mediaID] ?? 0
-            if current < primarySlotCap {
-                occupy(mediaID: mediaID)
-                if Self.verboseLogsEnabled {
-                    print("🎰 [POOL \(nodeHost)] PRIMARY \(short) slot \(current + 1)/\(primarySlotCap) (preload=\(nonPrimaryActive)/\(maxPreloadSlots))")
-                }
-                return true
-            } else {
-                return false
-            }
-        }
-        if nonPrimaryActive < maxPreloadSlots {
-            occupy(mediaID: mediaID)
-            return true
-        } else {
-            return false  // caller polls; no per-attempt log to avoid spam
-        }
-    }
-
-    /// Release a slot after an IPFS download completes or is cancelled.
-    func releaseSlot(mediaID: String) {
-        guard let count = activeSlots[mediaID] else { return }
-        if count <= 1 { activeSlots.removeValue(forKey: mediaID) }
-        else { activeSlots[mediaID] = count - 1 }
-    }
-
-    /// Force-release all slots except the new primary's. Called when primary changes.
-    /// Old IPFS downloads continue to disk cache but no longer count toward the cap,
-    /// freeing slots so preloads can acquire capacity.
-    func forceReleaseNonPrimary(primaryMediaID: String?) {
-        self.primaryMediaID = primaryMediaID
-        var released = 0
-        for (mediaID, count) in activeSlots where mediaID != primaryMediaID {
-            activeSlots.removeValue(forKey: mediaID)
-            released += count
-        }
-        if released > 0 {
-            let short = primaryMediaID.map { String($0.prefix(8)) } ?? "nil"
+            let current = primarySlots[mediaID] ?? 0
+            guard current < primarySlotCap else { return false }
+            primarySlots[mediaID, default: 0] += 1
             if Self.verboseLogsEnabled {
-                print("🎰 [POOL \(nodeHost)] force-released \(released) non-primary slots (primary=\(short), preload=\(nonPrimaryActive)/\(maxPreloadSlots))")
+                print("🎰 [POOL \(nodeHost)] PRIMARY \(short) slot \(current + 1)/\(primarySlotCap) (visible=\(visibleActive)/\(maxVisibleSlots), preload=\(preloadActive)/\(maxPreloadSlots))")
             }
+            return true
+
+        case .visible:
+            guard visibleActive < maxVisibleSlots else { return false }
+            visibleSlots[mediaID, default: 0] += 1
+            if Self.verboseLogsEnabled {
+                print("🎰 [POOL \(nodeHost)] VISIBLE \(short) slot \(visibleActive)/\(maxVisibleSlots) (preload=\(preloadActive)/\(maxPreloadSlots))")
+            }
+            return true
+
+        case .preload:
+            guard preloadsAllowed,
+                  preloadActive < maxPreloadSlots else { return false }
+            preloadSlots[mediaID, default: 0] += 1
+            if Self.verboseLogsEnabled {
+                print("🎰 [POOL \(nodeHost)] PRELOAD \(short) slot \(preloadActive)/\(maxPreloadSlots)")
+            }
+            return true
         }
     }
 
-    /// Called when the server stops. Clears all stale slot counts.
+    func releaseSlot(mediaID: String, priority: NodeDownloadPriority) {
+        switch priority {
+        case .primary:
+            release(mediaID: mediaID, from: &primarySlots)
+        case .visible:
+            release(mediaID: mediaID, from: &visibleSlots)
+        case .preload:
+            release(mediaID: mediaID, from: &preloadSlots)
+        }
+    }
+
+    /// Primary changed; stale lower-lane counters should not keep future work blocked.
+    /// Existing URLSession tasks may continue, but primary still has its own lane.
+    func forceReleaseLowerPriority(primaryMediaID: String?) {
+        self.primaryMediaID = primaryMediaID
+        let released = visibleSlots.values.reduce(0, +) + preloadSlots.values.reduce(0, +)
+        visibleSlots.removeAll()
+        preloadSlots.removeAll()
+        preloadsAllowed = primaryMediaID == nil
+        if released > 0, Self.verboseLogsEnabled {
+            let short = primaryMediaID.map { String($0.prefix(8)) } ?? "nil"
+            print("🎰 [POOL \(nodeHost)] released \(released) lower-priority slot(s) (primary=\(short))")
+        }
+    }
+
+    func setPreloadsAllowed(_ allowed: Bool) {
+        preloadsAllowed = allowed
+    }
+
     func reset() {
-        activeSlots.removeAll()
+        primarySlots.removeAll()
+        visibleSlots.removeAll()
+        preloadSlots.removeAll()
         primaryMediaID = nil
+        preloadsAllowed = true
     }
 
-    // MARK: - Internal
-
-    private var totalActive: Int { activeSlots.values.reduce(0, +) }
-
-    /// Count of active slots held by non-primary mediaIDs.
-    private var nonPrimaryActive: Int {
-        activeSlots.filter { $0.key != primaryMediaID }.values.reduce(0, +)
+    private var visibleActive: Int {
+        visibleSlots.values.reduce(0, +)
     }
 
-    private func occupy(mediaID: String) {
-        activeSlots[mediaID, default: 0] += 1
+    private var preloadActive: Int {
+        preloadSlots.values.reduce(0, +)
+    }
+
+    private func release(mediaID: String, from slots: inout [String: Int]) {
+        guard let count = slots[mediaID] else { return }
+        if count <= 1 {
+            slots.removeValue(forKey: mediaID)
+        } else {
+            slots[mediaID] = count - 1
+        }
     }
 }
 
 // MARK: - NodePoolRegistry (global, thread-safe via NSLock)
 
-/// Maps "host:port" strings to their NodeConnectionPool actors.
-/// Pools are created lazily and never removed (nodes are long-lived).
 final class NodePoolRegistry: @unchecked Sendable {
     static let shared = NodePoolRegistry()
     private init() {}
@@ -140,19 +147,28 @@ final class NodePoolRegistry: @unchecked Sendable {
         return pool
     }
 
-    /// Force-release non-primary slots from all pools.
-    func forceReleaseNonPrimary(primaryMediaID: String?) {
+    func forceReleaseLowerPriority(primaryMediaID: String?) {
         lock.lock()
         let allPools = Array(pools.values)
         lock.unlock()
         Task {
             for pool in allPools {
-                await pool.forceReleaseNonPrimary(primaryMediaID: primaryMediaID)
+                await pool.forceReleaseLowerPriority(primaryMediaID: primaryMediaID)
             }
         }
     }
 
-    /// Reset all pools on server stop: clears stale slot counts.
+    func setPreloadsAllowed(_ allowed: Bool) {
+        lock.lock()
+        let allPools = Array(pools.values)
+        lock.unlock()
+        Task {
+            for pool in allPools {
+                await pool.setPreloadsAllowed(allowed)
+            }
+        }
+    }
+
     func resetAllPools() {
         lock.lock()
         let allPools = Array(pools.values)
@@ -164,7 +180,6 @@ final class NodePoolRegistry: @unchecked Sendable {
         }
     }
 
-    /// Extract host:port from a URL (used to key pools per IPFS node).
     static func nodeHost(from url: URL) -> String {
         guard let host = url.host else { return "unknown" }
         if let port = url.port { return "\(host):\(port)" }
