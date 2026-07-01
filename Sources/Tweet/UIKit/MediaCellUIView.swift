@@ -25,6 +25,97 @@ enum VideoCellState {
     case failed         // Loading failed — showing retry button over thumbnail/dark backdrop
 }
 
+private final class RotatingLoadingSpinnerView: UIView {
+    var hidesWhenStopped = true
+    private(set) var isAnimating = false
+
+    var color: UIColor? {
+        didSet {
+            updateSpokeColor()
+        }
+    }
+
+    private var effectiveColor: UIColor {
+        color ?? UIColor.systemGray3
+    }
+
+    private let replicatorLayer = CAReplicatorLayer()
+    private let spokeLayer = CALayer()
+    private let fadeAnimationKey = "mediaCell.loadingSpinner.fade"
+    private let spokeCount = 9
+    private let animationDuration: CFTimeInterval = 1.0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame.isEmpty ? CGRect(origin: .zero, size: CGSize(width: 44, height: 44)) : frame)
+        isHidden = true
+        isUserInteractionEnabled = false
+        replicatorLayer.instanceCount = spokeCount
+        replicatorLayer.instanceDelay = animationDuration / CFTimeInterval(spokeCount)
+        replicatorLayer.instanceTransform = CATransform3DMakeRotation((.pi * 2) / CGFloat(spokeCount), 0, 0, 1)
+        spokeLayer.backgroundColor = effectiveColor.cgColor
+        spokeLayer.opacity = 0
+        spokeLayer.cornerRadius = 1.5
+        replicatorLayer.addSublayer(spokeLayer)
+        layer.addSublayer(replicatorLayer)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: 44, height: 44)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        replicatorLayer.frame = bounds
+        replicatorLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        let spokeWidth: CGFloat = 5
+        let spokeHeight: CGFloat = 12
+        spokeLayer.bounds = CGRect(x: 0, y: 0, width: spokeWidth, height: spokeHeight)
+        spokeLayer.position = CGPoint(x: bounds.midX, y: bounds.midY - 14)
+        spokeLayer.cornerRadius = spokeWidth / 2
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil, isAnimating {
+            ensureFadeAnimation()
+        }
+    }
+
+    func startAnimating() {
+        isAnimating = true
+        isHidden = false
+        updateSpokeColor()
+        ensureFadeAnimation()
+    }
+
+    func stopAnimating() {
+        isAnimating = false
+        spokeLayer.removeAnimation(forKey: fadeAnimationKey)
+        if hidesWhenStopped {
+            isHidden = true
+        }
+    }
+
+    private func updateSpokeColor() {
+        spokeLayer.backgroundColor = effectiveColor.cgColor
+    }
+
+    private func ensureFadeAnimation() {
+        guard spokeLayer.animation(forKey: fadeAnimationKey) == nil else { return }
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = 1.0
+        animation.toValue = 0.18
+        animation.duration = animationDuration
+        animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
+        spokeLayer.add(animation, forKey: fadeAnimationKey)
+    }
+}
+
 // MARK: - Feed Video Resume Store
 
 @MainActor
@@ -224,8 +315,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return v
     }()
 
-    private let loadingSpinner: UIActivityIndicatorView = {
-        let spinner = UIActivityIndicatorView(style: .large)
+    private let loadingSpinner: RotatingLoadingSpinnerView = {
+        let spinner = RotatingLoadingSpinnerView()
         spinner.hidesWhenStopped = true
         spinner.isUserInteractionEnabled = false
         return spinner
@@ -1149,8 +1240,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             SharedAssetCache.shared.protectBackgroundPoster(for: attachment.mid)
         }
 
-        // Keep the spinner subtle, but less faint than before on the light video placeholder.
-        loadingSpinner.color = .white.withAlphaComponent(0.9)
+        // Keep the video loading indicator close to the old iOS spinner style.
+        loadingSpinner.color = UIColor.systemGray3.withAlphaComponent(0.95)
 
         // Start with a dark loading state, then apply/generate any cached poster
         // immediately. If AVPlayer stalls before first render, a poster is much

@@ -1121,6 +1121,38 @@ public class LocalHTTPServer: @unchecked Sendable {
         } ?? false
     }
 
+    @discardableResult
+    private func cancelActiveHLSSegmentDownload(for mediaID: String, relativePath: String, reason: String) -> Bool {
+        hlsDataTasksLock.lock()
+        var tasksToCancel: [URLSessionTask] = []
+        if var tasks = hlsDataTasks[mediaID] {
+            let taskKeysToCancel = tasks.compactMap { taskKey, task -> UUID? in
+                if relativeHLSSegmentPath(for: task, mediaID: mediaID) == relativePath {
+                    return taskKey
+                }
+                return nil
+            }
+
+            for taskKey in taskKeysToCancel {
+                if let task = tasks.removeValue(forKey: taskKey) {
+                    tasksToCancel.append(task)
+                }
+            }
+
+            if tasks.isEmpty {
+                hlsDataTasks.removeValue(forKey: mediaID)
+            } else {
+                hlsDataTasks[mediaID] = tasks
+            }
+        }
+        hlsDataTasksLock.unlock()
+
+        guard !tasksToCancel.isEmpty else { return false }
+        print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) reset active \(relativePath) after \(reason)")
+        tasksToCancel.forEach { $0.cancel() }
+        return true
+    }
+
     private func hasActiveProgressiveCacheWriter(for mediaID: String) -> Bool {
         progressiveCacheWritersLock.lock()
         defer { progressiveCacheWritersLock.unlock() }
@@ -1770,7 +1802,12 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
 
             if hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
-                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) deduplicated \(logPath) while non-primary fetch is still active")
+                cancelActiveHLSSegmentDownload(
+                    for: mediaID,
+                    relativePath: logPath,
+                    reason: "non-primary duplicate waited 10s"
+                )
+                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) deduplicated \(logPath) after resetting stalled non-primary fetch")
                 connection.cancel()
                 return
             }
@@ -1808,6 +1845,15 @@ public class LocalHTTPServer: @unchecked Sendable {
             autoreleasepool {
                 serveFile(path: cachePath, connection: connection, method: method)
             }
+            return
+        }
+
+        isPrimary = isCurrentPrimary(mediaID)
+        if !isPrimary,
+           hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
+            await pool.releaseSlot(mediaID: mediaID)
+            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) deduplicated \(logPath) after segment slot wait")
+            connection.cancel()
             return
         }
 
