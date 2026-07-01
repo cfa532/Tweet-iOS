@@ -2742,7 +2742,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             || lastActualPlaybackDate != .distantPast
             || lastPlaybackProgressDate != .distantPast
             || lastDecodedPlaybackProgressDate != .distantPast
-        let hasUsableProxyData = bufferedAhead >= 1.0 || playerHasLoadedData(player)
+        let hasBufferedMediaAhead = bufferedAhead >= 1.0
         let isColdHLSStartup = attachment?.type == .hls_video
             && !hasDecodedPlaybackHistory
             && currentSeconds > 0.25
@@ -2777,13 +2777,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             && LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid)
         if mediaType == .hls_video || mediaType == .video,
            !hasActiveHLSDownload {
-            let canRebuildUnknown = status == .unknown && hasUsableProxyData
+            let canRebuildUnknown = status == .unknown && (hasBufferedMediaAhead || playerHasLoadedData(player))
+            let readyRebuildBufferThreshold = hasDecodedPlaybackHistory ? 8.0 : 2.0
             let canRebuildReadyStuck = status == .readyToPlay
-                && (bufferedAhead >= 2.0 || playerHasLoadedData(player))
+                && bufferedAhead >= readyRebuildBufferThreshold
                 && !isVisibleVideoFrameReady(player)
-            let rebuildDelay = hasUsableProxyData
-                ? Self.watchdogFastRebuildDelay
-                : Self.watchdogSlowRebuildDelay
+            let rebuildDelay = hasDecodedPlaybackHistory
+                ? Self.watchdogSlowRebuildDelay
+                : (hasBufferedMediaAhead ? Self.watchdogFastRebuildDelay : Self.watchdogSlowRebuildDelay)
             if stalledFor >= rebuildDelay,
                canRebuildUnknown || canRebuildReadyStuck {
                 let mediaLabel = mediaType == .video ? "progressive" : "HLS"

@@ -1111,6 +1111,63 @@ public class LocalHTTPServer: @unchecked Sendable {
         relativeHLSPath(from: url, mediaID: mediaID) ?? url.lastPathComponent
     }
 
+    private func duplicateSegmentWaitAttempts(for priority: NodeDownloadPriority) -> Int {
+        switch priority {
+        case .primary:
+            return 1200 // 5 minutes, matching the URLSession resource timeout.
+        case .visible:
+            return 240 // 60 seconds: visible video should not fail from normal IPFS slowness.
+        case .preload:
+            return 40 // 10 seconds: keep preload cheap.
+        }
+    }
+
+    private func duplicateSegmentUpstreamLimit(for priority: NodeDownloadPriority) -> Int {
+        switch priority {
+        case .primary:
+            return 2
+        case .visible, .preload:
+            return 1
+        }
+    }
+
+    private func activeHLSSegmentDownloadCount(for mediaID: String, relativePath: String) -> Int {
+        hlsDataTasksLock.lock()
+        defer { hlsDataTasksLock.unlock() }
+        return hlsDataTasks[mediaID]?.values.filter { task in
+            relativeHLSSegmentPath(for: task, mediaID: mediaID) == relativePath
+        }.count ?? 0
+    }
+
+    private func waitForActiveHLSSegmentToCache(
+        mediaID: String,
+        relativePath: String,
+        cachePath: String,
+        connection: NWConnection,
+        method: String,
+        waitAttempts: Int,
+        reason: String
+    ) async -> (served: Bool, stillActive: Bool) {
+        for _ in 0..<waitAttempts {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            switch connection.state { case .cancelled, .failed: return (true, true); default: break }
+
+            if isUsableCachedFile(atPath: cachePath) {
+                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(relativePath) after waiting for \(reason)")
+                autoreleasepool {
+                    serveFile(path: cachePath, connection: connection, method: method)
+                }
+                return (true, false)
+            }
+
+            if !hasActiveHLSSegmentDownload(for: mediaID, relativePath: relativePath) {
+                return (false, false)
+            }
+        }
+
+        return (false, hasActiveHLSSegmentDownload(for: mediaID, relativePath: relativePath))
+    }
+
     private func hasActiveHLSSegmentDownload(for mediaID: String, relativePath: String) -> Bool {
         hlsDataTasksLock.lock()
         defer { hlsDataTasksLock.unlock() }
@@ -1125,38 +1182,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         return hlsDataTasks[mediaID]?.values.contains { task in
             relativeHLSPath(from: task.currentRequest?.url ?? task.originalRequest?.url, mediaID: mediaID) == relativePath
         } ?? false
-    }
-
-    @discardableResult
-    private func cancelActiveHLSSegmentDownload(for mediaID: String, relativePath: String, reason: String) -> Bool {
-        hlsDataTasksLock.lock()
-        var tasksToCancel: [URLSessionTask] = []
-        if var tasks = hlsDataTasks[mediaID] {
-            let taskKeysToCancel = tasks.compactMap { taskKey, task -> UUID? in
-                if relativeHLSSegmentPath(for: task, mediaID: mediaID) == relativePath {
-                    return taskKey
-                }
-                return nil
-            }
-
-            for taskKey in taskKeysToCancel {
-                if let task = tasks.removeValue(forKey: taskKey) {
-                    tasksToCancel.append(task)
-                }
-            }
-
-            if tasks.isEmpty {
-                hlsDataTasks.removeValue(forKey: mediaID)
-            } else {
-                hlsDataTasks[mediaID] = tasks
-            }
-        }
-        hlsDataTasksLock.unlock()
-
-        guard !tasksToCancel.isEmpty else { return false }
-        print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) reset active \(relativePath) after \(reason)")
-        tasksToCancel.forEach { $0.cancel() }
-        return true
     }
 
     private func hasActiveProgressiveCacheWriter(for mediaID: String) -> Bool {
@@ -1875,30 +1900,25 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         var requestPriority = downloadPriority(for: mediaID)
 
-        if requestPriority != .primary,
-           hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
-            for _ in 0..<40 {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                switch connection.state { case .cancelled, .failed: return; default: break }
-                if isUsableCachedFile(atPath: cachePath) {
-                    print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(logPath) after waiting for duplicate non-primary fetch")
-                    autoreleasepool {
-                        serveFile(path: cachePath, connection: connection, method: method)
-                    }
-                    return
-                }
-                if !hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
-                    break
-                }
+        if activeHLSSegmentDownloadCount(for: mediaID, relativePath: logPath) >= duplicateSegmentUpstreamLimit(for: requestPriority) {
+            // AVPlayer can legitimately open duplicate requests for the same segment.
+            // Primary may race two upstream fetches for the same segment; lower-priority
+            // work coalesces after one so preloads cannot multiply IPFS pressure.
+            let waitResult = await waitForActiveHLSSegmentToCache(
+                mediaID: mediaID,
+                relativePath: logPath,
+                cachePath: cachePath,
+                connection: connection,
+                method: method,
+                waitAttempts: duplicateSegmentWaitAttempts(for: requestPriority),
+                reason: "duplicate fetch"
+            )
+            if waitResult.served {
+                return
             }
 
-            if hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
-                cancelActiveHLSSegmentDownload(
-                    for: mediaID,
-                    relativePath: logPath,
-                    reason: "non-primary duplicate waited 10s"
-                )
-                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) deduplicated \(logPath) after resetting stalled non-primary fetch")
+            if waitResult.stillActive {
+                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) closed duplicate \(logPath) after waiting for active fetch")
                 connection.cancel()
                 return
             }
@@ -1959,12 +1979,26 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         requestPriority = downloadPriority(for: mediaID)
-        if requestPriority != .primary,
-           hasActiveHLSSegmentDownload(for: mediaID, relativePath: logPath) {
-            await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
-            print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) deduplicated \(logPath) after segment slot wait")
-            connection.cancel()
-            return
+        if activeHLSSegmentDownloadCount(for: mediaID, relativePath: logPath) >= duplicateSegmentUpstreamLimit(for: requestPriority) {
+            let waitResult = await waitForActiveHLSSegmentToCache(
+                mediaID: mediaID,
+                relativePath: logPath,
+                cachePath: cachePath,
+                connection: connection,
+                method: method,
+                waitAttempts: duplicateSegmentWaitAttempts(for: requestPriority),
+                reason: "segment slot wait"
+            )
+            if waitResult.served {
+                await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+                return
+            }
+            if waitResult.stillActive {
+                await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) closed duplicate \(logPath) after segment slot wait")
+                connection.cancel()
+                return
+            }
         }
 
         // SlotReleaseGuard prevents a double-release: both onConnectionDead (NWConnection closes
