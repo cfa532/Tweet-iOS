@@ -1746,6 +1746,11 @@ final class HproseInstance: ObservableObject {
             await MainActor.run {
                 User.getInstance(mid: userId).cacheStatus = .refreshFailed
             }
+            // Backstop: ensure repeated fetchUser failures drive the 2-strike session block,
+            // even if the inner performUserUpdate path didn't record this attempt.
+            if !skipRetryAndBlacklist {
+                blackList.recordFailure(userId)
+            }
             throw error
         }
     }

@@ -34,19 +34,31 @@ final class BlackList: @unchecked Sendable {
     private var blacklist: Set<MimeiId> = []
 
     private let sessionBlockFailureCount = 2
+    /// How long a 2-strike session block lasts before the resource is retried.
+    private let sessionBlockDuration: TimeInterval = 30
 
     /// Process-local failure guard. This resets when the app process restarts.
     private var sessionFailureCounts: [MimeiId: Int] = [:]
-    private var sessionBlockedResources: Set<MimeiId> = []
+    /// Resources temporarily blocked this session, keyed by the time they were blocked.
+    /// Auto-expires after `sessionBlockDuration` (checked in isBlacklisted).
+    private var sessionBlockedResources: [MimeiId: Date] = [:]
     private var lastFailureRecordedAt: [MimeiId: TimeInterval] = [:]
     private let failureDedupWindow: TimeInterval = 20
-    
+
     // MARK: - Public Methods
-    
+
     /// Check if a resource is blacklisted
     func isBlacklisted(_ mimeiId: MimeiId) -> Bool {
         queue.sync {
-            sessionBlockedResources.contains(mimeiId) || blacklist.contains(mimeiId)
+            if blacklist.contains(mimeiId) { return true }
+            // Session block auto-expires after `sessionBlockDuration`. Expired entries
+            // are left in place (harmless — they read as not-blocked) and get overwritten
+            // on the next block or cleared by recordSuccess.
+            if let blockedAt = sessionBlockedResources[mimeiId],
+               Date().timeIntervalSince(blockedAt) < sessionBlockDuration {
+                return true
+            }
+            return false
         }
     }
     
@@ -55,7 +67,7 @@ final class BlackList: @unchecked Sendable {
         queue.sync(flags: .barrier) {
             let wasInCandidates = candidates.removeValue(forKey: mimeiId) != nil
             sessionFailureCounts.removeValue(forKey: mimeiId)
-            sessionBlockedResources.remove(mimeiId)
+            sessionBlockedResources.removeValue(forKey: mimeiId)
             lastFailureRecordedAt.removeValue(forKey: mimeiId)
             
             if wasInCandidates {
@@ -81,10 +93,10 @@ final class BlackList: @unchecked Sendable {
 
             let sessionFailureCount = (sessionFailureCounts[mimeiId] ?? 0) + 1
             sessionFailureCounts[mimeiId] = sessionFailureCount
-            if sessionFailureCount >= sessionBlockFailureCount,
-               !sessionBlockedResources.contains(mimeiId) {
-                sessionBlockedResources.insert(mimeiId)
-                print("[BlackList] Temporarily blocked \(mimeiId) for this session after \(sessionFailureCount) failures")
+            if sessionFailureCount >= sessionBlockFailureCount {
+                // (Re)start the 30s session-block window. Each subsequent failure refreshes it.
+                sessionBlockedResources[mimeiId] = Date()
+                print("[BlackList] Temporarily blocked \(mimeiId) for \(Int(sessionBlockDuration))s after \(sessionFailureCount) failures")
             }
             
             if let existingEntry = candidates[mimeiId] {
@@ -159,7 +171,7 @@ final class BlackList: @unchecked Sendable {
     private func moveToBlacklist(_ mimeiId: MimeiId) {
         candidates.removeValue(forKey: mimeiId)
         sessionFailureCounts.removeValue(forKey: mimeiId)
-        sessionBlockedResources.remove(mimeiId)
+        sessionBlockedResources.removeValue(forKey: mimeiId)
         blacklist.insert(mimeiId)
         print("[BlackList] Permanently blacklisted \(mimeiId) - will never be tried again")
     }

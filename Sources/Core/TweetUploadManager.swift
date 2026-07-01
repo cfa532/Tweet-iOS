@@ -1522,9 +1522,10 @@ extension TweetUploadManager {
                     // This allows ChatImageThumbnail to display from cache instead of downloading from server
                     // This is similar to how videos work - they cache locally via LocalHTTPServer
                     if isImage {
-                        // Cache the image immediately so it's available for display
-                        // Use Task to avoid blocking the upload flow
-                        Task(priority: .userInitiated) { @MainActor in
+                        // Cache the image immediately so it's available for display.
+                        // Task.detached: cacheImageData does UIImage(data:) + disk write —
+                        // keep that decode off the main actor.
+                        Task.detached(priority: .userInitiated) {
                             ImageCacheManager.shared.cacheImageData(item.data, for: fileType)
                             print("💾 [Upload] Cached image locally for immediate display: \(fileType.mid)")
                         }

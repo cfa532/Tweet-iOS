@@ -91,8 +91,14 @@ final class GlobalImageLoadManager: ObservableObject {
     private var focusedImageMID: String?
     
     // MARK: - Memory Management
-    private var currentMemoryUsage: UInt64 = 0
-    private var maxMemoryUsage: UInt64 = 0
+    // Sampled off-main every ~2s by startMemorySampler(). isMemoryPressureHigh() reads these
+    // cached values instead of running two task_info syscalls per loadImage() call — that was
+    // the dominant per-request cost on the main actor during scroll.
+    private let memorySampleLock = NSLock()
+    private nonisolated(unsafe) var sampledMemoryUsage: UInt64 = 0
+    private nonisolated(unsafe) var sampledMaxMemoryUsage: UInt64 = 0
+    private nonisolated(unsafe) var sampledMemoryPressureHigh: Bool = false
+    private var memorySamplerTask: Task<Void, Never>?
 
     // MARK: - Network Failure Tracking
     private var consecutiveNetworkFailures: Int = 0
@@ -108,6 +114,7 @@ final class GlobalImageLoadManager: ObservableObject {
         setupMemoryMonitoring()
         setupAppLifecycleNotifications()
         startPeriodicCleanup()
+        startMemorySampler()
     }
     
     // MARK: - Public Interface
@@ -462,9 +469,10 @@ final class GlobalImageLoadManager: ObservableObject {
         processNextPendingRequest()
     }
     
-    /// Get current memory usage information
+    /// Get current memory usage information (cached from the background sampler).
     func getMemoryInfo() -> (current: UInt64, max: UInt64, pressure: Bool) {
-        return (currentMemoryUsage, maxMemoryUsage, isMemoryPressureHigh())
+        memorySampleLock.lock(); defer { memorySampleLock.unlock() }
+        return (sampledMemoryUsage, sampledMaxMemoryUsage, sampledMemoryPressureHigh)
     }
     
     /// Force cleanup of completed requests to free memory
@@ -1058,55 +1066,76 @@ final class GlobalImageLoadManager: ObservableObject {
         updateStatistics()
     }
     
+    /// Cached, syscall-free check read on the main actor (loadImage / handleLoadFailure).
+    /// Updated off-main by startMemorySampler() every ~2s.
     private func isMemoryPressureHigh() -> Bool {
+        memorySampleLock.lock(); defer { memorySampleLock.unlock() }
+        return sampledMemoryPressureHigh
+    }
+
+    // MARK: - Background Memory Sampling
+
+    /// Periodically sample phys_footprint off the main actor so loadImage() never pays the
+    /// two task_info syscalls per call. Runs for the lifetime of the singleton.
+    private func startMemorySampler() {
+        memorySamplerTask?.cancel()
+        memorySamplerTask = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                let sample = self?.sampleMemoryUsage()
+                self?.applyMemorySample(sample)
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    /// Nonisolated: does the mach syscalls on the cooperative pool. Reads only the
+    /// `let memoryWarningThreshold` constant (immutable → safe off-main).
+    private nonisolated func sampleMemoryUsage() -> (usage: UInt64, high: Bool) {
         var memoryInfo = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
-        
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
         let kerr: kern_return_t = withUnsafeMutablePointer(to: &memoryInfo) {
             $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_,
-                         task_flavor_t(MACH_TASK_BASIC_INFO),
-                         $0,
-                         &count)
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
             }
         }
-        
-        if kerr == KERN_SUCCESS {
-            // Use phys_footprint for accurate measurement instead of resident_size
-            var vmInfo = task_vm_info_data_t()
-            var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
-            let vmKerr = withUnsafeMutablePointer(to: &vmInfo) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
-                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
-                }
+        guard kerr == KERN_SUCCESS else { return (0, false) }
+
+        var vmInfo = task_vm_info_data_t()
+        var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
+        let vmKerr = withUnsafeMutablePointer(to: &vmInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
             }
-            
-            if vmKerr == KERN_SUCCESS {
-                currentMemoryUsage = UInt64(vmInfo.phys_footprint)
-            } else {
-                currentMemoryUsage = memoryInfo.resident_size // Fallback
-            }
-            
-            if currentMemoryUsage > maxMemoryUsage {
-                maxMemoryUsage = currentMemoryUsage
-            }
-            
-            // Simple heuristic: if we're using more than threshold or absolute MB limit
-            let availableMemory = ProcessInfo.processInfo.physicalMemory
-            let memoryUsageRatio = Double(currentMemoryUsage) / Double(availableMemory)
-            let memoryUsageMB = Double(currentMemoryUsage) / (1024.0 * 1024.0)
-            let isHigh = memoryUsageRatio > memoryWarningThreshold || memoryUsageMB > 1400.0
-            
-            if isHigh {
-                let percentageString = String(format: "%.1f", memoryUsageRatio * 100)
-                let memoryString = String(format: "%.0f", memoryUsageMB)
-                print("DEBUG: [GlobalImageLoadManager] High memory pressure detected: \(percentageString)% used (\(memoryString) MB)")
-            }
-            
-            return isHigh
         }
-        
-        return false
+
+        let usage: UInt64
+        if vmKerr == KERN_SUCCESS {
+            usage = UInt64(vmInfo.phys_footprint)
+        } else {
+            usage = memoryInfo.resident_size // Fallback
+        }
+
+        let availableMemory = ProcessInfo.processInfo.physicalMemory
+        let ratio = availableMemory > 0 ? Double(usage) / Double(availableMemory) : 0
+        let usageMB = Double(usage) / (1024.0 * 1024.0)
+        let high = ratio > memoryWarningThreshold || usageMB > 1400.0
+        return (usage, high)
+    }
+
+    /// Nonisolated: writes the sampled values under memorySampleLock. Called from the
+    /// detached sampler task.
+    private nonisolated func applyMemorySample(_ sample: (usage: UInt64, high: Bool)?) {
+        guard let sample else { return }
+        memorySampleLock.lock()
+        defer { memorySampleLock.unlock() }
+        sampledMemoryUsage = sample.usage
+        if sample.usage > sampledMaxMemoryUsage { sampledMaxMemoryUsage = sample.usage }
+        let becameHigh = sample.high && !sampledMemoryPressureHigh
+        sampledMemoryPressureHigh = sample.high
+        if becameHigh {
+            let mb = Double(sample.usage) / (1024.0 * 1024.0)
+            print("DEBUG: [GlobalImageLoadManager] High memory pressure sampled: \(String(format: "%.0f", mb)) MB")
+        }
     }
     
     private func updateStatistics() {
