@@ -892,7 +892,14 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
             )
         }
 
-        let hasPlayableData = hasPlayableData(player: player, item: item)
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        let keepUp = item.isPlaybackLikelyToKeepUp
+        let hasPlayableData = hasPlayableData(
+            player: player,
+            item: item,
+            bufferedAhead: bufferedAhead,
+            keepUp: keepUp
+        )
         let showPoster = shouldShowFullscreenPoster(
             hasPoster: hasPoster,
             layerReadyForDisplay: layerReadyForDisplay,
@@ -904,14 +911,19 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
             || player.rate > 0
             || player.timeControlStatus == .playing
             || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-        let isPlaybackRendering = itemReady && hasFullscreenVisiblePlaybackProgress
+        let isWaitingForBuffer = itemReady
+            && isPlaybackTrying
+            && player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            && !isFullscreenVideoAtEnd(player)
+            && (item.isPlaybackBufferEmpty || bufferedAhead < 0.5 || !keepUp)
+        let isPlaybackRendering = itemReady && hasFullscreenVisiblePlaybackProgress && !isWaitingForBuffer
 
         if isPlaybackRendering, itemReady {
             return .playing(showPoster: showPoster)
         }
 
         let shouldShowSpinner = !isFullscreenVideoAtEnd(player)
-            && !isPlaybackRendering
+            && (isWaitingForBuffer || !isPlaybackRendering)
             && (isPlaybackTrying
                 || !(hasCachedMediaContent && hasPlayableData))
 
@@ -1917,7 +1929,11 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
 
                     self.setupVideoCompletionObserver(replacementItem)
                     self.setupTimeControlStatusObserver()
-                    self.startPlaybackWithSeekIfNeeded(playerItem: replacementItem, mid: mid)
+                    self.startPlaybackWithSeekIfNeeded(
+                        playerItem: replacementItem,
+                        mid: mid,
+                        preferredSeekTime: resumeTime
+                    )
                     self.startRetryMonitoring()
                 }
             } catch {
@@ -1977,7 +1993,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     /// Unified seek-then-play for all load paths. Computes the seek target once,
     /// performs a single seek (or none), then calls play(). If the item isn't ready
     /// yet, sets up a KVO observer to defer until readyToPlay.
-    private func startPlaybackWithSeekIfNeeded(playerItem: AVPlayerItem, mid: String) {
+    private func startPlaybackWithSeekIfNeeded(playerItem: AVPlayerItem, mid: String, preferredSeekTime: CMTime? = nil) {
         print("🎬 [FullScreenVideoManager] startPlaybackWithSeekIfNeeded \(shortMID(mid)): \(playerDiagnostic(singletonPlayer, item: playerItem))")
         guard playerItem.status == .readyToPlay else {
             // Item not ready — observe status and retry when ready
@@ -1989,7 +2005,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
                     print("🎬 [FullScreenVideoManager] deferred itemStatus \(self.shortMID(mid)): \(self.playerDiagnostic(self.singletonPlayer, item: item))")
                     if item.status == .readyToPlay {
                         self.isItemReady = true
-                        self.seekOnceAndPlay(playerItem: item, mid: mid)
+                        self.seekOnceAndPlay(playerItem: item, mid: mid, preferredSeekTime: preferredSeekTime)
                         self.itemStatusObserver?.invalidate()
                         self.itemStatusObserver = nil
                     } else if item.status == .failed {
@@ -2001,11 +2017,11 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
             return
         }
         self.isItemReady = true
-        seekOnceAndPlay(playerItem: playerItem, mid: mid)
+        seekOnceAndPlay(playerItem: playerItem, mid: mid, preferredSeekTime: preferredSeekTime)
     }
 
     /// Compute the single correct seek target and play. Called only when item is readyToPlay.
-    private func seekOnceAndPlay(playerItem: AVPlayerItem, mid: String) {
+    private func seekOnceAndPlay(playerItem: AVPlayerItem, mid: String, preferredSeekTime: CMTime? = nil) {
         print("🎬 [FullScreenVideoManager] seekOnceAndPlay \(shortMID(mid)): \(playerDiagnostic(singletonPlayer, item: playerItem))")
         if isUsingBorrowedFeedPlayer {
             hasRestoredPosition = true
@@ -2018,6 +2034,12 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         // Determine where to seek (nil = no seek needed)
         let seekTarget: CMTime? = {
             let duration = playerItem.duration
+            // Rebuild recovery has the freshest local position. Do not let an older
+            // feed/detail handoff send the replacement item back to the beginning.
+            if let recoveryTime = validResumeTime(preferredSeekTime, duration: duration) {
+                print("🔄 [FullScreenVideoManager] Restoring recovery position: \(recoveryTime.seconds)s")
+                return recoveryTime
+            }
             // 1) Video finished in feed cell → restart from beginning
             if duration.isValid && duration.seconds > 0,
                VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
