@@ -3210,10 +3210,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         
         print("DEBUG: [HproseInstance] getUserTweetsByType - Got response with \(response.count) items")
         
-        // For bookmarks/favorites, preserve server order by using a base timestamp minus index
-        // This ensures tweets are sorted correctly when retrieved from cache
+        // For bookmarks/favorites, preserve server order by using a stable rank timestamp.
+        // The rank must include the page offset; using Date() per page lets later-fetched
+        // pages outrank page 0 on the next cached first paint.
         let isBookmarkOrFavorite = type == .BOOKMARKS || type == .FAVORITES
-        let baseTime = Date()
+        let bookmarkOrderBaseTime = Date(timeIntervalSince1970: 4_102_444_800) // 2100-01-01
         var scheduledBackgroundAuthorFetches = Set<String>()
         func scheduleBackgroundAuthorFetch(authorId: String) {
             guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
@@ -3245,15 +3246,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         ? TweetCacheManager.bookmarkCacheKey(userId: snap.mid)
                         : TweetCacheManager.favoriteCacheKey(userId: snap.mid)
                     
-                    // For bookmarks/favorites, preserve server order by using a timestamp that reflects position
-                    // Subtract index milliseconds to ensure earlier items (lower index) have later timestamps
-                    // This way, when sorted descending by timeCached, they appear in the correct order
-                    // Using milliseconds provides better precision for large lists
                     let timeCached: Date?
                     if isBookmarkOrFavorite {
-                        // Use baseTime minus index milliseconds to preserve order (most recent bookmark first)
-                        // Index 0 gets baseTime (latest), index 1 gets baseTime - 0.001s, etc.
-                        timeCached = baseTime.addingTimeInterval(-TimeInterval(index) * 0.001)
+                        let globalIndex = Int(pageNumber * pageSize) + index
+                        timeCached = bookmarkOrderBaseTime.addingTimeInterval(-TimeInterval(globalIndex) * 0.001)
                     } else {
                         // For other types, use current time
                         timeCached = nil

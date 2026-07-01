@@ -223,7 +223,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private static let maxIndependentFeedPlayers = Constants.MAX_PLAYER_CACHE_SIZE
     private static let slowLoadingNudgeInterval: TimeInterval = 5
     private static let slowLoadingNudgeIntervalNanos: UInt64 = 5_000_000_000
-    private static let activeHLSSegmentStartupTimeout: TimeInterval = 75
+    private static let watchdogFastRebuildDelay: TimeInterval = 5
+    private static let watchdogSlowRebuildDelay: TimeInterval = 20
+    private static let activeHLSSegmentStartupTimeout: TimeInterval = 15
     private static let foregroundFeedResumeSuppressionDuration: TimeInterval = 30
 
     private final class IndependentFeedPlayerEntry {
@@ -473,21 +475,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastDecodedPlaybackSeconds: Double = 0
     private var lastObservedPlaybackSeconds: Double = 0
     private var lastPlaybackRequestPositionSeconds: Double = 0
-    private var hlsBufferedUnknownStartDate: Date = .distantPast
-    private var hlsEmptyWaitingStartDate: Date = .distantPast
     private var hlsActiveSegmentWaitStartDate: Date = .distantPast
     private var hlsActiveSegmentWaitMediaID: String?
     /// True after the current AVPlayerLayer has rendered a frame for this player.
     /// This lets visible non-primary videos stop their spinner once they have
     /// something real to show, even if frame capture did not produce a poster.
-    private var hasRenderedFrameForCurrentPlayer: Bool = false {
-        didSet {
-            if hasRenderedFrameForCurrentPlayer {
-                hlsBufferedUnknownStartDate = .distantPast
-                hlsEmptyWaitingStartDate = .distantPast
-            }
-        }
-    }
+    private var hasRenderedFrameForCurrentPlayer: Bool = false
     /// Last time this cell asked AVPlayer to play. This is intent only; it is
     /// intentionally separate from lastActualPlaybackDate.
     private var lastPlaybackRequestDate: Date = .distantPast
@@ -500,8 +493,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var lastSlowLoadWaitLogDate: Date = .distantPast
     private var didLogFirstDecodedPlayback = false
     private var didLogFirstPlaybackProgress = false
-    private var lastStartupBufferReleaseDate: Date = .distantPast
-    private var startupBufferReleaseUntil: Date = .distantPast
+    private var firstNoProgressWatchdogDate: Date = .distantPast
+    private var lastWatchdogNudgeDate: Date = .distantPast
+    private var didWatchdogSeekToZeroForCurrentPlayer = false
     private var pendingRecoverySeekTime: CMTime?
     private var pendingManualReplayMid: String?
     private weak var liveHandoffPlayer: AVPlayer?
@@ -510,8 +504,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var liveHandoffLastLayerRefreshAt: Date = .distantPast
     private var feedPlayerRebuildCount = 0
     private var firstFeedPlayerRebuildDate: Date = .distantPast
-    private var slowLoadingRecoveryTask: Task<Void, Never>?
-    private var lastSlowLoadingNudgeDate: Date = .distantPast
     private var lastLoggedTimeControlStatus: AVPlayer.TimeControlStatus?
     private var lastLoggedTimeControlBucket: Int = -1
     private var lastLoggedTimeControlDate: Date = .distantPast
@@ -1746,6 +1738,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         firstFeedPlayerRebuildDate = .distantPast
     }
 
+    private func resetPlaybackWatchdogRecoveryState() {
+        firstNoProgressWatchdogDate = .distantPast
+        lastWatchdogNudgeDate = .distantPast
+        didWatchdogSeekToZeroForCurrentPlayer = false
+    }
+
     private func playerHasLoadedData(_ player: AVPlayer) -> Bool {
         guard let item = player.currentItem else { return false }
         if item.status == .readyToPlay { return true }
@@ -1821,6 +1819,54 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             SharedAssetCache.shared.softResetPlayer(for: mid)
         }
         return true
+    }
+
+    @discardableResult
+    private func rebuildCurrentFeedPlayerFromProxyCache(
+        player: AVPlayer,
+        mid: String,
+        reason: String
+    ) -> Bool {
+        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
+        guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return false }
+
+        let hasDecodedPlaybackHistory = hasEstablishedDecodedPlayback(for: player)
+            || lastActualPlaybackDate != .distantPast
+            || lastPlaybackProgressDate != .distantPast
+            || lastDecodedPlaybackProgressDate != .distantPast
+        let resumeTime = player.currentTime()
+        if hasDecodedPlaybackHistory,
+           resumeTime.isValid,
+           resumeTime.seconds.isFinite,
+           resumeTime.seconds > 0.25 {
+            let duration = player.currentItem?.duration
+            if let duration,
+               duration.isValid,
+               !duration.isIndefinite,
+               duration.seconds.isFinite,
+               duration.seconds > 0,
+               duration.seconds - resumeTime.seconds <= 0.5 {
+                pendingRecoverySeekTime = .zero
+            } else {
+                pendingRecoverySeekTime = resumeTime
+            }
+        } else {
+            pendingRecoverySeekTime = nil
+        }
+
+        preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
+        restoreCachedPosterForFailureIfNeeded()
+        VideoStateCache.shared.clearCachedState(for: mid)
+        SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid)
+        resetPlaybackWatchdogRecoveryState()
+        return reacquirePlayerForCurrentVideo(
+            reason: reason,
+            transitionState: imageView.image != nil ? .thumbnail : .playerLoading,
+            requireLoadableVisibleVideo: true,
+            wantsPlayback: true
+        )
     }
 
     private func acquirePlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
@@ -2040,6 +2086,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         hasRenderedFrameForCurrentPlayer = false
         didLogFirstDecodedPlayback = false
         didLogFirstPlaybackProgress = false
+        resetPlaybackWatchdogRecoveryState()
         resetPlaybackProgressTracking(to: newPlayer.currentTime())
         removePlayerObservers()
         if usesIndependentPlayerInstance, let previousPlayer, previousPlayer !== newPlayer {
@@ -2287,8 +2334,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         playbackStartupRecoveryTask = nil
         playbackStartupRecoveryRequestDate = nil
         playbackStartupRecoveryDelay = nil
-        slowLoadingRecoveryTask?.cancel()
-        slowLoadingRecoveryTask = nil
         playbackProgressWatchdogTask?.cancel()
         playbackProgressWatchdogTask = nil
         statusUnknownFallbackTask?.cancel()
@@ -2458,9 +2503,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func applyAVPlayerBufferDefaults(to player: AVPlayer) {
-        if Date() >= startupBufferReleaseUntil {
-            player.automaticallyWaitsToMinimizeStalling = true
-        }
+        player.automaticallyWaitsToMinimizeStalling = true
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         // Let AVPlayer pick its own forward buffer. Our job is intent/ownership;
         // micromanaging buffer duration fights AVPlayer's stall recovery.
@@ -2518,16 +2561,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         applyAVPlayerBufferDefaults(to: player)
         updateLoadingSpinnerForPlayback(player)
-        if let mid = attachment?.mid,
-           isLiveSurfaceHandoff(player, mid: mid) {
-            return
-        }
-        if releaseStartupBufferIfReady(player, bufferedAhead: bufferedTimeAhead(for: player), reason: reason) {
-            return
-        }
-        scheduleStartupRecovery(for: player, reason: reason)
+        publishMediaBufferHealthIfNeeded(for: player)
+        schedulePlaybackProgressWatchdog(for: player, reason: reason)
     }
 
+    /// Startup watching keeps UI feedback alive and lets the progress watchdog
+    /// decide whether the feed AVPlayer needs a bounded IPFS recovery.
     private func scheduleStartupRecovery(for player: AVPlayer, reason: String) {
         if let mid = attachment?.mid,
            isLiveSurfaceHandoff(player, mid: mid) {
@@ -2602,127 +2641,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 self.lastSlowLoadWaitLogDate = now
             }
 
-            if self.releaseStartupBufferIfReady(player, bufferedAhead: bufferedAhead, reason: reason) {
-                return
-            }
-
-            if self.waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
-            if self.rebuildEmptyWaitingHLSPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
-            if self.failUnbufferedUnknownPrimaryIfTimedOut(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
-            if self.rebuildUnknownPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
-            if self.rebuildStarvedReadyPrimaryIfRecoverable(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
-            if self.nudgeSlowLoadingPrimaryIfUseful(player, bufferedAhead: bufferedAhead, reason: "\(label)-\(reason)") {
-                return
-            }
-
             self.applyAVPlayerBufferDefaults(to: player)
             self.updateLoadingSpinnerForPlayback(player)
-            self.scheduleStartupRecoveryAfterCurrentTask(for: player, reason: "slowLoadingWatchdog-\(reason)")
+            self.publishMediaBufferHealthIfNeeded(for: player)
+            self.schedulePlaybackProgressWatchdog(for: player, reason: reason)
         }
-    }
-
-    private func scheduleStartupRecoveryAfterCurrentTask(for player: AVPlayer, reason: String) {
-        let requestDate = lastPlaybackRequestDate
-        Task { @MainActor [weak self, weak player] in
-            await Task.yield()
-            guard let self,
-                  let player,
-                  self.player === player,
-                  self.lastPlaybackRequestDate == requestDate,
-                  self.coordinatorWantsToPlay,
-                  self.canDriveForegroundPlayback,
-                  self.videoCellState == .playing,
-                  !self.isVideoAtEnd(player) else { return }
-
-            self.scheduleStartupRecovery(for: player, reason: reason)
-        }
-    }
-
-    @discardableResult
-    private func releaseStartupBufferIfReady(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              canDriveForegroundPlayback,
-              videoCellState == .playing,
-              player.currentItem?.status == .readyToPlay,
-              player.timeControlStatus != .playing,
-              !isVideoAtEnd(player) else { return false }
-
-        let now = Date()
-        let currentSeconds = seconds(from: player.currentTime())
-        let isStartup = lastActualPlaybackDate == .distantPast && currentSeconds < 1.0
-        let hasNoRecentProgress = lastPlaybackProgressDate == .distantPast
-            || now.timeIntervalSince(lastPlaybackProgressDate) >= 2.0
-        let isStalledResume = lastActualPlaybackDate != .distantPast && hasNoRecentProgress
-        let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
-        let requiredBuffer: Double
-        if attachment?.type == .video {
-            requiredBuffer = keepUp ? 0.5 : 0.75
-        } else if keepUp {
-            requiredBuffer = 0.75
-        } else if isStartup {
-            requiredBuffer = 2.0
-        } else {
-            requiredBuffer = 2.5
-        }
-        let hasUsableBuffer = bufferedAhead >= requiredBuffer
-        guard hasUsableBuffer else { return false }
-
-        startupBufferReleaseUntil = now.addingTimeInterval(6.0)
-        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        player.currentItem?.preferredForwardBufferDuration = 0
-        player.automaticallyWaitsToMinimizeStalling = false
-        lastPlaybackRequestDate = now
-        resetPlaybackProgressTracking(to: player.currentTime())
-        player.play()
-        updateLoadingSpinnerForPlayback(player)
-
-        if now.timeIntervalSince(lastStartupBufferReleaseDate) >= 2.0 {
-            lastStartupBufferReleaseDate = now
-            let label: String
-            if isStartup {
-                label = "startup buffer ready"
-            } else if isStalledResume {
-                label = "resume buffer ready"
-            } else {
-                label = "primary buffer ready"
-            }
-            print("\(logPrefix) ▶️ \(label) (\(reason)): nudging playback, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, required=\(String(format: "%.1f", requiredBuffer))s, keepUp=\(keepUp)")
-        }
-        return true
-    }
-
-    @discardableResult
-    private func rebuildCurrentFeedPlayerFromProxyCache(
-        mid: String,
-        reacquireReason: String,
-        transitionState: VideoCellState? = nil
-    ) -> Bool {
-        preserveReleaseCoverForCurrentVideo(reason: reacquireReason, showCover: isVisible)
-        VideoStateCache.shared.clearCachedState(for: mid)
-        SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
-        LocalHTTPServer.shared.clearCancelledState(for: mid)
-        LocalHTTPServer.shared.setPrimaryMediaID(mid)
-        return reacquirePlayerForCurrentVideo(
-            reason: reacquireReason,
-            transitionState: transitionState,
-            requireLoadableVisibleVideo: true,
-            wantsPlayback: true
-        )
     }
 
     @discardableResult
@@ -2734,22 +2657,20 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
               LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) else { return false }
 
         if LocalHTTPServer.shared.hasCachedActiveHLSSegment(for: mid) {
-            guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-            hlsEmptyWaitingStartDate = .distantPast
-            preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
-            restoreCachedPosterForFailureIfNeeded()
-            print("\(logPrefix) 🔄 \(reason): HLS segment is cached but current item stayed empty — rebuilding feed player from proxy cache")
-            return rebuildCurrentFeedPlayerFromProxyCache(
-                mid: mid,
-                reacquireReason: "cachedActiveHLSSegmentRecovery",
-                transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-            )
+            applyAVPlayerBufferDefaults(to: player)
+            updateLoadingSpinnerForPlayback(player)
+            publishMediaBufferHealthIfNeeded(for: player)
+            let now = Date()
+            if now.timeIntervalSince(lastSlowLoadWaitLogDate) >= 5.0 {
+                print("\(logPrefix) ⏳ \(reason): HLS segment is cached but current item is still empty — keeping existing player")
+                lastSlowLoadWaitLogDate = now
+            }
+            return true
         }
 
         let activeSegments = LocalHTTPServer.shared.activeHLSSegmentKeys(for: mid)
         let segmentLabel = activeSegments.isEmpty ? "segment" : activeSegments.joined(separator: ",")
         notePrimaryPlaybackIntentWhileWaiting(player)
-        hlsEmptyWaitingStartDate = .distantPast
         let now = Date()
         if hlsActiveSegmentWaitMediaID != mid || hlsActiveSegmentWaitStartDate == .distantPast {
             hlsActiveSegmentWaitMediaID = mid
@@ -2758,35 +2679,22 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let activeWaitSeconds = now.timeIntervalSince(hlsActiveSegmentWaitStartDate)
 
         if activeWaitSeconds >= Self.activeHLSSegmentStartupTimeout {
-            guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
             hlsActiveSegmentWaitStartDate = .distantPast
             hlsActiveSegmentWaitMediaID = nil
-            preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
-            restoreCachedPosterForFailureIfNeeded()
             LocalHTTPServer.shared.resumeVisibleDownloads(for: mid)
-            print("\(logPrefix) 🔄 \(reason): HLS active segment download still pending after \(String(format: "%.1f", activeWaitSeconds))s (\(segmentLabel)) — rebuilding feed player while preserving downloads")
-            return rebuildCurrentFeedPlayerFromProxyCache(
-                mid: mid,
-                reacquireReason: "activeHLSSegmentTimeoutRecovery",
-                transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-            )
+            print("\(logPrefix) ⏳ \(reason): HLS active segment download still pending after \(String(format: "%.1f", activeWaitSeconds))s (\(segmentLabel)) — keeping existing player")
         }
 
         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.currentItem?.preferredForwardBufferDuration = 0
         player.automaticallyWaitsToMinimizeStalling = true
         updateLoadingSpinnerForPlayback(player)
-        print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with no buffered data, waiting for active download: \(segmentLabel)")
-        let recoveryReason = normalizedRecoveryReason(prefix: "activeHLSSegment-", reason: reason)
-        scheduleStartupRecoveryAfterCurrentTask(for: player, reason: recoveryReason)
-        return true
-    }
-
-    private func normalizedRecoveryReason(prefix: String, reason: String) -> String {
-        if let range = reason.range(of: prefix) {
-            return prefix + String(reason[range.upperBound...])
+        publishMediaBufferHealthIfNeeded(for: player)
+        if now.timeIntervalSince(lastSlowLoadWaitLogDate) >= 5.0 {
+            print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with no buffered data, waiting for active download: \(segmentLabel)")
+            lastSlowLoadWaitLogDate = now
         }
-        return prefix + reason
+        return true
     }
 
     private func progressWatchdogReason(after reason: String) -> String {
@@ -2796,6 +2704,116 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             base.removeFirst(prefix.count)
         }
         return prefix + base
+    }
+
+    @discardableResult
+    private func recoverPrimaryPlaybackIfStalled(
+        _ player: AVPlayer,
+        bufferedAhead: Double,
+        reason: String,
+        now: Date
+    ) -> Bool {
+        guard coordinatorWantsToPlay,
+              canDriveForegroundPlayback,
+              videoCellState == .playing,
+              !fullscreenOverlayOwnsCurrentVideo,
+              !isVideoAtEnd(player),
+              let mid = attachment?.mid else { return false }
+        guard !isLiveSurfaceHandoff(player, mid: mid) else { return false }
+
+        if firstNoProgressWatchdogDate == .distantPast {
+            if lastPlaybackProgressDate != .distantPast {
+                firstNoProgressWatchdogDate = lastPlaybackProgressDate
+            } else if lastPlaybackRequestDate != .distantPast {
+                firstNoProgressWatchdogDate = lastPlaybackRequestDate
+            } else {
+                firstNoProgressWatchdogDate = now
+            }
+        }
+
+        if waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: reason) {
+            return true
+        }
+
+        let stalledFor = now.timeIntervalSince(firstNoProgressWatchdogDate)
+        let status = player.currentItem?.status
+        let currentSeconds = seconds(from: player.currentTime())
+        let hasDecodedPlaybackHistory = hasEstablishedDecodedPlayback(for: player)
+            || lastActualPlaybackDate != .distantPast
+            || lastPlaybackProgressDate != .distantPast
+            || lastDecodedPlaybackProgressDate != .distantPast
+        let hasUsableProxyData = bufferedAhead >= 1.0 || playerHasLoadedData(player)
+        let isColdHLSStartup = attachment?.type == .hls_video
+            && !hasDecodedPlaybackHistory
+            && currentSeconds > 0.25
+
+        if isColdHLSStartup,
+           !didWatchdogSeekToZeroForCurrentPlayer,
+           stalledFor >= Self.watchdogFastRebuildDelay {
+            didWatchdogSeekToZeroForCurrentPlayer = true
+            clearFeedResumeState(for: mid)
+            applyAVPlayerBufferDefaults(to: player)
+            player.currentItem?.cancelPendingSeeks()
+            print("\(logPrefix) 🔄 watchdog cold HLS reset (\(reason)): seeking to zero before first decoded frame, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, stalled=\(String(format: "%.1f", stalledFor))s")
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
+                DispatchQueue.main.async {
+                    guard let self,
+                          let player,
+                          self.player === player,
+                          self.coordinatorWantsToPlay,
+                          self.canDriveForegroundPlayback,
+                          !self.isVideoAtEnd(player) else { return }
+                    self.resetPlaybackProgressTracking(to: .zero)
+                    self.applyAVPlayerBufferDefaults(to: player)
+                    player.play()
+                    self.updateLoadingSpinnerForPlayback(player)
+                }
+            }
+            return true
+        }
+
+        let mediaType = attachment?.type
+        let hasActiveHLSDownload = mediaType == .hls_video
+            && LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid)
+        if mediaType == .hls_video || mediaType == .video,
+           !hasActiveHLSDownload {
+            let canRebuildUnknown = status == .unknown && hasUsableProxyData
+            let canRebuildReadyStuck = status == .readyToPlay
+                && (bufferedAhead >= 2.0 || playerHasLoadedData(player))
+                && !isVisibleVideoFrameReady(player)
+            let rebuildDelay = hasUsableProxyData
+                ? Self.watchdogFastRebuildDelay
+                : Self.watchdogSlowRebuildDelay
+            if stalledFor >= rebuildDelay,
+               canRebuildUnknown || canRebuildReadyStuck {
+                let mediaLabel = mediaType == .video ? "progressive" : "HLS"
+                print("\(logPrefix) 🔄 watchdog recovery (\(reason)): rebuilding stuck \(mediaLabel) player, pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, stalled=\(String(format: "%.1f", stalledFor))s, itemStatus=\(status?.rawValue ?? -1), timeControl=\(player.timeControlStatus.rawValue), decodedHistory=\(hasDecodedPlaybackHistory)")
+                return rebuildCurrentFeedPlayerFromProxyCache(
+                    player: player,
+                    mid: mid,
+                    reason: "watchdogStallRecovery"
+                )
+            }
+        } else if mediaType == .hls_video {
+            LocalHTTPServer.shared.resumeVisibleDownloads(for: mid)
+        }
+
+        let shouldNudge = now.timeIntervalSince(lastWatchdogNudgeDate) >= Self.slowLoadingNudgeInterval
+            && status != .failed
+            && player.timeControlStatus != .playing
+
+        if shouldNudge {
+            lastWatchdogNudgeDate = now
+            applyAVPlayerBufferDefaults(to: player)
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            player.isMuted = MuteState.shared.isMuted
+            player.play()
+            updateLoadingSpinnerForPlayback(player)
+            print("\(logPrefix) ▶️ watchdog nudge (\(reason)): pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, stalled=\(String(format: "%.1f", stalledFor))s, itemStatus=\(status?.rawValue ?? -1), timeControl=\(player.timeControlStatus.rawValue)")
+            return true
+        }
+
+        return false
     }
 
     private func notePrimaryPlaybackIntentWhileWaiting(_ player: AVPlayer) {
@@ -2821,448 +2839,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         retryButton.isHidden = true
     }
 
-    @discardableResult
-    private func nudgeSlowLoadingPrimaryIfUseful(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              canDriveForegroundPlayback,
-              videoCellState == .playing,
-              let item = player.currentItem,
-              item.status != .failed,
-              !isVideoAtEnd(player),
-              let mid = attachment?.mid else { return false }
-        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
-
-        let now = Date()
-        guard now.timeIntervalSince(lastSlowLoadingNudgeDate) >= Self.slowLoadingNudgeInterval else { return false }
-        guard !isVisibleVideoFrameReady(player) else { return false }
-
-        if waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: reason) {
-            lastSlowLoadingNudgeDate = now
-            return true
-        }
-
-        let hasSomethingWorthKeeping = playerHasLoadedData(player)
-            || bufferedAhead > 0
-            || hasPlaybackCoverForCurrentVideo
-            || SharedAssetCache.shared.cachedThumbnail(for: mid) != nil
-            || hasEstablishedDecodedPlayback(for: player)
-
-        if hasSomethingWorthKeeping {
-            preserveFrameToCache(skipImageView: imageView.image != nil)
-            restoreCachedPosterForFailureIfNeeded()
-        }
-        applyAVPlayerBufferDefaults(to: player)
-        showPrimarySpinnerAfterDebounce(for: player)
-        lastSlowLoadingNudgeDate = now
-
-        let currentSeconds = seconds(from: player.currentTime())
-        if attachment?.type == .hls_video,
-           lastActualPlaybackDate == .distantPast,
-           !hasEstablishedDecodedPlayback(for: player),
-           currentSeconds > 0.25 {
-            clearFeedResumeState(for: mid)
-            print("\(logPrefix) 🔄 \(reason): cold HLS player stuck at \(String(format: "%.1f", currentSeconds))s before decoded playback — seeking to start")
-            player.currentItem?.cancelPendingSeeks()
-            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
-                DispatchQueue.main.async {
-                    guard let self,
-                          let player,
-                          self.player === player,
-                          self.coordinatorWantsToPlay,
-                          self.canDriveForegroundPlayback,
-                          !self.isVideoAtEnd(player) else { return }
-                    self.applyAVPlayerBufferDefaults(to: player)
-                    self.resetPlaybackProgressTracking(to: .zero)
-                    player.play()
-                    self.updateLoadingSpinnerForPlayback(player)
-                    self.scheduleStartupRecovery(for: player, reason: "coldHLSSeekToStart-\(reason)")
-                }
-            }
-            return true
-        }
-        print("\(logPrefix) ⏳ \(reason): slow-loading nudge, keeping player, cover=\(hasSomethingWorthKeeping), pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, itemStatus=\(item.status.rawValue), timeControl=\(player.timeControlStatus.rawValue)")
-
-        if attachment?.type == .video {
-            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            player.automaticallyWaitsToMinimizeStalling = true
-            if player.rate == 0 {
-                player.play()
-            }
-            updateLoadingSpinnerForPlayback(player)
-            return true
-        }
-
-        player.pause()
-        slowLoadingRecoveryTask?.cancel()
-        slowLoadingRecoveryTask = Task { @MainActor [weak self, weak player] in
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            guard let self else { return }
-            defer { self.slowLoadingRecoveryTask = nil }
-            guard !Task.isCancelled,
-                  let player,
-                  self.player === player,
-                  self.coordinatorWantsToPlay,
-                  self.canDriveForegroundPlayback,
-                  !self.isVideoAtEnd(player) else { return }
-
-            self.applyAVPlayerBufferDefaults(to: player)
-            self.resetPlaybackProgressTracking(to: player.currentTime())
-            player.play()
-            self.updateLoadingSpinnerForPlayback(player)
-            self.scheduleStartupRecovery(for: player, reason: "slowLoadingNudge-\(reason)")
-        }
-
-        return true
-    }
-
-    @discardableResult
-    private func rebuildUnknownPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              videoCellState == .playing,
-              player.currentItem?.status == .unknown,
-              bufferedAhead >= 1.0,
-              !isVideoAtEnd(player),
-              let mid = attachment?.mid else { return false }
-        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
-
-        if attachment?.type == .hls_video {
-            let now = Date()
-            let hasDecodedPlayback = hasEstablishedDecodedPlayback(for: player)
-                || lastActualPlaybackDate != .distantPast
-            let hasBufferedUnknownNoFrame = !hasDecodedPlayback
-                && !isVisibleVideoFrameReady(player)
-                && bufferedAhead >= 2.0
-
-            if hasBufferedUnknownNoFrame {
-                if hlsBufferedUnknownStartDate == .distantPast {
-                    hlsBufferedUnknownStartDate = now
-                }
-            } else {
-                hlsBufferedUnknownStartDate = .distantPast
-            }
-
-            let bufferedUnknownRebuildDelay: TimeInterval = bufferedAhead >= 6.0 ? 2.0 : 4.0
-            let waitedForBufferedUnknown = hlsBufferedUnknownStartDate != .distantPast
-                && now.timeIntervalSince(hlsBufferedUnknownStartDate) >= bufferedUnknownRebuildDelay
-
-            if hasBufferedUnknownNoFrame,
-               waitedForBufferedUnknown {
-                if let resumeTime = trustedRecoverySeekTime(for: player),
-                   resumeTime.isValid,
-                   resumeTime.seconds.isFinite {
-                    pendingRecoverySeekTime = resumeTime
-                }
-
-                guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-
-                hlsBufferedUnknownStartDate = .distantPast
-                preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
-                restoreCachedPosterForFailureIfNeeded()
-                print("\(logPrefix) 🔄 \(reason): HLS item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered and no decoded frame — rebuilding feed player from proxy cache")
-                return rebuildCurrentFeedPlayerFromProxyCache(
-                    mid: mid,
-                    reacquireReason: "unknownHLSBufferedStartupRecovery",
-                    transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-                )
-            }
-
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            player.currentItem?.preferredForwardBufferDuration = 0
-            player.automaticallyWaitsToMinimizeStalling = true
-            lastPlaybackRequestDate = Date()
-            resetPlaybackProgressTracking(to: player.currentTime())
-            player.play()
-            updateLoadingSpinnerForPlayback(player)
-            print("\(logPrefix) ⏳ \(reason): HLS item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — waiting briefly before rebuild")
-            return true
-        }
-
-        if attachment?.type == .video {
-            notePrimaryPlaybackIntentWhileWaiting(player)
-            applyAVPlayerBufferDefaults(to: player)
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            if player.rate == 0 {
-                player.play()
-            }
-            updateLoadingSpinnerForPlayback(player)
-            if Date().timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
-                print("\(logPrefix) ⏳ \(reason): progressive item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered — keeping existing AVPlayer")
-                lastSlowLoadWaitLogDate = Date()
-            }
-            scheduleStartupRecoveryAfterCurrentTask(
-                for: player,
-                reason: normalizedRecoveryReason(prefix: "progressiveUnknownWait-", reason: reason)
-            )
-            return true
-        }
-
-        // If playback has already shown real progress, do not tear down the
-        // visible layer. Rebuilding at that point causes frames -> black -> reload.
-        guard lastActualPlaybackDate == .distantPast else {
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            player.currentItem?.preferredForwardBufferDuration = 0
-            player.automaticallyWaitsToMinimizeStalling = true
-            lastPlaybackRequestDate = Date()
-            resetPlaybackProgressTracking(to: player.currentTime())
-            player.play()
-            updateLoadingSpinnerForPlayback(player)
-            print("\(logPrefix) ⏳ \(reason): item still .unknown with \(String(format: "%.1f", bufferedAhead))s buffered after playback — keeping existing player")
-            return true
-        }
-
-        if let resumeTime = trustedRecoverySeekTime(for: player),
-           resumeTime.isValid,
-           resumeTime.seconds.isFinite {
-            pendingRecoverySeekTime = resumeTime
-        }
-
-        guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-
-        print("\(logPrefix) 🔄 \(reason): item stayed .unknown with \(String(format: "%.1f", bufferedAhead))s buffered before playback — rebuilding feed player")
-        return rebuildCurrentFeedPlayerFromProxyCache(
-            mid: mid,
-            reacquireReason: "unknownItemBufferedStartupRecovery",
-            transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-        )
-    }
-
-    @discardableResult
-    private func rebuildEmptyWaitingHLSPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              canDriveForegroundPlayback,
-              videoCellState == .playing,
-              attachment?.type == .hls_video,
-              let item = player.currentItem,
-              item.status == .unknown,
-              bufferedAhead < 0.25,
-              !isVideoAtEnd(player),
-              let mid = attachment?.mid else { return false }
-        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
-
-        if LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) {
-            return waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: reason)
-        }
-
-        let isEmptyWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            || item.isPlaybackBufferEmpty
-            || !item.isPlaybackLikelyToKeepUp
-        guard isEmptyWaiting, !playerHasLoadedData(player) else {
-            hlsEmptyWaitingStartDate = .distantPast
-            return false
-        }
-
-        notePrimaryPlaybackIntentWhileWaiting(player)
-        let now = Date()
-        if hlsEmptyWaitingStartDate == .distantPast {
-            hlsEmptyWaitingStartDate = now
-            applyAVPlayerBufferDefaults(to: player)
-            updateLoadingSpinnerForPlayback(player)
-            print("\(logPrefix) ⏳ \(reason): HLS item still empty after downloads went idle — rechecking shortly")
-            scheduleStartupRecoveryAfterCurrentTask(
-                for: player,
-                reason: normalizedRecoveryReason(prefix: "emptyHLSWait-", reason: reason)
-            )
-            return true
-        }
-
-        guard now.timeIntervalSince(hlsEmptyWaitingStartDate) >= 2.0 else {
-            applyAVPlayerBufferDefaults(to: player)
-            updateLoadingSpinnerForPlayback(player)
-            scheduleStartupRecoveryAfterCurrentTask(
-                for: player,
-                reason: normalizedRecoveryReason(prefix: "emptyHLSWait-", reason: reason)
-            )
-            return true
-        }
-
-        if let resumeTime = trustedRecoverySeekTime(for: player),
-           resumeTime.isValid,
-           resumeTime.seconds.isFinite {
-            pendingRecoverySeekTime = resumeTime
-        }
-
-        guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else {
-            hlsEmptyWaitingStartDate = .distantPast
-            return true
-        }
-
-        hlsEmptyWaitingStartDate = .distantPast
-        preserveReleaseCoverForCurrentVideo(reason: reason, showCover: isVisible)
-        restoreCachedPosterForFailureIfNeeded()
-        print("\(logPrefix) 🔄 \(reason): HLS primary stayed empty with no active segment downloads — rebuilding feed player from proxy cache")
-        return rebuildCurrentFeedPlayerFromProxyCache(
-            mid: mid,
-            reacquireReason: "emptyWaitingHLSStartupRecovery",
-            transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-        )
-    }
-
-    @discardableResult
-    private func rebuildStarvedReadyPrimaryIfRecoverable(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              videoCellState == .playing,
-              player.currentItem?.status == .readyToPlay,
-              player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-              bufferedAhead < 0.5,
-              !isVideoAtEnd(player),
-              let mid = attachment?.mid else { return false }
-        guard !shouldSuppressPositionRestore(for: player, mid: mid) else { return false }
-
-        let now = Date()
-        let hasDecodedPlaybackHistory = hasEstablishedDecodedPlayback(for: player)
-            || lastActualPlaybackDate != .distantPast
-            || lastPlaybackProgressDate != .distantPast
-            || lastDecodedPlaybackProgressDate != .distantPast
-        let hasPlaybackHistory = hasDecodedPlaybackHistory
-            || hasPlaybackCoverForCurrentVideo
-        let noRecentPlaybackProgress = lastPlaybackProgressDate == .distantPast
-            || now.timeIntervalSince(lastPlaybackProgressDate) >= 20.0
-        let noRecentDecodedProgress = !hasRecentDecodedPlayback(for: player, maxAge: 20.0)
-        let coldReadyStarved = !hasDecodedPlaybackHistory
-            && lastPlaybackRequestDate != .distantPast
-            && noRecentDecodedProgress
-        let coldReadyWaitSeconds: TimeInterval = attachment?.type == .video ? 6.0 : 15.0
-        let hlsReadyStarved = attachment?.type == .hls_video
-            && coldReadyStarved
-            && !LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid)
-        let hlsReadyStarvedWaitSeconds: TimeInterval = 6.0
-        let waitedLongWithCover = hasPlaybackHistory
-            && lastPlaybackRequestDate != .distantPast
-            && now.timeIntervalSince(lastPlaybackRequestDate) >= 45.0
-            && noRecentPlaybackProgress
-            && noRecentDecodedProgress
-        let waitedForColdStart = coldReadyStarved
-            && now.timeIntervalSince(lastPlaybackRequestDate) >= (hlsReadyStarved ? hlsReadyStarvedWaitSeconds : coldReadyWaitSeconds)
-            && noRecentPlaybackProgress
-
-        if coldReadyStarved,
-           !waitedForColdStart {
-            notePrimaryPlaybackIntentWhileWaiting(player)
-            applyAVPlayerBufferDefaults(to: player)
-            updateLoadingSpinnerForPlayback(player)
-            if player.rate == 0 {
-                player.play()
-            }
-            if now.timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
-                let waited = now.timeIntervalSince(lastPlaybackRequestDate)
-                print("\(logPrefix) ⏳ \(reason): cold ready item has \(String(format: "%.1f", bufferedAhead))s buffered after \(String(format: "%.1f", waited))s — keeping existing player")
-                lastSlowLoadWaitLogDate = now
-            }
-            scheduleStartupRecoveryAfterCurrentTask(
-                for: player,
-                reason: normalizedRecoveryReason(prefix: "readyStarvedColdWait-", reason: reason)
-            )
-            return true
-        }
-
-        guard waitedForColdStart
-            || waitedLongWithCover else { return false }
-
-        if attachment?.type == .video {
-            notePrimaryPlaybackIntentWhileWaiting(player)
-            applyAVPlayerBufferDefaults(to: player)
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            if player.rate == 0 {
-                player.play()
-            }
-            updateLoadingSpinnerForPlayback(player)
-            if now.timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
-                print("\(logPrefix) ⏳ \(reason): progressive ready item is starved; keeping existing AVPlayer")
-                lastSlowLoadWaitLogDate = now
-            }
-            scheduleStartupRecoveryAfterCurrentTask(
-                for: player,
-                reason: normalizedRecoveryReason(prefix: "readyProgressiveWait-", reason: reason)
-            )
-            return true
-        }
-
-        if waitedForColdStart,
-           !hasDecodedPlaybackHistory {
-            if let resumeTime = trustedRecoverySeekTime(for: player),
-               resumeTime.isValid,
-               resumeTime.seconds.isFinite {
-                pendingRecoverySeekTime = resumeTime
-            }
-
-            guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-
-            print("\(logPrefix) 🔄 \(reason): ready item stayed starved with \(String(format: "%.1f", bufferedAhead))s buffered before decoded playback — rebuilding feed player from proxy cache")
-            return rebuildCurrentFeedPlayerFromProxyCache(
-                mid: mid,
-                reacquireReason: "readyStarvedStartupRecovery",
-                transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-            )
-        }
-
-        if waitedLongWithCover {
-            let currentTime = player.currentTime()
-            if let resumeTime = trustedRecoverySeekTime(for: player) ?? (currentTime.seconds.isFinite && currentTime.seconds > 0.25 ? currentTime : nil),
-               resumeTime.isValid,
-               resumeTime.seconds.isFinite {
-                pendingRecoverySeekTime = resumeTime
-            }
-
-            guard reserveFeedPlayerRebuild(player: player, mid: mid, reason: reason) else { return true }
-
-            print("\(logPrefix) 🔄 \(reason): ready item stalled at \(String(format: "%.1f", seconds(from: player.currentTime())))s with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player from proxy cache")
-            return rebuildCurrentFeedPlayerFromProxyCache(
-                mid: mid,
-                reacquireReason: "readyStarvedPlaybackRecovery",
-                transitionState: imageView.image != nil ? .thumbnail : .playerLoading
-            )
-        }
-
-        return false
-    }
-
-    @discardableResult
-    private func failUnbufferedUnknownPrimaryIfTimedOut(_ player: AVPlayer, bufferedAhead: Double, reason: String) -> Bool {
-        guard coordinatorWantsToPlay,
-              canDriveForegroundPlayback,
-              videoCellState == .playing,
-              player.currentItem?.status == .unknown,
-              bufferedAhead < 0.25,
-              lastActualPlaybackDate == .distantPast,
-              lastPlaybackRequestDate != .distantPast,
-              Date().timeIntervalSince(lastPlaybackRequestDate) >= 30.0,
-              !isVisibleVideoFrameReady(player),
-              !isVideoAtEnd(player) else { return false }
-
-        if attachment?.type == .hls_video,
-           let mid = attachment?.mid,
-           LocalHTTPServer.shared.hasActiveHLSSegmentDownloads(for: mid) {
-            waitForActiveHLSDownloadsIfNeeded(player, bufferedAhead: bufferedAhead, reason: reason)
-            return true
-        }
-
-        if attachment?.type == .video {
-            notePrimaryPlaybackIntentWhileWaiting(player)
-            applyAVPlayerBufferDefaults(to: player)
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            if player.rate == 0 {
-                player.play()
-            }
-            updateLoadingSpinnerForPlayback(player)
-            if Date().timeIntervalSince(lastSlowLoadWaitLogDate) >= 10.0 {
-                print("\(logPrefix) ⏳ \(reason): progressive item still .unknown with no buffered data — keeping existing AVPlayer")
-                lastSlowLoadWaitLogDate = Date()
-            }
-            scheduleStartupRecoveryAfterCurrentTask(
-                for: player,
-                reason: normalizedRecoveryReason(prefix: "progressiveUnknownWait-", reason: reason)
-            )
-            return true
-        }
-
-        print("\(logPrefix) ❌ \(reason): item stayed .unknown with no buffered data - moving to next video")
-        handleVideoLoadFailure(reason: "\(reason) unknown item timed out")
-        return true
-    }
-
     private func scheduleStillFrameRecovery(for player: AVPlayer, reason: String) {
         updateLoadingSpinnerForPlayback(player)
-        scheduleStartupRecovery(for: player, reason: reason)
+        publishMediaBufferHealthIfNeeded(for: player)
+        schedulePlaybackProgressWatchdog(for: player, reason: reason)
     }
 
     /// Queue extra work for the next first-frame event without discarding an existing callback.
@@ -4118,7 +3698,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 guard let mid = self.attachment?.mid else { return }
 
                 if item.status == .readyToPlay {
-                    self.hlsEmptyWaitingStartDate = .distantPast
                     self.hlsActiveSegmentWaitStartDate = .distantPast
                     self.hlsActiveSegmentWaitMediaID = nil
                     // Cancel the fallback task — statusKVO arrived before the timeout.
@@ -4276,7 +3855,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 }
 
                 if player.timeControlStatus == .playing {
-                    self.hlsEmptyWaitingStartDate = .distantPast
                     self.hlsActiveSegmentWaitStartDate = .distantPast
                     self.hlsActiveSegmentWaitMediaID = nil
                     self.foregroundRecoveryLoadingDeadline = nil
@@ -4402,8 +3980,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         playerAcquireDebounceTask = nil
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
-        slowLoadingRecoveryTask?.cancel()
-        slowLoadingRecoveryTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
         playbackStartupRecoveryTask?.cancel()
@@ -4830,6 +4406,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     isVisibleVideoFrameReady(player),
                    videoCellState == .playing || videoCellState == .playerReady {
                     resetFeedPlayerRebuildBudget()
+                    resetPlaybackWatchdogRecoveryState()
                     if imageView.image != nil {
                         fadeOutVideoCoverForPlayback()
                     }
@@ -4862,6 +4439,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             let noRecentDecodedProgress = !self.hasRecentDecodedPlayback(for: player, maxAge: 4.0)
             let nextReason = self.progressWatchdogReason(after: reason)
             guard noRecentClockProgress && noRecentDecodedProgress else {
+                self.resetPlaybackWatchdogRecoveryState()
                 self.schedulePlaybackProgressWatchdog(for: player, reason: nextReason)
                 return
             }
@@ -4870,50 +4448,22 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             let position = self.seconds(from: player.currentTime())
             let status = player.currentItem?.status.rawValue ?? -1
 
-            if self.releaseStartupBufferIfReady(player, bufferedAhead: bufferedAhead, reason: nextReason) {
-                return
-            }
-
             if now.timeIntervalSince(self.lastSlowLoadWaitLogDate) >= 5.0 {
                 print("\(self.logPrefix) ⏳ progress watchdog (\(reason)): no playback progress, pos=\(String(format: "%.1f", position))s, buffered=\(String(format: "%.1f", bufferedAhead))s, itemStatus=\(status), timeControl=\(player.timeControlStatus.rawValue)")
                 self.lastSlowLoadWaitLogDate = now
             }
 
-            guard player.currentItem?.status == .readyToPlay,
-                  player.timeControlStatus != .playing,
-                  bufferedAhead < 0.5,
-                  let mid = self.attachment?.mid,
-                  !self.shouldSuppressPositionRestore(for: player, mid: mid) else {
-                self.applyAVPlayerBufferDefaults(to: player)
-                player.play()
-                self.updateLoadingSpinnerForPlayback(player)
-                self.schedulePlaybackProgressWatchdog(for: player, reason: nextReason)
-                return
-            }
-
-            if self.attachment?.type == .video {
-                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-                self.applyAVPlayerBufferDefaults(to: player)
-                player.play()
-                self.updateLoadingSpinnerForPlayback(player)
-                self.schedulePlaybackProgressWatchdog(for: player, reason: nextReason)
-                return
-            }
-
-            let currentTime = player.currentTime()
-            if let resumeTime = self.trustedRecoverySeekTime(for: player) ?? (currentTime.seconds.isFinite && currentTime.seconds > 0.25 ? currentTime : nil),
-               resumeTime.isValid,
-               resumeTime.seconds.isFinite {
-                self.pendingRecoverySeekTime = resumeTime
-            }
-
-            guard self.reserveFeedPlayerRebuild(player: player, mid: mid, reason: nextReason) else { return }
-            print("\(self.logPrefix) 🔄 progress watchdog (\(reason)): ready player stalled with \(String(format: "%.1f", bufferedAhead))s buffered — rebuilding feed player from proxy cache")
-            _ = self.rebuildCurrentFeedPlayerFromProxyCache(
-                mid: mid,
-                reacquireReason: "progressWatchdogRecovery",
-                transitionState: self.imageView.image != nil ? .thumbnail : .playerLoading
+            self.applyAVPlayerBufferDefaults(to: player)
+            self.updateLoadingSpinnerForPlayback(player)
+            self.publishMediaBufferHealthIfNeeded(for: player)
+            _ = self.recoverPrimaryPlaybackIfStalled(
+                player,
+                bufferedAhead: bufferedAhead,
+                reason: nextReason,
+                now: now
             )
+            guard self.player === player else { return }
+            self.schedulePlaybackProgressWatchdog(for: player, reason: nextReason)
         }
     }
 
@@ -5091,8 +4641,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         statusUnknownFallbackTask = nil
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
-        slowLoadingRecoveryTask?.cancel()
-        slowLoadingRecoveryTask = nil
         loadingSpinner.stopAnimating()
         removePlayerObservers()
         removePlayerTimeObserver()
@@ -6090,7 +5638,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         let hasWork =
             setupPlayerTask != nil ||
-            slowLoadingRecoveryTask != nil ||
             playbackStartupRecoveryTask != nil ||
             playbackProgressWatchdogTask != nil ||
             videoOutput != nil ||
@@ -6123,8 +5670,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func teardownPlayerAndObservers() {
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
-        slowLoadingRecoveryTask?.cancel()
-        slowLoadingRecoveryTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
         automaticTransientRetryTask?.cancel()
@@ -6201,15 +5746,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         lastSlowLoadWaitLogDate = .distantPast
         didLogFirstDecodedPlayback = false
         didLogFirstPlaybackProgress = false
-        slowLoadingRecoveryTask?.cancel()
-        slowLoadingRecoveryTask = nil
-        lastSlowLoadingNudgeDate = .distantPast
-        lastStartupBufferReleaseDate = .distantPast
-        startupBufferReleaseUntil = .distantPast
-        hlsBufferedUnknownStartDate = .distantPast
-        hlsEmptyWaitingStartDate = .distantPast
         hlsActiveSegmentWaitStartDate = .distantPast
         hlsActiveSegmentWaitMediaID = nil
+        resetPlaybackWatchdogRecoveryState()
         if !preserveBackgroundCover {
             clearBackgroundVideoCoverHold()
         }

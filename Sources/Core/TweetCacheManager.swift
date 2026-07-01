@@ -351,7 +351,13 @@ extension TweetCacheManager {
         }
     }
 
-    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil, isProfileView: Bool = false) async -> [Tweet?] {
+    func fetchCachedTweets(
+        for userId: String,
+        page: UInt,
+        pageSize: UInt,
+        currentUserId: String? = nil,
+        isProfileView: Bool = false
+    ) async -> [Tweet?] {
         let cachedSlots = await withCheckedContinuation { (continuation: CheckedContinuation<[CachedTweetPayload?], Never>) in
             let readContext = self.readContext
             readContext.perform {
@@ -422,6 +428,16 @@ extension TweetCacheManager {
                 request.fetchOffset = startSlot
 
                 if let cdTweets = try? readContext.fetch(request) {
+                    if isBookmarkOrFavorite,
+                       let firstCachedAt = cdTweets.first?.timeCached,
+                       firstCachedAt < Date(timeIntervalSince1970: 4_102_358_400) {
+                        // Old bookmark/favorite cache used wall-clock write time for order.
+                        // That makes later-fetched pages outrank page 0 on first paint, so
+                        // skip it once and let the server response rewrite stable ranks.
+                        continuation.resume(returning: [])
+                        return
+                    }
+
                     var tweets: [CachedTweetPayload?] = []
                     for cdTweet in cdTweets {
                         switch self.cachedTweetListSlot(

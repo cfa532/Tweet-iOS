@@ -810,6 +810,8 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     private var playbackSurfaceReadyMid: String?
     private var pendingSurfacePlayback: (player: AVPlayer, item: AVPlayerItem, log: String)?
     private var playbackSurfaceFallbackTask: Task<Void, Never>?
+    private var fullscreenPlaybackStartSeconds: Double?
+    @Published private var hasFullscreenVisiblePlaybackProgress = false
     
     private var nearEndAdvanceTask: DispatchWorkItem?
     private var startupAudioMuteUntil: Date = .distantPast
@@ -840,6 +842,8 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         playbackSurfaceFallbackTask = nil
         playbackSurfaceReadyMid = nil
         pendingSurfacePlayback = nil
+        fullscreenPlaybackStartSeconds = nil
+        hasFullscreenVisiblePlaybackProgress = false
     }
 
     private func shortMID(_ mid: String?) -> String {
@@ -896,7 +900,11 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         )
 
         let itemReady = isItemReady || item.status == .readyToPlay
-        let isPlaybackRendering = player.timeControlStatus == .playing || player.rate > 0
+        let isPlaybackTrying = isPlaying
+            || player.rate > 0
+            || player.timeControlStatus == .playing
+            || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        let isPlaybackRendering = itemReady && hasFullscreenVisiblePlaybackProgress
 
         if isPlaybackRendering, itemReady {
             return .playing(showPoster: showPoster)
@@ -904,8 +912,8 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
 
         let shouldShowSpinner = !isFullscreenVideoAtEnd(player)
             && !isPlaybackRendering
-            && !(hasCachedMediaContent && hasPlayableData)
-            && !(layerReadyForDisplay && itemReady)
+            && (isPlaybackTrying
+                || !(hasCachedMediaContent && hasPlayableData))
 
         return .loading(
             showPoster: showPoster,
@@ -1489,8 +1497,23 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
                       let player,
                       let item,
                       self.singletonPlayer === player,
-                      player.currentItem === item,
-                      player.rate > 0 || self.isPlaying,
+                      player.currentItem === item else {
+                    return
+                }
+
+                if player.rate > 0 || self.isPlaying || player.timeControlStatus == .playing {
+                    let currentSeconds = CMTimeGetSeconds(player.currentTime())
+                    if currentSeconds.isFinite {
+                        if self.fullscreenPlaybackStartSeconds == nil {
+                            self.fullscreenPlaybackStartSeconds = currentSeconds
+                        } else if let start = self.fullscreenPlaybackStartSeconds,
+                                  currentSeconds - start >= 0.18 {
+                            self.hasFullscreenVisiblePlaybackProgress = true
+                        }
+                    }
+                }
+
+                guard player.rate > 0 || self.isPlaying,
                       let remaining = self.timeRemaining(for: item, player: player),
                       remaining <= 3.0,
                       remaining > 0 else {
@@ -2091,6 +2114,11 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
             keepUp: bufferPolicy.keepUp
         )
         print("🎬 [FullScreenVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(playerDiagnostic(player, item: item))")
+        if fullscreenPlaybackStartSeconds == nil || !hasFullscreenVisiblePlaybackProgress {
+            let currentSeconds = CMTimeGetSeconds(player.currentTime())
+            fullscreenPlaybackStartSeconds = currentSeconds.isFinite ? currentSeconds : nil
+            hasFullscreenVisiblePlaybackProgress = false
+        }
         player.play()
         isPlaying = true
     }

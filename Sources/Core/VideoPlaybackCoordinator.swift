@@ -202,7 +202,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var continuePlaybackMediaCells: Set<String> = []
 
     /// Current primary excluded after it drops below the continue threshold.
-    /// Prevents the 50% start threshold from immediately reselecting the same outgoing video.
+    /// Prevents immediate reselection of the same outgoing video during layout churn.
     private var primaryBelowContinueIdentifier: String?
 
     /// All videos in the app (ordered by feed, then attachmentIndex).
@@ -514,7 +514,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Do NOT insert into onScreenMediaCells here. didMoveToWindow fires for cells that
         // UITableView prefetches below the viewport — they are in the window but NOT visible.
-        // Only updateOnScreenMediaCells (which does geometric 50% visibility checks) should
+        // Only updateOnScreenMediaCells (which does geometric visibility checks) should
         // manage onScreenMediaCells. Otherwise off-screen cells get selected as primary.
         //
         // At app start, cells register AFTER the initial updateVisibleTweetsForVideoPlayback().
@@ -1041,6 +1041,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             finishedPrimaryIdentifier = nil
         }
 
+        enforcePrimaryVisibilityThresholdForPlayingDelegates(reason: "visibility")
+
         // Stop videos whose cell left the visible area
         if visibilityChanged {
             let identifiersToStop = previousVisibleIdentifiers.subtracting(currentVisibleIdentifiers)
@@ -1119,6 +1121,31 @@ class VideoPlaybackCoordinator: ObservableObject {
             delegate.shouldStopVideo(withMid: primary.videoMid)
         } else {
             SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
+        }
+    }
+
+    private func enforcePrimaryVisibilityThresholdForPlayingDelegates(reason: String) {
+        pruneReleasedDelegates()
+
+        for (identifier, storage) in Array(mediaCellDelegates) {
+            guard !continuePlaybackMediaCells.contains(identifier),
+                  let delegate = storage.delegate,
+                  delegate.isActuallyPlaying,
+                  let video = allVideos.first(where: { $0.identifier == identifier }) else {
+                continue
+            }
+
+            delegate.shouldStopVideo(withMid: video.videoMid)
+            currentlyPlayingVideoIds.remove(identifier)
+
+            if primaryVideoId == identifier {
+                primaryVideoId = nil
+                phase = .idle
+                primaryBelowContinueIdentifier = onScreenMediaCells.contains(identifier) ? identifier : nil
+                print("🎬 [COORD] \(reason): stopped primary \(shortMID(video.videoMid)) below visibility threshold")
+            } else {
+                print("🎬 [COORD] \(reason): stopped non-primary \(shortMID(video.videoMid)) below visibility threshold")
+            }
         }
     }
 
@@ -1929,7 +1956,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
 
-        // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate.
+        // visibleVideos is derived from onScreenMediaCells, the 50% start threshold; pick first candidate with a delegate.
         // Skip failedPrimaryIdentifier and finishedPrimaryIdentifier to avoid re-selecting.
         var belowContinueFallback: VideoPlaybackInfo?
         for video in candidates {
@@ -1944,9 +1971,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             return video
         }
 
-        // If the only visible video is the previous primary that fell below the
-        // continuation threshold, let it become primary again once normal selection
-        // is allowed. Otherwise the feed can sit idle with one visible video.
+        // If layout churn temporarily excluded the previous primary but it is
+        // visible enough again, allow it as a fallback.
         return belowContinueFallback
     }
 

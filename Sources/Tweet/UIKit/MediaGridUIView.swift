@@ -531,8 +531,8 @@ class MediaGridUIView: UIView {
     /// Updates per-media visibility.
     /// `loadVisible` uses a near-viewport band so media can start attaching/warming
     /// shortly before it scrolls on screen.
-    /// `continuePlayback` is stricter than `playable`: the current feed video stops once it drops below this threshold.
-    /// `playable` keeps the 50% threshold used by the video coordinator for new autoplay candidates.
+    /// `playable` starts autoplay at 50%; `continuePlayback` keeps the active
+    /// primary only while it remains at least 70% visible.
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
         var loadVisible: [String] = []
         var continuePlayback: [String] = []
@@ -550,10 +550,12 @@ class MediaGridUIView: UIView {
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
             let isLoadVisible = isGridVisible && loadVisibleArea > 0
-            let shouldWarmPlayer = ratio >= FeedPlaybackTuning.videoWarmVisibilityRatio
+            let isActuallyVisible = isGridVisible && visibleArea > 0
+            let shouldWarmPlayer = ratio > 0 && ratio >= FeedPlaybackTuning.videoWarmVisibilityRatio
             let isPlayable = ratio >= FeedPlaybackTuning.videoStartVisibilityRatio
+            let shouldMarkCellVisible = cellView.isVideoAttachment ? isActuallyVisible : isLoadVisible
             cellView.setVisible(
-                isLoadVisible,
+                shouldMarkCellVisible,
                 shouldAcquirePlayer: shouldWarmPlayer && AppDelegate.isVideoInfrastructureReady
             )
 
@@ -572,7 +574,7 @@ class MediaGridUIView: UIView {
         return (loadVisible, continuePlayback, playable)
     }
 
-    /// Updates per-media visibility and returns video identifiers whose frames are at least 50% visible.
+    /// Updates per-media visibility and returns video identifiers eligible for primary playback.
     func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
         mediaVisibilityIdentifiers(visibleRect: visibleRect, coordinateSpace: coordinateSpace).playable
     }

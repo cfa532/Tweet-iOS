@@ -407,7 +407,7 @@ struct TweetListDestinationView: View {
                 }
             },
             feedIdentifier: feedIdentifier,
-            preserveOrder: isTargetAppUser,
+            preserveOrder: true,
             onAvatarTap: { tappedUser in
                 navigationPath.append(tappedUser)
             },

@@ -1913,6 +1913,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         var acquiredPriority: NodeDownloadPriority? = slotAcquired ? requestPriority : nil
         // Poll when the cap is full. Primary bypasses the preload cap, but still honors
         // its own HLS segment cap so startup cannot launch parallel segment downloads.
+        // Visible non-primary video gets more patience than off-screen preload so
+        // AVPlayer does not treat normal backpressure as a corrupt HLS segment.
         if !slotAcquired {
             for attempt in 0..<240 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
@@ -1923,7 +1925,16 @@ public class LocalHTTPServer: @unchecked Sendable {
                     acquiredPriority = requestPriority
                     break
                 }
-                if requestPriority != .primary && attempt >= 9 { break }
+                let shouldStopWaiting: Bool
+                switch requestPriority {
+                case .primary:
+                    shouldStopWaiting = false
+                case .visible:
+                    shouldStopWaiting = attempt >= 59
+                case .preload:
+                    shouldStopWaiting = attempt >= 9
+                }
+                if shouldStopWaiting { break }
             }
         }
         guard slotAcquired else {
