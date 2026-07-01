@@ -641,7 +641,10 @@ extension TweetCacheManager {
     }
 
     func deleteExpiredTweets() {
-        context.performAndWait {
+        // Fire-and-forget on the background context queue (perform, not performAndWait):
+        // this iterates and decodes every cached tweet, which stalled startup when run
+        // synchronously on the @MainActor caller. Cleanup has no completion dependency.
+        context.perform { [self] in
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             let expirationDate = Date().addingTimeInterval(-maxCacheAge)
             
