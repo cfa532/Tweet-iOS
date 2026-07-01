@@ -214,6 +214,7 @@ struct TweetListView: View {
         pageSize: UInt
     ) {
         applyPaginatedTweets(cachedTweets, page: page)
+        currentPage = max(currentPage, page)
         if responseCount >= pageSize {
             hasMoreTweets = true
         }
@@ -226,7 +227,7 @@ struct TweetListView: View {
         pageSize: UInt
     ) {
         applyPaginatedTweets(serverTweets, page: page)
-        currentPage = page
+        currentPage = max(currentPage, page)
         hasMoreTweets = responseCount >= pageSize
     }
 
@@ -1302,12 +1303,12 @@ struct TweetListView: View {
             // to ensure correct server order (sorted by bookmark/favorite time)
             if page == 0 && preserveOrder {
                 tweets = renderableServerTweets
-                currentPage = page
+                currentPage = max(currentPage, page)
                 hasMoreTweets = tweetsFromServer.count >= pageSize
                 scheduleMemoryMaintenance(delay: 0.2)
             } else if page == 0 && tweets.isEmpty {
                 tweets = renderableServerTweets
-                currentPage = page
+                currentPage = max(currentPage, page)
                 hasMoreTweets = tweetsFromServer.count >= pageSize
                 scheduleMemoryMaintenance(delay: 0.2)
             } else {
@@ -1332,7 +1333,7 @@ struct TweetListView: View {
         // BRANCH 1b: Valid profile page contained only new top tweets deferred behind the banner.
         } else if !validServerTweets.isEmpty {
             didConfirmEmptyFromServer = false
-            currentPage = page
+            currentPage = max(currentPage, page)
             hasMoreTweets = tweetsFromServer.count >= pageSize
             if page == 0 {
                 isLoading = false
@@ -1365,7 +1366,7 @@ struct TweetListView: View {
         } else {
             // Full page (all nils) means server had enough entries, continue to next page
             // Example: Page has 10 deleted bookmarks (all nils) - more entries might exist
-            currentPage = page
+            currentPage = max(currentPage, page)
             hasMoreTweets = true
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), FULL PAGE - trying next page")
         }

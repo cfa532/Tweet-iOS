@@ -1916,7 +1916,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // No need to cancel preload downloads here.
 
         delegate.shouldPlayVideo(withMid: primary.videoMid)
-        print("🎬 [COORD] startPrimary: delegated play to \(shortMID(primary.videoMid))")
     }
 
     /// Identify the primary video based on scroll direction.

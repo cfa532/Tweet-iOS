@@ -5,6 +5,9 @@ final class CoreDataManager: @unchecked Sendable {
     static let shared = CoreDataManager()
     
     let container: NSPersistentContainer
+    private let contextLock = NSLock()
+    private var _cacheContext: NSManagedObjectContext?
+    private var _cacheReadContext: NSManagedObjectContext?
     
     private init() {
         print("[CoreDataManager] Initializing CoreDataManager")
@@ -23,21 +26,6 @@ final class CoreDataManager: @unchecked Sendable {
         container.persistentStoreDescriptions = [description]
         
         print("[CoreDataManager] Core Data store URL: \(description.url?.absoluteString ?? "nil")")
-        
-        // Eagerly create the background contexts BEFORE loadPersistentStores (whose escaping
-        // completion captures self; all stored properties must be initialized first). Swift
-        // `lazy` is non-atomic, so this also avoids a double-init race on concurrent access.
-        let cacheCtx = container.newBackgroundContext()
-        cacheCtx.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
-        cacheCtx.automaticallyMergesChangesFromParent = true
-        cacheCtx.name = "TweetCacheManager.cacheContext"
-        cacheContext = cacheCtx
-
-        let cacheReadCtx = container.newBackgroundContext()
-        cacheReadCtx.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
-        cacheReadCtx.automaticallyMergesChangesFromParent = true
-        cacheReadCtx.name = "TweetCacheManager.cacheReadContext"
-        cacheReadContext = cacheReadCtx
 
         container.loadPersistentStores { _, error in
             if let error = error {
@@ -67,6 +55,36 @@ final class CoreDataManager: @unchecked Sendable {
     
     var context: NSManagedObjectContext { container.viewContext }
 
-    let cacheContext: NSManagedObjectContext
-    let cacheReadContext: NSManagedObjectContext
+    var cacheContext: NSManagedObjectContext {
+        lockedBackgroundContext(
+            storage: &_cacheContext,
+            name: "TweetCacheManager.cacheContext"
+        )
+    }
+
+    var cacheReadContext: NSManagedObjectContext {
+        lockedBackgroundContext(
+            storage: &_cacheReadContext,
+            name: "TweetCacheManager.cacheReadContext"
+        )
+    }
+
+    private func lockedBackgroundContext(
+        storage: inout NSManagedObjectContext?,
+        name: String
+    ) -> NSManagedObjectContext {
+        contextLock.lock()
+        defer { contextLock.unlock() }
+
+        if let storage {
+            return storage
+        }
+
+        let context = container.newBackgroundContext()
+        context.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
+        context.automaticallyMergesChangesFromParent = true
+        context.name = name
+        storage = context
+        return context
+    }
 }

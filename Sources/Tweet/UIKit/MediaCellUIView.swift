@@ -3252,7 +3252,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         let hasPlayer = player != nil
         let itemStatus = player?.currentItem?.status.rawValue ?? -1
         let rate = player?.rate ?? -1
-        print("\(logPrefix) 🎬 shouldPlayVideo: state=\(videoCellState), hasPlayer=\(hasPlayer), itemStatus=\(itemStatus), rate=\(rate)")
+        logVerbose("🎬 shouldPlayVideo: state=\(videoCellState), hasPlayer=\(hasPlayer), itemStatus=\(itemStatus), rate=\(rate)")
 
         isHandlingFinishEvent = false
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
@@ -3393,14 +3393,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if self.player == nil,
                setupPlayerTask == nil,
                let context = currentVideoContext(requireLoadableVisibleVideo: true) {
-                print("\(logPrefix) 🎬 shouldPlayVideo: acquiring player")
                 acquirePlayer(
                     attachment: context.attachment,
                     url: context.url,
                     parentTweet: context.parentTweet
                 )
             } else if let player = self.player, player.currentItem?.status == .unknown {
-                print("\(logPrefix) 🎬 shouldPlayVideo: item unknown, enabling network and starting playback")
                 // DEADLOCK FIX: Paused player created with
                 // canUseNetworkResourcesForLiveStreamingWhilePaused=false (SharedAssetCache
                 // default) can't fetch HLS data while paused → item.status stays .unknown
