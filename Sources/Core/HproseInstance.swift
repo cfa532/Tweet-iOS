@@ -2847,21 +2847,22 @@ final class HproseInstance: ObservableObject {
         user: User,
         entry: UserContentType
     ) async throws -> [String] {
+        // Phase A (HproseInstance demotion prep): snapshot the @MainActor User into a Sendable
+        // UserRecord so this function no longer reads user.X directly. The class is still
+        // @MainActor so this compiles and ships; once demoted the function runs off-main and
+        // this is its one main-actor hop. invokeRunMApp is retained until Phase C.
+        let snap = await MainActor.run { UserRecord(user: user) }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid,
+            "userid": snap.mid,
         ]
-        guard let client = user.hproseClient else {
+        guard let baseUrl = snap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-
-        // Route the synchronous hprose invoke through invokeRunMApp so it runs on a
-        // background queue. getListByType reads @MainActor User properties (user.mid /
-        // user.hproseClient) and is therefore @MainActor-isolated; calling client.invoke
-        // directly here blocked the main thread until the server replied, freezing the UI
-        // and stranding every other @MainActor continuation (feed fetch, video setup).
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
+        client.timeout = 15
         let rawResponse = await invokeRunMApp(using: client, entry: entry.rawValue, params: params)
         
         // Unwrap v2 response
@@ -2894,20 +2895,22 @@ final class HproseInstance: ObservableObject {
      */
     func getFollowings(user: User) async throws -> [MimeiId] {
         let entry = "get_followings_sorted"
+        // Phase A (demotion prep): snapshot @MainActor User → Sendable UserRecord.
+        let snap = await MainActor.run { UserRecord(user: user) }
+        let attemptedBaseUrl = snap.baseUrl?.absoluteString
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid
+            "userid": snap.mid
         ]
-        
-        var attemptedBaseUrl: String?
+
         do {
-            guard let client = user.hproseClient else {
+            guard let baseUrl = snap.baseUrl else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            
-            attemptedBaseUrl = user.baseUrl?.absoluteString
+            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
+            client.timeout = 15
             let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
 
             // Unwrap v2 response
@@ -2930,7 +2933,7 @@ final class HproseInstance: ObservableObject {
                 let rval = (rhs["value"] as? Int) ?? 0
                 return lval > rval
             }
-            NodePool.shared.updateFromUser(user)
+            await MainActor.run { NodePool.shared.updateFromUser(user) }
             return sorted.compactMap { $0["field"] as? String }
         } catch {
             print("DEBUG: [HproseInstance] getFollowings error: \(error) (baseUrl: \(attemptedBaseUrl ?? "nil"))")
@@ -2989,20 +2992,22 @@ final class HproseInstance: ObservableObject {
      */
     func getFans(user: User) async throws -> [MimeiId]? {
         let entry = "get_followers_sorted"
+        // Phase A (demotion prep): snapshot @MainActor User → Sendable UserRecord.
+        let snap = await MainActor.run { UserRecord(user: user) }
+        let attemptedBaseUrl = snap.baseUrl?.absoluteString
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid
+            "userid": snap.mid
         ]
-        
-        var attemptedBaseUrl: String?
+
         do {
-            guard let client = user.hproseClient else {
+            guard let baseUrl = snap.baseUrl else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            
-            attemptedBaseUrl = user.baseUrl?.absoluteString
+            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
+            client.timeout = 15
             let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
@@ -3023,7 +3028,7 @@ final class HproseInstance: ObservableObject {
                 let rval = (rhs["value"] as? Int) ?? 0
                 return lval > rval
             }
-            NodePool.shared.updateFromUser(user)
+            await MainActor.run { NodePool.shared.updateFromUser(user) }
             return sorted.compactMap { $0["field"] as? String }
         } catch {
             print("DEBUG: [HproseInstance] getFans error: \(error) (baseUrl: \(attemptedBaseUrl ?? "nil"))")
@@ -3037,25 +3042,29 @@ final class HproseInstance: ObservableObject {
         pageNumber: UInt = 0,
         pageSize: UInt = 20
     ) async throws -> [Tweet?] {
-        print("DEBUG: [HproseInstance] getUserTweetsByType called - user: \(user.mid), type: \(type.rawValue), page: \(pageNumber), size: \(pageSize)")
+        // Phase A (demotion prep): snapshot @MainActor User + appUser.mid.
+        let snap = await MainActor.run { UserRecord(user: user) }
+        let appUserMid = await MainActor.run { self.appUser.mid }
+        print("DEBUG: [HproseInstance] getUserTweetsByType called - user: \(snap.mid), type: \(type.rawValue), page: \(pageNumber), size: \(pageSize)")
         let entry = "get_user_meta"
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid,
+            "userid": snap.mid,
             "type": type.rawValue,
             "pn": pageNumber,
             "ps": pageSize,
-            "appuserid": appUser.mid
+            "appuserid": appUserMid
         ] as [String : Any]
         print("DEBUG: [HproseInstance] getUserTweetsByType params: \(params)")
         
-        guard let client = user.hproseClient else {
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Client not initialized for user: \(user.mid)")
+        guard let baseUrl = snap.baseUrl else {
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Client not initialized for user: \(snap.mid)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
+        client.timeout = 15
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
         // Unwrap v2 response
@@ -3114,8 +3123,8 @@ final class HproseInstance: ObservableObject {
                     // Use format: "bookmark_list_userId" or "favorite_list_userId".
                     // saveTweet will automatically mark media as permanent based on the prefix
                     let cacheKey = type == .BOOKMARKS
-                        ? TweetCacheManager.bookmarkCacheKey(userId: user.mid)
-                        : TweetCacheManager.favoriteCacheKey(userId: user.mid)
+                        ? TweetCacheManager.bookmarkCacheKey(userId: snap.mid)
+                        : TweetCacheManager.favoriteCacheKey(userId: snap.mid)
                     
                     // For bookmarks/favorites, preserve server order by using a timestamp that reflects position
                     // Subtract index milliseconds to ensure earlier items (lower index) have later timestamps
