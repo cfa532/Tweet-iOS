@@ -24,6 +24,21 @@ final class CoreDataManager: @unchecked Sendable {
         
         print("[CoreDataManager] Core Data store URL: \(description.url?.absoluteString ?? "nil")")
         
+        // Eagerly create the background contexts BEFORE loadPersistentStores (whose escaping
+        // completion captures self; all stored properties must be initialized first). Swift
+        // `lazy` is non-atomic, so this also avoids a double-init race on concurrent access.
+        let cacheCtx = container.newBackgroundContext()
+        cacheCtx.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
+        cacheCtx.automaticallyMergesChangesFromParent = true
+        cacheCtx.name = "TweetCacheManager.cacheContext"
+        cacheContext = cacheCtx
+
+        let cacheReadCtx = container.newBackgroundContext()
+        cacheReadCtx.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
+        cacheReadCtx.automaticallyMergesChangesFromParent = true
+        cacheReadCtx.name = "TweetCacheManager.cacheReadContext"
+        cacheReadContext = cacheReadCtx
+
         container.loadPersistentStores { _, error in
             if let error = error {
                 print("[CoreDataManager] Core Data failed to load: \(error)")
@@ -52,19 +67,6 @@ final class CoreDataManager: @unchecked Sendable {
     
     var context: NSManagedObjectContext { container.viewContext }
 
-    lazy var cacheContext: NSManagedObjectContext = {
-        let context = container.newBackgroundContext()
-        context.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
-        context.automaticallyMergesChangesFromParent = true
-        context.name = "TweetCacheManager.cacheContext"
-        return context
-    }()
-
-    lazy var cacheReadContext: NSManagedObjectContext = {
-        let context = container.newBackgroundContext()
-        context.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
-        context.automaticallyMergesChangesFromParent = true
-        context.name = "TweetCacheManager.cacheReadContext"
-        return context
-    }()
+    let cacheContext: NSManagedObjectContext
+    let cacheReadContext: NSManagedObjectContext
 }

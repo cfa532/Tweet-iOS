@@ -28,8 +28,19 @@ final class VideoConversionService: @unchecked Sendable {
     static let reference720pBitrate = 2500.0  // Base bitrate for 720p video (in kbps)
     static let minBitrate = 600  // Minimum bitrate in kbps for lower-resolution variants
     
-    private var currentConversion: Task<Void, Never>?
-    private var progressCallback: (@Sendable (ConversionProgress) -> Void)?
+    // currentConversion + progressCallback are written by convertVideoToHLS and concurrently
+    // nil'd/read by cancelCurrentConversion (user-tap cancel). Guard with a shared lock.
+    private let conversionStateLock = NSLock()
+    private var _currentConversion: Task<Void, Never>?
+    private var currentConversion: Task<Void, Never>? {
+        get { conversionStateLock.lock(); defer { conversionStateLock.unlock() }; return _currentConversion }
+        set { conversionStateLock.lock(); defer { conversionStateLock.unlock() }; _currentConversion = newValue }
+    }
+    private var _progressCallback: (@Sendable (ConversionProgress) -> Void)?
+    private var progressCallback: (@Sendable (ConversionProgress) -> Void)? {
+        get { conversionStateLock.lock(); defer { conversionStateLock.unlock() }; return _progressCallback }
+        set { conversionStateLock.lock(); defer { conversionStateLock.unlock() }; _progressCallback = newValue }
+    }
 
     private init() {
         // FFmpegKit configuration

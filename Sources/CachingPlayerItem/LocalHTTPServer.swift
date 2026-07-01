@@ -329,7 +329,18 @@ public class LocalHTTPServer: @unchecked Sendable {
     fileprivate static let verboseLogsEnabled = false
 #endif
 
-    private var listener: NWListener?
+    // `listener` is read/written from several unsynchronized contexts: the concurrent
+    // `queue`, the listener's own `listenerQueue` (via stateUpdateHandler), and the
+    // cooperative pool via Task hops. Guard it with a dedicated lock (same pattern as
+    // stateLock/_isRunning below) to prevent a retain/release race that could crash or
+    // wedge every video load. All accesses are quick and synchronous, so no lock is held
+    // across an await (no deadlock risk).
+    private var _listener: NWListener?
+    private let listenerLock = NSLock()
+    private var listener: NWListener? {
+        get { listenerLock.lock(); defer { listenerLock.unlock() }; return _listener }
+        set { listenerLock.lock(); defer { listenerLock.unlock() }; _listener = newValue }
+    }
     public private(set) var port: UInt16 = 8080  // Public read, private write
     private var mediaCache: [String: String] = [:] // mediaID -> cachePath
     /// Truncate a mediaID to 8 chars for log readability.

@@ -22,7 +22,14 @@ final class MemoryCapManager: @unchecked Sendable {
     
     // MARK: - State
     private nonisolated(unsafe) var monitoringTimer: Timer?
-    private var currentMemoryUsage: UInt64 = 0
+    // currentMemoryUsage is written on main (checkMemoryStatus) and read off-main
+    // (ImageCacheManager.memoryDuplicateBlockState); guard it with a lock.
+    private var _currentMemoryUsage: UInt64 = 0
+    private let memoryUsageLock = NSLock()
+    private var currentMemoryUsage: UInt64 {
+        get { memoryUsageLock.lock(); defer { memoryUsageLock.unlock() }; return _currentMemoryUsage }
+        set { memoryUsageLock.lock(); defer { memoryUsageLock.unlock() }; _currentMemoryUsage = newValue }
+    }
     private var isMemoryWarningActive = false
     private let logger = Logger(subsystem: "Tweet", category: "MemoryCapManager")
     

@@ -42,7 +42,13 @@ private final class BottomBarScrollObserver: NSObject {
                 let isAtBottom = (contentHeight > 0 && scrollViewHeight > 0) &&
                                 (contentOffsetY + scrollViewHeight >= contentHeight - 50)
 
-                self.onScrollChange?(y, delta, isAtBottom)
+                // Defer the SwiftUI state update off the current view-update cycle:
+                // contentOffset KVO can fire synchronously during a SwiftUI layout pass,
+                // and mutating @State in onScrollChange then triggers
+                // "Modifying state during view update".
+                DispatchQueue.main.async { [weak self] in
+                    self?.onScrollChange?(y, delta, isAtBottom)
+                }
             }
         }
     }

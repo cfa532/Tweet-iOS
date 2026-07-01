@@ -21,10 +21,11 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
     // Cached URL for callers that need a pre-resolved attachment URL.
     @Published private var _cachedUrl: String?
     
-    var url: String? {
-        get { _cachedUrl }
-        set { _cachedUrl = newValue }
-    }
+    // Read-only accessor. _cachedUrl is @Published (Combine requires main-actor writes);
+    // the only mutator is setAuthor() (@MainActor), and init/decode write it before the
+    // instance is shared. Keeping this read-only prevents an off-main caller from racing
+    // the @Published storage.
+    var url: String? { _cachedUrl }
     
     /// Update the URL based on the author's baseUrl
     private func updateUrl(with baseUrl: URL?) {

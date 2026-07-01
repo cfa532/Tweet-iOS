@@ -21,9 +21,41 @@ final class TweetCacheManager: @unchecked Sendable {
     private let maxCacheSize: Int = 5000 // Maximum number of tweets to cache
     private nonisolated(unsafe) var cleanupTimer: Timer?
     
-    // Track last access time for tweets (in memory, persisted to UserDefaults)
+    // Track last access time for tweets (in memory, persisted to UserDefaults).
+    // TweetCacheManager is @unchecked Sendable; all access to this dict goes through
+    // locked helpers so a future off-main caller can't race the dict.
     private var tweetAccessTimes: [String: Date] = [:]
+    private let accessTimesLock = NSLock()
     private let accessTimesKey = "TweetAccessTimes"
+
+    private func lockedAccessTime(for id: String) -> Date? {
+        accessTimesLock.lock(); defer { accessTimesLock.unlock() }
+        return tweetAccessTimes[id]
+    }
+    private func lockedSetAccessTime(_ date: Date, for id: String) {
+        accessTimesLock.lock(); defer { accessTimesLock.unlock() }
+        tweetAccessTimes[id] = date
+    }
+    private func lockedAccessCount() -> Int {
+        accessTimesLock.lock(); defer { accessTimesLock.unlock() }
+        return tweetAccessTimes.count
+    }
+    private func lockedRemoveAccessTime(for id: String) {
+        accessTimesLock.lock(); defer { accessTimesLock.unlock() }
+        tweetAccessTimes.removeValue(forKey: id)
+    }
+    private func lockedClearAccessTimes() {
+        accessTimesLock.lock(); defer { accessTimesLock.unlock() }
+        tweetAccessTimes.removeAll()
+    }
+    private func lockedSnapshotAccessTimes() -> [String: Date] {
+        accessTimesLock.lock(); defer { accessTimesLock.unlock() }
+        return tweetAccessTimes
+    }
+    private func lockedSetAccessTimes(_ times: [String: Date]) {
+        accessTimesLock.lock(); defer { accessTimesLock.unlock() }
+        tweetAccessTimes = times
+    }
 
     private init() {
         // Load access times from UserDefaults
@@ -49,23 +81,23 @@ final class TweetCacheManager: @unchecked Sendable {
     private func loadAccessTimes() {
         if let data = UserDefaults.standard.data(forKey: accessTimesKey),
            let times = try? JSONDecoder().decode([String: Date].self, from: data) {
-            tweetAccessTimes = times
+            lockedSetAccessTimes(times)
             print("DEBUG: [TweetCacheManager] Loaded \(times.count) tweet access times")
         }
     }
     
     // Save access times to UserDefaults
     private func saveAccessTimes() {
-        if let data = try? JSONEncoder().encode(tweetAccessTimes) {
+        if let data = try? JSONEncoder().encode(lockedSnapshotAccessTimes()) {
             UserDefaults.standard.set(data, forKey: accessTimesKey)
         }
     }
     
     // Mark tweet as accessed (called when tweet is viewed)
     func markTweetAccessed(_ tweetId: String) {
-        tweetAccessTimes[tweetId] = Date()
+        lockedSetAccessTime(Date(), for: tweetId)
         // Save periodically, not on every access (performance)
-        if tweetAccessTimes.count % 20 == 0 {
+        if lockedAccessCount() % 20 == 0 {
             saveAccessTimes()
         }
     }
@@ -199,7 +231,7 @@ final class TweetCacheManager: @unchecked Sendable {
         }
 
         // Clear access times
-        tweetAccessTimes.removeAll()
+        lockedClearAccessTimes()
         saveAccessTimes()
         print("DEBUG: [TweetCacheManager] Access times cleared")
         TweetHeightCache.shared.clearAll()
@@ -637,7 +669,7 @@ extension TweetCacheManager {
                     }
                     
                     // Check last access time (if available), otherwise fall back to timeCached
-                    let lastAccess = tweetAccessTimes[tweetId] ?? (cdTweet.timeCached ?? Date.distantPast)
+                    let lastAccess = lockedAccessTime(for: tweetId) ?? (cdTweet.timeCached ?? Date.distantPast)
                     
                     if lastAccess < expirationDate {
                         // Tweet hasn't been accessed in 2 weeks - delete it and its media
@@ -647,7 +679,7 @@ extension TweetCacheManager {
                         deleteMediaForTweetRecord(tweet)
                         
                         // Remove from access times
-                        tweetAccessTimes.removeValue(forKey: tweetId)
+                        lockedRemoveAccessTime(for: tweetId)
                         Task { @MainActor in
                             self.clearHeightCache(for: tweetId)
                         }
@@ -723,7 +755,7 @@ extension TweetCacheManager {
                     // Decode tweet to check authorId
                     if let tweet = try? decodeTweetRecord(from: cdTweet), tweet.authorId == userId {
                         // Remove from access times
-                        tweetAccessTimes.removeValue(forKey: tweet.mid)
+                        lockedRemoveAccessTime(for: tweet.mid)
                         Task { @MainActor in
                             self.clearHeightCache(for: tweet.mid)
                         }
