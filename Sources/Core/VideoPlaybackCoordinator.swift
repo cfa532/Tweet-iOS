@@ -1669,6 +1669,17 @@ class VideoPlaybackCoordinator: ObservableObject {
             visibleWarmupMids.insert(video.videoMid)
         }
 
+        let maxDirectionalTargets = max(
+            1,
+            max(0, directionalPlayerPreloadCount) + max(0, FeedPlaybackTuning.directionalVideoCoverPreloadCount)
+        )
+        let cacheOnlyDirectionalVideos = getNextVideosInScrollDirection(count: maxDirectionalTargets)
+        var cacheOnlyCoverMids = Set<String>()
+        for video in cacheOnlyDirectionalVideos {
+            preloadVideoPoster(video, allowNetwork: false)
+            cacheOnlyCoverMids.insert(video.videoMid)
+        }
+
         // Don't run off-screen directional preloads while the autoplay primary is struggling
         // for buffer. Actual visible media is handled above and through MediaCell visibility.
         guard canPreloadCoversWithoutStarvingPrimary() else {
@@ -1676,6 +1687,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                 cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "\(reason).primaryStarved")
                 activePreloadMids.removeAll()
                 SharedAssetCache.shared.updateProtectedPreloadMids([])
+            }
+            if !visibleWarmupMids.isEmpty || !cacheOnlyCoverMids.isEmpty {
+                print("🎬 [COORD] \(reason): \(visibleWarmupMids.count) visible cover(s), \(cacheOnlyCoverMids.count) cache-only directional cover attempt(s), primary not ready")
             }
             return
         }
@@ -1713,12 +1727,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         // (primary stable = app not busy) and retries, so it fires once startup settles.
         let playerCandidates = Array(nextVideos.prefix(playerPreloadCount))
         if !playerCandidates.isEmpty {
-            // The exact-frame/player preload waits for stable primary playback.
-            // Still fetch a lightweight poster now so the nearest upcoming video
-            // has a cover before it scrolls into view.
-            for video in playerCandidates {
-                preloadVideoPoster(video, allowNetwork: allowNetworkPreload)
-            }
+            // Cached posters were attempted before the primary-health gate. Do not
+            // start a network poster task for the player candidate too: the warm
+            // player owns its decoded cover, and both paths share the same preload slot.
             scheduleExactFrameUpgradeIfStable(for: playerCandidates)
         }
 
@@ -1728,8 +1739,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             preloadVideoPoster(video, allowNetwork: allowNetworkPreload)
         }
 
-        if !newPreloadMids.isEmpty || !visibleWarmupMids.isEmpty {
-            print("🎬 [COORD] \(reason): \(visibleWarmupMids.count) visible cover(s), \(playerCandidates.count) player preload(s), \(coverOnlyVideos.count) directional cover(s)")
+        if !newPreloadMids.isEmpty || !visibleWarmupMids.isEmpty || !cacheOnlyCoverMids.isEmpty {
+            print("🎬 [COORD] \(reason): \(visibleWarmupMids.count) visible cover(s), \(playerCandidates.count) player preload(s), \(coverOnlyVideos.count) directional cover(s), \(cacheOnlyCoverMids.count) cache-only directional cover attempt(s)")
         }
     }
 
