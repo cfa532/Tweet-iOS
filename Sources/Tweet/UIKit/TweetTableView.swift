@@ -14,7 +14,8 @@ struct TweetTableView: UIViewControllerRepresentable {
     let header: (() -> AnyView)?
     let headerRefreshToken: Int
     let hproseInstance: HproseInstance
-    @Binding var hasMoreTweets: Bool
+    let hasMoreTweets: Bool
+    let canShowNoMoreTweetsMessage: Bool
     let isLoading: Bool
     let isLoadingMore: Bool
     /// True for the long-lived main feed, where new tweets must NOT move the user's
@@ -113,7 +114,8 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.updateLoadingState(
             isLoading: isLoading,
             isLoadingMore: isLoadingMore,
-            hasMoreTweets: hasMoreTweets
+            hasMoreTweets: hasMoreTweets,
+            canShowNoMoreTweetsMessage: canShowNoMoreTweetsMessage
         )
 
         // Update callbacks

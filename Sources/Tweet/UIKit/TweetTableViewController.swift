@@ -95,6 +95,7 @@ class TweetTableViewController: UITableViewController {
     private var tweets: [Tweet] = []
     private var pinnedTweets: [Tweet] = []  // Pinned tweets rendered as first N rows
     private var hasMoreTweets: Bool = true
+    private var canShowNoMoreTweetsMessage: Bool = false
     private var isLoadingMore: Bool = false
     
     // Bottom pull-to-load state (manual pull past bottom edge)
@@ -989,7 +990,12 @@ class TweetTableViewController: UITableViewController {
 
         if needsFooterUpdate {
             needsFooterUpdate = false
-            updateLoadingState(isLoading: isLoading, isLoadingMore: isLoadingMore, hasMoreTweets: hasMoreTweets)
+            updateLoadingState(
+                isLoading: isLoading,
+                isLoadingMore: isLoadingMore,
+                hasMoreTweets: hasMoreTweets,
+                canShowNoMoreTweetsMessage: canShowNoMoreTweetsMessage
+            )
         }
 
         applyPendingDetachedTableReloadIfNeeded(reason: "viewDidAppear")
@@ -1971,18 +1977,30 @@ class TweetTableViewController: UITableViewController {
         }
     }
     
-    func updateLoadingState(isLoading: Bool, isLoadingMore: Bool, hasMoreTweets: Bool) {
+    func updateLoadingState(
+        isLoading: Bool,
+        isLoadingMore: Bool,
+        hasMoreTweets: Bool,
+        canShowNoMoreTweetsMessage: Bool
+    ) {
         // Track previous states
         let previousLoading = self.isLoading
         let previousLoadingMore = self.isLoadingMore
         let previousHasMoreTweets = self.hasMoreTweets
+        let previousCanShowNoMoreTweetsMessage = self.canShowNoMoreTweetsMessage
         let stateChanged = previousLoading != isLoading
             || previousLoadingMore != isLoadingMore
             || previousHasMoreTweets != hasMoreTweets
+            || previousCanShowNoMoreTweetsMessage != canShowNoMoreTweetsMessage
         
         self.isLoading = isLoading
         self.isLoadingMore = isLoadingMore
         self.hasMoreTweets = hasMoreTweets
+        self.canShowNoMoreTweetsMessage = canShowNoMoreTweetsMessage
+
+        if !canShowNoMoreTweetsMessage {
+            clearNoMoreTweetsMessageIfNeeded()
+        }
 
         guard stateChanged || needsFooterUpdate else { return }
         
@@ -2019,7 +2037,12 @@ class TweetTableViewController: UITableViewController {
                 MainActor.assumeIsolated {
                     guard let self = self else { return }
                     if self.isLoadingMore {
-                        self.updateLoadingState(isLoading: self.isLoading, isLoadingMore: false, hasMoreTweets: self.hasMoreTweets)
+                        self.updateLoadingState(
+                            isLoading: self.isLoading,
+                            isLoadingMore: false,
+                            hasMoreTweets: self.hasMoreTweets,
+                            canShowNoMoreTweetsMessage: self.canShowNoMoreTweetsMessage
+                        )
                     }
                 }
             }
@@ -2051,7 +2074,9 @@ class TweetTableViewController: UITableViewController {
                 let remainingTime = max(0, minimumSpinnerDisplayTime - elapsedTime)
 
                 // Check if we should show "no more tweets" message
-                let shouldShowMessage = previousLoadingMore && !hasMoreTweets && tweets.count > 0
+                let shouldShowMessage = previousLoadingMore
+                    && canShowNoMoreTweetsMessage
+                    && tweets.count > 0
 
                 // Add cooldown check
                 let canShowMessage: Bool
@@ -3628,7 +3653,7 @@ class TweetTableViewController: UITableViewController {
     
     /// Show "no more tweets" message (can be called externally)
     func showNoMoreTweetsMessageIfNeeded() {
-        if !hasMoreTweets && tweets.count > 0 {
+        if canShowNoMoreTweetsMessage && tweets.count > 0 {
             showNoMoreTweetsMessage()
         }
     }
@@ -3643,7 +3668,12 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
-        updateLoadingState(isLoading: isLoading, isLoadingMore: true, hasMoreTweets: hasMoreTweets)
+        updateLoadingState(
+            isLoading: isLoading,
+            isLoadingMore: true,
+            hasMoreTweets: hasMoreTweets,
+            canShowNoMoreTweetsMessage: canShowNoMoreTweetsMessage
+        )
 
         // Call the load more callback with forceLoad=true to bypass hasMoreTweets check
         loadMoreTweets?(true)
@@ -3655,7 +3685,12 @@ class TweetTableViewController: UITableViewController {
     private func triggerAutoLoadMore() {
         guard hasMoreTweets, !isLoadingMore else { return }
 
-        updateLoadingState(isLoading: isLoading, isLoadingMore: true, hasMoreTweets: hasMoreTweets)
+        updateLoadingState(
+            isLoading: isLoading,
+            isLoadingMore: true,
+            hasMoreTweets: hasMoreTweets,
+            canShowNoMoreTweetsMessage: canShowNoMoreTweetsMessage
+        )
 
         // Automatic pagination should obey hasMoreTweets; threshold crossing decides when it fires.
         loadMoreTweets?(false)
@@ -3665,6 +3700,7 @@ class TweetTableViewController: UITableViewController {
     }
     
     private func showNoMoreTweetsMessage() {
+        guard canShowNoMoreTweetsMessage, tweets.count > 0 else { return }
         guard !isShowingNoMoreTweetsMessage else { return }
         guard tableView.window != nil else {
             needsFooterUpdate = true
@@ -3721,12 +3757,29 @@ class TweetTableViewController: UITableViewController {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         MainActor.assumeIsolated {
                             if self.isLoadingMore && self.hasMoreTweets {
-                                self.updateLoadingState(isLoading: self.isLoading, isLoadingMore: self.isLoadingMore, hasMoreTweets: self.hasMoreTweets)
+                                self.updateLoadingState(
+                                    isLoading: self.isLoading,
+                                    isLoadingMore: self.isLoadingMore,
+                                    hasMoreTweets: self.hasMoreTweets,
+                                    canShowNoMoreTweetsMessage: self.canShowNoMoreTweetsMessage
+                                )
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    private func clearNoMoreTweetsMessageIfNeeded() {
+        guard isShowingNoMoreTweetsMessage else { return }
+
+        noMoreTweetsMessageTimer?.invalidate()
+        noMoreTweetsMessageTimer = nil
+        isShowingNoMoreTweetsMessage = false
+
+        if tableView.tableFooterView != nil {
+            tableView.tableFooterView = nil
         }
     }
 }

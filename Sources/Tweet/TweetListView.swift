@@ -81,6 +81,32 @@ private struct ProfileNewTweetsBanner: View {
     }
 }
 
+private enum TweetPaginationState {
+    case canLoadMore
+    case serverExhausted
+    case memoryLimited
+
+    var canLoadMore: Bool {
+        switch self {
+        case .canLoadMore:
+            return true
+        case .serverExhausted, .memoryLimited:
+            return false
+        }
+    }
+
+    var shouldShowNoMoreTweetsMessage: Bool {
+        if case .serverExhausted = self {
+            return true
+        }
+        return false
+    }
+
+    static func fromServerResponseCount(_ responseCount: Int, pageSize: UInt) -> TweetPaginationState {
+        responseCount < pageSize ? .serverExhausted : .canLoadMore
+    }
+}
+
 @available(iOS 16.0, *)
 struct TweetListView: View {
     // MARK: - Properties
@@ -121,7 +147,7 @@ struct TweetListView: View {
     @Binding var tweets: [Tweet]
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false
-    @State private var hasMoreTweets: Bool = true
+    @State private var paginationState: TweetPaginationState = .canLoadMore
     @State private var currentPage: UInt = 0
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -209,15 +235,12 @@ struct TweetListView: View {
 
     private func applyCachedPaginationTweets(
         _ cachedTweets: [Tweet],
-        responseCount: Int,
-        page: UInt,
-        pageSize: UInt
+        page: UInt
     ) {
         applyPaginatedTweets(cachedTweets, page: page)
         currentPage = max(currentPage, page)
-        if responseCount >= pageSize {
-            hasMoreTweets = true
-        }
+        // Cache is only a fast paint. It may be incomplete or stale, so it must
+        // not change whether pagination is exhausted.
     }
 
     private func applyServerPaginationTweets(
@@ -228,7 +251,7 @@ struct TweetListView: View {
     ) {
         applyPaginatedTweets(serverTweets, page: page)
         currentPage = max(currentPage, page)
-        hasMoreTweets = responseCount >= pageSize
+        paginationState = .fromServerResponseCount(responseCount, pageSize: pageSize)
     }
 
     private var shouldUseProfileNewTweetsBanner: Bool {
@@ -366,7 +389,7 @@ struct TweetListView: View {
         pendingProfileNewTweets.removeAll()
         showProfileNewTweetsBanner = false
         currentPage = 0
-        hasMoreTweets = true
+        paginationState = .canLoadMore
         scheduleMemoryMaintenance(delay: 0.2)
         DispatchQueue.main.async {
             var userInfo: [String: Any] = [
@@ -512,7 +535,8 @@ struct TweetListView: View {
             header: header,
             headerRefreshToken: headerRefreshToken,
             hproseInstance: hproseInstance,
-            hasMoreTweets: $hasMoreTweets,
+            hasMoreTweets: paginationState.canLoadMore,
+            canShowNoMoreTweetsMessage: paginationState.shouldShowNoMoreTweetsMessage,
             isLoading: isLoading,
             isLoadingMore: isLoadingMore,
             preservesScrollPositionOnPrepend: preservesScrollPositionOnPrepend,
@@ -901,7 +925,7 @@ struct TweetListView: View {
                         }
                     }
                     currentPage = 0
-                    hasMoreTweets = freshTweets.count >= pageSize
+                    paginationState = .fromServerResponseCount(freshTweets.count, pageSize: pageSize)
 
                     // Update video manager with debouncing
                     scheduleMemoryMaintenance(delay: 0.2)
@@ -919,6 +943,7 @@ struct TweetListView: View {
     func performInitialLoad() async {
         currentPage = 0
         didConfirmEmptyFromServer = false
+        paginationState = .canLoadMore
         // First paint is cache-first. Do not show the blank loading spinner until
         // the first cache probe misses; otherwise a valid cached profile briefly
         // looks blocked by network even though cached rows are about to render.
@@ -951,8 +976,6 @@ struct TweetListView: View {
                     // Use direct assignment for page 0 so cached order is not disturbed.
                     tweets = validPage
                     currentPage = page
-
-                    hasMoreTweets = true  // Server may have more
 
                     // Schedule memory maintenance for the first visible cache page.
                     scheduleMemoryMaintenance(delay: 0.2)
@@ -1026,6 +1049,7 @@ struct TweetListView: View {
         isLoading = true
         initialLoadComplete = false
         didConfirmEmptyFromServer = false
+        paginationState = .canLoadMore
         currentPage = 0
 
         // DON'T clear existing tweets - keep them while refreshing for better UX
@@ -1057,7 +1081,6 @@ struct TweetListView: View {
                 } else {
                     tweets.mergeTweets(visibleCachedTweets)
                 }
-                hasMoreTweets = cachedTweets.count >= pageSize
                 scheduleMemoryMaintenance(delay: 0.2)
                 print("🔄 [PULL REFRESH] Rendered \(visibleCachedTweets.count) cached tweet(s) before server refresh, feed=\(feedIdentifier)")
             }
@@ -1072,12 +1095,12 @@ struct TweetListView: View {
         // Prevent loading if we've reached memory limit
         if tweets.count >= maxTweetsInMemory && !forceLoad {
             print("⚠️ [MEMORY] Reached maximum tweets limit (\(maxTweetsInMemory)), stopping pagination")
-            hasMoreTweets = false
+            paginationState = .memoryLimited
             return
         }
 
         // Allow bypassing hasMoreTweets check for manual pull-to-load
-        guard (hasMoreTweets || forceLoad), !isLoadingMore, initialLoadComplete else {
+        guard (paginationState.canLoadMore || forceLoad), !isLoadingMore, initialLoadComplete else {
             return 
         }
         
@@ -1118,9 +1141,7 @@ struct TweetListView: View {
                         let visibleCachedTweets = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
                         applyCachedPaginationTweets(
                             visibleCachedTweets,
-                            responseCount: tweetsFromCache.count,
-                            page: page,
-                            pageSize: pageSize
+                            page: page
                         )
                         // Cache supplied the tweets — spinner can go once they render.
                         // hasPendingSpinnerHide in TweetTableViewController will hold the
@@ -1304,12 +1325,12 @@ struct TweetListView: View {
             if page == 0 && preserveOrder {
                 tweets = renderableServerTweets
                 currentPage = max(currentPage, page)
-                hasMoreTweets = tweetsFromServer.count >= pageSize
+                paginationState = .fromServerResponseCount(tweetsFromServer.count, pageSize: pageSize)
                 scheduleMemoryMaintenance(delay: 0.2)
             } else if page == 0 && tweets.isEmpty {
                 tweets = renderableServerTweets
                 currentPage = max(currentPage, page)
-                hasMoreTweets = tweetsFromServer.count >= pageSize
+                paginationState = .fromServerResponseCount(tweetsFromServer.count, pageSize: pageSize)
                 scheduleMemoryMaintenance(delay: 0.2)
             } else {
                 // For preserveOrder lists (bookmarks/favorites), append in server order
@@ -1322,7 +1343,7 @@ struct TweetListView: View {
                 )
             }
 
-            print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (\(validServerTweets.count) valid), hasMoreTweets = \(hasMoreTweets)")
+            print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (\(validServerTweets.count) valid), hasMoreTweets = \(paginationState.canLoadMore)")
 
             // Mark initial load as complete for page 0 only if we got valid tweets
             if page == 0 {
@@ -1334,17 +1355,17 @@ struct TweetListView: View {
         } else if !validServerTweets.isEmpty {
             didConfirmEmptyFromServer = false
             currentPage = max(currentPage, page)
-            hasMoreTweets = tweetsFromServer.count >= pageSize
+            paginationState = .fromServerResponseCount(tweetsFromServer.count, pageSize: pageSize)
             if page == 0 {
                 isLoading = false
                 initialLoadComplete = true
             }
-            print("📊 [PAGINATION] Page \(page): deferred \(validServerTweets.count) profile entries behind banner, hasMoreTweets = \(hasMoreTweets)")
+            print("📊 [PAGINATION] Page \(page): deferred \(validServerTweets.count) profile entries behind banner, hasMoreTweets = \(paginationState.canLoadMore)")
 
         // BRANCH 2: No valid tweets AND partial page - server depleted
         } else if tweetsFromServer.count < pageSize {
             // Partial page means server ran out of bookmark/favorite entries
-            hasMoreTweets = false
+            paginationState = .serverExhausted
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), PARTIAL PAGE - no more tweets")
             if page == 0 && (tweets.isEmpty || emptyStateText != nil) {
                 // Server confirmed an empty first page. Profile lists opt into
@@ -1367,7 +1388,7 @@ struct TweetListView: View {
             // Full page (all nils) means server had enough entries, continue to next page
             // Example: Page has 10 deleted bookmarks (all nils) - more entries might exist
             currentPage = max(currentPage, page)
-            hasMoreTweets = true
+            paginationState = .canLoadMore
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), FULL PAGE - trying next page")
         }
     }
@@ -1380,7 +1401,7 @@ struct TweetListView: View {
     // MARK: - Screen Filling
     /// Automatically loads more tweets until the screen is filled
     private func loadMoreToFillScreen() async {
-        guard hasMoreTweets, !isLoadingMore, !isLoading, initialLoadComplete else { return }
+        guard paginationState.canLoadMore, !isLoadingMore, !isLoading, initialLoadComplete else { return }
         
         
         // Temporarily disable auto-fill to prevent infinite loop
