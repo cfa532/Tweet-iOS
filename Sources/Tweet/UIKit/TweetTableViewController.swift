@@ -1580,6 +1580,7 @@ class TweetTableViewController: UITableViewController {
             scheduleInitialSavedScrollPositionRestoreIfNeeded(reason: "initialTweets")
             rebuildVideoListAndRefreshVisibility(reason: "initialTweetsVideoList")
             schedulePendingBackgroundResumeRestore(reason: "initialTweets")
+            scheduleAutoLoadMoreCheck(reason: "initialTweets")
             
             // Trigger video detection after initial load. Multiple passes are intentional:
             // cached startup rows can self-size/layout over several run-loop turns, and a
@@ -1711,6 +1712,7 @@ class TweetTableViewController: UITableViewController {
                 isTableViewUpdating = false
                 rebuildVideoListAndRefreshVisibility(reason: "tweetsAppendedVideoList")
                 scheduleVideoVisibilityRefresh(reason: "tweetsAppended")
+                scheduleAutoLoadMoreCheck(reason: "tweetsAppended")
                 return
             }
         }
@@ -1755,6 +1757,30 @@ class TweetTableViewController: UITableViewController {
         isTableViewUpdating = false
         rebuildVideoListAndRefreshVisibility(reason: "diffUpdateVideoList")
         scheduleVideoVisibilityRefresh(reason: "diffUpdate")
+        scheduleAutoLoadMoreCheck(reason: "diffUpdate")
+    }
+
+    private func scheduleAutoLoadMoreCheck(reason: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.triggerAutoLoadMoreIfNeeded(reason: reason, countsTowardScrollGestureLimit: false)
+        }
+    }
+
+    private func triggerAutoLoadMoreIfNeeded(reason: String, countsTowardScrollGestureLimit: Bool) {
+        guard hasMoreTweets, !isLoadingMore else { return }
+        guard tableView.window != nil, tableView.numberOfRows(inSection: 0) > 0 else { return }
+        guard let lastVisibleRow = tableView.indexPathsForVisibleRows?.last?.row else { return }
+
+        let totalRows = pinnedTweets.count + tweets.count
+        let remainingRows = max(0, totalRows - 1 - lastVisibleRow)
+        guard remainingRows < loadMoreTriggerRows else { return }
+
+        if countsTowardScrollGestureLimit {
+            guard autoLoadMoreCountDuringCurrentScrollGesture < maxAutoLoadMorePerScrollGesture else { return }
+            autoLoadMoreCountDuringCurrentScrollGesture += 1
+        }
+
+        triggerAutoLoadMore()
     }
     
     private var needsHeaderUpdate = false
@@ -2003,6 +2029,10 @@ class TweetTableViewController: UITableViewController {
         }
 
         guard stateChanged || needsFooterUpdate else { return }
+
+        if hasMoreTweets && !isLoadingMore {
+            scheduleAutoLoadMoreCheck(reason: "loadingState")
+        }
         
         // ✅ FIX: Only log state changes, and avoid logging Date() or complex objects
         // Excessive logging can cause Xcode console to stop showing logs (FontServicesDaemonManager error)
@@ -2886,26 +2916,12 @@ class TweetTableViewController: UITableViewController {
         let scrollViewHeight = scrollView.frame.size.height
         let contentInsetBottom = scrollView.contentInset.bottom
         let bottomOffset = scrollView.contentOffset.y + scrollViewHeight - contentHeight + contentInsetBottom
-        let isMovingTowardBottom = frameDelta > 0
 
-        let lastVisibleRow = tableView.indexPathsForVisibleRows?.last?.row ?? 0
-        let totalRows = pinnedTweets.count + tweets.count
-        let remainingRows = max(0, totalRows - 1 - lastVisibleRow)
-        // Sustained near-bottom check: fire on every scroll frame while in the buffer zone
-        // (instead of a one-shot crossing). The !isLoadingMore guard prevents burst;
-        // autoLoadMoreCountDuringCurrentScrollGesture caps pages per gesture.
-        // This lets the trigger retry when the first attempt was blocked by initialLoadComplete=false
-        // and the VC's isLoadingMore was reset to false by a subsequent SwiftUI sync.
-        let isNearBottom = remainingRows < loadMoreTriggerRows
-
-        if isUserDrivenScroll,
-           autoLoadMoreCountDuringCurrentScrollGesture < maxAutoLoadMorePerScrollGesture,
-           isMovingTowardBottom,
-           isNearBottom,
-           hasMoreTweets,
-           !isLoadingMore {
-            autoLoadMoreCountDuringCurrentScrollGesture += 1
-            triggerAutoLoadMore()
+        if isUserDrivenScroll {
+            triggerAutoLoadMoreIfNeeded(
+                reason: "scroll",
+                countsTowardScrollGestureLimit: true
+            )
         }
 
 

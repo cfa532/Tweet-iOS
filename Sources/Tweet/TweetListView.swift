@@ -535,7 +535,7 @@ struct TweetListView: View {
             header: header,
             headerRefreshToken: headerRefreshToken,
             hproseInstance: hproseInstance,
-            hasMoreTweets: paginationState.canLoadMore,
+            hasMoreTweets: paginationState.canLoadMore && initialLoadComplete,
             canShowNoMoreTweetsMessage: paginationState.shouldShowNoMoreTweetsMessage,
             isLoading: isLoading,
             isLoadingMore: isLoadingMore,
@@ -1143,12 +1143,10 @@ struct TweetListView: View {
                             visibleCachedTweets,
                             page: page
                         )
-                        // Cache supplied the tweets — spinner can go once they render.
-                        // hasPendingSpinnerHide in TweetTableViewController will hold the
-                        // spinner until the deferred rows are committed if the user is
-                        // still dragging.
-                        isLoadingMore = false
-                        loadingStartTime = nil
+                        // Cache paints immediately, but pagination remains in-flight
+                        // until the server response for this page arrives. Otherwise
+                        // auto-load can race ahead using stale cache pages and later
+                        // server responses can reopen pagination out of order.
                     }
                     print("✅ [PAGINATION] Loaded \(tweetsFromCache.count) tweets from cache for page \(page)")
                 }
@@ -1158,18 +1156,13 @@ struct TweetListView: View {
             }
 
             // Step 2: Refresh from server in the background (always, even after a cache hit).
-            // If there was a cache miss, server response also clears the spinner.
-            let hadCachedTweets = !tweetsFromCache.isEmpty
+            // Server response is the page boundary: only after it arrives may the
+            // next page be requested.
             Task(priority: .utility) { @MainActor in
                 await loadFromServer(page: page, pageSize: pageSize, completion: completion)
 
-                // Only update loading state here when there was no cache hit.
-                // On a cache hit isLoadingMore is already false; setting it again is harmless
-                // but produces an unnecessary SwiftUI re-render.
-                if !hadCachedTweets {
-                    isLoadingMore = false
-                    loadingStartTime = nil
-                }
+                isLoadingMore = false
+                loadingStartTime = nil
             }
         }
     }
