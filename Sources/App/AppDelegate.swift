@@ -703,11 +703,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
 
-        if hasEnteredBackgroundInCurrentProcess {
-            BackgroundResumeStateStore.shared.clear(reason: "same process foreground resume")
+        endBackgroundCleanupTask()
+
+        guard hasEnteredBackgroundInCurrentProcess else {
+            // New process after iOS killed/suspended the old app instance: treat it as
+            // a normal launch. Runtime-only player/proxy state is already gone.
+            UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
+            didLaunchInBackground = false
+            AppDelegate.didPerformAggressiveCleanup = false
+            AppDelegate.isVideoInfrastructureReady = true
+            print("🚀 [AppDelegate] Foreground in fresh process - using normal startup path")
+            return
         }
 
-        endBackgroundCleanupTask()
+        BackgroundResumeStateStore.shared.clear(reason: "same process foreground resume")
 
         guard let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date else {
             if didLaunchInBackground {
