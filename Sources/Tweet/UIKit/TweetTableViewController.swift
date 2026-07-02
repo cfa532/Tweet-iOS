@@ -222,6 +222,7 @@ class TweetTableViewController: UITableViewController {
     private let oppositeStopPreloadRowCount = FeedPlaybackTuning.oppositeStopImagePreloadRowCount
     private let maxDirectionalImagePreloadsInFlight = FeedPlaybackTuning.maxDirectionalImagePreloadsInFlight
     private var activeDirectionalImagePreloadTasks: [String: Task<Void, Never>] = [:]
+    private var lastDirectionalImagePreloadDuringScrollTime: CFTimeInterval = 0
     private var didScheduleInitialVisibilityRefresh = false
 
     // Scroll state tracking to prevent direction detection jitter during deceleration
@@ -2848,8 +2849,10 @@ class TweetTableViewController: UITableViewController {
             updateVisibleTweetsForVideoPlayback()
         }
 
-        // Directional image warmup is done at scroll stop. Starting network work
-        // during active dragging/deceleration competes with visible media and video.
+        let isUserDrivenScroll = isUserDragging || isDecelerating || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
+        if isUserDrivenScroll {
+            triggerDirectionalImagePreloadDuringScroll(now: now)
+        }
 
         // Auto-load next page when 1 page worth of rows remains below the viewport.
         // Row-count threshold adapts to tweet height: tall media tweets give more pixel
@@ -2870,7 +2873,6 @@ class TweetTableViewController: UITableViewController {
         // and the VC's isLoadingMore was reset to false by a subsequent SwiftUI sync.
         let isNearBottom = remainingRows < loadMoreTriggerRows
 
-        let isUserDrivenScroll = isUserDragging || isDecelerating || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
         if isUserDrivenScroll,
            autoLoadMoreCountDuringCurrentScrollGesture < maxAutoLoadMorePerScrollGesture,
            isMovingTowardBottom,
@@ -2942,9 +2944,8 @@ class TweetTableViewController: UITableViewController {
         isDecelerating = false
         autoLoadMoreCountDuringCurrentScrollGesture = 0
         lastCallbackOffset = scrollView.contentOffset.y
-        // Directional preloads restart only after scrolling stops.
-        cancelDirectionalImagePreloads()
         videoCoordinator.onScrollStarted()
+        updateVisibleTweetsForVideoPlayback()
         notifyScrollStateChanged(scrollView)
     }
 
@@ -2959,8 +2960,7 @@ class TweetTableViewController: UITableViewController {
             runDeferredHeightOverflowChecksForVisibleCells()
             performPendingHeightRelayout()
             saveScrollPositionIfNeeded()
-            triggerPreloadOnScrollStop()
-            applyDeferredTableChromeUpdatesAfterScroll()
+            runScrollStopPreloadWhenIdle()
         }
         notifyScrollStateChanged(scrollView)
     }
@@ -2987,6 +2987,29 @@ class TweetTableViewController: UITableViewController {
 
         applyDeferredTableChromeUpdatesAfterScroll()
         notifyScrollStateChanged(scrollView)
+    }
+
+    private func runScrollStopPreloadWhenIdle(attempt: Int = 0) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let tableIsIdle = !self.isUserDragging &&
+                !self.isDecelerating &&
+                !self.tableView.isTracking &&
+                !self.tableView.isDragging &&
+                !self.tableView.isDecelerating
+
+            guard tableIsIdle else {
+                guard attempt < 3 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    self?.runScrollStopPreloadWhenIdle(attempt: attempt + 1)
+                }
+                return
+            }
+
+            self.updateVisibleTweetsForVideoPlayback()
+            self.triggerPreloadOnScrollStop()
+            self.applyDeferredTableChromeUpdatesAfterScroll()
+        }
     }
 
     override func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
@@ -3089,12 +3112,33 @@ class TweetTableViewController: UITableViewController {
             lastVisibleRow: lastVisible.row
         )
         if videoCoordinator.canRunDirectionalPreloads() {
-            preloadImagesForRows(preloadRows + oppositeRows)
+            preloadImagesForRows(preloadRows + oppositeRows, allowNetwork: true)
         } else {
             cancelDirectionalImagePreloads()
         }
 
         videoCoordinator.performPreloadOnScrollStop()
+    }
+
+    /// Lightweight image warmup while the list is moving. This only promotes cached
+    /// image files in the current scroll direction; network preloads wait for scroll stop.
+    private func triggerDirectionalImagePreloadDuringScroll(now: CFTimeInterval) {
+        guard now - lastDirectionalImagePreloadDuringScrollTime >= FeedPlaybackTuning.directionalVideoPreloadRefreshInterval else { return }
+        lastDirectionalImagePreloadDuringScrollTime = now
+
+        guard let visibleIndexPaths = tableView.indexPathsForVisibleRows,
+              let firstVisible = visibleIndexPaths.first,
+              let lastVisible = visibleIndexPaths.last else { return }
+
+        let preloadRows = directionalPreloadRows(
+            firstVisibleRow: firstVisible.row,
+            lastVisibleRow: lastVisible.row
+        )
+        guard !preloadRows.isEmpty else { return }
+
+        if videoCoordinator.canRunDirectionalImagePreloads() {
+            preloadImagesForRows(preloadRows, allowNetwork: false)
+        }
     }
 
     private func directionalPreloadRows(firstVisibleRow: Int, lastVisibleRow: Int) -> [Int] {
@@ -3131,10 +3175,11 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    private func preloadImagesForRows(_ rows: [Int]) {
+    private func preloadImagesForRows(_ rows: [Int], allowNetwork: Bool = true) {
         var targetImageIds = Set<String>()
         var cachedTargetImageIds = Set<String>()
         var candidates: [(attachment: MimeiFileType, url: URL)] = []
+        var cachedCandidates: [MimeiFileType] = []
         var candidateIds = Set<String>()
         let visibleImageIds = visibleImageAttachmentIds()
 
@@ -3156,7 +3201,17 @@ class TweetTableViewController: UITableViewController {
                     guard !candidateIds.contains(attachment.mid),
                           !visibleImageIds.contains(attachment.mid),
                           !GlobalImageLoadManager.shared.hasLoad(id: attachment.mid),
-                          !BlackList.shared.isBlacklisted(MimeiId(attachment.mid)),
+                          !BlackList.shared.isBlacklisted(MimeiId(attachment.mid)) else {
+                        continue
+                    }
+
+                    if !allowNetwork {
+                        candidateIds.insert(attachment.mid)
+                        cachedCandidates.append(attachment)
+                        continue
+                    }
+
+                    guard !candidateIds.contains(attachment.mid),
                           let baseUrl = resolvedMediaBaseUrl(for: source),
                           let url = attachment.getUrl(baseUrl) else {
                         continue
@@ -3168,18 +3223,31 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
-        let activeImageIds = Set(activeDirectionalImagePreloadTasks.keys)
-        let staleImageIds = activeImageIds
-            .subtracting(targetImageIds)
-            .union(activeImageIds.intersection(visibleImageIds))
-            .union(activeImageIds.intersection(cachedTargetImageIds))
-        for imageId in staleImageIds {
-            activeDirectionalImagePreloadTasks[imageId]?.cancel()
-            activeDirectionalImagePreloadTasks.removeValue(forKey: imageId)
+        if allowNetwork {
+            let activeImageIds = Set(activeDirectionalImagePreloadTasks.keys)
+            let staleImageIds = activeImageIds
+                .subtracting(targetImageIds)
+                .union(activeImageIds.intersection(visibleImageIds))
+                .union(activeImageIds.intersection(cachedTargetImageIds))
+            for imageId in staleImageIds {
+                activeDirectionalImagePreloadTasks[imageId]?.cancel()
+                activeDirectionalImagePreloadTasks.removeValue(forKey: imageId)
+            }
         }
 
         var availableSlots = max(0, maxDirectionalImagePreloadsInFlight - activeDirectionalImagePreloadTasks.count)
         guard availableSlots > 0 else { return }
+
+        if !allowNetwork {
+            for attachment in cachedCandidates {
+                guard availableSlots > 0 else { break }
+                guard activeDirectionalImagePreloadTasks[attachment.mid] == nil else { continue }
+
+                availableSlots -= 1
+                startCachedDirectionalImagePromotion(attachment: attachment)
+            }
+            return
+        }
 
         for candidate in candidates {
             guard availableSlots > 0 else { break }
@@ -3191,6 +3259,22 @@ class TweetTableViewController: UITableViewController {
 
             availableSlots -= 1
             startDirectionalImagePreload(attachment: candidate.attachment, url: candidate.url)
+        }
+    }
+
+    private func startCachedDirectionalImagePromotion(attachment: MimeiFileType) {
+        let attachmentCopy = attachment
+        let imageId = attachment.mid
+
+        activeDirectionalImagePreloadTasks[imageId] = Task.detached(priority: .utility) { [weak self] in
+            defer {
+                Task { @MainActor [weak self] in
+                    self?.activeDirectionalImagePreloadTasks.removeValue(forKey: imageId)
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            _ = ImageCacheManager.shared.getCompressedImage(for: attachmentCopy)
         }
     }
 
@@ -3362,6 +3446,9 @@ class TweetTableViewController: UITableViewController {
                     self.forceLayoutVisibleCellsForVisibilityPass()
                 }
                 self.updateVisibleTweetsForVideoPlayback()
+                if !isFeedReturn {
+                    self.runScrollStopPreloadWhenIdle()
+                }
             }
         }
     }
@@ -3387,6 +3474,7 @@ class TweetTableViewController: UITableViewController {
         lastOnScreenVideoIds = []
         forceLayoutVisibleCellsForVisibilityPass()
         updateVisibleTweetsForVideoPlayback()
+        runScrollStopPreloadWhenIdle()
         videoCoordinator.recoverVisiblePlaybackAfterInterruption(
             reason: reason,
             isForegroundRecovery: false

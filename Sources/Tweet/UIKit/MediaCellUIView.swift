@@ -1248,6 +1248,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: attachment.mid) {
             applyCachedVideoThumbnail(thumbnail, preValidated: true)
         }
+        requestCachedVideoCoverIfNeeded(for: attachment.mid)
         requestFallbackVideoThumbnailIfNeeded(for: attachment.mid)
 
         // Tap gesture for fullscreen — on both videoPlayerView and imageView so that
@@ -1393,6 +1394,47 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
     }
 
+    private func requestCachedVideoCoverIfNeeded(for mediaID: String) {
+        guard isVideoAttachment,
+              SharedAssetCache.shared.cachedThumbnail(for: mediaID) == nil,
+              let attachment,
+              attachment.mid == mediaID else { return }
+
+        let allowNetwork = (videoCoordinator ?? .shared).isFeedScrollIdle
+        if allowNetwork {
+            SharedAssetCache.shared.generatePreloadedThumbnailIfNeeded(for: mediaID)
+        }
+
+        guard let url = attachment.getUrl(effectiveBaseUrl) else { return }
+        SharedAssetCache.shared.preloadPoster(
+            for: url,
+            mediaID: mediaID,
+            tweetId: parentTweet?.mid,
+            mediaType: attachment.type,
+            allowNetwork: allowNetwork
+        )
+    }
+
+    @discardableResult
+    private func captureMissingVideoCoverIfPossible(for player: AVPlayer, reason: String) -> Bool {
+        guard isVideoAttachment,
+              isVisible,
+              self.player === player,
+              imageView.image == nil,
+              !currentPlayerCanReplaceCover,
+              playerHasLoadedData(player) else { return false }
+
+        let didCaptureCover = preserveFrameToCache(skipImageView: true, allowCachedFallback: false)
+            || preserveFrameToCache(useVideoOutput: false, skipImageView: true, allowCachedFallback: false)
+        guard didCaptureCover else { return false }
+
+        if videoCellState == .noContent || videoCellState == .playerLoading || videoCellState == .playerReady {
+            transitionTo(videoCellState == .noContent ? .thumbnail : videoCellState)
+        }
+        logVerbose("🖼️ captured missing video cover (\(reason))")
+        return true
+    }
+
     private func observePreloadedVideoPlayer(for mediaID: String) {
         if let observer = videoPlayerPreloadedObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -1466,6 +1508,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if cachedPlayer.rate > 0 { cachedPlayer.pause() }
             configurePlayer(cachedPlayer)
         }
+        requestCachedVideoCoverIfNeeded(for: mid)
         return true
     }
 
@@ -2249,7 +2292,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 // Notify coordinator — video is ready. If idle, start; if primary is
                 // stuck (not actually playing), reset and pick a new primary.
                 self.logVerbose("🖼️ onReadyForDisplay: coordinatorWants=false, checking stall")
-                (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
+                (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled(
+                    requesterIdentifier: self.videoIdentifier
+                )
             }
         }
     }
@@ -2333,7 +2378,52 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.player === newPlayer else { return }
             self.ensureVideoOutputAttached(for: newPlayer)
+            if self.captureMissingVideoCoverIfPossible(for: newPlayer, reason: "videoOutputAttached") {
+                return
+            }
+            Task { @MainActor [weak self, weak newPlayer] in
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard let self,
+                      let newPlayer,
+                      self.player === newPlayer else { return }
+                if self.captureMissingVideoCoverIfPossible(for: newPlayer, reason: "videoOutputAttached-delayed") {
+                    return
+                }
+                guard !self.coordinatorWantsToPlay,
+                      self.imageView.image == nil,
+                      let item = newPlayer.currentItem,
+                      item.status == .readyToPlay,
+                      self.playerHasLoadedData(newPlayer),
+                      !self.shouldSuppressPositionRestore(for: newPlayer, mid: self.attachment?.mid ?? "") else {
+                    return
+                }
+                self.videoPlayerView.onReadyForDisplay = { [weak self, weak newPlayer] in
+                    guard let self,
+                          let newPlayer,
+                          self.player === newPlayer,
+                          self.imageView.image == nil else { return }
+                    self.hasRenderedFrameForCurrentPlayer = true
+                    _ = self.captureMissingVideoCoverIfPossible(for: newPlayer, reason: "decodeSeek-readyForDisplay")
+                }
+                self.videoPlayerView.observeReadyForDisplay()
+                let seekTarget = self.firstLoadedFrameSeekTarget(for: newPlayer)
+                await newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
         }
+    }
+
+    private func firstLoadedFrameSeekTarget(for player: AVPlayer) -> CMTime {
+        guard let item = player.currentItem else {
+            return CMTime(seconds: 0.01, preferredTimescale: 600)
+        }
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = seconds(from: range.start)
+            let duration = seconds(from: range.duration)
+            guard start.isFinite, duration.isFinite, duration > 0 else { continue }
+            return CMTime(seconds: max(0.01, start + 0.01), preferredTimescale: 600)
+        }
+        return CMTime(seconds: 0.01, preferredTimescale: 600)
     }
 
     private func attachSharedPlayerForHandoff(_ newPlayer: AVPlayer, reason: String) {
@@ -3566,7 +3656,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         allowCachedFallback: Bool = true
     ) -> Bool {
         guard let mid = attachment?.mid else { return false }
-        guard hasPlaybackCoverForCurrentVideo else { return false }
+        guard hasPlaybackCoverForCurrentVideo || (isVisible && currentPlayerHasLoadedData) else { return false }
 
         // Priority 1: imageView already has a frame — save to cache and we're done.
         // Skipped during active playback captures (skipImageView=true) because imageView
@@ -3760,6 +3850,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                       let player,
                       self.player === player,
                       player.currentItem === item else { return }
+                self.captureMissingVideoCoverIfPossible(for: player, reason: "loadedTimeRanges")
                 self.removeVideoCoverIfLoadedAndDisplayable(player, reason: "loadedTimeRanges")
                 self.publishMediaBufferHealthIfNeeded(for: player)
             }
@@ -3783,6 +3874,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     let firstReadyTransition = change.oldValue != .readyToPlay
                     self.logVerbose("📺 statusKVO: readyToPlay (first=\(firstReadyTransition), coordWants=\(self.coordinatorWantsToPlay), state=\(self.videoCellState))")
                     if let player = self.player {
+                        self.captureMissingVideoCoverIfPossible(for: player, reason: "statusKVO-ready")
                         self.removeVideoCoverIfLoadedAndDisplayable(player, reason: "statusKVO-ready")
                     }
 
@@ -3856,7 +3948,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     // Notify coordinator — video data is fully ready. If idle, start;
                     // if primary is stuck (not actually playing), reset and pick new.
                     if !self.coordinatorWantsToPlay {
-                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
+                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled(
+                            requesterIdentifier: self.videoIdentifier
+                        )
                     }
                 } else if item.status == .failed {
                     let nsError = item.error.map { $0 as NSError }
@@ -5029,6 +5123,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 if shouldAcquirePlayer {
                     _ = attachCachedPlayerIfAvailable(reason: "becameVisible")
                 }
+                requestCachedVideoCoverIfNeeded(for: attachment.mid)
                 if shouldAcquirePlayer,
                    player == nil,
                    setupPlayerTask == nil,

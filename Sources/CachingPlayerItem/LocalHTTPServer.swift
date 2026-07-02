@@ -1055,6 +1055,59 @@ public class LocalHTTPServer: @unchecked Sendable {
         return cachedSize >= totalSize && isValidProgressiveCache(fileURL: cacheFileURL)
     }
 
+    public func progressiveCacheFileForThumbnailIfAvailable(for mediaID: String, minimumContiguousBytes: Int64 = 2 * 1024 * 1024) -> URL? {
+        let cacheFileURL = progressiveCacheFileURL(for: mediaID)
+        guard FileManager.default.fileExists(atPath: cacheFileURL.path) else { return nil }
+
+        let cachedSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
+        let requiredSize: Int64
+        if let totalSize = loadProgressiveTotalSize(mediaID: mediaID), totalSize > 0 {
+            if cachedSize >= totalSize {
+                return cacheFileURL
+            }
+            requiredSize = min(totalSize, minimumContiguousBytes)
+        } else {
+            requiredSize = minimumContiguousBytes
+        }
+
+        guard cachedSize >= requiredSize,
+              progressiveCacheHasMoovInPrefix(fileURL: cacheFileURL) else {
+            return nil
+        }
+
+        return cacheFileURL
+    }
+
+    private func progressiveCacheHasMoovInPrefix(fileURL: URL) -> Bool {
+        do {
+            let fileHandle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? fileHandle.close() }
+
+            let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let fileSize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+            let maxScanBytes = Int(min(max(fileSize, 0), 4 * 1024 * 1024))
+            guard maxScanBytes > 0 else { return false }
+
+            let chunkSize = 128 * 1024
+            var buffer = Data(capacity: maxScanBytes)
+            while buffer.count < maxScanBytes {
+                let remaining = maxScanBytes - buffer.count
+                let toRead = min(chunkSize, remaining)
+                guard let chunk = try fileHandle.read(upToCount: toRead), !chunk.isEmpty else {
+                    break
+                }
+                buffer.append(chunk)
+
+                if buffer.range(of: Data([0x6D, 0x6F, 0x6F, 0x76])) != nil {
+                    return true
+                }
+            }
+            return false
+        } catch {
+            return false
+        }
+    }
+
     private func trackHLSDataTask(_ task: URLSessionTask, mediaID: String, taskKey: UUID) {
         guard !mediaID.isEmpty else { return }
         hlsDataTasksLock.lock()

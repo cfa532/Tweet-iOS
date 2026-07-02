@@ -913,8 +913,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         )
         reconcilePlaybackForCurrentVisibility()
 
-        // Warm covers for visible videos + directional preloads when idle. This is the
-        // initial-load trigger (refreshDirectionalPreloads is a no-op while scrolling).
+        // Warm covers for visible videos + directional cover preloads. Heavy player
+        // preloads still wait for scroll stop inside refreshDirectionalPreloads.
         refreshDirectionalPreloads(reason: "viewport", throttle: true)
     }
     
@@ -1246,13 +1246,17 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Called by media cells when ready. If coordinator is idle, starts playback.
     /// If coordinator thinks primary is playing but it's actually stuck, resets and restarts.
-    func requestStartPlaybackIfStalled() {
+    func requestStartPlaybackIfStalled(requesterIdentifier: String? = nil) {
         if phase == .idle {
             print("🎬 [COORD] stallCheck: phase is idle, scheduling primary")
             scheduleStartPrimary()
             return
         }
         guard phase == .primaryPlaying, let primaryId = primaryVideoId else { return }
+
+        if let requesterIdentifier, requesterIdentifier != primaryId {
+            return
+        }
 
         guard onScreenMediaCells.contains(primaryId),
               continuePlaybackMediaCells.contains(primaryId) else {
@@ -1451,9 +1455,15 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Preload a poster for upcoming video in scroll direction without creating an AVPlayer.
-    private func preloadVideoPoster(_ video: VideoPlaybackInfo) {
+    private func preloadVideoPoster(_ video: VideoPlaybackInfo, allowNetwork: Bool = true) {
         guard let resolved = resolveVideoURL(video) else { return }
-        SharedAssetCache.shared.preloadPoster(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+        SharedAssetCache.shared.preloadPoster(
+            for: resolved.url,
+            mediaID: resolved.mediaID,
+            tweetId: resolved.tweetId,
+            mediaType: resolved.mediaType,
+            allowNetwork: allowNetwork
+        )
     }
 
     /// Upgrade a directional poster to a player-decoded frame after the feed is idle.
@@ -1567,15 +1577,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Called when scroll starts (scrollViewWillBeginDragging).
-    /// Directional preloads are started only after scrolling stops, so cancel stale
-    /// off-screen preload work as soon as the user starts moving again.
+    /// Do not cancel directional preloads here: small list nudges often keep the same
+    /// next target, and killing it before the next scroll-stop selection loses useful work.
     func onScrollStarted() {
         isScrolling = true
-        cancelDirectionalExactFramePreload()
-        let onScreenMids = currentOnScreenVideoMids()
-        SharedAssetCache.shared.cancelDirectionalPreloadsForScrollStart(except: onScreenMids)
-        activePreloadMids.formIntersection(onScreenMids)
-        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids)
     }
     
     /// Called on scroll stop and initial load.
@@ -1594,12 +1599,15 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     func canRunDirectionalPreloads() -> Bool {
-        canRunDirectionalExactFramePreloads()
+        canScheduleDirectionalCoverPreloads() && canPreloadCoversWithoutStarvingPrimary()
+    }
+
+    func canRunDirectionalImagePreloads() -> Bool {
+        canScheduleDirectionalCoverPreloads()
     }
 
     private func canScheduleDirectionalCoverPreloads() -> Bool {
         guard AppDelegate.isVideoInfrastructureReady,
-              isTableViewScrollIdle,
               !isPlaybackSuppressedByOverlay,
               isFeedVisible else { return false }
 
@@ -1608,6 +1616,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     private func canRunDirectionalExactFramePreloads() -> Bool {
         guard canScheduleDirectionalCoverPreloads() else { return false }
+        guard isTableViewScrollIdle else { return false }
         guard !visibleVideos.isEmpty else { return true }
 
         guard phase == .primaryPlaying,
@@ -1631,13 +1640,15 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     private func refreshDirectionalPreloads(reason: String, throttle: Bool) {
         guard AppDelegate.isVideoInfrastructureReady else { return }
-        guard isTableViewScrollIdle else { return }
         promoteForegroundVisibleMedia(reason: reason)
+        let canCancelStalePreloads = reason.hasPrefix("scroll stop")
 
         guard canScheduleDirectionalCoverPreloads() else {
-            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
-            activePreloadMids.removeAll()
-            SharedAssetCache.shared.updateProtectedPreloadMids([])
+            if canCancelStalePreloads {
+                cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
+                activePreloadMids.removeAll()
+                SharedAssetCache.shared.updateProtectedPreloadMids([])
+            }
             return
         }
 
@@ -1647,44 +1658,54 @@ class VideoPlaybackCoordinator: ObservableObject {
             lastDirectionalPreloadRefreshTime = now
         }
 
-        // Don't generate covers while the autoplay primary is struggling for buffer — those
-        // AVAssetImageGenerator fetches would compete with the primary for bandwidth and
-        // worsen its stall. Covers resume once the primary is actually playing again (or
-        // when there is no primary yet, e.g. the initial feed load).
+        let canRunPlayerPreload = isTableViewScrollIdle
+        let allowNetworkPreload = isTableViewScrollIdle
+
+        // Visible videos that still lack a poster get a lightweight cover. While scrolling,
+        // this is cache-only; network-backed poster/player preloads remain idle-only.
+        var visibleWarmupMids = Set<String>()
+        for video in visibleVideosLackingCovers() {
+            preloadVideoPoster(video, allowNetwork: allowNetworkPreload)
+            visibleWarmupMids.insert(video.videoMid)
+        }
+
+        // Don't run off-screen directional preloads while the autoplay primary is struggling
+        // for buffer. Actual visible media is handled above and through MediaCell visibility.
         guard canPreloadCoversWithoutStarvingPrimary() else {
-            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "\(reason).primaryStarved")
-            activePreloadMids.removeAll()
-            SharedAssetCache.shared.updateProtectedPreloadMids([])
+            if canCancelStalePreloads {
+                cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "\(reason).primaryStarved")
+                activePreloadMids.removeAll()
+                SharedAssetCache.shared.updateProtectedPreloadMids([])
+            }
             return
         }
 
-        let playerPreloadCount = max(0, directionalPlayerPreloadCount)
-        let coverPreloadCount = max(0, FeedPlaybackTuning.directionalVideoCoverPreloadCount)
-
-        // Visible videos that still lack a poster get a lightweight cover (AVAssetImageGenerator,
-        // off-main) so cells aren't blank while their own player buffers. Runs only when idle.
-        var warmupMids = Set<String>()
-        for video in visibleVideosLackingCovers() {
-            preloadVideoPoster(video)
-            warmupMids.insert(video.videoMid)
-        }
+        let playerPreloadCount = canRunPlayerPreload ? max(0, directionalPlayerPreloadCount) : 0
+        let coverPreloadCount = max(
+            0,
+            FeedPlaybackTuning.directionalVideoCoverPreloadCount + (canRunPlayerPreload ? 0 : max(0, directionalPlayerPreloadCount))
+        )
 
         guard playerPreloadCount > 0 || coverPreloadCount > 0 else {
-            cancelTrackedPreloads(except: currentOnScreenVideoMids().union(warmupMids), reason: reason)
-            activePreloadMids = warmupMids
-            SharedAssetCache.shared.updateProtectedPreloadMids(warmupMids)
+            if canCancelStalePreloads {
+                cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
+                activePreloadMids.removeAll()
+                SharedAssetCache.shared.updateProtectedPreloadMids([])
+            }
             return
         }
 
         let nextVideos = getNextVideosInScrollDirection(count: playerPreloadCount + coverPreloadCount)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
 
-        // Keep on-screen + visible-warmup work alive, then cancel any older preloads.
+        // Keep on-screen work alive, then cancel any older off-screen preloads.
         let onScreenMids = currentOnScreenVideoMids()
-        let newAll = newPreloadMids.union(onScreenMids).union(warmupMids)
-        cancelTrackedPreloads(except: newAll, reason: reason)
+        let newAll = newPreloadMids.union(onScreenMids)
+        if canCancelStalePreloads {
+            cancelTrackedPreloads(except: newAll, reason: reason)
+        }
 
-        activePreloadMids = newPreloadMids.union(warmupMids)
+        activePreloadMids = newPreloadMids
         SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids)
 
         // First video(s) in the scroll direction get a full player preload (decoded frame +
@@ -1692,17 +1713,23 @@ class VideoPlaybackCoordinator: ObservableObject {
         // (primary stable = app not busy) and retries, so it fires once startup settles.
         let playerCandidates = Array(nextVideos.prefix(playerPreloadCount))
         if !playerCandidates.isEmpty {
+            // The exact-frame/player preload waits for stable primary playback.
+            // Still fetch a lightweight poster now so the nearest upcoming video
+            // has a cover before it scrolls into view.
+            for video in playerCandidates {
+                preloadVideoPoster(video, allowNetwork: allowNetworkPreload)
+            }
             scheduleExactFrameUpgradeIfStable(for: playerCandidates)
         }
 
         // Remaining directional videos get a cover image only (no player).
         let coverOnlyVideos = Array(nextVideos.dropFirst(playerCandidates.count))
         for video in coverOnlyVideos {
-            preloadVideoPoster(video)
+            preloadVideoPoster(video, allowNetwork: allowNetworkPreload)
         }
 
-        if !newPreloadMids.isEmpty || !warmupMids.isEmpty {
-            print("🎬 [COORD] \(reason): \(warmupMids.count) visible cover(s), \(playerCandidates.count) player preload(s), \(coverOnlyVideos.count) directional cover(s)")
+        if !newPreloadMids.isEmpty || !visibleWarmupMids.isEmpty {
+            print("🎬 [COORD] \(reason): \(visibleWarmupMids.count) visible cover(s), \(playerCandidates.count) player preload(s), \(coverOnlyVideos.count) directional cover(s)")
         }
     }
 
