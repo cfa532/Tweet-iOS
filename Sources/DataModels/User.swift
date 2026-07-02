@@ -1,5 +1,5 @@
 import Foundation
-import hprose
+@preconcurrency import hprose
 
 enum UserCacheStatus: String {
     case unknown

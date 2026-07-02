@@ -1,9 +1,9 @@
 import Foundation
-import hprose
+@preconcurrency import hprose
 
 /// A pool for managing HproseClient instances
 /// Thread-safe pool that manages creation and reuse of HproseHttpClient instances
-class HproseClientPool {
+final class HproseClientPool: @unchecked Sendable {
     private var availableClients: [String: [HproseClient]] = [:]
     private let maxClientsPerURL: Int
     private let lock = NSLock()
