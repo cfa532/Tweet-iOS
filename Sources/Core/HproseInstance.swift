@@ -38,25 +38,18 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private var heavyCallLastAttemptAt: [String: Date] = [:]
     private let heavyCallLock = NSLock()
 
-    private struct HproseInvocation: @unchecked Sendable {
-        let client: HproseClient
-        let entry: String
-        let params: [String: Any]
-    }
-
     private func invokeRunMApp(
         using client: HproseClient,
         entry: String,
         params: [String: Any],
         priority: DispatchQoS.QoSClass = .userInitiated
     ) async -> Any? {
-        let invocation = HproseInvocation(client: client, entry: entry, params: params)
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Any?, Never>) in
-            DispatchQueue.global(qos: priority).async {
-                let response = invocation.client.invoke("runMApp", withArgs: [invocation.entry, invocation.params])
-                continuation.resume(returning: response)
-            }
-        }
+        await HproseTransport.invokeRunMApp(
+            using: client,
+            entry: entry,
+            params: params,
+            priority: priority
+        )
     }
     
     /// The domain to use for sharing links
@@ -5830,7 +5823,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "cid": cid
             ]
             
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await HproseTransport.invokeRunMApp(
+                using: client,
+                entry: entry,
+                params: params
+            )
             let unwrappedResponse = try? HproseInstance.unwrapV2Response(rawResponse)
             guard let response = unwrappedResponse as? [String: Any] else {
                 return nil // No response yet
@@ -6210,7 +6207,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             print("Uploaded \(chunkCount) chunks, finalizing...")
             
-            let rawFinalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
+            let rawFinalResponse = await HproseTransport.invokeRunMApp(
+                using: uploadClient,
+                entry: "upload_ipfs",
+                params: request
+            )
             guard rawFinalResponse != nil else {
                 print("ERROR: Upload finalization failed - nil response")
                 throw uploadTimeoutError("Upload finalization timed out")
@@ -6613,7 +6614,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             )
             return try await withThrowingTaskGroup(of: UploadChunkResponse.self) { group in
                 group.addTask { [invocation] in
-                    let rawResponse = invocation.uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", invocation.request, [invocation.data]])
+                    let rawResponse = await HproseTransport.invoke(
+                        "runMApp",
+                        using: invocation.uploadClient,
+                        args: ["upload_ipfs", invocation.request, [invocation.data]]
+                    )
                     guard rawResponse != nil else {
                         throw uploadTimeoutError("Upload timed out on chunk \(invocation.chunkNumber)")
                     }

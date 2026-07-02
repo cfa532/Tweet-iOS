@@ -25,6 +25,7 @@
 		4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D72DD5CA640051A92D /* HproseInstance.swift */; };
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
 		4608E2DB2DD5CA640051A92D /* VideoConversionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */; };
+		4610F2A12F57C8B200C0DE01 /* HproseTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4610F2A02F57C8B200C0DE01 /* HproseTransport.swift */; };
 		4612ED1C2E924A18005D5B8B /* URLExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED192E924A18005D5B8B /* URLExtension.swift */; };
 		4612ED1D2E924A18005D5B8B /* CachingPlayerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED142E924A18005D5B8B /* CachingPlayerItem.swift */; };
 		4612ED1E2E924A18005D5B8B /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED132E924A18005D5B8B /* AppLogger.swift */; };
@@ -181,6 +182,7 @@
 		4608E2D72DD5CA640051A92D /* HproseInstance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseInstance.swift; sourceTree = "<group>"; };
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoConversionService.swift; sourceTree = "<group>"; };
+		4610F2A02F57C8B200C0DE01 /* HproseTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseTransport.swift; sourceTree = "<group>"; };
 		4612ED132E924A18005D5B8B /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
 		4612ED142E924A18005D5B8B /* CachingPlayerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachingPlayerItem.swift; sourceTree = "<group>"; };
 		4612ED152E924A18005D5B8B /* CachingPlayerItemConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachingPlayerItemConfiguration.swift; sourceTree = "<group>"; };
@@ -422,6 +424,7 @@
 				469A995E2DEF300900954049 /* TweetCacheManager.swift */,
 				469A994C2DEB31EF00954049 /* NotificationNames.swift */,
 				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
+				4610F2A02F57C8B200C0DE01 /* HproseTransport.swift */,
 				272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */,
 				4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */,
 				464EA34F2EEAE31800FC6AD1 /* PersistentVideoStateManager.swift */,
@@ -893,6 +896,7 @@
 				46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */,
 				4674940F2DF2C4D60082FAC6 /* CommentListView.swift in Sources */,
 				4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
+				4610F2A12F57C8B200C0DE01 /* HproseTransport.swift in Sources */,
 				87BA2CB8BF2E44C8861960D5 /* TweetUploadManager.swift in Sources */,
 				4608E2DB2DD5CA640051A92D /* VideoConversionService.swift in Sources */,
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
