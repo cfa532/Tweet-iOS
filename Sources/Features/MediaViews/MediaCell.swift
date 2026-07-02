@@ -409,18 +409,8 @@ struct MediaCell: View, @MainActor Equatable, @MainActor MediaCellDelegate {
         .onChange(of: showFullScreen) { _, newValue in
             if newValue {
                 // Video is going into full-screen mode
-                // Pause all MediaCell videos to avoid multiple videos playing
-                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-
-                VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
-                OverlayVisibilityCoordinator.shared.beginOverlay(
-                    id: "mediaBrowserFullScreen",
-                    source: "MediaCell"
-                )
-                // Reset loading state once fullscreen is presented
-                isOpeningFullScreen = false
-
-                // Set video list for fullscreen navigation if provider is available (e.g. comments)
+                // Set video list before stopping inline players so fullscreen can
+                // continue autoplaying through the current feed/comment list.
                 if isVideoAttachment,
                    let provider = videoListProvider,
                    let (list, startIndex) = provider(
@@ -431,6 +421,17 @@ struct MediaCell: View, @MainActor Equatable, @MainActor MediaCellDelegate {
                    ) {
                     FullScreenVideoManager.shared.setVideoList(list, startIndex: startIndex)
                 }
+
+                // Pause all MediaCell videos to avoid multiple videos playing
+                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+
+                VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
+                OverlayVisibilityCoordinator.shared.beginOverlay(
+                    id: "mediaBrowserFullScreen",
+                    source: "MediaCell"
+                )
+                // Reset loading state once fullscreen is presented
+                isOpeningFullScreen = false
             } else {
                 // Video is exiting full-screen mode
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)

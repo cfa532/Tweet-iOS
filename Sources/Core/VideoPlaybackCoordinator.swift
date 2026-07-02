@@ -444,11 +444,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         if isCovered {
-            // Fullscreen media browser borrows the same shared AVPlayer as the feed.
-            // Do not pause it during coverage; ownership is transferring, not stopping.
-            if source != "MediaCellUIView.handleVideoTap",
-               source != "MediaBrowserView",
-               source != "LoginView" {
+            // Fullscreen owns playback exclusively. Its video list is captured
+            // before coverage begins, so feed players can be stopped here.
+            if source != "LoginView" {
                 // Hard stop so no audio bleeds under non-media overlays, and so we
                 // don't preserve stale primary state.
                 stopAllVideos()

@@ -414,6 +414,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var videoThumbnailObserver: NSObjectProtocol?
     private var videoPlayerPreloadedObserver: NSObjectProtocol?
     private var videoPlayerItemReplacedObserver: NSObjectProtocol?
+    private var feedVideoRebuildFromProxyObserver: NSObjectProtocol?
     private var shouldPlayObserver: NSObjectProtocol?
     private var shouldPauseObserver: NSObjectProtocol?
     private var shouldStopObserver: NSObjectProtocol?
@@ -1299,6 +1300,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
         }
 
+        feedVideoRebuildFromProxyObserver = NotificationCenter.default.addObserver(
+            forName: .feedVideoShouldRebuildFromProxyCache, object: nil, queue: .main
+        ) { [weak self] notification in
+            let rebuildMid = notification.userInfo?["mediaID"] as? String
+            let source = notification.userInfo?["source"] as? String ?? "unknown"
+            MainActor.assumeIsolated {
+                guard let self,
+                      rebuildMid == self.attachment?.mid else { return }
+                self.rebuildVisibleFeedPlayerFromProxyCache(reason: "proxyRebuild.\(source)")
+            }
+        }
+
         // Observe MuteState changes → forward to player
         MuteState.shared.$isMuted
             .receive(on: DispatchQueue.main)
@@ -1867,6 +1880,68 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             requireLoadableVisibleVideo: true,
             wantsPlayback: true
         )
+    }
+
+    @discardableResult
+    private func rebuildVisibleFeedPlayerFromProxyCache(reason: String) -> Bool {
+        guard isVisible,
+              isVideoAttachment,
+              shouldAcquirePlayer,
+              let mid = attachment?.mid else {
+            return false
+        }
+
+        coordinatorWantsToPlay = true
+        if let player {
+            if feedPlayerCanContinueAfterProxyCacheRequest(player) {
+                logVerbose("▶️ \(reason): keeping healthy feed player")
+                requestPlaybackStartIfNeeded(player, reason: "\(reason).healthyPlayer")
+                return true
+            }
+
+            return rebuildCurrentFeedPlayerFromProxyCache(
+                player: player,
+                mid: mid,
+                reason: reason
+            )
+        }
+
+        SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid)
+        resetPlaybackWatchdogRecoveryState()
+        return reacquirePlayerForCurrentVideo(
+            reason: reason,
+            transitionState: imageView.image != nil ? .thumbnail : .playerLoading,
+            requireLoadableVisibleVideo: true,
+            wantsPlayback: true
+        )
+    }
+
+    private func feedPlayerCanContinueAfterProxyCacheRequest(_ player: AVPlayer) -> Bool {
+        guard self.player === player,
+              let item = player.currentItem else {
+            return false
+        }
+
+        if player.error != nil || item.error != nil || item.status == .failed {
+            return false
+        }
+
+        if player.timeControlStatus == .playing || player.rate > 0 {
+            return true
+        }
+
+        if isVisibleVideoFrameReady(player) || hasRecentDecodedPlayback(for: player, maxAge: 3.0) {
+            return true
+        }
+
+        guard item.status == .readyToPlay else {
+            return false
+        }
+
+        let bufferedAhead = bufferedTimeAhead(for: player)
+        return bufferedAhead > 0.5 || item.isPlaybackLikelyToKeepUp || !item.isPlaybackBufferEmpty
     }
 
     private func acquirePlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
@@ -4047,6 +4122,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         let currentTime = player.currentTime()
         let currentSeconds = currentTime.seconds
+        if let fullscreenReturnTime = FullScreenVideoManager.shared.consumeFeedResumeHandoffTime(
+            for: mid,
+            duration: player.currentItem?.duration
+        ) {
+            pendingRecoverySeekTime = nil
+            return fullscreenReturnTime
+        }
+
         if let resumeTime = savedFeedResumeTime(for: mid, player: player),
            resumeTime.isValid,
            resumeTime.seconds.isFinite {
@@ -4073,9 +4156,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // "freeze then jump ahead" glitch: the layer renders the first frame (~0)
             // before the async seek lands, then snaps to resumeTime.
             // Resume-at-position is still honored where it matters:
-            //  • Fullscreen/detail return — live-surface handoff keeps the transferring
-            //    player's currentTime (shouldSuppressPositionRestore, handled above).
-            //  • App-foreground return — intentionally restarts (suppressFeedResumeUntil).
+            //  • Immediate fullscreen return consumes a short-lived resume marker above.
+            //  • Detail return can still keep a live shared surface via
+            //    shouldSuppressPositionRestore.
+            //  • App-foreground return intentionally restarts (suppressFeedResumeUntil).
             // Stall recovery (pendingRecoverySeekTime, below) is playback continuity, not
             // initial resume, and stays active.
             pendingRecoverySeekTime = nil
@@ -4815,6 +4899,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             $0.attachmentIndex == attachmentIndex
         }) ?? 0
         FullScreenVideoManager.shared.setVideoList(fullscreenList, startIndex: startIndex)
+        coordinator.stopAllVideos()
+        NotificationCenter.default.post(name: .stopAllVideos, object: nil)
 
         // CRITICAL: Mark overlay BEFORE presenting the modal. The .fullScreen presentation
         // triggers didMoveToWindow(nil) → setVisible(false) on feed cells, which checks
@@ -5654,6 +5740,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             videoThumbnailObserver != nil ||
             videoPlayerPreloadedObserver != nil ||
             videoPlayerItemReplacedObserver != nil ||
+            feedVideoRebuildFromProxyObserver != nil ||
             shouldPlayObserver != nil ||
             shouldPauseObserver != nil ||
             shouldStopObserver != nil ||
@@ -5697,6 +5784,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         videoPlayerPreloadedObserver = nil
         if let o = videoPlayerItemReplacedObserver { NotificationCenter.default.removeObserver(o) }
         videoPlayerItemReplacedObserver = nil
+        if let o = feedVideoRebuildFromProxyObserver { NotificationCenter.default.removeObserver(o) }
+        feedVideoRebuildFromProxyObserver = nil
         if let o = shouldPlayObserver { NotificationCenter.default.removeObserver(o) }
         shouldPlayObserver = nil
         if let o = shouldPauseObserver { NotificationCenter.default.removeObserver(o) }

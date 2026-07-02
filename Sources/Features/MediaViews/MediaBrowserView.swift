@@ -150,18 +150,22 @@ struct MediaBrowserView: View {
                 FullScreenVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
                 setupFullScreenManager()
                 OverlayVisibilityCoordinator.shared.beginOverlayIfNeeded(id: "mediaBrowserView", source: "MediaBrowserView")
+                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
                 updateFocusedImageLoad(for: currentIndex)
 
-                // NOTE: Don't broadcast stopAllVideos here. Fullscreen borrows the
-                // feed's shared player, so overlay coverage should transfer ownership
-                // without a pause/resume cycle.
+                // Fullscreen has its own autoplay list. Feed and inline players
+                // must stay stopped while fullscreen is active.
             }
             .onDisappear {
                 OrientationManager.shared.lockToPortrait()
 
-                // Fullscreen owns its own AVPlayer, so dismissal must pause that player.
-                // Feed/detail can reuse cached data and their saved position independently.
-                FullScreenVideoManager.shared.deactivate(transferPlaybackToUnderlyingSurface: false)
+                let shouldTransferVideoPlayback = attachments.indices.contains(currentIndex)
+                    && (attachments[currentIndex].type == .video || attachments[currentIndex].type == .hls_video)
+                    && FullScreenVideoManager.shared.currentVideoMid == attachments[currentIndex].mid
+
+                FullScreenVideoManager.shared.deactivate(
+                    transferPlaybackToUnderlyingSurface: shouldTransferVideoPlayback
+                )
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
                 
                 // CRITICAL: Clean up controls timer to prevent CPU cycles accumulation
@@ -1213,7 +1217,7 @@ struct SingletonVideoPlayerView: View {
         GeometryReader { geometry in
             ZStack {
                 // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
-                if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
+                if let player = manager.singletonPlayer, manager.currentVideoMid == mid, let currentItem = player.currentItem {
                     let layerReadyForCurrentVideo = readyForDisplayMid == mid
                     let visualState = manager.visualState(
                         for: mid,
@@ -1228,6 +1232,7 @@ struct SingletonVideoPlayerView: View {
                         mid: mid,
                         onUserInteraction: onUserInteraction
                     )
+                    .id(fullscreenSurfaceID(mid: mid, item: currentItem))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .onAppear {
                         DispatchQueue.main.async {
@@ -1289,6 +1294,10 @@ struct SingletonVideoPlayerView: View {
                 refreshHandoffThumbnail(for: mid)
             }
         }
+    }
+
+    private func fullscreenSurfaceID(mid: String, item: AVPlayerItem) -> String {
+        "\(mid)-\(ObjectIdentifier(item).hashValue)"
     }
 
     private func refreshHandoffThumbnail(for mediaID: String) {

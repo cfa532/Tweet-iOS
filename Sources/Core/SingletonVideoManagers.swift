@@ -422,9 +422,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         // audio right after we intentionally stopped it. Setting them first prevents this.
         isPlaying = false
         wasPlayingBeforeWaiting = false
-        if !transferPlaybackToUnderlyingSurface {
-            singletonPlayer?.pause()
-        }
+        singletonPlayer?.pause()
         resetPlaybackSurfaceState()
 
         // Cancel all timers and observers that could wake the player back up.
@@ -466,15 +464,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
 
         if transferPlaybackToUnderlyingSurface && !releasedBrokenBorrowedPlayer {
             feedHandoffMid = currentVideoMid
-            feedHandoffExpiresAt = Date().addingTimeInterval(2.0)
-            if let player = singletonPlayer,
-               let mid = currentVideoMid {
-                VideoSurfaceHandoffRegistry.shared.beginTransfer(
-                    mediaID: mid,
-                    player: player,
-                    source: "fullscreen"
-                )
-            }
+            feedHandoffExpiresAt = Date().addingTimeInterval(4.0)
         } else {
             feedHandoffMid = nil
             feedHandoffExpiresAt = .distantPast
@@ -490,20 +480,40 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         }
         LocalHTTPServer.shared.clearPrimaryRestriction()
 
-        let cleanupResult = releasedBrokenBorrowedPlayer ? "broken borrowed player released" : "fullscreen player preserved"
+        let cleanupResult = releasedBrokenBorrowedPlayer ? "broken borrowed player released" : "fullscreen player paused"
         print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, \(cleanupResult)")
     }
 
     func isTransferringPlayerToFeed(_ player: AVPlayer, mid: String) -> Bool {
-        if VideoSurfaceHandoffRegistry.shared.isActiveTransfer(mediaID: mid, player: player) {
-            return true
-        }
-        guard singletonPlayer === player,
-              feedHandoffMid == mid,
+        false
+    }
+
+    func consumeFeedResumeHandoffTime(for mid: String, duration: CMTime? = nil) -> CMTime? {
+        guard feedHandoffMid == mid,
               Date() <= feedHandoffExpiresAt else {
-            return false
+            return nil
         }
-        return true
+
+        feedHandoffMid = nil
+        feedHandoffExpiresAt = .distantPast
+
+        if let latest = PersistentVideoStateManager.shared.latestState(
+            videoMid: mid,
+            excluding: .mediaCell,
+            duration: duration
+        ) {
+            return validResumeTime(latest.currentTime, duration: duration)
+        }
+
+        if let saved = PersistentVideoStateManager.shared.getState(
+            videoMid: mid,
+            context: .mediaCell,
+            duration: duration
+        ) {
+            return validResumeTime(saved.currentTime, duration: duration)
+        }
+
+        return nil
     }
 
     /// Set the feed's video list for fullscreen browsing (called before presenting MediaBrowserView)
@@ -810,6 +820,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     private var playbackSurfaceReadyMid: String?
     private var pendingSurfacePlayback: (player: AVPlayer, item: AVPlayerItem, log: String)?
     private var playbackSurfaceFallbackTask: Task<Void, Never>?
+    private var requiresExplicitSurfaceReadyForCurrentItem = false
     private var fullscreenPlaybackStartSeconds: Double?
     @Published private var hasFullscreenVisiblePlaybackProgress = false
     
@@ -842,6 +853,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         playbackSurfaceFallbackTask = nil
         playbackSurfaceReadyMid = nil
         pendingSurfacePlayback = nil
+        requiresExplicitSurfaceReadyForCurrentItem = false
         fullscreenPlaybackStartSeconds = nil
         hasFullscreenVisiblePlaybackProgress = false
     }
@@ -1654,6 +1666,13 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         }
 
         VideoStateCache.shared.clearCachedState(for: failedMid)
+        if !deleteDiskCache {
+            NotificationCenter.default.post(
+                name: .feedVideoShouldRebuildFromProxyCache,
+                object: nil,
+                userInfo: ["mediaID": failedMid, "source": "fullscreenLoadFailure"]
+            )
+        }
         LocalHTTPServer.shared.clearPrimaryRestriction()
 
         singletonPlayer = nil
@@ -1889,6 +1908,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         hasRestoredPosition = false
         isSeekingToRestoredPosition = false
         resetPlaybackSurfaceState()
+        requiresExplicitSurfaceReadyForCurrentItem = true
         isItemReady = false
         refreshCachedMediaContent(for: mid)
         isPlaying = true
@@ -2148,6 +2168,10 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     private func schedulePlaybackSurfaceFallbackIfNeeded(player: AVPlayer, item: AVPlayerItem) {
         guard playbackSurfaceFallbackTask == nil,
               let mid = currentVideoMid else { return }
+        guard !requiresExplicitSurfaceReadyForCurrentItem else {
+            print("🎬 [FullScreenVideoManager] waiting for rebuilt fullscreen surface \(shortMID(mid)): \(playerDiagnostic(player, item: item))")
+            return
+        }
 
         playbackSurfaceFallbackTask = Task { @MainActor [weak self, weak player, weak item] in
             try? await Task.sleep(nanoseconds: 900_000_000)
@@ -2392,6 +2416,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         }
 
         playbackSurfaceReadyMid = mid
+        requiresExplicitSurfaceReadyForCurrentItem = false
         playbackSurfaceFallbackTask?.cancel()
         playbackSurfaceFallbackTask = nil
         if let item = player.currentItem {

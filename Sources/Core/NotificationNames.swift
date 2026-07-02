@@ -166,6 +166,10 @@ extension Notification.Name {
     /// Posted when a shared AVPlayer keeps its identity but receives a new AVPlayerItem.
     /// userInfo: ["mediaID": String]
     static let videoPlayerItemReplaced = Notification.Name("VideoPlayerItemReplaced")
+    /// Posted when a visible feed cell should discard its current player shell and
+    /// rebuild from the local proxy/disk cache.
+    /// userInfo: ["mediaID": String, "source": String?]
+    static let feedVideoShouldRebuildFromProxyCache = Notification.Name("FeedVideoShouldRebuildFromProxyCache")
     
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast
