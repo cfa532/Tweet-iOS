@@ -80,8 +80,6 @@
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
-		46AA00012F5B000100000001 /* Records.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AA00002F5B000100000001 /* Records.swift */; };
-		46AA00032F5B000100000001 /* ModelStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AA00022F5B000100000001 /* ModelStores.swift */; };
 		469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99542DEC744200954049 /* ProfileTweetsSection.swift */; };
 		469A99562DEC744200954049 /* ProfileHeaderSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99522DEC744200954049 /* ProfileHeaderSection.swift */; };
 		469A995F2DEF300900954049 /* TweetCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A995E2DEF300900954049 /* TweetCacheManager.swift */; };
@@ -93,6 +91,8 @@
 		46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34AC62E8E8A0100C83177 /* InfoPlist.strings */; };
 		46A73E3C2F04C76D001310E5 /* NodePool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A73E3B2F04C76D001310E5 /* NodePool.swift */; };
 		46A8F6842E52BDDC0050F4A0 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A8F6832E52BDDC0050F4A0 /* ProfileEditView.swift */; };
+		46AA00012F5B000100000001 /* Records.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AA00002F5B000100000001 /* Records.swift */; };
+		46AA00032F5B000100000001 /* ModelStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AA00022F5B000100000001 /* ModelStores.swift */; };
 		46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */; };
 		46B03D852E486D3B000E08DF /* MuteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D842E486D36000E08DF /* MuteState.swift */; };
 		46B03D872E48866C000E08DF /* ReplyEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D862E48866C000E08DF /* ReplyEditorView.swift */; };
@@ -237,8 +237,6 @@
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
-		46AA00002F5B000100000001 /* Records.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Records.swift; sourceTree = "<group>"; };
-		46AA00022F5B000100000001 /* ModelStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelStores.swift; sourceTree = "<group>"; };
 		469A99522DEC744200954049 /* ProfileHeaderSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileHeaderSection.swift; sourceTree = "<group>"; };
 		469A99542DEC744200954049 /* ProfileTweetsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTweetsSection.swift; sourceTree = "<group>"; };
 		469A995E2DEF300900954049 /* TweetCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetCacheManager.swift; sourceTree = "<group>"; };
@@ -250,6 +248,8 @@
 		46A34ACE2E8E8A0100C83177 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = InfoPlist.strings; sourceTree = "<group>"; };
 		46A73E3B2F04C76D001310E5 /* NodePool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodePool.swift; sourceTree = "<group>"; };
 		46A8F6832E52BDDC0050F4A0 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
+		46AA00002F5B000100000001 /* Records.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Records.swift; sourceTree = "<group>"; };
+		46AA00022F5B000100000001 /* ModelStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelStores.swift; sourceTree = "<group>"; };
 		46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingletonVideoManagers.swift; sourceTree = "<group>"; };
 		46B03D842E486D36000E08DF /* MuteState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteState.swift; sourceTree = "<group>"; };
 		46B03D862E48866C000E08DF /* ReplyEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyEditorView.swift; sourceTree = "<group>"; };
@@ -722,7 +722,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1600;
-				LastUpgradeCheck = 2650;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 					1A1A1A1A1A1A1A1A1A1A1A0F = {
 						CreatedOnToolsVersion = 15.0;
