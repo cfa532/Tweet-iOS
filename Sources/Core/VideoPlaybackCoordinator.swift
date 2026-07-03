@@ -1003,6 +1003,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
+        // While the user is actively scrolling, keep the current primary alive.
+        // The settled scroll-stop pass owns stopping, switching, or reasserting playback.
+        guard !isScrolling else { return }
+
         // Stop all videos if none are visible
         if currentVisibleIdentifiers.isEmpty {
             if phase == .primaryPlaying, let primaryId = primaryVideoId {
@@ -1592,10 +1596,44 @@ class VideoPlaybackCoordinator: ObservableObject {
         // an explicit scroll stop even if it previously fell below the threshold.
         primaryBelowContinueIdentifier = nil
         promoteForegroundVisibleMedia(reason: "scroll stop")
-        if phase == .idle && !visibleVideos.isEmpty {
+        reconcilePlaybackForCurrentVisibility()
+        if !reassertRetainedPrimaryOnScrollStop(),
+           phase == .idle && !visibleVideos.isEmpty {
             scheduleStartPrimary()
         }
         refreshDirectionalPreloads(reason: "scroll stop", throttle: false)
+    }
+
+    /// Scroll stop is a hard settle point. If the same primary is still qualified,
+    /// re-send its play command so a reused or paused cell can resume immediately.
+    private func reassertRetainedPrimaryOnScrollStop() -> Bool {
+        guard AppDelegate.isVideoInfrastructureReady,
+              !isPlaybackSuppressedByOverlay,
+              isFeedVisible,
+              phase == .primaryPlaying,
+              let primaryId = primaryVideoId,
+              onScreenMediaCells.contains(primaryId),
+              continuePlaybackMediaCells.contains(primaryId),
+              let primary = allVideos.first(where: { $0.identifier == primaryId }) else {
+            return false
+        }
+
+        guard let delegate = delegate(forIdentifier: primaryId) else {
+            print("🎬 [COORD] scrollStop: retained primary \(shortIdent(primaryId)) lost delegate; restarting selection")
+            phase = .idle
+            currentlyPlayingVideoIds.removeAll()
+            primaryVideoId = nil
+            scheduleStartPrimary()
+            return true
+        }
+
+        cancelPendingPrimarySelection()
+        currentlyPlayingVideoIds = [primaryId]
+        cachedVisibilityRatios[primaryId] = 0.7
+        LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
+        delegate.shouldPlayVideo(withMid: primary.videoMid)
+        print("🎬 [COORD] scrollStop: reasserted primary \(shortMID(primary.videoMid))")
+        return true
     }
 
     func canRunDirectionalPreloads() -> Bool {
