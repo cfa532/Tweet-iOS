@@ -532,7 +532,7 @@ class MediaGridUIView: UIView {
     /// `loadVisible` uses a near-viewport band so media can start attaching/warming
     /// shortly before it scrolls on screen.
     /// `playable` starts autoplay at 50%; `continuePlayback` keeps the active
-    /// primary only while it remains at least 70% visible.
+    /// primary only while it remains at the playback visibility threshold.
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
         var loadVisible: [String] = []
         var continuePlayback: [String] = []

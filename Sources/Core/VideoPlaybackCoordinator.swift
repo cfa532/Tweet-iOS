@@ -3,7 +3,7 @@
 //  Tweet
 //
 //  Coordinates video playback across the app
-//  Behavior: Start a video once it is 50% visible; stop the current video once it drops below 70% visible.
+//  Behavior: Start a video once it is visible enough, and stop it once it drops below the same playback threshold.
 //
 import Foundation
 import SwiftUI
@@ -147,7 +147,7 @@ struct VideoPlaybackInfo: Equatable {
 /// Behavior:
 /// 1. Play topmost video on screen immediately (no survey phase)
 /// 2. Monitor scroll position during playback
-/// 3. When current video drops below 70% visible, switch to the next 50% visible video if available
+/// 3. When current video drops below the playback threshold, switch to the next playable video if available
 /// 4. When video finishes, move to next visible video
 /// 5. Moving-viewport primary selection debounce: 0.2s
 @MainActor
@@ -1071,8 +1071,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         }
 
-        // Primary selection: new videos can start at 50%, but the active primary
-        // must remain 70% visible to keep playing.
+        // Primary selection: start and continuation use the same threshold so
+        // startup/layout samples cannot start, stop, then reselect one cell.
         if visibilityChanged && !currentVisibleIdentifiers.isEmpty {
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
@@ -1588,8 +1588,8 @@ class VideoPlaybackCoordinator: ObservableObject {
     func performPreloadOnScrollStop() {
         onScrollStopped()
         // Re-evaluate primary from scratch after each scroll gesture. Clearing
-        // primaryBelowContinueIdentifier lets the topmost visible video win even if it
-        // previously fell below the 70% continuation threshold mid-scroll.
+        // primaryBelowContinueIdentifier lets the topmost visible video win after
+        // an explicit scroll stop even if it previously fell below the threshold.
         primaryBelowContinueIdentifier = nil
         promoteForegroundVisibleMedia(reason: "scroll stop")
         if phase == .idle && !visibleVideos.isEmpty {

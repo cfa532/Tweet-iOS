@@ -53,7 +53,10 @@ enum FeedPlaybackTuning {
     /// MAX_CONCURRENT_PLAYER_CREATIONS (2). Autoplay still requires videoStartVisibilityRatio.
     static let videoWarmVisibilityRatio: CGFloat = 0
     static let videoStartVisibilityRatio: CGFloat = 0.50
-    static let videoContinueVisibilityRatio: CGFloat = 0.70
+    /// Keep the active primary at the same threshold used to start it. A higher
+    /// continuation threshold causes startup/layout samples around 50-70% visible
+    /// to start, stop, then restart the same onscreen video.
+    static let videoContinueVisibilityRatio: CGFloat = 0.50
 
     // Overlay/layout settling
     static let overlayDismissSettleDelay: TimeInterval = 0.35

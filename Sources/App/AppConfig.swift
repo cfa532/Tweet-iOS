@@ -19,7 +19,7 @@ struct AppConfig {
         case .debug:
             return "http://twbe.fireshare.us"
         case .release:
-            return "http://tweet.fireshare.us"
+            return "http://t1.fireshare.us"
         }
     }()
     
