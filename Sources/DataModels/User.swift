@@ -25,7 +25,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         }
     }
     @Published var writableUrl: URL?
-    /// When writableUrl was last resolved. Used for the 5-minute TTL cache.
+    /// Last resolution time for diagnostics only. Writable URLs are not reused
+    /// across calls; writes resolve hostIds[0] fresh before creating a client.
     var writableUrlResolvedAt: Date?
     @Published var name: String?
     @Published var username: String?
@@ -312,7 +313,6 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
             // which is resolved via getProviderIP(user.mid), not from hostId
             let instance = getInstance(mid: decodedUser.mid)
             decodedUser.baseUrl = instance.baseUrl  // Preserve provider IP, ignore backend baseUrl
-            decodedUser.writableUrl = instance.writableUrl
             
             updateUserInstance(with: decodedUser, nilFieldsToClear: explicitNullFields)
             return userInstancesQueue.sync {
@@ -424,10 +424,6 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         if shouldUpdateBaseUrl, let newBaseUrl = user.baseUrl {
             instance.baseUrl = newBaseUrl
         }
-        if let newWritableUrl = user.writableUrl {
-            instance.writableUrl = newWritableUrl
-        }
-
         if let v = user.tweetCount {
             if instance.tweetCount != v {
                 print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(v) for user \(instance.mid)")
@@ -488,7 +484,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         
         mid = try container.decode(String.self, forKey: .mid)
         baseUrl = try container.decodeIfPresent(URL.self, forKey: .baseUrl)
-        writableUrl = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
+        _ = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
+        writableUrl = nil
         name = try container.decodeIfPresent(String.self, forKey: .name)
         username = try container.decodeIfPresent(String.self, forKey: .username)
         password = try container.decodeIfPresent(String.self, forKey: .password)
@@ -610,20 +607,11 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     /// network resolution.
     private var resolveWritableUrlTask: Task<URL, Error>?
 
-    /// Returns the writable URL for the user, resolving via hostIds if needed.
-    /// Follows NodePool pattern: check pool -> resolve fresh -> update pool on success.
+    /// Returns the writable URL for the user, resolving hostIds[0] fresh.
     /// Throws if no host ID is configured or the writable host can't be reached;
     /// otherwise always returns a valid URL.
     @MainActor
     func resolveWritableUrl() async throws -> URL {
-        // Return cached URL if it was resolved within the last 5 minutes.
-        let ttl: TimeInterval = 5 * 60
-        if let url = writableUrl, let resolvedAt = writableUrlResolvedAt,
-           Date().timeIntervalSince(resolvedAt) < ttl {
-            print("DEBUG: [resolveWritableUrl] Using cached writableUrl (age \(Int(Date().timeIntervalSince(resolvedAt)))s): \(url.absoluteString)")
-            return url
-        }
-
         // Coalesce concurrent callers onto a single in-flight Task.
         if let inFlight = resolveWritableUrlTask {
             print("DEBUG: [resolveWritableUrl] Awaiting in-flight resolve Task")

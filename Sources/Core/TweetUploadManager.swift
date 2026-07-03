@@ -649,7 +649,7 @@ extension TweetUploadManager {
                 
                 await removePendingUpload()
             } else {
-                print("DEBUG: [Error handling] Scheduling background retry \(retryCount + 1)")
+                print("DEBUG: [Error handling] Scheduling retry \(retryCount + 1)")
                 
                 // Don't fail the progress UI on retry
                 await MainActor.run {
@@ -661,10 +661,8 @@ extension TweetUploadManager {
                 }
                 
                 let delay = UInt64(retryCount + 1) * 2_000_000_000
-                Task(priority: .background) { @MainActor in
-                    try? await Task.sleep(nanoseconds: delay)
-                    await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
-                }
+                try? await Task.sleep(nanoseconds: delay)
+                await uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
             }
         }
     }

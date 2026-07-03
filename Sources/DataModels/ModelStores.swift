@@ -61,10 +61,6 @@ final class UserStore {
         if shouldUpdateBaseUrl, let baseUrl = record.baseUrl {
             instance.baseUrl = baseUrl
         }
-        if let writableUrl = record.writableUrl {
-            instance.writableUrl = writableUrl
-        }
-
         instance.tweetCount = record.tweetCount ?? instance.tweetCount
         instance.followingCount = record.followingCount ?? instance.followingCount
         instance.followersCount = record.followersCount ?? instance.followersCount

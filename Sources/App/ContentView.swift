@@ -762,8 +762,8 @@ struct ContentView: View {
     // MARK: - Pending Upload Handling
     
     private func checkForPendingUpload() {
-        // Don't check if dialog is already showing or if actively uploading
-        guard !showPendingUploadDialog && !uploadProgressManager.isUploading else {
+        // Don't recover while the foreground upload queue is still handling work.
+        guard !showPendingUploadDialog && !uploadProgressManager.hasActiveOrQueuedUploads else {
             return
         }
         
@@ -941,12 +941,6 @@ private struct NewTweetsBannerOverlay: View {
                 }
                 .buttonStyle(.plain)
                 .transition(.move(edge: .top).combined(with: .opacity))
-                .onAppear {
-                    scheduleAutoHide()
-                }
-                .onChange(of: pendingTweets.map(\.mid)) { _, _ in
-                    scheduleAutoHide()
-                }
             }
 
             Spacer()
@@ -1054,13 +1048,4 @@ private struct NewTweetsBannerOverlay: View {
         }
     }
 
-    private func scheduleAutoHide() {
-        let ids = pendingTweets.map(\.mid)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-            guard viewModel.visiblePendingNewTweets.map(\.mid) == ids else { return }
-            Task { @MainActor in
-                viewModel.dismissNewTweetsBanner()
-            }
-        }
-    }
 }

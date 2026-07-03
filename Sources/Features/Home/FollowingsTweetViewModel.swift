@@ -271,7 +271,19 @@ class FollowingsTweetViewModel: ObservableObject {
         let newTweets = uniqueIncomingTweets.filter { tweet in
             isPendingNewFeedTweet(tweet, visibleTweetIds: visibleTweetIds)
         }
-        let snapshot = newTweets.sorted { $0.timestamp > $1.timestamp }
+        let combinedPendingTweets = pendingNewTweets + newTweets
+        var seenPendingTweetIds = Set<String>()
+        let snapshot = combinedPendingTweets
+            .filter { tweet in
+                seenPendingTweetIds.insert(tweet.mid).inserted
+                && isPendingNewFeedTweet(tweet, visibleTweetIds: visibleTweetIds)
+            }
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp {
+                    return lhs.mid > rhs.mid
+                }
+                return lhs.timestamp > rhs.timestamp
+            }
 
         pendingNewTweets = snapshot
         showNewTweetsBanner = !snapshot.isEmpty
@@ -303,11 +315,6 @@ class FollowingsTweetViewModel: ObservableObject {
         pendingNewTweets.removeAll()
         showNewTweetsBanner = false
         print("DEBUG: [FollowingsTweetViewModel] Applied \(tweetsToApply.count) pending main feed tweet(s), dropped \(staleCount) stale")
-    }
-
-    @MainActor
-    func dismissNewTweetsBanner() {
-        showNewTweetsBanner = false
     }
 
     @MainActor

@@ -142,7 +142,8 @@ struct UserRecord: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mid = try container.decode(String.self, forKey: .mid)
         baseUrl = try container.decodeIfPresent(URL.self, forKey: .baseUrl)
-        writableUrl = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
+        _ = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
+        writableUrl = nil
         name = try container.decodeIfPresent(String.self, forKey: .name)
         username = try container.decodeIfPresent(String.self, forKey: .username)
         password = try container.decodeIfPresent(String.self, forKey: .password)
@@ -247,7 +248,7 @@ struct UserRecord: Codable, Sendable {
         self.init(
             mid: user.mid,
             baseUrl: user.baseUrl,
-            writableUrl: user.writableUrl,
+            writableUrl: nil,
             name: user.name,
             username: user.username,
             password: user.password,

@@ -137,13 +137,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             Task { @MainActor in
                 // Update the singleton instance with new values
                 instance.baseUrl = newValue.baseUrl
-                // writableUrl is resolved lazily by resolveWritableUrl() and is
-                // typically not present on a server-fetched User. Only overwrite
-                // when newValue actually provides one — otherwise we'd wipe a
-                // valid cached resolution and force re-resolution on every refresh.
-                if let newWritableUrl = newValue.writableUrl {
-                    instance.writableUrl = newWritableUrl
-                }
                 instance.name = newValue.name
                 instance.username = newValue.username
                 instance.avatar = newValue.avatar
@@ -3684,17 +3677,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             requestUser = await MainActor.run { self.appUser }
         }
 
-        // Admin moderation deletes must run on the target author's writable host.
-        // resolveWritableUrl() resolves hostIds[0], not the read/access node.
-        _ = try await requestUser.resolveWritableUrl()
+        // Delete is a mutation, so it must run directly against the current
+        // writable/root host. resolveWritableUrl() always resolves hostIds[0]
+        // fresh rather than reusing the last writable URL.
+        let writableUrl = try await requestUser.resolveWritableUrl()
         guard let client = await requestUser.writableClient else {
             throw NSError(domain: "HproseClient", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "")])
+                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
         let originalTimeout = client.timeout
         client.timeout = 30.0
         defer { client.timeout = originalTimeout }
 
+        print("DEBUG: [deleteTweet] Using writable client at \(writableUrl.absoluteString) for tweet \(tweetId)")
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse: Any?
         do {
@@ -4734,9 +4729,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         throw error
                     }
                     
-                    // Clear cached writableUrl to force fresh resolution on retry
+                    // Drop the last resolved URL before retrying; the next attempt resolves hostIds[0] again.
                     await MainActor.run {
-                        print("DEBUG: [HLS Upload] Clearing writableUrl to force fresh IP resolution on retry")
+                        print("DEBUG: [HLS Upload] Clearing last writableUrl before retry")
                         appUser.writableUrl = nil
                     }
                     
@@ -5910,9 +5905,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         throw error
                     }
                     
-                    // Clear cached writableUrl to force fresh resolution on retry
+                    // Drop the last resolved URL before retrying; the next attempt resolves hostIds[0] again.
                     await MainActor.run {
-                        print("DEBUG: [Backend Conversion] Clearing writableUrl to force fresh IP resolution on retry")
+                        print("DEBUG: [Backend Conversion] Clearing last writableUrl before retry")
                         appUser.writableUrl = nil
                     }
                     
@@ -6072,13 +6067,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         ) async throws -> MimeiFileType {
             print("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
             
-            // Retry logic: Try with cached/pooled IP first, retry with fresh IP if it fails
+            // Retry logic: resolve the writable host for each attempt.
             var lastError: Error?
             let maxRetries = 2
             
             for attempt in 1...maxRetries {
                 do {
-                    // Resolve writable URL (may use NodePool cache or resolve fresh)
+                    // Resolve the writable host for this attempt.
                     let writableUrl = try await appUser.resolveWritableUrl()
                     print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl.absoluteString)")
                     
@@ -6106,9 +6101,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         throw error
                     }
                     
-                    // Invalidate cached writableUrl so the retry re-resolves a fresh IP.
+                    // Drop the last resolved URL before retrying.
                     await MainActor.run {
-                        print("DEBUG: [uploadRegularFile] Invalidating cached writableUrl to force fresh IP resolution on retry")
+                        print("DEBUG: [uploadRegularFile] Clearing last writableUrl before retry")
                         appUser.writableUrl = nil
                         appUser.writableUrlResolvedAt = nil
                     }

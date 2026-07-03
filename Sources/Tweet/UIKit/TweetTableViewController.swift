@@ -165,6 +165,8 @@ class TweetTableViewController: UITableViewController {
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: CFTimeInterval = 0
     private let videoVisibilityThrottleInterval = FeedPlaybackTuning.videoVisibilityThrottleInterval
+    private var lastScrollVelocitySampleTime: CFTimeInterval = 0
+    private var estimatedScrollVelocityY: CGFloat = 0
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     private var lastLoadVisibleVideoIds: Set<String> = [] // Cache media that is physically on screen and should load
     private var lastContinuePlaybackVideoIds: Set<String> = [] // Cache media visible enough to keep current playback
@@ -2894,8 +2896,8 @@ class TweetTableViewController: UITableViewController {
             isScrollingBackward = frameDelta < 0
         }
 
-        // Throttle video visibility updates (CACurrentMediaTime is cheaper than Date())
         let now = CACurrentMediaTime()
+        updateEstimatedScrollVelocity(frameDelta: frameDelta, now: now)
 
         // Update video visibility during all scroll phases (drag + deceleration).
         // Throttle limits frequency to avoid excessive work.
@@ -2903,6 +2905,7 @@ class TweetTableViewController: UITableViewController {
             lastVideoVisibilityUpdate = now
             updateVisibleTweetsForVideoPlayback()
         }
+        reconcilePrimaryVideoIfDecelerationIsSettling()
 
         let isUserDrivenScroll = isUserDragging || isDecelerating || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
         if isUserDrivenScroll {
@@ -2976,6 +2979,30 @@ class TweetTableViewController: UITableViewController {
         lastCallbackOffset = currentOffset
         lastScrollCallbackTime = now
     }
+
+    private func updateEstimatedScrollVelocity(frameDelta: CGFloat, now: CFTimeInterval) {
+        guard lastScrollVelocitySampleTime > 0 else {
+            lastScrollVelocitySampleTime = now
+            estimatedScrollVelocityY = 0
+            return
+        }
+
+        let elapsed = now - lastScrollVelocitySampleTime
+        if elapsed > 0 {
+            estimatedScrollVelocityY = frameDelta / CGFloat(elapsed)
+        }
+        lastScrollVelocitySampleTime = now
+    }
+
+    private func reconcilePrimaryVideoIfDecelerationIsSettling() {
+        guard isDecelerating,
+              !isUserDragging,
+              abs(estimatedScrollVelocityY) <= FeedPlaybackTuning.earlyPrimarySelectionVelocityThreshold else {
+            return
+        }
+
+        videoCoordinator.reconcilePlaybackForSettlingScroll()
+    }
     
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         // User started dragging - reset callback baseline to current position
@@ -2983,6 +3010,8 @@ class TweetTableViewController: UITableViewController {
         cancelBackgroundResumeForUserScroll()
         isUserDragging = true
         isDecelerating = false
+        lastScrollVelocitySampleTime = 0
+        estimatedScrollVelocityY = 0
         autoLoadMoreCountDuringCurrentScrollGesture = 0
         lastCallbackOffset = scrollView.contentOffset.y
         videoCoordinator.onScrollStarted()

@@ -42,6 +42,10 @@ class UploadProgressManager: ObservableObject {
     // CRITICAL: Upload queue to prevent concurrent uploads from interfering
     private var uploadQueue: [QueuedUpload] = []
     private var isProcessingQueue: Bool = false
+
+    var hasActiveOrQueuedUploads: Bool {
+        isUploading || isProcessingQueue || !uploadQueue.isEmpty
+    }
     
     struct QueuedUpload {
         let id: UUID = UUID()
