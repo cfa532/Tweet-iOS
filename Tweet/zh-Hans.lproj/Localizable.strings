@@ -595,6 +595,8 @@
 "Video conversion failed" = "视频转换失败";
 "Chat message upload failed" = "聊天消息上传失败";
 "Profile update failed" = "个人资料更新失败";
+"Host ID updated. Please log in on the new host." = "主机 ID 已更新。请登录到新的主机。";
+"Host ID update timed out. Log in again to verify the result." = "主机 ID 更新超时。请重新登录以确认结果。";
 "Success" = "成功";
 "Processing..." = "处理中...";
 "Invalid response format from server" = "服务器响应格式无效";

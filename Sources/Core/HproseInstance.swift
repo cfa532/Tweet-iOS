@@ -2793,19 +2793,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "password": loginPassword!
         ]
 
-        // Prefer hostIds[0] (the writable home node where data_of_author lives).
-        // Fall back to baseUrl (access node) if resolution fails or hostIds is absent.
-        let loginUrl: URL
-        if let resolved = try? await loginUser.resolveWritableUrl() {
-            loginUrl = resolved
-            print("DEBUG: [login] Using writable node URL (hostIds[0]): \(loginUrl.absoluteString)")
-        } else if let fallback = loginBaseUrl {
-            loginUrl = fallback
-            print("DEBUG: [login] hostIds[0] not resolved, falling back to baseUrl: \(loginUrl.absoluteString)")
-        } else {
+        // Match TweetWeb: authenticate through the resolved read/provider route.
+        // hostIds[0] is the writable home node and is resolved lazily for writes.
+        guard let loginUrl = loginBaseUrl else {
             print("ERROR: [login] No URL available for login")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
+        print("DEBUG: [login] Using provider URL for authentication: \(loginUrl.absoluteString)")
 
         print("DEBUG: [login] Starting login API call to: \(loginUrl.absoluteString)")
 
@@ -2852,6 +2846,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     Task {
                         await self.populateFellowLists(user: loginUser)
                     }
+                    Task {
+                        _ = try? await loginUser.resolveWritableUrl()
+                    }
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
@@ -2873,6 +2870,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     }
                     Task {
                         await self.populateFellowLists(user: loginUser)
+                    }
+                    Task {
+                        _ = try? await loginUser.resolveWritableUrl()
                     }
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
@@ -7855,7 +7855,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let updateClient = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        updateClient.timeout = 15
+        updateClient.timeout = 30
         let rawResponse = await invokeRunMApp(using: updateClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         

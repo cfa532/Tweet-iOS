@@ -3656,7 +3656,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         allowCachedFallback: Bool = true
     ) -> Bool {
         guard let mid = attachment?.mid else { return false }
-        guard hasPlaybackCoverForCurrentVideo || (isVisible && currentPlayerHasLoadedData) else { return false }
 
         // Priority 1: imageView already has a frame — save to cache and we're done.
         // Skipped during active playback captures (skipImageView=true) because imageView
@@ -3670,6 +3669,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             SharedAssetCache.shared.updateCachedThumbnail(existingImage, for: mid)
             return true
         }
+
+        guard hasPlaybackCoverForCurrentVideo || (isVisible && currentPlayerHasLoadedData) else { return false }
 
         // Priority 2: Video output capture (highest quality).
         // We try regardless of item.status — copyPixelBuffer returns nil when no frame is
@@ -3805,7 +3806,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     @discardableResult
     private func preserveReleaseCoverForCurrentVideo(reason: String, showCover: Bool = true) -> Bool {
         guard isVideoAttachment else { return false }
+        let currentMid = attachment?.mid
         guard player != nil, player?.currentItem != nil else {
+            if let currentMid, let existingImage = imageView.image, !isInvalidVideoCover(existingImage) {
+                SharedAssetCache.shared.updateCachedThumbnail(existingImage, for: currentMid)
+                SharedAssetCache.shared.protectBackgroundPoster(for: currentMid)
+            }
             restoreCachedPosterForFailureIfNeeded()
             return imageView.image != nil
         }
@@ -3818,6 +3824,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
 
         guard imageView.image != nil else { return false }
+
+        if let currentMid {
+            SharedAssetCache.shared.protectBackgroundPoster(for: currentMid)
+        }
 
         if showCover {
             showImageView()

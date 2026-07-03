@@ -406,18 +406,48 @@ struct ProfileView: View {
         // Set submission state
         isSubmittingProfile = true
         print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), domainToShare: \(domainToShare ?? "nil")")
-        
-        let success = try await hproseInstance.updateUserCore(
-            password: password,
-            alias: alias,
-            profile: profile,
-            hostId: hostId,
-            cloudDrivePort: cloudDrivePort,
-            domainToShare: domainToShare
-        )
+
+        let originalHostId = hproseInstance.appUser.hostIds?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let submittedHostId = hostId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hostIdChanged = submittedHostId.count == Constants.MIMEI_ID_LENGTH && submittedHostId != originalHostId
+
+        let success: Bool
+        do {
+            success = try await hproseInstance.updateUserCore(
+                password: password,
+                alias: alias,
+                profile: profile,
+                hostId: hostId,
+                cloudDrivePort: cloudDrivePort,
+                domainToShare: domainToShare
+            )
+        } catch {
+            if hostIdChanged && isTimeoutLikeError(error) {
+                print("DEBUG: Profile hostId update timed out after migration; logging out so user can verify result")
+                await completeHostIdMigration(
+                    message: NSLocalizedString("Host ID update timed out. Log in again to verify the result.", comment: "Host ID migration timeout message"),
+                    isError: true
+                )
+                throw NSError(
+                    domain: "ProfileHostIdMigration",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Host ID update timed out. Log in again to verify the result.", comment: "Host ID migration timeout message")]
+                )
+            }
+            isSubmittingProfile = false
+            throw error
+        }
         print("DEBUG: Profile update result: \(success)")
         
         if success {
+            if hostIdChanged {
+                await completeHostIdMigration(
+                    message: NSLocalizedString("Host ID updated. Please log in on the new host.", comment: "Host ID migration success message"),
+                    isError: false
+                )
+                return
+            }
+
             // Update local user data
             if let alias = alias, !alias.isEmpty {
                 hproseInstance.appUser.name = alias
@@ -458,6 +488,42 @@ struct ProfileView: View {
             isSubmittingProfile = false
             throw NSError(domain: "ProfileUpdate", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Profile update failed", comment: "Profile update error")])
         }
+    }
+
+    private func completeHostIdMigration(message: String, isError: Bool) async {
+        await hproseInstance.logout()
+        await MainActor.run {
+            isSubmittingProfile = false
+            showEditSheet = false
+            if let onShowToast {
+                onShowToast(message, isError)
+            } else {
+                showToastMessage(message, type: isError ? .warning : .success)
+            }
+            NotificationCenter.default.post(name: .userDidLogout, object: nil)
+            dismiss()
+        }
+    }
+
+    private func isTimeoutLikeError(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        var depth = 0
+
+        while let nsError = current, depth < 8 {
+            if nsError.code == NSURLErrorTimedOut {
+                return true
+            }
+
+            let description = nsError.localizedDescription.lowercased()
+            if description.contains("timed out") || description.contains("timeout") {
+                return true
+            }
+
+            current = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+
+        return false
     }
     
     // MARK: - Scroll Handling

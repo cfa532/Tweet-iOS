@@ -545,6 +545,7 @@ struct ProfileEditView: View {
                 // If user provided input, use it; otherwise use original value
                 let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
                 let hostIdValue = trimmedHostId.isEmpty ? originalHostId : trimmedHostId
+                let hostIdChanged = trimmedHostId.count == Constants.MIMEI_ID_LENGTH && trimmedHostId != (originalHostId ?? "")
                 
                 // For domainToShare: if empty, send empty string (will be converted to nil and excluded from JSON)
                 let trimmedShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -571,6 +572,12 @@ struct ProfileEditView: View {
                 
                 // Success - update initial values and close the screen
                 await MainActor.run {
+                    if hostIdChanged {
+                        isSubmitting = false
+                        onSubmissionStateChange?(false)
+                        return
+                    }
+
                     // Update initial values to reflect the saved state
                     initialValues = [
                         "username": username,
@@ -606,6 +613,12 @@ struct ProfileEditView: View {
             } catch {
                 // Handle profile update failure with toast
                 await MainActor.run {
+                    if (error as NSError).domain == "ProfileHostIdMigration" {
+                        isSubmitting = false
+                        onSubmissionStateChange?(false)
+                        return
+                    }
+
                     let errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                     showToastMessage(errorMessage, type: .error)
                     onProfileUpdateFailure?(errorMessage)

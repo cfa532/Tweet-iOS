@@ -499,6 +499,8 @@
 "Video conversion failed" = "動画の変換に失敗しました";
 "Chat message upload failed" = "チャットメッセージのアップロードに失敗しました";
 "Profile update failed" = "プロフィールの更新に失敗しました";
+"Host ID updated. Please log in on the new host." = "ホストIDが更新されました。新しいホストにログインしてください。";
+"Host ID update timed out. Log in again to verify the result." = "ホストIDの更新がタイムアウトしました。再度ログインして結果を確認してください。";
 "Success" = "成功";
 "Processing..." = "処理中...";
 "Invalid response format from server" = "サーバーからの無効な応答形式";

@@ -589,6 +589,8 @@
 "Video conversion failed" = "Video conversion failed";
 "Chat message upload failed" = "Chat message upload failed";
 "Profile update failed" = "Profile update failed";
+"Host ID updated. Please log in on the new host." = "Host ID updated. Please log in on the new host.";
+"Host ID update timed out. Log in again to verify the result." = "Host ID update timed out. Log in again to verify the result.";
 "Success" = "Success";
 "Processing..." = "Processing...";
 "Invalid response format from server" = "Invalid response format from server";
