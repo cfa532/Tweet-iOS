@@ -4340,13 +4340,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 print("Original video resolution: \(info.displayWidth)x\(info.displayHeight) (\(originalVideoResolution ?? 0)p)")
             }
             
-            // Step 2: Always normalize videos (≤720p keeps original resolution with proportional bitrate, >720p scales to 720p)
+            // Step 2: Always normalize videos (>720p scales to 720p; bitrate is never raised above the source)
             print("📹 [VIDEO UPLOAD] Starting video normalization")
             if let origRes = originalVideoResolution {
                 if origRes <= 720 {
-                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p ≤ 720p: will normalize with original resolution and proportional bitrate")
+                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p ≤ 720p: will normalize with original resolution")
                 } else {
-                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p with \(Int(VideoConversionService.reference720pBitrate))k bitrate")
+                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p without raising source bitrate")
                 }
             } else {
                 print("📹 [VIDEO UPLOAD] Could not detect resolution: will normalize (defaulting to 720p if needed)")
@@ -5075,7 +5075,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         }
                     }
                     
-                    // Note: Bitrate detection is unreliable, so we always use calculated bitrate
+                    let sourceBitrateKbps = try? await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: inputURL.path)
                     
                     // Get original resolution
                     let originalWidth: Int?
@@ -5111,7 +5111,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         needsScaling = videoResolution > 720
                         
                         if needsScaling {
-                            // Resolution > 720p: scale to 720p with the shared reference bitrate
+                            // Resolution > 720p: scale to 720p, capped at the source bitrate.
                             if aspectRatio < 1.0 {
                                 // Portrait: scale to target width
                                 scaleFilter = "scale=720:-2"
@@ -5119,11 +5119,22 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                                 // Landscape: scale to target height
                                 scaleFilter = "scale=-2:720"
                             }
-                            // Always use the reference bitrate for 720p normalization (bitrate detection is unreliable)
-                            targetBitrateKbps = Int(VideoConversionService.reference720pBitrate)
-                            print("📊 Scaling to 720p with \(targetBitrateKbps)k bitrate")
+                            let referenceBitrateKbps = Int(VideoConversionService.reference720pBitrate)
+                            if let sourceBitrateKbps, sourceBitrateKbps > 0, sourceBitrateKbps < referenceBitrateKbps {
+                                targetBitrateKbps = sourceBitrateKbps
+                                print("📊 Scaling to 720p, keeping lower source bitrate: \(targetBitrateKbps)k")
+                            } else {
+                                targetBitrateKbps = referenceBitrateKbps
+                                print("📊 Scaling to 720p with \(targetBitrateKbps)k bitrate")
+                            }
+                        } else if videoResolution < 720, let sourceBitrateKbps, sourceBitrateKbps > 0 {
+                            // Sub-720p sources stay at their original bitrate instead of being raised by the 720p reference curve.
+                            scaleFilter = ""
+                            targetBitrateKbps = sourceBitrateKbps
+                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), keeping source bitrate: \(targetBitrateKbps)k")
                         } else {
-                            // Resolution ≤ 720p: keep original resolution with proportional bitrate (min minBitrate to avoid inflating low-bitrate videos)
+                            // 720p sources keep the reference curve; bitrate detection can vary across formats.
+                            // If source bitrate is unavailable for sub-720p, fall back to the previous pixel-based estimate.
                             scaleFilter = ""
                             // Calculate proportional bitrate based on pixel count
                             // Formula: bitrate = max(minBitrate, (pixel_count / REFERENCE_720P_PIXELS) * reference720pBitrate)
@@ -5131,8 +5142,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                             let pixelCount = width * height
                             let REFERENCE_720P_PIXELS = 921600
                             let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
-                            targetBitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
-                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), pixel-based: \(calculatedBitrate)k → \(targetBitrateKbps)k (with \(VideoConversionService.minBitrate)k min)")
+                            let estimatedBitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
+                            if let sourceBitrateKbps, sourceBitrateKbps > 0, sourceBitrateKbps < estimatedBitrateKbps {
+                                targetBitrateKbps = sourceBitrateKbps
+                                print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), keeping lower source bitrate: \(targetBitrateKbps)k")
+                            } else {
+                                targetBitrateKbps = estimatedBitrateKbps
+                                print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), pixel-based: \(calculatedBitrate)k → \(targetBitrateKbps)k (with \(VideoConversionService.minBitrate)k min)")
+                            }
                         }
                     } else {
                         // Fallback: assume scaling needed
