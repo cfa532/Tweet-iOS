@@ -4287,8 +4287,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         /// Process and upload video files with new routing logic:
         /// 1. Normalize to 720p reference bitrate (preserving original resolution if lower)
         /// 2. Route based on normalized size and resolution:
-        ///    - ≤ 32MB: Progressive video route
-        ///    - > 32MB: HLS conversion based on resolution
+        ///    - ≤ 50MB: Progressive video route
+        ///    - > 50MB: HLS conversion based on resolution
         ///      * resolution > 480p: HLS with 720p + 480p variants
         ///      * resolution ≤ 480p: HLS with 480p variant only
         static func processVideo(
@@ -4354,7 +4354,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             
             print("========== FIRST NORMALIZATION (Standardization) ==========")
             print("📹 [VIDEO UPLOAD] Original video: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
-            print("📹 [VIDEO UPLOAD] Purpose: Unified format for 32MB routing decision")
+            print("📹 [VIDEO UPLOAD] Purpose: Unified format for 50MB routing decision")
             
             progressCallback?("Normalizing video...", 10)
             let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
@@ -4412,8 +4412,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", videoSizeMB))MB (\(videoSize) bytes)")
             
             if videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
-                // ≤ 32MB: progressive video route
-                print("📹 [VIDEO UPLOAD] Size ≤ 32MB: using progressive video route (direct MP4 upload)")
+                // ≤ 50MB: progressive video route
+                print("📹 [VIDEO UPLOAD] Size ≤ 50MB: using progressive video route (direct MP4 upload)")
                 progressCallback?("Uploading video...", 50)
                 let result = try await uploadRegularFile(
                     data: videoData,
@@ -4427,8 +4427,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 print("✅ [VIDEO UPLOAD] Progressive video uploaded successfully, CID: \(result.mid)")
                 return (result, nil)
             } else {
-                // > 32MB: Need HLS conversion - check if cloud drive is available
-                print("📹 [VIDEO UPLOAD] Size > 32MB: will use HLS conversion route")
+                // > 50MB: Need HLS conversion - check if cloud drive is available
+                print("📹 [VIDEO UPLOAD] Size > 50MB: will use HLS conversion route")
                 let cloudPort = await MainActor.run { appUser.cloudDrivePort }
                 guard cloudPort > 0 else {
                     print("⚠️ [VIDEO UPLOAD] No cloud drive configured, falling back to progressive video")

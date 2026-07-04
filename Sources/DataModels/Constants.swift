@@ -27,7 +27,7 @@ enum Constants {
     static let MAX_FILE_SIZE = 512 * 1024 * 1024 // 512MB in bytes - applies to all file types
     
     // Video Processing Thresholds
-    static let PROGRESSIVE_VIDEO_THRESHOLD_BYTES: Int64 = 32 * 1024 * 1024  // 32MB
+    static let PROGRESSIVE_VIDEO_THRESHOLD_BYTES: Int64 = 50 * 1024 * 1024  // 50MB
     
     // Image Loading Timeout
     static let IMAGE_LOAD_TIMEOUT: TimeInterval = 15.0  // 15 seconds for all image loading requests
