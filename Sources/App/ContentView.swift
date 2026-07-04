@@ -641,7 +641,7 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { _ in
-                MainActor.assumeIsolated {
+                Task { @MainActor in
                     self.isNavigationVisible = true
                     self.checkForPendingUpload()
                 }
