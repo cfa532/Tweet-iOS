@@ -2907,8 +2907,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
     
     func logout() async {
-        preferenceHelper?.setUserId(nil as String?)
-
         // Don't clear tweet cache on logout - cache persists per user and is cleared periodically or manually
         // Clear chat cache on signout
         ChatCacheManager.shared.clearAllCache()
@@ -2921,6 +2919,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         // Reset appUser to guest user with entry baseUrl (not the old user's node)
         await MainActor.run {
+            self.preferenceHelper?.setUserId(nil)
+
             let guestUser = User.getInstance(mid: Constants.GUEST_ID)
             guestUser.baseUrl = HproseInstance.baseUrl
             guestUser.followingList = Gadget.getAlphaIds()
