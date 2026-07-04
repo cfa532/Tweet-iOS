@@ -202,12 +202,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// Mirror stdout/stderr (all `print()`/`NSLog`) to Documents so troubleshooting
     /// logs survive app suspension and process relaunches.
     private static func redirectConsoleToLogFile() {
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        deleteExpiredLogFiles(in: docs)
-        let logURL = docs.appendingPathComponent(logFileName)
-        consoleMirror = ConsoleMirror(logURL: logURL)
-        print("\n--- App log session started: \(Date()) pid=\(ProcessInfo.processInfo.processIdentifier) ---")
-        print("📂 [LOG] Console output mirrored to \(logURL.path)")
+        // Disabled: do not create or mirror console output to log files on the iOS device.
+//        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+//        deleteExpiredLogFiles(in: docs)
+//        let logURL = docs.appendingPathComponent(logFileName)
+//        consoleMirror = ConsoleMirror(logURL: logURL)
+//        print("\n--- App log session started: \(Date()) pid=\(ProcessInfo.processInfo.processIdentifier) ---")
+//        print("📂 [LOG] Console output mirrored to \(logURL.path)")
     }
 
     private static func deleteExpiredLogFiles(in directory: URL) {
