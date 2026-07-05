@@ -278,7 +278,7 @@ struct HomeView: View {
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated {
+            Task { @MainActor in
                 // Always reset navigation to visible when returning from background
                 isNavigationVisible = true
                 NotificationCenter.default.post(

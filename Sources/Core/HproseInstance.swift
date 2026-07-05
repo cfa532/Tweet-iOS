@@ -6659,53 +6659,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     
     // MARK: - Private Methods
     private func fetchHTML(from urlString: String) async throws -> String {
-        // Extract MimeiId from URL if possible (assuming it's in the URL path)
-        if let url = URL(string: urlString),
-           let mimeiId = extractMimeiIdFromURL(url) {
-            // Check if this resource is blacklisted
-            if blackList.isBlacklisted(mimeiId) {
-                print("[HproseInstance] Skipping blacklisted resource: \(mimeiId)")
-                throw URLError(.badServerResponse)
-            }
-        }
-        
         guard let url = URL(string: urlString) else {
             throw URLError(.badURL)
         }
-        
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            guard let htmlString = String(data: data, encoding: .utf8) else {
-                throw URLError(.cannotDecodeContentData)
-            }
-            
-            // Record success if we can extract MimeiId
-            if let mimeiId = extractMimeiIdFromURL(url) {
-                blackList.recordSuccess(mimeiId)
-            }
-            
-            return htmlString
-        } catch {
-            // Record failure if we can extract MimeiId
-            if let url = URL(string: urlString),
-               let mimeiId = extractMimeiIdFromURL(url) {
-                blackList.recordFailure(mimeiId)
-            }
-            throw error
+
+        let (data, _) = try await URLSession.shared.data(from: url)
+        guard let htmlString = String(data: data, encoding: .utf8) else {
+            throw URLError(.cannotDecodeContentData)
         }
-    }
-    
-    /// Extract MimeiId from URL if present
-    private func extractMimeiIdFromURL(_ url: URL) -> MimeiId? {
-        // Try to extract MimeiId from URL path components
-        let pathComponents = url.pathComponents
-        for component in pathComponents {
-            // Check if component looks like a MimeiId (you may need to adjust this logic)
-            if component.count > 10 && component.range(of: "^[a-zA-Z0-9]+$", options: .regularExpression) != nil {
-                return MimeiId(component)
-            }
-        }
-        return nil
+
+        return htmlString
     }
     
     /// Access a resource by MimeiId with BlackList integration

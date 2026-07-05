@@ -853,18 +853,16 @@ struct TweetListView: View {
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated {
+            Task { @MainActor in
                 // Only fetch if initial load has completed (avoid interfering with app startup)
                 guard self.initialLoadComplete else {
                     print("📱 [FOREGROUND] Skipping fetch - initial load not complete")
                     return
                 }
-                
+
                 // Fetch new tweets when app comes to foreground
                 print("📱 [FOREGROUND] App became active - fetching new tweets...")
-                Task {
-                    await self.fetchNewTweetsOnForeground()
-                }
+                await self.fetchNewTweetsOnForeground()
             }
         }
     }

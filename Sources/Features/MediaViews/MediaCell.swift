@@ -516,10 +516,10 @@ struct MediaCell: View, @MainActor Equatable, @MainActor MediaCellDelegate {
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated {
+            Task { @MainActor in
                 // Only reload if cell is visible and image was released
                 guard self.isVisible, self.image == nil, self.attachment.type == .image else { return }
-                
+
                 self.loadImage()
             }
         }

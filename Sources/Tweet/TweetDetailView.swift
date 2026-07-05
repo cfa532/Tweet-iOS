@@ -563,10 +563,10 @@ struct DetailMediaCell: View {
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated {
+            Task { @MainActor in
                 // Only reload if image was released
                 guard self.image == nil, self.attachment.type == .image else { return }
-                
+
                 print("DEBUG: [DetailMediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
                 self.loadImage()
             }
