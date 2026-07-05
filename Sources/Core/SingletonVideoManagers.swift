@@ -3798,6 +3798,14 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                             self.resetDetailRenderingProgress(to: .zero)
                             self.isBuffering = false
                         }
+                        // Let CommentsVideoPlaybackCoordinator know so it can replay this video
+                        // when no other video is eligible to become primary. Posted only after
+                        // the rewind-to-zero completes so a replay resumes cleanly from the start.
+                        NotificationCenter.default.post(
+                            name: .videoDidFinishPlaying,
+                            object: nil,
+                            userInfo: ["videoMid": finishedMid ?? "", "source": "detailVideoManager"]
+                        )
                     }
                 }
                 print("🏁 [DetailVideoManager] Video finished for \(finishedMid ?? "?") - rewinding")

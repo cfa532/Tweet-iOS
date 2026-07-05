@@ -63,6 +63,9 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     /// Kept for backward compatibility but unified tracking now uses visibleCommentVideos
     private var isMainTweetVideoVisible: Bool = false
 
+    /// Observes videos finishing so the primary video can be replayed when nothing else can take over.
+    private nonisolated(unsafe) var finishObserver: NSObjectProtocol?
+
     // MARK: - Lifecycle
 
     init() {
@@ -71,6 +74,9 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
     deinit {
         visibilityDebounceTimer?.invalidate()
+        if let finishObserver {
+            NotificationCenter.default.removeObserver(finishObserver)
+        }
         print("📹 [CommentsVideoCoordinator] Deinitialized")
     }
 
@@ -81,6 +87,18 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     func activate(hasMainVideo: Bool = false) {
         isActive = true
         isMainTweetVideoVisible = false
+
+        if finishObserver == nil {
+            finishObserver = NotificationCenter.default.addObserver(
+                forName: .videoDidFinishPlaying, object: nil, queue: .main
+            ) { [weak self] notification in
+                let videoMid = notification.userInfo?["videoMid"] as? String
+                let videoIdentifier = notification.userInfo?["videoIdentifier"] as? String
+                Task { @MainActor [weak self] in
+                    self?.handlePrimaryVideoFinished(videoMid: videoMid, videoIdentifier: videoIdentifier)
+                }
+            }
+        }
         print("📹 [CommentsVideoCoordinator] Activated")
     }
 
@@ -97,6 +115,10 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         isMainTweetVideoVisible = false
         visibilityDebounceTimer?.invalidate()
         visibilityDebounceTimer = nil
+        if let finishObserver {
+            NotificationCenter.default.removeObserver(finishObserver)
+        }
+        finishObserver = nil
         print("📹 [CommentsVideoCoordinator] Deactivated")
     }
 
@@ -276,15 +298,36 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
         // Send play notification to the specific video
         // Uses the same notification name as VideoPlaybackCoordinator
+        // "isPrimary" tells SimpleVideoPlayer to restart from zero if this video already
+        // finished playing, instead of a no-op play() call on an ended item.
         NotificationCenter.default.post(
             name: Notification.Name("shouldPlayVideo"),
             object: nil,
             userInfo: [
                 "videoMid": videoInfo.videoMid,
                 "videoId": videoInfo.identifier,
+                "isPrimary": true,
                 "source": "commentsCoordinator"
             ]
         )
+    }
+
+    /// Called when any video finishes playing (main tweet attachment or comment video).
+    /// If no other video is currently eligible to become primary, replay the one that just
+    /// finished instead of leaving it frozen on its last frame.
+    private func handlePrimaryVideoFinished(videoMid: String?, videoIdentifier: String?) {
+        guard isActive, let currentInfo = currentlyPlayingVideoInfo else { return }
+
+        let isCurrentVideo = videoIdentifier == currentInfo.identifier || videoMid == currentInfo.videoMid
+        guard isCurrentVideo else { return }
+
+        let hasOtherCandidate = visibleCommentVideos.values.contains {
+            $0.ratio >= startVisibilityRatio && $0.info.identifier != currentInfo.identifier
+        }
+        guard !hasOtherCandidate else { return }
+
+        print("🔁 [CommentsVideoCoordinator] No other candidate to become primary — replaying \(currentInfo.videoMid)")
+        startVideo(currentInfo)
     }
 
     private func stopCurrentVideo() {
