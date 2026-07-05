@@ -1803,9 +1803,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return true
     }
 
-    private func resetFeedPlayerRebuildBudget() {
+    private func resetFeedPlayerRebuildBudget(clearingHistoryFor mid: String? = nil) {
         feedPlayerRebuildCount = 0
         firstFeedPlayerRebuildDate = .distantPast
+        if let mid {
+            Self.feedPlayerRebuildHistory[mid] = nil
+        }
     }
 
     private func resetPlaybackWatchdogRecoveryState() {
@@ -4810,6 +4813,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             automaticTransientRetryTask?.cancel()
             automaticTransientRetryTask = nil
             automaticTransientRetryCount = 0
+            // A deliberate user tap should get a clean rebuild budget — otherwise the
+            // rebuild attempts left over from the failure that just happened (both the
+            // per-cell counter and the static per-mid history) immediately re-exhaust
+            // the budget after a single stall, making manual retry fail almost instantly.
+            resetFeedPlayerRebuildBudget(clearingHistoryFor: attachment?.mid)
         }
         let retryReason = isAutomatic ? "automaticTransientRetry" : "manualRetry"
         preserveReleaseCoverForCurrentVideo(reason: retryReason, showCover: isVisible)
@@ -4938,6 +4946,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if !fullscreenOverlayOwnsCurrentVideo {
                 VideoStateCache.shared.clearCachedState(for: failedMid)
                 SharedAssetCache.shared.clearPlayerForMediaID(failedMid, deleteDiskCache: false)
+            }
+            // Nothing was preserved as a cover (the player stalled before ever rendering a
+            // frame) — fall back to generating/fetching a poster directly instead of leaving
+            // a blank/grey backdrop behind the retry button. requestFallbackVideoThumbnailIfNeeded
+            // only fires once per mid per cell lifecycle, so reset its dedupe guard here since
+            // that earlier attempt (from configure()) evidently didn't produce anything either.
+            if imageView.image == nil {
+                if requestedFallbackThumbnailMid == failedMid {
+                    requestedFallbackThumbnailMid = nil
+                }
+                requestCachedVideoCoverIfNeeded(for: failedMid)
+                requestFallbackVideoThumbnailIfNeeded(for: failedMid)
             }
         }
 
