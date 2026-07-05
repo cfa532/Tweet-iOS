@@ -444,6 +444,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var playbackStartupRecoveryRequestDate: Date?
     private var playbackStartupRecoveryDelay: UInt64?
     private var playbackProgressWatchdogTask: Task<Void, Never>?
+    /// The last imageView.image instance that passed (or was exempted from) the
+    /// mostly-black/white cover check. `discardInvalidVideoCoverIfNeeded()` runs on
+    /// every `transitionTo()` call, including ones triggered by a mid-load rebuild;
+    /// without this, a cover already accepted once (e.g. via `preValidated: true`)
+    /// could be discarded on a later transition purely because the luminance check
+    /// re-runs, flashing a grey screen even though nothing about the cover changed.
+    private weak var validatedCoverImage: UIImage?
     /// True after app backgrounding captured a visible feed frame. While active,
     /// keep that frame over the player so foreground proxy/player recovery never
     /// exposes a black AVPlayerLayer.
@@ -868,8 +875,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func discardInvalidVideoCoverIfNeeded() {
-        guard let image = imageView.image,
-              isInvalidVideoCover(image) else { return }
+        guard let image = imageView.image else { return }
+        // Already validated (or explicitly trusted) this exact image — don't
+        // re-run the luminance check every time the cell transitions state.
+        guard image !== validatedCoverImage else { return }
+        guard isInvalidVideoCover(image) else {
+            validatedCoverImage = image
+            return
+        }
         imageView.image = nil
         hideImageViewImmediately()
     }
@@ -1361,6 +1374,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return
         }
         imageView.image = image
+        validatedCoverImage = image
         switch videoCellState {
         case .noContent:
             transitionTo(.thumbnail)
