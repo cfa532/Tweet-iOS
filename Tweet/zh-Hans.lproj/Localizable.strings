@@ -171,6 +171,7 @@
 
 // MARK: - Loading States
 "Loading tweets..." = "正在加载推文...";
+"Loading quoted tweet..." = "正在加载引用的推文...";
 "No tweet yet" = "暂无推文";
 "Timeline" = "首页";
 

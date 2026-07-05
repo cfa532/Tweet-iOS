@@ -168,6 +168,7 @@
 
 // MARK: - Loading States
 "Loading tweets..." = "ツイートを読み込み中...";
+"Loading quoted tweet..." = "引用ツイートを読み込み中...";
 "No tweet yet" = "まだツイートがありません";
 "Timeline" = "ホーム";
 

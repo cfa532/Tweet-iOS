@@ -16,45 +16,24 @@ class EmbeddedTweetUIView: UIView {
     private let headerView = TweetHeaderUIView()
     private let bodyView = TweetBodyUIView()
 
-    // Placeholder shown while loading
+    // Placeholder shown while loading — matches the "Loading quoted tweet..." text used in TweetDetailView.
     private let placeholderView: UIView = {
         let v = UIView()
         v.isHidden = true
 
-        let circle = UIView()
-        circle.backgroundColor = .systemGray5
-        circle.layer.cornerRadius = 20
-        circle.translatesAutoresizingMaskIntoConstraints = false
+        let label = UILabel()
+        label.text = NSLocalizedString("Loading quoted tweet...", comment: "")
+        label.textColor = XTheme.secondaryText
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.numberOfLines = 1
+        label.translatesAutoresizingMaskIntoConstraints = false
 
-        let line1 = UIView()
-        line1.backgroundColor = .systemGray6
-        line1.layer.cornerRadius = 4
-        line1.translatesAutoresizingMaskIntoConstraints = false
-
-        let line2 = UIView()
-        line2.backgroundColor = .systemGray6
-        line2.layer.cornerRadius = 4
-        line2.translatesAutoresizingMaskIntoConstraints = false
-
-        v.addSubview(circle)
-        v.addSubview(line1)
-        v.addSubview(line2)
-
+        v.addSubview(label)
         NSLayoutConstraint.activate([
-            circle.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
-            circle.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
-            circle.widthAnchor.constraint(equalToConstant: 40),
-            circle.heightAnchor.constraint(equalToConstant: 40),
-
-            line1.leadingAnchor.constraint(equalTo: circle.trailingAnchor, constant: 8),
-            line1.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -8),
-            line1.topAnchor.constraint(equalTo: v.topAnchor, constant: 12),
-            line1.heightAnchor.constraint(equalToConstant: 20),
-
-            line2.leadingAnchor.constraint(equalTo: circle.trailingAnchor, constant: 8),
-            line2.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -8),
-            line2.topAnchor.constraint(equalTo: line1.bottomAnchor, constant: 4),
-            line2.heightAnchor.constraint(equalToConstant: 16),
+            label.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -8),
+            label.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -8),
         ])
 
         return v
@@ -151,7 +130,7 @@ class EmbeddedTweetUIView: UIView {
         // Mutually exclusive constraints — only one group active at a time
         contentStackBottomConstraint = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.contentBottomPadding)
         placeholderBottomConstraint = placeholderView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: 60)
+        placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: 36)
         // Lower priority so parent's height=0 constraint wins when hidden in stack view
         placeholderHeightConstraint.priority = .defaultHigh
         placeholderBottomConstraint.priority = .defaultHigh
@@ -297,6 +276,8 @@ class EmbeddedTweetUIView: UIView {
                     self?.onAsyncConfigured?()
                 }
             }
+            // Original tweet fetch failed (deleted/404/network error) — leave the
+            // "Loading quoted tweet..." placeholder showing rather than an empty/hidden card.
         }
     }
 
@@ -355,7 +336,7 @@ class EmbeddedTweetUIView: UIView {
     override var intrinsicContentSize: CGSize {
         // Placeholder needs an explicit height; content relies on constraints
         if contentStack.isHidden {
-            return CGSize(width: UIView.noIntrinsicMetric, height: 60)
+            return CGSize(width: UIView.noIntrinsicMetric, height: 36)
         }
         // Let auto-layout constraints determine the height (top/bottom pinned to contentStack)
         return CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)

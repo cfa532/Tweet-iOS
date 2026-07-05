@@ -1397,10 +1397,15 @@ struct TweetDetailView: View {
                     .padding(.horizontal)
                     .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
                 } else {
-                    Text("Loading quoted tweet...")
+                    Text(NSLocalizedString("Loading quoted tweet...", comment: ""))
                         .foregroundColor(XTheme.secondaryTextColor)
-                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
                         .padding(.vertical, 8)
+                        .background(Color(uiColor: XTheme.quotedTweetSurface))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .padding(.horizontal)
+                        .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
                 }
             }
         }
