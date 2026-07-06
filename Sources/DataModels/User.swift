@@ -105,39 +105,37 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     
     public var hproseClient: HproseClient? {
         get {
-            guard let baseUrl = baseUrl else { 
-                return nil 
+            guard let baseUrl = baseUrl else {
+                return nil
             }
-            
-            let client = HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            
-            // Configure timeout for regular operations (15 seconds - fast fail for bad servers)
-            client.timeout = 15  // 15 seconds (detect slow/dead servers quickly)
-            
-            return client
+
+            // 15s timeout for regular operations (detect slow/dead servers quickly).
+            // Clients are shared per (URL, timeout) — never mutate the returned client.
+            return HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         }
     }
-    
+
     /// Hprose client targeting the user's writable node. Use for any RPC that
     /// mutates server-side data (uploads, toggles, edits, deletes) so the
     /// request lands directly on the writable host instead of being delegated.
     /// Returns nil when the writable URL hasn't been resolved yet — callers
     /// should treat that as an error.
+    ///
+    /// Default timeout: 10s (fast-fail on bad servers; file uploads use URLSession
+    /// with its own 10-minute timeout). Clients are shared per (URL, timeout) —
+    /// callers needing a longer timeout must use `writableClient(timeout:)` instead
+    /// of mutating the returned client.
     public var writableClient: HproseClient? {
-        get {
-            guard let writableUrl = writableUrl else {
-                return nil
-            }
+        return writableClient(timeout: 10)
+    }
 
-            let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
-
-            // Default timeout: 10s. Fast-fail on bad servers. Long-running mutations
-            // (e.g. file uploads use URLSession with its own 10-minute timeout;
-            // toggle operations override this per-call to ~30s).
-            client.timeout = 10
-
-            return client
+    /// Writable-node client with a specific timeout class (e.g. 30s for slow
+    /// toggle/delete/edit mutations).
+    public func writableClient(timeout: TimeInterval) -> HproseClient? {
+        guard let writableUrl = writableUrl else {
+            return nil
         }
+        return HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: timeout)
     }
     
     @MainActor

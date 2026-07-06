@@ -134,8 +134,19 @@ Same class as §1, blocking primitives other than hprose. Prioritized:
 - `TweetCacheManager.tweetAccessTimes` — fixed (`accessTimesLock` + locked helpers).
 - `CoreDataManager.cacheContext/cacheReadContext` — fixed (`contextLock` +
   `lockedBackgroundContext`).
-- `HproseClient` reuse across threads (`HproseClientPool`) — **still open**: thread-safety
-  depends on the hprose library; worth confirming since invokes now run concurrently off-main.
+- `HproseClient` reuse across threads (`HproseClientPool`) — **RESOLVED (Jul 2026)**, and
+  the investigation found a worse bug: the pool's checkout model never released clients
+  (`releaseClient` had zero callers), so every RPC created a fresh `HproseHttpClient` whose
+  `NSURLSession` (whose delegate strongly retains the client — a retain cycle) was never
+  invalidated → **one leaked session + client per RPC call**. Redesigned: the pool now hands
+  out ONE shared client per (endpoint URL, timeout) pair, configured once at creation and
+  never mutated after (timeout is part of the pool key; `User.writableClient(timeout:)` for
+  the 30s/240s classes). Concurrent invokes on a shared client are safe: hprose keeps
+  per-call state in context/settings objects, NSURLSession is thread-safe, and the only
+  shared mutation (failover URI rotation) is `@synchronized` and unused in our single-URI
+  setup. `clear()`/`clear(for:)` now actually `close()` sessions. `HproseClient` is declared
+  `@unchecked @retroactive Sendable` on this basis — **do not set properties on a client
+  returned by the pool**.
 
 **Dead code:** ~~`AppDelegate` `Thread.sleep` in unused `restartVideoInfrastructure`;
 `LocalHTTPServer` `Thread.sleep` in deprecated `startAndWait`;
@@ -169,7 +180,11 @@ is correctly off-main. `BlackList`, `NodePool`, `NodeConnectionPool`, `ImageCach
 4. ~~**CoreData `performAndWait` → `context.perform`** sweep (§4).~~ **DONE (Jul 2026)**
    except deliberate holdouts noted in §4.
 5. ~~**Launch:** use `startAndWaitAsync()` to remove the 2 s `group.wait` (§4).~~ **DONE (Jul 2026)**
-6. ~~**Remaining races**~~ **DONE (Jul 2026)** except: confirm `HproseClient` thread-safety.
+6. ~~**Remaining races**~~ **DONE (Jul 2026)** including the `HproseClient` question — which
+   turned out to be a per-RPC NSURLSession leak; see §4.
+   Also evaluated: actor-ifying `BlackList`/`NodePool`/`TweetDeletionRegistry` — rejected;
+   their callers are synchronous `filter`/`guard` paths (UIKit cell config, SwiftUI list
+   computation) where forcing `await` is worse than the audited locks they already have.
 7. ~~**Delete dead code** (§4).~~ **DONE (Jul 2026)**.
 
 ---

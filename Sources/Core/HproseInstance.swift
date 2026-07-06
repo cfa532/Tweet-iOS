@@ -205,9 +205,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
     
     // MARK: - Client Pool Management
-    lazy var clientPool: HproseClientPool = {
-        return HproseClientPool(maxClientsPerURL: 5)
-    }()
+    let clientPool = HproseClientPool()
     
     private var lastInitializationAddresses: String?
     private var lastLoggedUpgradeDomain: String?
@@ -929,8 +927,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let authorBaseUrl = authorSnap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: nil", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
 
         print("DEBUG: [fetchComments] Using author's baseUrl (\(authorBaseUrl.absoluteString)) for tweet \(tweetId)")
 
@@ -1013,8 +1010,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let appUserMid = await MainActor.run { self.appUser.mid }
         guard let authorBaseUrl = authorSnap.baseUrl,
               let authorHostId = authorSnap.hostIds?.first else { return nil }
-        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
 
         let updateParams: [String: Any] = [
             "aid": appId, "ver": "last", "version": "v2",
@@ -1099,13 +1095,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         if isFollowingTweetUpdate {
             client = try await followingTweetsHomeClient()
         } else {
-            client = appSnap.baseUrl.map { clientPool.getClientByUrl(for: $0.absoluteString) }
+            client = appSnap.baseUrl.map { clientPool.getClientByUrl(for: $0.absoluteString, timeout: 15) }
         }
 
         guard let client = client else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        client.timeout = 15
 
         var params: [String: Any] = [
             "aid": appId,
@@ -1217,12 +1212,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // writable client on the main actor.
         let appUserInstance = await MainActor.run { self.appUser }
         let writableUrl = try await appUserInstance.resolveWritableUrl()
-        guard let client = await appUserInstance.writableClient else {
+        guard let client = await appUserInstance.writableClient(timeout: 15) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: "Writable client not available for \(writableUrl.absoluteString)"
             ])
         }
-        client.timeout = 15
         return client
     }
 
@@ -1248,8 +1242,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         var accessParams = requestParams
         accessParams["homeupdated"] = true
 
-        let accessClient = clientPool.getClientByIP(for: accessIP)
-        accessClient.timeout = 15
+        let accessClient = clientPool.getClientByIP(for: accessIP, timeout: 15)
 
         do {
             let rawResponse = await invokeRunMApp(using: accessClient, entry: HproseInstance.updateFollowingTweetsEntry, params: accessParams)
@@ -1346,8 +1339,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = snap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let params = [
             "aid": appId,
             "ver": "last",
@@ -1463,8 +1455,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let authorBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author client not initialized", comment: "Author client initialization error")])
         }
-        let authorClient = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString)
-        authorClient.timeout = 15
+        let authorClient = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
 
         let entry = "get_tweet"
         let appUserMid = await MainActor.run { self.appUser.mid }
@@ -1530,8 +1521,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = authorBaseUrl ?? appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let entry = "refresh_tweet"
         var params: [String: Any] = [
             "aid": appId,
@@ -2083,8 +2073,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     "v4only": v4Only ? "true" : "false"
                 ]
 
-                let hproseClient = clientPool.getClientByUrl(for: candidateBaseUrl.absoluteString)
-                hproseClient.timeout = 15
+                let hproseClient = clientPool.getClientByUrl(for: candidateBaseUrl.absoluteString, timeout: 15)
 
                 // Make server call
                 guard let rawResponse = await invokeRunMApp(using: hproseClient, entry: entry, params: params) else {
@@ -2705,9 +2694,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "appuserid": appUserMid
         ]
 
-        let client = HproseHttpClient()
-        client.uri = "\(route)/webapi/"
-        client.timeout = 300
+        // 300s: resync can be a long server-side operation. Pooled per (URL, timeout).
+        let client = clientPool.getClientByUrl(for: route, timeout: 300)
 
         print("DEBUG: [resyncUser] Calling resync_user for userId: \(userId) with baseUrl: \(route)")
 
@@ -2798,8 +2786,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         return try await retryOperation(maxRetries: 3) {
             print("DEBUG: [login] Creating client for: \(loginUrl.absoluteString)")
-            let newClient = self.clientPool.getClientByUrl(for: loginUrl.absoluteString)
-            newClient.timeout = 30.0
+            let newClient = self.clientPool.getClientByUrl(for: loginUrl.absoluteString, timeout: 30)
 
             print("DEBUG: [login] Invoking login API...")
             let rawResponse = await self.invokeRunMApp(using: newClient, entry: entry, params: params)
@@ -2952,8 +2939,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = snap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let rawResponse = await invokeRunMApp(using: client, entry: entry.rawValue, params: params)
         
         // Unwrap v2 response
@@ -3000,8 +2986,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             guard let baseUrl = snap.baseUrl else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            client.timeout = 15
+            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
             let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
 
             // Unwrap v2 response
@@ -3100,8 +3085,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             guard let baseUrl = snap.baseUrl else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            client.timeout = 15
+            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
             let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
@@ -3157,8 +3141,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             print("DEBUG: [HproseInstance] getUserTweetsByType - Client not initialized for user: \(snap.mid)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
         // Unwrap v2 response
@@ -3326,10 +3309,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // failure on the client. By calling the home node directly we bypass it.
         let appUserInstance = await MainActor.run { self.appUser }
         let writableUrl = try await appUserInstance.resolveWritableUrl()
-        let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
+        let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 30)
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
@@ -3357,7 +3337,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
         }
         _ = try await author.resolveWritableUrl()
-        guard let client = await author.writableClient else {
+        guard let client = await author.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let entry = "toggle_favorite"
@@ -3370,9 +3350,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "authorid": tweetAuthorId,
             "userhostid": appHostId as Any
         ]
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         // Hprose syncInvoke returns the error object (not throws) on failure
         if let error = rawResponse as? NSError {
@@ -3413,7 +3390,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
         }
         _ = try await author.resolveWritableUrl()
-        guard let client = await author.writableClient else {
+        guard let client = await author.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let entry = "toggle_bookmark"
@@ -3426,9 +3403,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "authorid": tweetAuthorId,
             "userhostid": appHostId as Any
         ]
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         // Hprose syncInvoke returns the error object (not throws) on failure
         if let error = rawResponse as? NSError {
@@ -3548,8 +3522,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             print("⚠️ [updateRetweetCount] Author client not initialized; refusing to fall back to appUser baseUrl")
             return nil
         }
-        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
 
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
@@ -3596,12 +3569,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // writableUrl is lazy-resolved — make sure it's populated first.
         let appUserInstance = await MainActor.run { self.appUser }
         _ = try await appUserInstance.resolveWritableUrl()
-        guard let client = await appUserInstance.writableClient else {
+        guard let client = await appUserInstance.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
 
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         print("[toggleTweetPrivacy] Raw response: \(String(describing: rawResponse))")
@@ -3681,13 +3651,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // writable/root host. resolveWritableUrl() always resolves hostIds[0]
         // fresh rather than reusing the last writable URL.
         let writableUrl = try await requestUser.resolveWritableUrl()
-        guard let client = await requestUser.writableClient else {
+        guard let client = await requestUser.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
 
         print("DEBUG: [deleteTweet] Using writable client at \(writableUrl.absoluteString) for tweet \(tweetId)")
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
@@ -3783,12 +3750,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         ]
         // Mutation path should use writable client, same as other write APIs.
         _ = try await requestUser.resolveWritableUrl()
-        guard let client = await requestUser.writableClient else {
+        guard let client = await requestUser.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
 
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let requestUserMid = await MainActor.run { requestUser.mid }
@@ -3824,8 +3788,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             guard let authorBaseUrl = authorSnap.baseUrl else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: nil", comment: "Client initialization error")])
             }
-            let commentClient = self.clientPool.getClientByUrl(for: authorBaseUrl.absoluteString)
-            commentClient.timeout = 15
+            let commentClient = self.clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
 
             print("DEBUG: [addComment] add_comment via author's baseUrl (\(authorBaseUrl.absoluteString)), tweet hostid: \(authorSnap.hostIds?.first ?? "nil")")
 
@@ -3967,8 +3930,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let authorBaseUrl = authorSnap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: nil", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
         print("DEBUG: [deleteComment] delete_comment via author's baseUrl (\(authorBaseUrl.absoluteString))")
         
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
@@ -6094,7 +6056,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     let writableUrl = try await appUser.resolveWritableUrl()
                     print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl.absoluteString)")
                     
-                    guard let uploadClient = await MainActor.run(body: { appUser.writableClient }) else {
+                    guard let uploadClient = await MainActor.run(body: { appUser.writableClient(timeout: 240) }) else {
                         throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
                     }
                     
@@ -6143,14 +6105,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             uploadClient: HproseClient,
             appId: String
         ) async throws -> MimeiFileType {
-            let originalClientTimeout = uploadClient.timeout
-            let uploadClientTimeout = max(originalClientTimeout, 240.0)
-            if uploadClient.timeout < uploadClientTimeout {
-                uploadClient.timeout = uploadClientTimeout
-                print("DEBUG: [performUpload] Extended Hprose upload timeout to \(Int(uploadClientTimeout))s")
-            }
-            defer { uploadClient.timeout = originalClientTimeout }
-            
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try data.write(to: tempURL)
             defer { try? FileManager.default.removeItem(at: tempURL) }
@@ -6887,7 +6841,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let hostId = await MainActor.run {
             self.appUser.hostIds?.first
         }
-        guard let client = await MainActor.run(body: { self.appUser.hproseClient }) else {
+        // Non-idempotent add_tweet can be slow server-side: use a dedicated 240s
+        // timeout class instead of mutating the shared 15s client.
+        guard let client = await MainActor.run(body: { self.appUser.baseUrl.map { self.clientPool.getClientByUrl(for: $0.absoluteString, timeout: 240) } }) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
         }
             
@@ -6902,14 +6858,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         print("DEBUG: [uploadTweet] Complete params: \(params)")
         print("DEBUG: [uploadTweet] Tweet JSON: \(tweetJSON)")
         print("DEBUG: [uploadTweet] Tweet authorId: \(tweetAuthorId), content: \(logContent), attachments count: \(logAttachCount)")
-        
-        let originalTimeout = client.timeout
-        let submitTimeout = max(originalTimeout, 240.0)
-        if client.timeout < submitTimeout {
-            client.timeout = submitTimeout
-            print("DEBUG: [uploadTweet] Extended non-idempotent add_tweet timeout to \(Int(submitTimeout))s")
-        }
-        defer { client.timeout = originalTimeout }
         
         let rawResponse = await invokeRunMApp(using: client, entry: "add_tweet", params: params)
             
@@ -7525,8 +7473,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let pinClient = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        pinClient.timeout = 15
+        let pinClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let rawResponse = await invokeRunMApp(using: pinClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
@@ -7566,8 +7513,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = snap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
@@ -7660,8 +7606,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             print("DEBUG: [registerUser] ERROR: appUser.baseUrl is nil")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized. Please check your connection.", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let targetUrl = baseUrl.absoluteString
         
         print("DEBUG: [registerUser] Sending registration request to server")
@@ -7829,8 +7774,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let updateClient = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        updateClient.timeout = 30
+        let updateClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 30)
         let rawResponse = await invokeRunMApp(using: updateClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
@@ -7961,8 +7905,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let profileClient = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        profileClient.timeout = 15
+        let profileClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let rawResponse = await invokeRunMApp(using: profileClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
@@ -8003,8 +7946,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
         }
-        let avatarClient = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        avatarClient.timeout = 15
+        let avatarClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let rawResponse = await invokeRunMApp(using: avatarClient, entry: entry, params: params)
         guard rawResponse != nil else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
@@ -8293,8 +8235,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 )
             }
             
-            let senderClient = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            senderClient.timeout = 15
+            let senderClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
             print("[sendMessage] 📤 Sending to sender node (attempt \(attempt + 1)/\(maxRetries + 1)) - baseUrl: \(baseUrl.absoluteString)")
 
             let rawResponse = await invokeRunMApp(using: senderClient, entry: entry, params: params)
@@ -8450,8 +8391,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 )
             }
             
-            let recipientClient = clientPool.getClientByUrl(for: rBaseUrl.absoluteString)
-            recipientClient.timeout = 15
+            let recipientClient = clientPool.getClientByUrl(for: rBaseUrl.absoluteString, timeout: 15)
             print("[sendMessage] 📤 Sending to recipient node (attempt \(attempt + 1)/\(maxRetries + 1)) - baseUrl: \(rBaseUrl.absoluteString)")
 
             let rawReceiptResponse = await invokeRunMApp(using: recipientClient, entry: receiptEntry, params: receiptParams)
@@ -8620,8 +8560,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let entry = "message_fetch"
         let params: [String: Any] = [
@@ -8676,8 +8615,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let entry = "message_check"
         let params: [String: Any] = [
@@ -8730,8 +8668,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             print("[checkAndUpdateDomain] Client not initialized")
             return
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params, priority: .background)
         let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
@@ -8795,8 +8732,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let entry = "block_user"
         let params: [String: Any] = [
@@ -8818,8 +8754,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString)
-        client.timeout = 15
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let entry = "delete_account"
         let params: [String: Any] = [
