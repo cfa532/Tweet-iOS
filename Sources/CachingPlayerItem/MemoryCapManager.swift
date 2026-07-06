@@ -305,6 +305,9 @@ final class MemoryCapManager: @unchecked Sendable {
         HproseInstance.shared.clientPool.clear()
         // Refault Core Data registered objects / drop row caches (pure cache data).
         CoreDataManager.shared.releaseMemoryForBackground()
+        // Drop CIContext internal buffer caches accumulated by video frame extraction.
+        // (CIContext is thread-safe; clearCaches keeps the context usable.)
+        VideoFrameExtractor.ciContext.clearCaches()
 
         updateMemoryUsage()
         let afterMB = currentMemoryUsage / (1024 * 1024)
