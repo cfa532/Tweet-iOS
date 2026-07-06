@@ -255,9 +255,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ = SimpleVideoPlayerStateHelper.shared
         print("[AppDelegate] SimpleVideoPlayerStateHelper initialized for detail view video state")
         
-        // Start LocalHTTPServer early to ensure it's ready before videos load
-        LocalHTTPServer.shared.start()
-        print("[AppDelegate] LocalHTTPServer started on app launch")
+        // Start LocalHTTPServer early so it's usually ready before videos load.
+        // Async on purpose: the old start() blocked launch up to 2s on a DispatchGroup.
+        // If a video wins the race, SharedAssetCache.ensureReadyForPlaybackAsync()
+        // health-checks and restarts the proxy before creating the player.
+        Task(priority: .userInitiated) {
+            await LocalHTTPServer.shared.startAndWaitAsync()
+            print("[AppDelegate] LocalHTTPServer started on app launch")
+        }
         
         // Handle URL if app was launched from a deeplink
         if let url = launchOptions?[.url] as? URL {
@@ -957,25 +962,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // lock recovery, visible players are recreated and regular-video proxy misses
         // need a fresh upstream URL before playback is restarted.
         !reason.hasPrefix("fast foreground")
-    }
-    
-    /// Synchronous restart (for cases where blocking is acceptable)
-    private func restartVideoInfrastructure() {
-        print("[AppDelegate] Restarting video infrastructure after long background")
-        
-        // Snapshot resume metadata before detaching player items, then clear all
-        // players so they cannot keep using old port numbers after server restart.
-        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
-        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-        
-        // Stop the server completely and wait for cleanup
-        LocalHTTPServer.shared.stop()
-        Thread.sleep(forTimeInterval: 0.5) // BLOCKING sleep - ensure port is released
-        
-        // Restart the server SYNCHRONOUSLY - wait until ready
-        LocalHTTPServer.shared.startAndWait()
-        
-        print("[AppDelegate] Video infrastructure restart complete")
     }
     
     /// Async restart (non-blocking - allows UI to remain interactive)

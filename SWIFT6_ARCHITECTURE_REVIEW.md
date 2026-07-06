@@ -104,9 +104,11 @@ avatars resolve to one IPFS node, only 6 download in parallel.
 Same class as §1, blocking primitives other than hprose. Prioritized:
 
 **Freeze-likely:**
-- `LocalHTTPServer.swift:808` — `group.wait(timeout: .now() + 2.0)` in `start()`, called from
-  `AppDelegate.didFinishLaunchingWithOptions` (main). Blocks launch up to 2 s. Use the
-  existing `startAndWaitAsync()` (`:727`) instead.
+- ~~`LocalHTTPServer` `group.wait(timeout: .now() + 2.0)` in `start()`, called from
+  `AppDelegate.didFinishLaunchingWithOptions` (main). Blocks launch up to 2 s.~~
+  **FIXED (Jul 2026):** launch now fires `startAndWaitAsync()` in a `Task`; the blocking
+  `start()` and deprecated `startAndWait()` were deleted. Player creation is protected by
+  `ensureReadyForPlaybackAsync()` if it wins the startup race.
 - Main-thread image decode + `Data(contentsOf:)` via `ImageCacheManager.getCompressedImage`
   (the file itself warns at `:496-498`): `MediaBrowserView.swift:778,854`,
   `TweetDetailView.swift:615` (function is **not** async despite the comment),
@@ -119,23 +121,21 @@ Same class as §1, blocking primitives other than hprose. Prioritized:
   `:174,180,220` / `:744` (clear-cache settings), `ChatCacheManager.swift:345`. Convert to the
   `context.perform` + `withCheckedContinuation` pattern already used by their async siblings.
 
-**Race (`@unchecked Sendable` with unsynchronized state):**
-- `LocalHTTPServer.listener` — **fixed this session** (added `listenerLock`; was read/written
+**Race (`@unchecked Sendable` with unsynchronized state) — ALL FIXED as of Jul 2026:**
+- `LocalHTTPServer.listener` — fixed (added `listenerLock`; was read/written
   from `queue`, `listenerQueue`, and Task hops → retain/release race under every video load).
-- `MemoryCapManager.currentMemoryUsage` (`:25`) — written on main, read off-main; stale read
-  can wrongly abort/permit an image download.
-- `VideoConversionService.currentConversion/progressCallback` (`:31-32`) — cancel-during-start race.
-- `TweetCacheManager.tweetAccessTimes` (`:25`) — no lock; latent today (callers happen to be
-  main) but one background caller is a hard crash. Mirror `TweetHeightCache`'s `NSLock`.
-- `CoreDataManager.cacheContext/cacheReadContext` (`:55,63`) — `lazy var` is non-atomic;
-  eager-init in `init`.
-- `HproseClient` reuse across threads (`HproseClientPool`) — thread-safety depends on the
-  hprose library; worth confirming since invokes now run concurrently off-main.
+- `MemoryCapManager.currentMemoryUsage` — fixed (`memoryUsageLock`).
+- `VideoConversionService.currentConversion/progressCallback` — fixed (`conversionStateLock`).
+- `TweetCacheManager.tweetAccessTimes` — fixed (`accessTimesLock` + locked helpers).
+- `CoreDataManager.cacheContext/cacheReadContext` — fixed (`contextLock` +
+  `lockedBackgroundContext`).
+- `HproseClient` reuse across threads (`HproseClientPool`) — **still open**: thread-safety
+  depends on the hprose library; worth confirming since invokes now run concurrently off-main.
 
-**Dead code (delete so it can't be revived):** `AppDelegate.swift:963`
-(`Thread.sleep` in unused `restartVideoInfrastructure`), `LocalHTTPServer.swift:716`
-(`Thread.sleep` in deprecated `startAndWait`), `GlobalImageLoadManager.swift:932,941,946`
-+ `loadImageOptimizedForDisplay` (`:1346`, zero callers — would decode on main if wired up).
+**Dead code:** ~~`AppDelegate` `Thread.sleep` in unused `restartVideoInfrastructure`;
+`LocalHTTPServer` `Thread.sleep` in deprecated `startAndWait`~~ **deleted (Jul 2026)**.
+Still present: `GlobalImageLoadManager.swift` debug-path decode helpers +
+`loadImageOptimizedForDisplay` (zero callers — would decode on main if wired up).
 
 ---
 
@@ -157,10 +157,10 @@ is correctly off-main. `BlackList`, `NodePool`, `NodeConnectionPool`, `ImageCach
    the queued-cell spinner / cover path.
 3. **Decode-site wraps** (§4) — mechanical, copy `MediaCellUIView:1085`.
 4. **CoreData `performAndWait` → `context.perform`** sweep (§4).
-5. **Launch:** use `startAndWaitAsync()` to remove the 2 s `group.wait` (§4).
-6. **Remaining races:** `TweetCacheManager.tweetAccessTimes` lock; confirm `HproseClient`
-   thread-safety; `MemoryCapManager`/`VideoConversionService` locks.
-7. **Delete dead code** (§4).
+5. ~~**Launch:** use `startAndWaitAsync()` to remove the 2 s `group.wait` (§4).~~ **DONE (Jul 2026)**
+6. ~~**Remaining races**~~ **DONE (Jul 2026)** except: confirm `HproseClient` thread-safety.
+7. **Delete dead code** (§4) — AppDelegate/LocalHTTPServer done; GlobalImageLoadManager
+   dead helpers remain.
 
 ---
 

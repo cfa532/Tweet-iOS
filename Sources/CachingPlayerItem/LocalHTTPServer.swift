@@ -704,43 +704,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         endBackgroundTask()
     }
     
-    /// Start the server synchronously and WAIT until it's ready
-    /// ⚠️ DEPRECATED: Use startAndWaitAsync() instead to avoid blocking main thread
-    /// This method is kept for backwards compatibility but should not be used
-    public func startAndWait() {
-        print("[LocalHTTPServer] ⚠️ startAndWait() DEPRECATED - use startAndWaitAsync() instead!")
-        
-        // If already running, return immediately
-        if isRunning {
-            print("[LocalHTTPServer] Already running on port \(port)")
-            return
-        }
-        
-        // DON'T block with semaphore - just start async
-        queue.async { [weak self] in
-            Task {
-                guard let self = self else { return }
-
-                if !self.isRunning {
-                    await self.startServer()
-                }
-            }
-        }
-        
-        // Give it a moment to start (don't block with semaphore!)
-        // NOTE: This is still using Thread.sleep because this is a deprecated sync method
-        // Users should migrate to startAndWaitAsync() instead
-        Thread.sleep(forTimeInterval: 0.1)
-        
-        if isRunning {
-            print("[LocalHTTPServer] ✅ Server started")
-        } else {
-            print("[LocalHTTPServer] ⚠️ Server starting in background...")
-        }
-    }
-    
     /// Start the server asynchronously and WAIT until it's ready (non-blocking)
-    /// Use this instead of startAndWait() to avoid blocking the main thread
     public func startAndWaitAsync() async {
         print("[LocalHTTPServer] startAndWaitAsync() called")
         
@@ -781,50 +745,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             print("[LocalHTTPServer] ✅ startAndWaitAsync() SUCCESS - Server ready on port \(port)")
         } else {
             print("[LocalHTTPServer] ❌ startAndWaitAsync() FAILED - Server not running")
-        }
-    }
-    
-    public func start() {
-        // If already running, return immediately
-        if isRunning {
-            return
-        }
-
-        // Use a dispatch group to wait for server startup
-        let group = DispatchGroup()
-        group.enter()
-
-        queue.async { [weak self] in
-            guard let self = self else {
-                group.leave()
-                return
-            }
-
-            Task {
-                // If currently stopping, wait for it to finish
-                if self.isStopping {
-                    var waitCount = 0
-                    while self.isStopping && waitCount < 10 {
-                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                        waitCount += 1
-                    }
-                }
-
-                // Don't start if already running or starting
-                if self.isRunning || self.isStarting {
-                    group.leave()
-                    return
-                }
-
-                await self.startServer()
-                group.leave()
-            }
-        }
-
-        // Wait for server to start (with timeout)
-        let result = group.wait(timeout: .now() + 2.0) // 2 second timeout
-        if result == .timedOut {
-            print("⚠️ [LocalHTTPServer] start() timed out waiting for server to start")
         }
     }
     
