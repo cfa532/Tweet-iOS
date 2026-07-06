@@ -103,7 +103,9 @@ final class TweetCacheManager: @unchecked Sendable {
     }
     
     private func performPeriodicCleanup() {
-        context.performAndWait {
+        // perform (not performAndWait): the hourly timer fires on the main run loop and
+        // cleanup has no completion dependency, so don't block main on the CoreData queue.
+        context.perform { [self] in
             // Delete expired tweets (2 weeks old, excluding private tweets)
             deleteExpiredTweets()
             
@@ -199,17 +201,17 @@ final class TweetCacheManager: @unchecked Sendable {
     
     /// Manual cleanup from settings screen - clears everything including private tweets
     @MainActor
-    func manualClearAllCache() {
+    func manualClearAllCache() async {
         print("DEBUG: [TweetCacheManager] Manual cache clear - clearing EVERYTHING")
 
         // Log initial state
-        let initialTweetCount = context.performAndWait {
+        let initialTweetCount = await context.perform { [context] in
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             return (try? context.fetch(request).count) ?? 0
         }
         print("DEBUG: [TweetCacheManager] Initial tweet count: \(initialTweetCount)")
 
-        context.performAndWait {
+        await context.perform { [self, context] in
             // Get all tweets
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             if let allTweets = try? context.fetch(request) {
@@ -249,21 +251,13 @@ final class TweetCacheManager: @unchecked Sendable {
         print("DEBUG: [TweetCacheManager] Memory cache cleared")
 
         // Verify cleanup
-        let finalTweetCount = context.performAndWait {
+        let finalTweetCount = await context.perform { [context] in
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             return (try? context.fetch(request).count) ?? 0
         }
         print("✅ Manual cache clear complete - final tweet count: \(finalTweetCount)")
     }
     
-    // MARK: - Signout Cleanup
-    
-    /// Clear everything on signout
-    @MainActor
-    func clearCacheOnSignout() {
-        print("DEBUG: [TweetCacheManager] Signout - clearing EVERYTHING")
-        manualClearAllCache()
-    }
 }
 
 // MARK: - Tweet Caching

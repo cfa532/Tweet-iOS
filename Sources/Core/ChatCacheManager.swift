@@ -339,10 +339,10 @@ extension ChatCacheManager {
     }
     
     // MARK: - Clear All Cache
-    func clearAllCache() {
+    func clearAllCache() async {
         print("DEBUG: [ChatCacheManager] Manual cache clear - clearing all chat messages and their media")
-        
-        context.performAndWait {
+
+        await context.perform { [self, context] in
             // Delete all chat messages AND their media
             let messageRequest: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
             if let allMessages = try? context.fetch(messageRequest) {

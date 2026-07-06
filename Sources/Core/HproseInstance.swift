@@ -2909,7 +2909,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     func logout() async {
         // Don't clear tweet cache on logout - cache persists per user and is cleared periodically or manually
         // Clear chat cache on signout
-        ChatCacheManager.shared.clearAllCache()
+        await ChatCacheManager.shared.clearAllCache()
 
         // Clear all video cache files from disk
         // await CachingPlayerItem.clearAllCache()

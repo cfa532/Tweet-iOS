@@ -1757,8 +1757,8 @@ class SharedAssetCache: ObservableObject {
                 }
             }
             
-            // Check Core Data cache (synchronous but reliable)
-            if let tweet = TweetCacheManager.shared.fetchTweetSync(mid: tweetId) {
+            // Check Core Data cache (async so the fetch+decode stays off the main actor)
+            if let tweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
                 let authorId = !tweet.authorId.isEmpty ? tweet.authorId : tweet.author?.mid
                 if let authorId = authorId, !authorId.isEmpty {
                     print("✅ [AUTHOR SEARCH] Found author from Core Data: \(authorId)")

@@ -115,11 +115,16 @@ Same class as §1, blocking primitives other than hprose. Prioritized:
   `ChatMessageView.swift:500`, `AvatarFullScreenView.swift:133-139`, `TweetUploadManager.swift:1528`,
   `DocumentPicker.swift:65`. Fix: wrap in `Task.detached(priority: .userInitiated)`, copy the
   `MediaCellUIView.swift:1085-1089` pattern.
-- CoreData `performAndWait` from `@MainActor`: `TweetCacheManager.swift:612`
-  (`deleteExpiredTweets` at startup — iterates+decodes every cached tweet on main),
-  `:452` (`fetchTweetSync`, called per quoted tweet during scroll), `:74` (hourly timer),
-  `:174,180,220` / `:744` (clear-cache settings), `ChatCacheManager.swift:345`. Convert to the
-  `context.perform` + `withCheckedContinuation` pattern already used by their async siblings.
+- CoreData `performAndWait` from `@MainActor` — **mostly fixed (Jul 2026)**:
+  `deleteExpiredTweets` (fire-and-forget `perform`), hourly `performPeriodicCleanup`
+  (`perform`), `manualClearAllCache` + `ChatCacheManager.clearAllCache` (now `async` with
+  `await context.perform`; dead `clearCacheOnSignout` deleted), `SharedAssetCache.
+  findAuthorIdForVideo` (uses async `fetchTweet`). **Kept deliberately synchronous:**
+  `fetchTweetSync` in `TweetItemView.onAppear` (retweet layout needs the original tweet
+  before first layout pass — async would reintroduce height jumps) and
+  `SingletonVideoManagers.resolveNextVideo` (video-end path, in-memory hit in practice).
+  `ChatCacheManager`'s remaining ~10 `performAndWait` message read/write paths are still
+  sync — convert opportunistically if chat jank is ever reported.
 
 **Race (`@unchecked Sendable` with unsynchronized state) — ALL FIXED as of Jul 2026:**
 - `LocalHTTPServer.listener` — fixed (added `listenerLock`; was read/written
@@ -133,9 +138,9 @@ Same class as §1, blocking primitives other than hprose. Prioritized:
   depends on the hprose library; worth confirming since invokes now run concurrently off-main.
 
 **Dead code:** ~~`AppDelegate` `Thread.sleep` in unused `restartVideoInfrastructure`;
-`LocalHTTPServer` `Thread.sleep` in deprecated `startAndWait`~~ **deleted (Jul 2026)**.
-Still present: `GlobalImageLoadManager.swift` debug-path decode helpers +
-`loadImageOptimizedForDisplay` (zero callers — would decode on main if wired up).
+`LocalHTTPServer` `Thread.sleep` in deprecated `startAndWait`;
+`GlobalImageLoadManager` `loadImageOptimizedForDisplay` chain (5 funcs, zero callers);
+`TweetCacheManager.clearCacheOnSignout`~~ — **all deleted (Jul 2026)**.
 
 ---
 
@@ -151,16 +156,21 @@ is correctly off-main. `BlackList`, `NodePool`, `NodeConnectionPool`, `ImageCach
 
 ## 6. Recommended fix order
 
-1. **Slow images:** `GlobalImageLoadManager` `@MainActor` → `actor` + periodic memory sampling
-   (§3). Biggest user-visible win; may also improve the video "media not loaded" perception.
+1. **Slow images (§3) — RESOLVED DIFFERENTLY (Jul 2026):** the dominant per-request cost
+   (two `task_info` syscalls per load on main) was fixed by the off-main memory sampler;
+   cache checks are memory-only on main. The full `actor` conversion was evaluated and
+   **deliberately not done**: it would break the synchronous memory-cache fast path
+   (`request.completion(image)` inline is what makes cell reuse flicker-free) and introduce
+   cancel/load reordering risk, for what is now just dictionary bookkeeping on main.
+   Do not revisit unless profiling shows `loadImage` itself hot on main.
 2. **Video spinner bug:** diagnose per §2 (log one warm-visible non-primary cell), then fix
    the queued-cell spinner / cover path.
 3. **Decode-site wraps** (§4) — mechanical, copy `MediaCellUIView:1085`.
-4. **CoreData `performAndWait` → `context.perform`** sweep (§4).
+4. ~~**CoreData `performAndWait` → `context.perform`** sweep (§4).~~ **DONE (Jul 2026)**
+   except deliberate holdouts noted in §4.
 5. ~~**Launch:** use `startAndWaitAsync()` to remove the 2 s `group.wait` (§4).~~ **DONE (Jul 2026)**
 6. ~~**Remaining races**~~ **DONE (Jul 2026)** except: confirm `HproseClient` thread-safety.
-7. **Delete dead code** (§4) — AppDelegate/LocalHTTPServer done; GlobalImageLoadManager
-   dead helpers remain.
+7. ~~**Delete dead code** (§4).~~ **DONE (Jul 2026)**.
 
 ---
 
