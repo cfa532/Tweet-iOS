@@ -69,6 +69,23 @@ final class CoreDataManager: @unchecked Sendable {
         )
     }
 
+    /// Refault registered objects and drop row-cache data on all contexts.
+    /// Safe: Core Data objects here are pure cache (decoded into TweetRecord/Tweet
+    /// on read), never bound to UI. Each refresh runs on the context's own queue.
+    func releaseMemoryForBackground() {
+        var contexts: [NSManagedObjectContext] = [container.viewContext]
+        contextLock.lock()
+        if let cacheContext = _cacheContext { contexts.append(cacheContext) }
+        if let cacheReadContext = _cacheReadContext { contexts.append(cacheReadContext) }
+        contextLock.unlock()
+
+        for context in contexts {
+            context.perform {
+                context.refreshAllObjects()
+            }
+        }
+    }
+
     private func lockedBackgroundContext(
         storage: inout NSManagedObjectContext?,
         name: String

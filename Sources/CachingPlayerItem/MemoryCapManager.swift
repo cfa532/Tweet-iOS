@@ -300,6 +300,11 @@ final class MemoryCapManager: @unchecked Sendable {
         SDImageCache.shared.clearMemory()
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
+        // Close pooled hprose URLSessions (keep-alive connections + buffers).
+        // Clients are recreated lazily on the next RPC after foregrounding.
+        HproseInstance.shared.clientPool.clear()
+        // Refault Core Data registered objects / drop row caches (pure cache data).
+        CoreDataManager.shared.releaseMemoryForBackground()
 
         updateMemoryUsage()
         let afterMB = currentMemoryUsage / (1024 * 1024)

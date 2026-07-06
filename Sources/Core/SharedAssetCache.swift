@@ -3326,6 +3326,11 @@ class SharedAssetCache: ObservableObject {
             visibleMidsForPosters.insert(fullscreenMid)
         }
 
+        // Last-frame placeholders are full 720p UIImages (up to 48 ≈ tens of MB) and
+        // NSCache does not shrink in the background on its own. Keep only the frames
+        // for currently visible/fullscreen videos (flicker-free resume) and drop the rest.
+        VideoLastFrameCache.shared.keepOnly(visibleMidsForPosters)
+
         var mediaIDsToCancel = Set<String>()
         mediaIDsToCancel.formUnion(playerCache.keys)
         mediaIDsToCancel.formUnion(assetCache.keys)
