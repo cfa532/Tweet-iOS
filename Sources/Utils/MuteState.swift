@@ -39,7 +39,20 @@ class MuteState: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
     
-    @objc private func userDefaultsDidChange() {
+    // NotificationCenter invokes selector-based observers synchronously on whatever
+    // thread posts the notification. UserDefaults.didChangeNotification can be posted
+    // from a background thread (e.g. PencilKit's Scribble setup on iPad calling
+    // -[NSUserDefaults registerDefaults:] lazily off-main), which would trip Swift's
+    // main-actor isolation check on this @objc method and crash. Stay nonisolated here
+    // and hop to the main actor explicitly for the actual work.
+    @objc private nonisolated func userDefaultsDidChange() {
+        Task { @MainActor in
+            self.syncMuteStateFromUserDefaults()
+        }
+    }
+
+    @MainActor
+    private func syncMuteStateFromUserDefaults() {
         // Check for changes to the speakerMuted key
         // CRITICAL: Always try preferenceHelper first, but fall back to direct UserDefaults read
         let newMuteState: Bool
@@ -54,7 +67,7 @@ class MuteState: ObservableObject {
                 newMuteState = UserDefaults.standard.bool(forKey: "speakerMuted")
             }
         }
-        
+
         if self.isMuted != newMuteState {
             self.isMuted = newMuteState
             print("DEBUG: [MUTE STATE] Synced from UserDefaults change: \(newMuteState)")
