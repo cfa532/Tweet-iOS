@@ -367,55 +367,56 @@ class TweetTableViewController: UITableViewController {
         videoCoordinator.setTableView(tableView)
     }
     
-    deinit {
-        MainActor.assumeIsolated {
-            // End any active background task
-            endBackgroundTask()
+    // isolated deinit (SE-0371): the runtime hops to the main actor if the last
+    // reference is dropped off-main, instead of MainActor.assumeIsolated trapping
+    // (the build-117 crash class).
+    isolated deinit {
+        // End any active background task
+        endBackgroundTask()
 
-            // Remove notification observers
-            if let observer = scrollToTopObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            if let observer = memoryWarningObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            if let observer = foregroundObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            if let observer = backgroundObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            if let observer = prepareVisibleVideosForBackgroundObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            if let observer = didBecomeActiveObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            if let observer = reloadVisibleVideosObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            if let observer = feedViewDidAppearObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            if let observer = overlayCoverageObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-
-            // Clean up timers
-            noMoreTweetsMessageTimer?.invalidate()
-            loadingTimeoutTimer?.invalidate()
-            embeddedTweetPrefetchInFlight.removeAll()
-            cancelDirectionalImagePreloads()
-            cancelPendingBackgroundResumeRestores()
+        // Remove notification observers
+        if let observer = scrollToTopObserver {
+            NotificationCenter.default.removeObserver(observer)
         }
+
+        if let observer = memoryWarningObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = backgroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = prepareVisibleVideosForBackgroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = reloadVisibleVideosObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = feedViewDidAppearObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = overlayCoverageObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        // Clean up timers
+        noMoreTweetsMessageTimer?.invalidate()
+        loadingTimeoutTimer?.invalidate()
+        embeddedTweetPrefetchInFlight.removeAll()
+        cancelDirectionalImagePreloads()
+        cancelPendingBackgroundResumeRestores()
 
         // NOTE: Removed .shouldStopAllVideos notification from deinit
         // This was causing issues when navigating back from profile - it would stop

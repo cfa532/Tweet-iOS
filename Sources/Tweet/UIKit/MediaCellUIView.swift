@@ -6067,37 +6067,38 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         shouldAcquirePlayer = true
     }
 
-    deinit {
-        MainActor.assumeIsolated {
-            if let id = videoIdentifier {
-                let coordinator = videoCoordinator
-                Task { @MainActor in
-                    (coordinator ?? .shared).unregisterDelegate(forIdentifier: id)
-                }
+    // isolated deinit (SE-0371): the runtime hops to the main actor if the last
+    // reference is dropped off-main, instead of MainActor.assumeIsolated trapping
+    // (the build-117 crash class).
+    isolated deinit {
+        if let id = videoIdentifier {
+            let coordinator = videoCoordinator
+            Task { @MainActor in
+                (coordinator ?? .shared).unregisterDelegate(forIdentifier: id)
             }
-            if let att = attachment {
-                let mid = att.mid
-                Task { @MainActor in
-                    GlobalImageLoadManager.shared.cancelLoad(id: mid)
-                }
+        }
+        if let att = attachment {
+            let mid = att.mid
+            Task { @MainActor in
+                GlobalImageLoadManager.shared.cancelLoad(id: mid)
             }
-            imageLoadTask?.cancel()
-            imageLoadTask = nil
-            timerHideTask?.cancel()
-            timerHideTask = nil
-            cancellables.removeAll()
+        }
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        timerHideTask?.cancel()
+        timerHideTask = nil
+        cancellables.removeAll()
 
-            cleanupVideoPlayer(reason: "deinit")
-            removeAudioHosting()
+        cleanupVideoPlayer(reason: "deinit")
+        removeAudioHosting()
 
-            if let observer = foregroundObserver {
-                NotificationCenter.default.removeObserver(observer)
-                foregroundObserver = nil
-            }
-            if let o = imageCacheObserver {
-                NotificationCenter.default.removeObserver(o)
-                imageCacheObserver = nil
-            }
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+            foregroundObserver = nil
+        }
+        if let o = imageCacheObserver {
+            NotificationCenter.default.removeObserver(o)
+            imageCacheObserver = nil
         }
     }
 }

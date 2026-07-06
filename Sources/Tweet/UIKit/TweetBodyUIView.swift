@@ -101,18 +101,19 @@ class TweetBodyUIView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    deinit {
-        MainActor.assumeIsolated {
-            if let hostingController = audioHostingController {
-                hostingController.willMove(toParent: nil)
-                hostingController.view.removeFromSuperview()
-                hostingController.removeFromParent()
-            }
-            if let hostingController = documentHostingController {
-                hostingController.willMove(toParent: nil)
-                hostingController.view.removeFromSuperview()
-                hostingController.removeFromParent()
-            }
+    // isolated deinit (SE-0371): the runtime hops to the main actor if the last
+    // reference is dropped off-main, instead of MainActor.assumeIsolated trapping
+    // (the build-117 crash class). Required — this body does UIKit work.
+    isolated deinit {
+        if let hostingController = audioHostingController {
+            hostingController.willMove(toParent: nil)
+            hostingController.view.removeFromSuperview()
+            hostingController.removeFromParent()
+        }
+        if let hostingController = documentHostingController {
+            hostingController.willMove(toParent: nil)
+            hostingController.view.removeFromSuperview()
+            hostingController.removeFromParent()
         }
     }
 

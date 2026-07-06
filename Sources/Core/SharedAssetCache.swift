@@ -375,8 +375,10 @@ class SharedAssetCache: ObservableObject {
     private var hlsExtensions: [String: String] = [:] // mediaID -> "master.m3u8" or "playlist.m3u8"
     
     // MARK: - Background Cleanup
-    private var cleanupTimer: Timer?
-    private var memoryMonitorTimer: Timer?
+    // nonisolated(unsafe) so deinit can invalidate them without MainActor.assumeIsolated
+    // (deinit runs on whatever thread drops the last reference; assumeIsolated there traps).
+    private nonisolated(unsafe) var cleanupTimer: Timer?
+    private nonisolated(unsafe) var memoryMonitorTimer: Timer?
     
     private func startBackgroundCleanup() {
         // BALANCED CLEANUP: 10s interval - frequent enough to prevent memory buildup but not disruptive
@@ -3241,42 +3243,15 @@ class SharedAssetCache: ObservableObject {
     }
     
     deinit {
-        MainActor.assumeIsolated {
-            // Invalidate timers
-            cleanupTimer?.invalidate()
-            cleanupTimer = nil
-            memoryMonitorTimer?.invalidate()
-            memoryMonitorTimer = nil
-            
-            for task in loadingTasks.values {
-                task.cancel()
-            }
-            loadingTasks.removeAll()
-            for task in preloadTasks.values {
-                task.cancel()
-            }
-            preloadTasks.removeAll()
-            for tasks in activeCreationTasks.values {
-                for task in tasks.values {
-                    task.cancel()
-                }
-            }
-            activeCreationTasks.removeAll()
-            activeVideoLoadTickets.removeAll()
-            
-            // Pause and clean up all cached players
-            for (_, player) in playerCache {
-                player.pause()
-            }
-            playerCache.removeAll()
-            
-            // Clear all caches
-            assetCache.removeAll()
-            cacheTimestamps.removeAll()
-            
-            // Remove NotificationCenter observers
-            NotificationCenter.default.removeObserver(self)
-        }
+        // No MainActor.assumeIsolated here: deinit runs on whatever thread drops the
+        // last reference, and assumeIsolated off-main traps (the build-117 crash class).
+        // Only thread-safe teardown belongs in deinit: timers (which hold weak self and
+        // would otherwise keep firing via the run loop) and observer removal. The
+        // @MainActor task/player/cache collections are released by ARC with the object;
+        // explicit teardown for them lives in clearAllCaches()/background-release paths.
+        cleanupTimer?.invalidate()
+        memoryMonitorTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
     }
     
     private func handleAppWillEnterForeground() {

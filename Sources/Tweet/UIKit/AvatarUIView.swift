@@ -225,10 +225,11 @@ class AvatarUIView: UIView {
         notificationObservers.removeAll()
     }
 
-    deinit {
-        MainActor.assumeIsolated {
-            loadTask?.cancel()
-            removeNotificationObservers()
-        }
+    // isolated deinit (SE-0371): the runtime hops to the main actor if the last
+    // reference is dropped off-main, instead of MainActor.assumeIsolated trapping
+    // (the build-117 crash class).
+    isolated deinit {
+        loadTask?.cancel()
+        removeNotificationObservers()
     }
 }

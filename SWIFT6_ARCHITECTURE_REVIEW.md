@@ -180,6 +180,16 @@ is correctly off-main. `BlackList`, `NodePool`, `NodeConnectionPool`, `ImageCach
 4. ~~**CoreData `performAndWait` → `context.perform`** sweep (§4).~~ **DONE (Jul 2026)**
    except deliberate holdouts noted in §4.
 5. ~~**Launch:** use `startAndWaitAsync()` to remove the 2 s `group.wait` (§4).~~ **DONE (Jul 2026)**
+8. **Sendable snapshots / "pass values, not models" — DONE (Jul 2026):** the snapshot
+   infrastructure already existed (`Records.swift`: `TweetRecord`/`UserRecord`/`MediaRecord`,
+   Sendable + full round-trip converters) and RPC paths already consolidated reads into
+   single "Phase A" tuple hops, so no bulk conversion was needed. What the audit pass
+   actually found and fixed: six `deinit { MainActor.assumeIsolated }` traps (the
+   build-117 crash class — deinit can run off-main). UIKit views/VCs with main-actor
+   deinit work (`TweetBodyUIView`, `MediaCellUIView`, `TweetTableViewController`,
+   `AvatarUIView`) now use `isolated deinit` (SE-0371); singletons with thread-safe-only
+   teardown (`SharedAssetCache`, `ChatVideoManager`) use `nonisolated(unsafe)` fields +
+   direct calls. The rules are codified in AGENTS.md ("Swift 6 Concurrency Rules").
 6. ~~**Remaining races**~~ **DONE (Jul 2026)** including the `HproseClient` question — which
    turned out to be a per-RPC NSURLSession leak; see §4.
    Also evaluated: actor-ifying `BlackList`/`NodePool`/`TweetDeletionRegistry` — rejected;

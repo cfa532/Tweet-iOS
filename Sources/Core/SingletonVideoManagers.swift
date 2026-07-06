@@ -4857,7 +4857,9 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
 class ChatVideoManager: ObservableObject {
     static let shared = ChatVideoManager()
 
-    private var lifecycleObservers: [NSObjectProtocol] = []
+    // nonisolated(unsafe) so deinit can remove them without MainActor.assumeIsolated
+    // (deinit runs on whatever thread drops the last reference; assumeIsolated there traps).
+    private nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
 
     private init() {
         lifecycleObservers.append(
@@ -4885,10 +4887,11 @@ class ChatVideoManager: ObservableObject {
     }
 
     deinit {
-        MainActor.assumeIsolated {
-            lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
-            lifecycleObservers.removeAll()
-        }
+        // No MainActor.assumeIsolated here: deinit runs on whatever thread drops the
+        // last reference, and assumeIsolated off-main traps (the build-117 crash class).
+        // NotificationCenter.removeObserver is thread-safe.
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lifecycleObservers.removeAll()
     }
 
     // Track active chat sessions and their video states
