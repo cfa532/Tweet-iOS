@@ -144,10 +144,12 @@ class DeeplinkManager: ObservableObject {
         
         // If not in cache and we have authorId, fetch from server
         if !authorId.isEmpty {
+            print("[DeeplinkManager] Fetching tweet from server...")
+
+            // Try getTweet first (faster, uses current provider). It throws when the
+            // author's node can't be resolved — don't let that skip the refreshTweet
+            // fallback, which can still sync via the app user's own node.
             do {
-                print("[DeeplinkManager] Fetching tweet from server...")
-                
-                // Try getTweet first (faster, uses current provider)
                 if let tweet = try await hproseInstance.getTweet(tweetId: tweetId, authorId: authorId) {
                     print("[DeeplinkManager] ✅ Successfully fetched tweet from server")
                     await MainActor.run {
@@ -155,9 +157,14 @@ class DeeplinkManager: ObservableObject {
                     }
                     return
                 }
-                
-                // If getTweet returns nil, try refreshTweet (syncs from author's host)
-                print("[DeeplinkManager] Tweet not found with getTweet, trying refreshTweet...")
+            } catch {
+                print("[DeeplinkManager] ⚠️ getTweet failed (\(error)), trying refreshTweet...")
+            }
+
+            do {
+                // refreshTweet syncs from the author's host and falls back to the
+                // app user's node when the author's baseUrl is unknown
+                print("[DeeplinkManager] Trying refreshTweet...")
                 if let tweet = try await hproseInstance.refreshTweet(tweetId: tweetId, authorId: authorId) {
                     print("[DeeplinkManager] ✅ Successfully fetched tweet with refreshTweet")
                     await MainActor.run {
@@ -165,11 +172,11 @@ class DeeplinkManager: ObservableObject {
                     }
                     return
                 }
-                
+
                 // Both methods failed
                 print("[DeeplinkManager] ⚠️ Tweet not found on server")
                 await showTweetNotFoundError()
-                
+
             } catch {
                 print("[DeeplinkManager] ❌ Error fetching tweet: \(error)")
                 await showTweetNotFoundError()
