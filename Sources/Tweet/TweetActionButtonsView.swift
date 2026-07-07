@@ -1608,36 +1608,14 @@ struct TweetActionButtonsView: View {
             shareText += "\n\n"
         }
         
-        // Add URL - compose based on context (comment vs regular tweet, detail view vs feed)
+        // Add URL - always the dtweet.com Universal Link / App Link domain
         let urlText: String
         let effectiveParentTweet = parentTweet ?? commentsVM?.parentTweet
-        
-        if let parent = effectiveParentTweet, isInDetailView {
-            // Comment in detail view: use entry format with query params in hash fragment
-            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
-            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
-        } else if let parent = effectiveParentTweet {
-            // Comment in feed/list: use traditional format with query parameters
-            // Ensure domainToShare has http:// protocol prefix if it doesn't already have a protocol
-            var domain = hproseInstance.domainToShare
-            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
-                domain = "http://" + domain
-            }
-            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
-        } else if isInDetailView {
-            // Regular tweet in detail view: use author's baseUrl with entry format
-            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
-            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
+
+        if let parent = effectiveParentTweet {
+            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
         } else {
-            // Regular tweet in feed/grid: use traditional format
-            // Ensure domainToShare has http:// protocol prefix if it doesn't already have a protocol
-            var domain = hproseInstance.domainToShare
-            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
-                domain = "http://" + domain
-            }
-            var text = domain
-            text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
-            urlText = text
+            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)"
         }
         
         // Only add space if there's content before the URL

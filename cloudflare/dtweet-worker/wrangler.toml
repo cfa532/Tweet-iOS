@@ -1,0 +1,10 @@
+name = "dtweet-deeplink"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+# Custom domains: Cloudflare auto-creates the DNS records and certificates
+# for the dtweet.com zone in this account.
+routes = [
+  { pattern = "dtweet.com", custom_domain = true },
+  { pattern = "www.dtweet.com", custom_domain = true }
+]
