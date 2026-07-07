@@ -25,6 +25,7 @@ struct UserListView: View {
     @State private var errorMessage: String? = nil
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
+    @State private var prefetchTask: Task<Void, Never>?
     @State private var nextPageNumber: Int = 0
     @State private var nextDisplayIndex: Int = 0
     @State private var cancellationToken: UUID = UUID()
@@ -132,6 +133,7 @@ struct UserListView: View {
         .onDisappear {
             refreshTask?.cancel()
             loadMoreTask?.cancel()
+            prefetchTask?.cancel()
             cancellationToken = UUID()
         }
     }
@@ -159,6 +161,7 @@ struct UserListView: View {
                     hasMoreServerPages = firstPageIds.count >= pageSize
                     hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
                     isLoading = false
+                    prefetchUsers(filteredUserIds)
                 }
             } catch is CancellationError {
                 print("DEBUG: [UserListView] Refresh cancelled")
@@ -206,6 +209,7 @@ struct UserListView: View {
                     hasMoreServerPages = pageIds.count >= pageSize
                     hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
                     isLoadingMore = false
+                    prefetchUsers(filteredUserIds)
                 }
             } catch {
                 print("Error loading more users: \(error)")
@@ -226,6 +230,36 @@ struct UserListView: View {
         nextDisplayIndex = endIndex
         hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
         return true
+    }
+
+    /// Warm the user cache for a freshly fetched page of list IDs. Rows only fetch
+    /// users as they scroll into view, so without this only seen rows ever get
+    /// cached. fetchUser persists each user to Core Data (and the UserStore
+    /// singleton), returns instantly for fresh cache entries, and dedups against
+    /// the row-level fetches, so revisits render without network round-trips.
+    @MainActor
+    private func prefetchUsers(_ userIds: [String]) {
+        guard !userIds.isEmpty else { return }
+        let instance = hproseInstance
+        prefetchTask?.cancel()
+        prefetchTask = Task(priority: .utility) {
+            await withTaskGroup(of: Void.self) { group in
+                let maxConcurrentFetches = 3
+                var pending = userIds.makeIterator()
+                for _ in 0..<maxConcurrentFetches {
+                    guard let userId = pending.next() else { break }
+                    group.addTask {
+                        _ = try? await instance.fetchUser(userId, refreshExpiredCacheInBackground: false)
+                    }
+                }
+                while await group.next() != nil {
+                    guard !Task.isCancelled, let userId = pending.next() else { continue }
+                    group.addTask {
+                        _ = try? await instance.fetchUser(userId, refreshExpiredCacheInBackground: false)
+                    }
+                }
+            }
+        }
     }
 
     private func filteredUniqueUserIds(from userIds: [String], excluding existingUserIds: Set<String> = []) async -> [String] {

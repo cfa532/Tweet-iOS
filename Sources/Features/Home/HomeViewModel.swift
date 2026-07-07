@@ -307,9 +307,31 @@ struct UserListDestinationView: View {
             userFetcher: { page, size in
                 let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
                 let targetUser = User.getInstance(mid: destination.userId)
-                let cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
+                var cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
 
-                if page == 0 || cachedIds == nil {
+                // The in-memory singleton is empty on cold start, but the profile
+                // owner's cached user record carries the lists too.
+                if cachedIds == nil {
+                    _ = await TweetCacheManager.shared.fetchUser(mid: destination.userId)
+                    cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
+                }
+
+                if page == 0, let cachedIds, !cachedIds.isEmpty {
+                    // Serve cached IDs instantly so rows render without a spinner;
+                    // refresh the list in the background for the next access.
+                    Task {
+                        guard let ids = try? await hproseInstance.getListByType(user: targetUser, entry: entry) else { return }
+                        await MainActor.run {
+                            if destination.listType == .FOLLOWER {
+                                targetUser.fansList = ids
+                            } else {
+                                targetUser.followingList = ids
+                            }
+                            // Persist so the list is available instantly on cold start.
+                            TweetCacheManager.shared.saveUser(targetUser)
+                        }
+                    }
+                } else if page == 0 || cachedIds == nil {
                     let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
                     await MainActor.run {
                         if destination.listType == .FOLLOWER {
@@ -317,6 +339,8 @@ struct UserListDestinationView: View {
                         } else {
                             targetUser.followingList = ids
                         }
+                        // Persist so the list is available instantly on cold start.
+                        TweetCacheManager.shared.saveUser(targetUser)
                     }
                 }
 
