@@ -355,12 +355,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     private func registerBackgroundTasks() {
         // Register background task for checking new messages every 15 minutes
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMessageCheck.identifier, using: nil) { task in
+        // using: .main is required — these closures call @MainActor AppDelegate methods,
+        // so Swift 6 isolation checks trap if BGTaskScheduler runs them on its own queue.
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMessageCheck.identifier, using: .main) { task in
             print("[AppDelegate] 🎯 Background task triggered: \(task.identifier)")
             self.handleMessageCheckBackgroundTask(task: task as! BGAppRefreshTask)
         }
 
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMainFeedCheck.identifier, using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMainFeedCheck.identifier, using: .main) { task in
             print("[AppDelegate] 🎯 Background task triggered: \(task.identifier)")
             self.handleMainFeedCheckBackgroundTask(task: task as! BGAppRefreshTask)
         }
