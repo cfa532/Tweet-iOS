@@ -34,7 +34,6 @@ struct MediaBrowserView: View {
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
-    @State private var isDismissingForBackground = false
     @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
     @State private var focusedImageMid: String?
     private var attachments: [MimeiFileType] {
@@ -185,9 +184,6 @@ struct MediaBrowserView: View {
                     loadImageIfNeeded(for: selectedAttachment, at: newIndex)
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                dismissFullscreenForBackground()
-            }
     }
 
     private func dismissFullScreen() {
@@ -195,14 +191,6 @@ struct MediaBrowserView: View {
         dismiss()
     }
 
-    private func dismissFullscreenForBackground() {
-        guard !isDismissingForBackground else { return }
-        isDismissingForBackground = true
-        // Keep long-background recovery focused on feed/detail. Fullscreen will
-        // save position and release its player through the normal onDisappear path.
-        dismissFullScreen()
-    }
-    
     private func setupFullScreenManager() {
         // Set up navigation callback for auto-advance and swipe up
         FullScreenVideoManager.shared.onNavigateToNextVideo = { [self] nextTweet, videoIndex, nextSourceTweetId in
@@ -510,9 +498,17 @@ struct MediaBrowserView: View {
             return isImageAttachment(attachments[currentIndex])
         }
 
+        /// Swipes that start in the home-indicator zone are the system home/app-switcher
+        /// gesture, not video navigation. Advancing on them loads the next video while
+        /// the app is backgrounding.
+        private func isSystemEdgeSwipe(_ value: DragGesture.Value) -> Bool {
+            value.startLocation.y > UIScreen.main.bounds.height - 44
+        }
+
         private func verticalNavigationGesture(allowImageAttachments: Bool) -> some Gesture {
             DragGesture(minimumDistance: 25, coordinateSpace: .global)
                 .onChanged { value in
+                    guard !isSystemEdgeSwipe(value) else { return }
                     guard allowImageAttachments || !currentAttachmentIsImage else { return }
                     guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else { return }
 
@@ -525,6 +521,12 @@ struct MediaBrowserView: View {
                     }
                 }
                 .onEnded { value in
+                    // If the app is resigning/backgrounding (home swipe took over),
+                    // never treat the gesture end as navigation.
+                    guard UIApplication.shared.applicationState == .active, !isSystemEdgeSwipe(value) else {
+                        resetDragOffset(animated: false)
+                        return
+                    }
                     guard allowImageAttachments || !currentAttachmentIsImage else { return }
                     guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else {
                         resetDragOffset(animated: true)
