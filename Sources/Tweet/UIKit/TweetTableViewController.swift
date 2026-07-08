@@ -127,6 +127,9 @@ class TweetTableViewController: UITableViewController {
     var headerViewBuilder: (() -> AnyView)?
     var onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     var onScrollStateChange: ((CGFloat, Bool, Bool) -> Void)?  // (offset, isAtTop, isInteracting)
+    /// Fired after a viewport-aware memory trim so the SwiftUI-side binding can be
+    /// kept in sync with what the table view actually rendered.
+    var onTweetsTrimmed: (([Tweet]) -> Void)?
     var leadingPadding: CGFloat = 8  // Configurable leading padding for cells
     var trailingPadding: CGFloat = 8  // Configurable trailing padding for cells
 
@@ -234,6 +237,7 @@ class TweetTableViewController: UITableViewController {
     private var isTableViewUpdating: Bool = false
     private var deferredPinnedTweets: [Tweet]?
     private var deferredTweets: [Tweet]?
+    private var pendingTrimRequest: (maxCount: Int, targetCount: Int)?
     /// True when updateLoadingState(isLoadingMore:false) was called while deferredTweets
     /// were pending. The spinner stays visible until the deferred rows are actually inserted.
     private var hasPendingSpinnerHide = false
@@ -1563,11 +1567,10 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
-        // Cleanup old tweet instances to prevent memory growth
-        let activeTweetIds = Set(newTweets.map { $0.mid })
-        Task(priority: .background) { @MainActor in
-            Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
-        }
+        // Note: stale Tweet instance cleanup is handled by TweetListView's throttled
+        // scheduleMemoryMaintenance (runs at most once per cleanupInterval), not here —
+        // this function fires on every structural update and doing an unthrottled
+        // Set(activeTweetIds) + cleanup sweep per update was pure duplicate work.
 
         let newOriginalTweetIds = Set(newTweets.compactMap(\.originalTweetId))
 
@@ -1763,6 +1766,100 @@ class TweetTableViewController: UITableViewController {
         scheduleAutoLoadMoreCheck(reason: "diffUpdate")
     }
 
+    /// Trims `tweets` back down to `targetCount` when it exceeds `maxCount`, keeping a
+    /// window around whatever rows are currently on screen instead of always keeping the
+    /// newest ones. A user scrolled deep into a long feed is looking at rows far from the
+    /// top; blindly keeping `prefix(targetCount)` (as this used to do) would delete exactly
+    /// the rows under their finger. Off-screen rows below the viewport are cheap to drop
+    /// (nothing shifts). Off-screen rows above the viewport require a contentOffset
+    /// compensation, mirrored from the prepend-insert logic in updateTweets, so removing
+    /// them doesn't yank the visible content upward.
+    func trimTweetsIfOverCapacity(maxCount: Int, targetCount: Int) {
+        guard tweets.count > maxCount else { return }
+
+        guard isTableAttachedForDataMutation else {
+            // Not laid out — no viewport to protect, safe to keep the newest window.
+            let trimmed = Array(tweets.prefix(targetCount))
+            let removed = tweets.dropFirst(targetCount)
+            for tweet in removed { Tweet.clearInstance(mid: tweet.mid) }
+            tweets = trimmed
+            onTweetsTrimmed?(trimmed)
+            return
+        }
+
+        guard !isScrollInteractionActive else {
+            pendingTrimRequest = (maxCount, targetCount)
+            return
+        }
+
+        let oldCount = tweets.count
+        let visibleRegularIndices = (tableView.indexPathsForVisibleRows ?? [])
+            .map { $0.row - pinnedTweets.count }
+            .filter { $0 >= 0 && $0 < oldCount }
+        let firstVisible = visibleRegularIndices.min() ?? 0
+        let lastVisible = visibleRegularIndices.max() ?? firstVisible
+
+        let halfWindow = targetCount / 2
+        var lowerBound = max(0, firstVisible - halfWindow)
+        var upperBound = min(oldCount, lowerBound + targetCount)
+        if upperBound - lowerBound < targetCount {
+            lowerBound = max(0, upperBound - targetCount)
+        }
+        // Never trim rows that are actually on screen right now.
+        lowerBound = min(lowerBound, firstVisible)
+        upperBound = max(upperBound, lastVisible + 1)
+
+        guard lowerBound > 0 || upperBound < oldCount else { return }
+
+        let headTweets = lowerBound > 0 ? Array(tweets[0..<lowerBound]) : []
+        let tailTweets = upperBound < oldCount ? Array(tweets[upperBound...]) : []
+        let trimmedTweets = Array(tweets[lowerBound..<upperBound])
+
+        // Index paths must be captured against the OLD (pre-trim) row layout —
+        // deleteRows interprets them relative to the table's current rows.
+        let headIndexPaths = (0..<lowerBound).map { regularTweetIndexPath($0) }
+        let tailIndexPaths = (upperBound..<oldCount).map { regularTweetIndexPath($0) }
+
+        let contentOffsetBefore = tableView.contentOffset.y
+        let contentSizeBefore = tableView.contentSize.height
+
+        // The data source must already reflect the final row count by the time
+        // deleteRows is called — mutating `tweets` after issuing the delete (as an
+        // earlier version of this code did) leaves numberOfRowsInSection returning
+        // the stale count mid-update and trips UITableView's row-count assertion.
+        isTableViewUpdating = true
+        tweets = trimmedTweets
+        tableView.deleteRows(at: headIndexPaths + tailIndexPaths, with: .none)
+        isTableViewUpdating = false
+
+        // Removing rows above the viewport shifts content up; compensate so the
+        // rows the user is currently looking at don't jump.
+        if !headTweets.isEmpty {
+            let removedHeight = contentSizeBefore - tableView.contentSize.height
+            if removedHeight > 0.5 {
+                let minOffset = -tableView.adjustedContentInset.top
+                let newOffset = max(minOffset, contentOffsetBefore - removedHeight)
+                tableView.setContentOffset(CGPoint(x: 0, y: newOffset), animated: false)
+            }
+        }
+
+        for tweet in headTweets + tailTweets {
+            clearCachedHeight(for: tweet)
+            Tweet.clearInstance(mid: tweet.mid)
+        }
+
+        print("⚠️ [MEMORY] Trimmed feed '\(feedIdentifier)' from \(oldCount) to \(trimmedTweets.count) (removed \(headTweets.count) head, \(tailTweets.count) tail)")
+
+        // The video coordinator's allVideos list was built from the pre-trim tweets/row
+        // layout. Without rebuilding it here, its index-to-row mapping goes stale after
+        // the delete above — primary-video selection and on/off-screen detection then
+        // compute against the wrong rows, which shows up as jumpy video during scroll.
+        rebuildVideoListAndRefreshVisibility(reason: "tweetsTrimmedVideoList")
+        scheduleVideoVisibilityRefresh(reason: "tweetsTrimmed")
+
+        onTweetsTrimmed?(trimmedTweets)
+    }
+
     private func scheduleAutoLoadMoreCheck(reason: String) {
         DispatchQueue.main.async { [weak self] in
             self?.triggerAutoLoadMoreIfNeeded(reason: reason, countsTowardScrollGestureLimit: false)
@@ -1776,7 +1873,7 @@ class TweetTableViewController: UITableViewController {
 
         let totalRows = pinnedTweets.count + tweets.count
         let remainingRows = max(0, totalRows - 1 - lastVisibleRow)
-        guard remainingRows < loadMoreTriggerRows else { return }
+        guard remainingRows < dynamicLoadMoreTriggerRows() else { return }
 
         if countsTowardScrollGestureLimit {
             guard autoLoadMoreCountDuringCurrentScrollGesture < maxAutoLoadMorePerScrollGesture else { return }
@@ -1785,7 +1882,21 @@ class TweetTableViewController: UITableViewController {
 
         triggerAutoLoadMore()
     }
-    
+
+    /// Widens the load-more trigger distance during fast flings. A user flinging quickly
+    /// through a long feed can cover a page's worth of rows before the network round-trip
+    /// for the next page completes, hitting the bottom spinner mid-gesture. Scaling the
+    /// trigger distance with scroll velocity buys enough runway for the fetch to land first.
+    private func dynamicLoadMoreTriggerRows() -> Int {
+        let velocity = abs(estimatedScrollVelocityY)
+        guard velocity > 300 else { return loadMoreTriggerRows }
+
+        let avgRowHeight: CGFloat = 250
+        let leadTimeSeconds: CGFloat = 1.2
+        let velocityRows = Int(ceil(velocity / avgRowHeight * leadTimeSeconds))
+        return max(loadMoreTriggerRows, min(velocityRows, 40))
+    }
+
     private var needsHeaderUpdate = false
 
     private var isScrollInteractionActive: Bool {
@@ -1816,6 +1927,11 @@ class TweetTableViewController: UITableViewController {
         if let deferredPinnedTweets {
             self.deferredPinnedTweets = nil
             updatePinnedTweets(deferredPinnedTweets)
+        }
+
+        if let pendingTrimRequest {
+            self.pendingTrimRequest = nil
+            trimTweetsIfOverCapacity(maxCount: pendingTrimRequest.maxCount, targetCount: pendingTrimRequest.targetCount)
         }
 
         // Hide the spinner now that deferred rows are in the table.

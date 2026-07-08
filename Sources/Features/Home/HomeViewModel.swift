@@ -22,6 +22,15 @@ struct HomeView: View {
     @State private var isScrolling = false
     @State private var scrollOffset: CGFloat = 0
     @State private var isNavigationVisible = true
+    /// Natural height of the header VStack below, captured via onGeometryChange.
+    /// `.frame(height: isNavigationVisible ? nil : 0)` cannot animate — SwiftUI has
+    /// no way to interpolate towards `nil` (unconstrained), so the height snapped to 0
+    /// in a single frame even though the state change was wrapped in withAnimation.
+    /// Only the opacity animated, producing a visible jump in whatever content sat
+    /// below the header (most noticeable when a video row was mid-scroll at the time).
+    /// Using a concrete measured height instead of nil gives animation two real
+    /// endpoints to interpolate between.
+    @State private var measuredHeaderHeight: CGFloat?
     @State private var previousScrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
     @State private var foregroundObserver: NSObjectProtocol? = nil
@@ -68,7 +77,13 @@ struct HomeView: View {
                     .fill(XTheme.borderColor)
                     .frame(height: 0.5)
             }
-            .frame(height: isNavigationVisible ? nil : 0)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { newHeight in
+                guard newHeight > 0 else { return }
+                measuredHeaderHeight = newHeight
+            }
+            .frame(height: isNavigationVisible ? measuredHeaderHeight : 0)
             .opacity(isNavigationVisible ? 1 : 0)
             .clipped()
 

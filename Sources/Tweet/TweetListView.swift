@@ -177,8 +177,12 @@ struct TweetListView: View {
     private let videoCoordinator: VideoPlaybackCoordinator
     
     // Memory management - limit total tweets in memory
-    private let maxTweetsInMemory: Int = 200  // Keep max 200 tweets to prevent unbounded growth
-    private let tweetsToKeepOnTrim: Int = 150  // When trimming, keep 150 most recent
+    private let maxTweetsInMemory: Int = 100  // Trigger a trim once the feed grows past this
+    private let tweetsToKeepOnTrim: Int = 80  // Target window size after trimming
+    // Safety valve only: with viewport-aware trimming keeping the array near
+    // tweetsToKeepOnTrim, this should rarely if ever be hit during normal pagination.
+    private let hardPaginationStopCount: Int = 1500
+    @State private var trimRequestToken: Int = 0
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -210,9 +214,11 @@ struct TweetListView: View {
             }
             
             if shouldCleanup {
-                // Trim tweets array if it's too large
-                await self.trimTweetsIfNeeded()
-                
+                // Ask the controller to trim if the feed has grown past the cap.
+                // It knows the current viewport and trims around it (not just the
+                // newest rows) so it doesn't delete what the user is looking at.
+                await MainActor.run { self.trimRequestToken += 1 }
+
                 // Also cleanup old tweet instances to prevent memory growth
                 let activeTweetIds = await MainActor.run { Set(self.tweets.map { $0.mid }) }
                 await Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
@@ -420,30 +426,6 @@ struct TweetListView: View {
         )
     }
 
-    /// Trim oldest tweets from memory if array exceeds maximum size
-    /// Keeps most recent tweets to prevent unbounded memory growth
-    private func trimTweetsIfNeeded() async {
-        await MainActor.run {
-            guard tweets.count > maxTweetsInMemory else { return }
-            
-            print("⚠️ [MEMORY] Trimming tweets array from \(tweets.count) to \(tweetsToKeepOnTrim)")
-            
-            // Keep only the most recent tweets (sorted by timestamp descending)
-            // Already sorted in descending order, so just take first N
-            let tweetsToRemove = tweets.dropFirst(tweetsToKeepOnTrim)
-            
-            // Clear Tweet singleton instances for removed tweets
-            for tweet in tweetsToRemove {
-                Tweet.clearInstance(mid: tweet.mid)
-            }
-            
-            // Trim array
-            tweets = Array(tweets.prefix(tweetsToKeepOnTrim))
-            
-            print("✅ [MEMORY] Trimmed to \(tweets.count) tweets")
-        }
-    }
-    
     // MARK: - Initialization
     let onRefreshExtra: (() async -> Void)?  // Optional extra refresh callback
     
@@ -547,18 +529,31 @@ struct TweetListView: View {
             },
             onScroll: onScroll,
             onScrollStateChange: { offset, isAtTop, isInteracting in
-                DispatchQueue.main.async {
-                    if !hasReceivedScrollState {
-                        hasReceivedScrollState = true
-                    }
-                    if isFeedAtTop != isAtTop {
-                        isFeedAtTop = isAtTop
-                    }
-                    if isFeedScrollInteractionActive != isInteracting {
-                        isFeedScrollInteractionActive = isInteracting
-                    }
+                // Already on main (called from UIScrollViewDelegate) — no need to
+                // hop back through DispatchQueue.main.async on every scroll frame.
+                if !hasReceivedScrollState {
+                    hasReceivedScrollState = true
+                }
+                let atTopChanged = isFeedAtTop != isAtTop
+                let interactingChanged = isFeedScrollInteractionActive != isInteracting
+                if atTopChanged {
+                    isFeedAtTop = isAtTop
+                }
+                if interactingChanged {
+                    isFeedScrollInteractionActive = isInteracting
+                }
+                // The only external consumer (FollowingsTweetView) ignores offset and
+                // only reacts to isAtTop/isInteracting transitions — skip the forward
+                // when neither changed to avoid a per-frame @Published republish.
+                if atTopChanged || interactingChanged {
                     onScrollStateChange?(offset, isAtTop, isInteracting)
                 }
+            },
+            trimRequestToken: trimRequestToken,
+            trimMaxCount: maxTweetsInMemory,
+            trimTargetCount: tweetsToKeepOnTrim,
+            onTweetsTrimmed: { trimmedTweets in
+                tweets = trimmedTweets
             },
             leadingPadding: leadingPadding,
             trailingPadding: trailingPadding,
@@ -1090,9 +1085,12 @@ struct TweetListView: View {
     }
 
     func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
-        // Prevent loading if we've reached memory limit
-        if tweets.count >= maxTweetsInMemory && !forceLoad {
-            print("⚠️ [MEMORY] Reached maximum tweets limit (\(maxTweetsInMemory)), stopping pagination")
+        // maxTweetsInMemory just triggers a viewport-aware trim (see scheduleMemoryMaintenance /
+        // trimRequestToken) — it keeps the array bounded without blocking pagination, so users
+        // can keep scrolling through hundreds of tweets. hardPaginationStopCount is only a rare
+        // safety valve in case trimming can't keep up (e.g. table view detached).
+        if tweets.count >= hardPaginationStopCount && !forceLoad {
+            print("⚠️ [MEMORY] Reached hard pagination stop (\(hardPaginationStopCount)), stopping pagination")
             paginationState = .memoryLimited
             return
         }

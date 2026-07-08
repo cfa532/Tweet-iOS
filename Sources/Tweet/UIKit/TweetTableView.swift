@@ -26,6 +26,13 @@ struct TweetTableView: UIViewControllerRepresentable {
     let onRefresh: (() async -> Void)?
     let onScroll: ((CGFloat, CGFloat) -> Void)?
     let onScrollStateChange: ((CGFloat, Bool, Bool) -> Void)?
+    /// Incremented by TweetListView's debounced memory maintenance to request a
+    /// viewport-aware trim. The controller decides whether/how to trim and reports
+    /// the result back via onTweetsTrimmed.
+    let trimRequestToken: Int
+    let trimMaxCount: Int
+    let trimTargetCount: Int
+    let onTweetsTrimmed: (([Tweet]) -> Void)?
     let leadingPadding: CGFloat
     let trailingPadding: CGFloat
     let pinnedTweets: [Tweet]
@@ -46,6 +53,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         var lastPinnedTweetIds: [String] = []
         var lastHeaderWasPresent: Bool?
         var lastHeaderRefreshToken: Int?
+        var lastTrimRequestToken: Int?
         weak var controller: TweetTableViewController?
 
         @MainActor
@@ -82,10 +90,12 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.onShowToast = onShowToast
         controller.allowDeleteAll = allowDeleteAll
         controller.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
+        controller.onTweetsTrimmed = onTweetsTrimmed
 
         controller.updateHeader()
         context.coordinator.lastHeaderWasPresent = header != nil
         context.coordinator.lastHeaderRefreshToken = headerRefreshToken
+        context.coordinator.lastTrimRequestToken = trimRequestToken
 
         return controller
     }
@@ -134,6 +144,12 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.onShowLogin = onShowLogin
         uiViewController.onShowToast = onShowToast
         uiViewController.allowDeleteAll = allowDeleteAll
+        uiViewController.onTweetsTrimmed = onTweetsTrimmed
+
+        if coordinator.lastTrimRequestToken != trimRequestToken {
+            coordinator.lastTrimRequestToken = trimRequestToken
+            uiViewController.trimTweetsIfOverCapacity(maxCount: trimMaxCount, targetCount: trimTargetCount)
+        }
 
         // Only rebuild the hosted header when its presence changes. The hosted
         // SwiftUI view continues to observe its own model changes; reassigning it

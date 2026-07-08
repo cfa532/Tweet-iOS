@@ -185,6 +185,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Timestamp when primary video was last switched (to prevent immediate re-switching)
     private var lastPrimarySwitchTime: Date?
 
+    /// Identifier + timestamp of the last reassert-on-scroll-stop resend, so overlapping
+    /// scroll-settle triggers (scrollViewDidEndDragging, scrollViewDidEndDecelerating, and
+    /// scheduleVideoVisibilityRefresh's own scroll-stop retry) don't each independently
+    /// re-send a live play command to the same already-playing cell.
+    private var lastReassertedPrimaryId: String?
+    private var lastReassertTime: Date?
+
 
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
@@ -1635,6 +1642,18 @@ class VideoPlaybackCoordinator: ObservableObject {
             scheduleStartPrimary()
             return true
         }
+
+        // scrollViewDidEndDragging, scrollViewDidEndDecelerating, and every scroll-stop
+        // retry scheduled by scheduleVideoVisibilityRefresh after a structural table
+        // update (pagination append, trim, etc.) can all land within the same settle
+        // window. Without this guard each one independently re-sends shouldPlayVideo to
+        // the same already-playing cell, which was showing up as a visible glitch/jump.
+        if lastReassertedPrimaryId == primaryId,
+           let lastReassertTime, Date().timeIntervalSince(lastReassertTime) < 0.5 {
+            return true
+        }
+        lastReassertedPrimaryId = primaryId
+        lastReassertTime = Date()
 
         cancelPendingPrimarySelection()
         currentlyPlayingVideoIds = [primaryId]
