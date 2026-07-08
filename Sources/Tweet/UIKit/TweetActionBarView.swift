@@ -529,7 +529,9 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// Build share items with rich preview
     private func buildShareItems(for tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
         let effectiveParentTweet = parentTweet ?? commentsVMParentTweet
-        let style = shareLinkStyleOverride ?? (isInDetailView ? .webDomain : .deeplink)
+        // Only plain feed tweet rows use the deep-link format; detail views and
+        // comment shares keep the check_upgrade web domain (DEEPLINKING.md)
+        let style = shareLinkStyleOverride ?? ((isInDetailView || effectiveParentTweet != nil) ? .webDomain : .deeplink)
         let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, style: style, parentTweet: effectiveParentTweet)
         let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
 
@@ -624,7 +626,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return shareText
     }
 
-    /// Get an IPv4-preferred baseUrl for sharing from detail view
+    /// Get an IPv4-preferred baseUrl for sharing from detail view.
+    /// Only a domain name or a sound public IPv4 is acceptable in a shared
+    /// link — private/Tailscale (RFC 6598) addresses and IPv6 trigger a fresh
+    /// public-IPv4 resolution instead.
     private static func getIPv4PreferredBaseUrl(for tweet: Tweet, hproseInstance: HproseInstance) async -> String {
         guard let author = tweet.author else {
             return AppConfig.baseUrl
@@ -632,12 +637,21 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
         let currentBaseUrl = author.baseUrl?.absoluteString ?? AppConfig.baseUrl
 
-        // Quick check: if already IPv4, use it
-        if !currentBaseUrl.contains("[") && currentBaseUrl.filter({ $0 == ":" }).count <= 1 {
-            return currentBaseUrl
+        if let host = URL(string: currentBaseUrl)?.host, !Gadget.isIPv6Address(host) {
+            let looksLikeIPv4 = host.range(of: #"^(\d{1,3}\.){3}\d{1,3}$"#, options: .regularExpression) != nil
+            if !looksLikeIPv4 {
+                // Domain name — fine to share as-is
+                return currentBaseUrl
+            }
+            if Gadget.isValidPublicIpAddress(host) {
+                // Sound public IPv4 — use it
+                return currentBaseUrl
+            }
+            // Private/Tailscale IPv4 — fall through to re-resolve
         }
 
-        // IPv6 detected - resolve IPv4 via getProviderIP
+        // IPv6 or non-public IPv4 - resolve a public IPv4 via getProviderIP
+        // (its result list is already filtered by Gadget.isValidPublicIpAddress)
         do {
             if let ipv4 = try await hproseInstance.getProviderIP(author.mid, v4Only: true) {
                 let ipv4BaseUrl = "http://\(ipv4)"
@@ -650,7 +664,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             }
         } catch {}
 
-        return currentBaseUrl
+        // Never leak a private/Tailscale IP into a shared link
+        return AppConfig.baseUrl
     }
 
     /// Load attachment preview image (first image or video thumbnail)

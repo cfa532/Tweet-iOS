@@ -31,9 +31,10 @@ solely where Apple/Google require it (the two well-known files + redirects).
 
 | Share action | URL format | Rationale |
 |---|---|---|
-| **Feed share button** | `http://dtweet.com/tweet/{mid}/{authorId}` (standard deep-link format) | Opens the app when installed; web fallback via Worker |
+| **Feed share button** (plain tweet rows only) | `http://dtweet.com/tweet/{mid}/{authorId}` (standard deep-link format) | Opens the app when installed; web fallback via Worker |
 | **Detail-view share button** | `http://{check_upgrade domain}/tweet/{mid}/{authorId}` | Backend-controlled domain, independent of dtweet.com |
 | **Detail-view dropdown menu → share** | `http://{author provider IP}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}` | Works with a bare node IP, no DNS/domain needed |
+| **Everything else** (comment rows, fullscreen player, media browser) | check_upgrade domain — same as the detail-view share button | Unchanged legacy behavior |
 
 Comment shares append `?fromComment=true&parentTweetId={mid}&parentAuthorId={mid}`
 (inside the hash fragment for the provider-IP format).
