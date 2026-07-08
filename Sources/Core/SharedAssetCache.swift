@@ -176,7 +176,16 @@ final class VideoSurfaceHandoffRegistry {
 @MainActor
 class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
-    
+
+    /// Dedicated serial queue for the progressive-cache disk scan in preloadPoster
+    /// (progressiveCacheFileForThumbnailIfAvailable reads up to 4MB per call). Using a
+    /// real background queue instead of Task.detached keeps this blocking file I/O off
+    /// Swift's shared cooperative thread pool, which other structured-concurrency work
+    /// in the app also draws from — piling several of these onto that pool during a fast
+    /// scroll (several videos entering range per tick) delayed their completions until
+    /// they all landed back on the main actor in a burst, which read as a jump.
+    private static let posterDiskCheckQueue = DispatchQueue(label: "com.tweet.posterDiskCheck", qos: .utility)
+
     // CRITICAL: Track visible videos to prevent their players from being removed.
     // Count by media ID because the same video can be visible in more than one cell.
     private var visibleVideoMidCounts: [String: Int] = [:]
@@ -2234,26 +2243,40 @@ class SharedAssetCache: ObservableObject {
         let cacheKey = mediaID
 
         guard cachedThumbnail(for: mediaID) == nil else { return }
+        guard preloadTasks[cacheKey] == nil else { return }
 
-        if let cachedFileURL = LocalHTTPServer.shared.progressiveCacheFileForThumbnailIfAvailable(for: mediaID) {
-            generateThumbnail(from: AVURLAsset(url: cachedFileURL), for: mediaID)
-            return
-        }
+        // progressiveCacheFileForThumbnailIfAvailable scans up to 4MB of disk looking for
+        // the moov atom (progressiveCacheHasMoovInPrefix). This function runs on every
+        // throttled scroll-visibility tick for the next few videos in the scroll direction;
+        // doing that scan synchronously on the main actor blocked scroll handling, visible
+        // as periodic "stop, move a bit, stop" hitches while non-primary videos scrolled by.
+        // Run it on a dedicated serial queue (reusing preloadTasks to dedup repeat scans of
+        // the same not-yet-cached video) — everything else here stays on this MainActor.
+        let task = Task {
+            defer { preloadTasks.removeValue(forKey: cacheKey) }
 
-        if !allowNetwork {
-            return
-        }
+            let cachedFileURL = await withCheckedContinuation { continuation in
+                Self.posterDiskCheckQueue.async {
+                    let result = LocalHTTPServer.shared.progressiveCacheFileForThumbnailIfAvailable(for: mediaID)
+                    continuation.resume(returning: result)
+                }
+            }
 
-        if let cachedAsset = assetCache[cacheKey] {
-            generateThumbnail(from: cachedAsset, for: mediaID)
-            return
-        }
+            guard !Task.isCancelled, cachedThumbnail(for: mediaID) == nil else { return }
 
-        if preloadTasks[cacheKey] != nil { return }
+            if let cachedFileURL {
+                generateThumbnail(from: AVURLAsset(url: cachedFileURL), for: mediaID)
+                return
+            }
 
-        if let loadingTask = loadingTasks[cacheKey] {
-            let task = Task {
-                defer { preloadTasks.removeValue(forKey: cacheKey) }
+            guard allowNetwork else { return }
+
+            if let cachedAsset = assetCache[cacheKey] {
+                generateThumbnail(from: cachedAsset, for: mediaID)
+                return
+            }
+
+            if let loadingTask = loadingTasks[cacheKey] {
                 do {
                     try await loadingTask.value
                     guard !Task.isCancelled,
@@ -2263,13 +2286,9 @@ class SharedAssetCache: ObservableObject {
                 } catch {
                     // Poster preload failure is non-critical; visible playback can still load normally.
                 }
+                return
             }
-            preloadTasks[cacheKey] = task
-            return
-        }
 
-        let task = Task {
-            defer { preloadTasks.removeValue(forKey: cacheKey) }
             do {
                 let asset = try await getAsset(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType)
                 guard !Task.isCancelled,
