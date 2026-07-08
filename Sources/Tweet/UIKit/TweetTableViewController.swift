@@ -168,6 +168,7 @@ class TweetTableViewController: UITableViewController {
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: CFTimeInterval = 0
     private let videoVisibilityThrottleInterval = FeedPlaybackTuning.videoVisibilityThrottleInterval
+    private var isVideoVisibilityUpdateScheduled = false
     private var lastScrollVelocitySampleTime: CFTimeInterval = 0
     private var estimatedScrollVelocityY: CGFloat = 0
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
@@ -270,6 +271,22 @@ class TweetTableViewController: UITableViewController {
 
     private var currentRowLayoutWidth: CGFloat {
         tableView.bounds.width > 0 ? tableView.bounds.width : UIScreen.main.bounds.width
+    }
+
+    /// Keeps TweetHeightPrewarmer's background-measurement width in sync with this table's
+    /// ACTUAL row layout width (tableView.bounds.width), instead of the app-launch-time guess
+    /// derived from UIScreen.main.bounds.width. If the two ever diverge (safe area, Slide Over,
+    /// iPad, or simply a table that isn't edge-to-edge with the screen), the prewarmer's cached
+    /// text height/attributed string would be keyed on a width that never matches what
+    /// calculateTweetHeight/renderTextContent actually compute — silently defeating prewarming
+    /// entirely and forcing full CoreText typesetting on first render regardless.
+    private func syncPrewarmerContentWidthIfNeeded() {
+        let padding = leadingPadding + trailingPadding
+        let contentWidth = currentRowLayoutWidth - padding - 3 - 42 - 4
+        guard contentWidth > 1 else { return }
+        if abs(TweetHeightPrewarmer.shared.standardContentWidth - contentWidth) > 0.5 {
+            TweetHeightPrewarmer.shared.standardContentWidth = contentWidth
+        }
     }
 
     private func cachedHeight(for tweet: Tweet, width: CGFloat) -> CGFloat? {
@@ -1045,6 +1062,8 @@ class TweetTableViewController: UITableViewController {
     
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+
+        syncPrewarmerContentWidthIfNeeded()
 
         guard isTableVisibleForMutation else { return }
 
@@ -2354,6 +2373,7 @@ class TweetTableViewController: UITableViewController {
                 parentViewController: self,
                 leadingPadding: leadingPadding,
                 trailingPadding: trailingPadding,
+                rowWidth: currentRowLayoutWidth,
                 videoCoordinator: videoCoordinator,
                 onAvatarTap: onAvatarTap,
                 onTweetTap: onTweetTap,
@@ -2479,9 +2499,30 @@ class TweetTableViewController: UITableViewController {
         }
 
         // Fast path: text height already computed this session — calculateTweetHeight is cheap.
-        let textCacheWarm = displayTweet.cachedMeasuredTextHeight >= 0
+        // For quote-tweets, calculateTweetHeight ALSO measures the embedded/original tweet's text
+        // (a separate cache keyed on the embedded Tweet instance). If the embedded tweet's instance
+        // was recreated (e.g. evicted by memory trimming/cleanup and re-fetched), its cache is cold
+        // even though the quoting tweet's own cache is warm — so this must gate on BOTH caches or
+        // the "fast path" silently pays full CoreText typesetting cost for the embedded content.
+        var textCacheWarm = displayTweet.cachedMeasuredTextHeight >= 0
             && displayTweet.cachedMeasuredTextWidth == contentWidth
+        if textCacheWarm, isRetweet, hasOwnContent,
+           let originalId = tweet.originalTweetId,
+           let embeddedTweet = Tweet.getInstance(for: originalId),
+           embeddedTweet.author != nil,
+           let embeddedContent = embeddedTweet.content,
+           !embeddedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let embeddedWidth = contentWidth - 12
+            textCacheWarm = embeddedTweet.cachedMeasuredTextHeight >= 0
+                && embeddedTweet.cachedMeasuredTextWidth == embeddedWidth
+        }
         if textCacheWarm {
+            if displayTweet.cachedContentAttributedString == nil || displayTweet.cachedContentWidth != contentWidth {
+                print("⚠️ [HEIGHT CACHE MISS] mid=\(displayTweet.mid) textCacheWarm=true but cachedContentAttributedString stale: " +
+                      "attrStringNil=\(displayTweet.cachedContentAttributedString == nil) " +
+                      "cachedContentWidth=\(displayTweet.cachedContentWidth) contentWidth=\(contentWidth) " +
+                      "cachedMeasuredTextWidth=\(displayTweet.cachedMeasuredTextWidth)")
+            }
             return Self.calculateTweetHeight(for: tweet, rowWidth: layoutWidth, cellHorizontalPadding: padding)
         }
 
@@ -3020,7 +3061,7 @@ class TweetTableViewController: UITableViewController {
         // Throttle limits frequency to avoid excessive work.
         if now - lastVideoVisibilityUpdate >= videoVisibilityThrottleInterval {
             lastVideoVisibilityUpdate = now
-            updateVisibleTweetsForVideoPlayback()
+            scheduleVideoVisibilityUpdateNextRunLoop()
         }
         reconcilePrimaryVideoIfDecelerationIsSettling()
 
@@ -3668,12 +3709,28 @@ class TweetTableViewController: UITableViewController {
         )
     }
     
+    /// Defers updateVisibleTweetsForVideoPlayback() to the next run-loop turn instead of
+    /// running it synchronously inside scrollViewDidScroll. scrollViewDidScroll fires as part
+    /// of the CURRENT CATransaction, before UIKit's own layoutSubviews has created cells for
+    /// rows that just scrolled into view — querying visibleCells/cellForRow(at:) at that point
+    /// forces UIKit to synchronously build+configure those cells (full CoreText text layout)
+    /// right there on the scroll display-link's critical path. Deferring to the next turn lets
+    /// the current transaction's layout pass finish normally first, so by the time this runs,
+    /// the cells already exist and querying them is a cheap, side-effect-free read.
+    private func scheduleVideoVisibilityUpdateNextRunLoop() {
+        guard !isVideoVisibilityUpdateScheduled else { return }
+        isVideoVisibilityUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isVideoVisibilityUpdateScheduled = false
+            self.updateVisibleTweetsForVideoPlayback()
+        }
+    }
+
     private func updateVisibleTweetsForVideoPlayback() {
         guard isTableVisibleForMutation else { return }
         guard !isTableViewUpdating else { return }
         guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
-
-        let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
 
         // Calculate the actual user-visible rect, excluding areas behind translucent bars.
         // adjustedContentInset accounts for navigation bar, status bar, and toolbar.
@@ -3684,12 +3741,17 @@ class TweetTableViewController: UITableViewController {
 
         // Single pass over visible cells: compute tweet visibility, toggle media visibility,
         // and gather load-visible/playable video IDs together so scrolling does less repeated work.
+        // NOTE: iterate tableView.visibleCells (already-created cells only), NOT
+        // indexPathsForVisibleRows + cellForRow(at:) — the latter forces UIKit to synchronously
+        // create+configure a cell (full CoreText text layout) for any row that just scrolled into
+        // view but hasn't been prepared yet, right here on the scroll display-link's critical path.
         var visibleTweetIds = Set<String>()
         var loadVisibleVideoIds = Set<String>()
         var continuePlaybackVideoIds = Set<String>()
         var onScreenVideoIds = Set<String>()
-        for indexPath in visibleIndexPaths {
-            guard let tweetCell = tableView.cellForRow(at: indexPath) as? TweetTableViewCell else { continue }
+        for cell in tableView.visibleCells {
+            guard let tweetCell = cell as? TweetTableViewCell,
+                  let indexPath = tableView.indexPath(for: tweetCell) else { continue }
 
             let cellRect = tableView.rectForRow(at: indexPath)
             let intersection = cellRect.intersection(visibleRect)

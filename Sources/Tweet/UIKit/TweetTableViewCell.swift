@@ -168,6 +168,7 @@ class TweetTableViewCell: UITableViewCell {
         parentViewController: UIViewController,
         leadingPadding: CGFloat,
         trailingPadding: CGFloat,
+        rowWidth: CGFloat,
         videoCoordinator: VideoPlaybackCoordinator?,
         onAvatarTap: ((User) -> Void)?,
         onTweetTap: ((Tweet) -> Void)?,
@@ -182,6 +183,7 @@ class TweetTableViewCell: UITableViewCell {
         leadingConstraint.constant = leadingPadding
         trailingConstraint.constant = -trailingPadding
         tweetContentView.cellHorizontalPadding = leadingPadding + trailingPadding
+        tweetContentView.rowWidth = rowWidth
 
         tweetContentView.videoCoordinator = videoCoordinator
         tweetContentView.onAvatarTap = onAvatarTap

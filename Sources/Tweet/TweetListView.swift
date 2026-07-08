@@ -177,8 +177,8 @@ struct TweetListView: View {
     private let videoCoordinator: VideoPlaybackCoordinator
     
     // Memory management - limit total tweets in memory
-    private let maxTweetsInMemory: Int = 100  // Trigger a trim once the feed grows past this
-    private let tweetsToKeepOnTrim: Int = 80  // Target window size after trimming
+    private let maxTweetsInMemory: Int = 500  // Trigger a trim once the feed grows past this
+    private let tweetsToKeepOnTrim: Int = 400  // Target window size after trimming
     // Safety valve only: with viewport-aware trimming keeping the array near
     // tweetsToKeepOnTrim, this should rarely if ever be hit during normal pagination.
     private let hardPaginationStopCount: Int = 1500

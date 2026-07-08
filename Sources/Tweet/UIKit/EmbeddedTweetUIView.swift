@@ -74,6 +74,11 @@ class EmbeddedTweetUIView: UIView {
             bodyView.cellHorizontalPadding = cellHorizontalPadding
         }
     }
+    var rowWidth: CGFloat? {
+        didSet {
+            bodyView.rowWidth = rowWidth
+        }
+    }
 
     var onTap: ((Tweet) -> Void)?
     var onContentExpanded: (() -> Void)?

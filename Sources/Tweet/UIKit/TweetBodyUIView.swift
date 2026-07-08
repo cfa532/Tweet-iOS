@@ -233,10 +233,21 @@ class TweetBodyUIView: UIView {
         onContentExpanded?()
     }
 
+    /// Row width used to derive text width, matching TweetTableViewController's
+    /// currentRowLayoutWidth (tableView.bounds.width). Falls back to UIScreen.main.bounds.width
+    /// only if never set. MUST use the same width source as calculateTweetHeight — if this ever
+    /// falls back to UIScreen.main.bounds.width while the deterministic height calculator uses
+    /// tableView.bounds.width (which can differ, e.g. on iPad/Slide Over/Catalyst), the two
+    /// text-attributed-string caches permanently invalidate each other: each write here
+    /// overwrites cachedContentWidth to this view's width, which the height calculator then
+    /// treats as a cache miss and overwrites back to its own width, forcing full CoreText/CJK
+    /// typesetting on every single cell configure AND every height calculation, forever.
+    var rowWidth: CGFloat?
+
     private func renderTextContent(tweet: Tweet, isEmbedded: Bool) {
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Compute available text width (must match deterministic height calculator)
-            let screenWidth = UIScreen.main.bounds.width
+            let screenWidth = rowWidth ?? UIScreen.main.bounds.width
             let regularContentWidth = (
                 screenWidth
                 - cellHorizontalPadding

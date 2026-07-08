@@ -111,7 +111,23 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 context: nil
             )
-            cache.set(ceil(bounds.height), tweetId: mid, width: width)
+            let height = ceil(bounds.height)
+            cache.set(height, tweetId: mid, width: width)
+
+            // Also warm the REAL cache calculateTweetHeight/renderTextContent check, so the
+            // first actual render/height-measurement of this tweet skips CoreText typesetting
+            // entirely instead of just getting a cheap estimate. The background attributed
+            // string's truncation point can differ from the UILabel-computed one by up to one
+            // character (TextKit1 vs TextKit2 line-break disagreement) — negligible for height,
+            // and corrected automatically the next time the text actually changes/re-renders.
+            await MainActor.run {
+                guard let tweet = Tweet.getInstance(for: mid) else { return }
+                guard tweet.cachedMeasuredTextWidth != width || tweet.cachedMeasuredTextHeight < 0 else { return }
+                tweet.cachedContentAttributedString = attrStr
+                tweet.cachedContentWidth = width
+                tweet.cachedMeasuredTextHeight = height
+                tweet.cachedMeasuredTextWidth = width
+            }
         }
     }
 }

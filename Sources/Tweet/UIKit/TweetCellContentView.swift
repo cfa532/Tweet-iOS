@@ -107,6 +107,12 @@ class TweetCellContentView: UIView {
             embeddedTweetView.cellHorizontalPadding = cellHorizontalPadding
         }
     }
+    var rowWidth: CGFloat? {
+        didSet {
+            bodyView.rowWidth = rowWidth
+            embeddedTweetView.rowWidth = rowWidth
+        }
+    }
 
     // Callbacks (set by cell / controller)
     var onAvatarTap: ((User) -> Void)?
