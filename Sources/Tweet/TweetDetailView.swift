@@ -1416,7 +1416,8 @@ struct TweetDetailView: View {
             tweet: displayTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
-            }
+            },
+            isInDetailView: true
         )
         .frame(height: 30)
         .padding(.leading, 16)

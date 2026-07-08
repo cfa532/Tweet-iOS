@@ -53,6 +53,24 @@ export default {
 
     const path = url.pathname;
 
+    // dl.dtweet.com is the http-only web host. Browsers speculatively upgrade
+    // http links to https; redirecting https back to http signals "upgrade
+    // failed" and they settle on http silently. Plain http passes through to
+    // the origin (same-zone subrequests skip this worker, so no recursion).
+    if (url.hostname === "dl.dtweet.com") {
+      if (path === "/.well-known/apple-app-site-association" || path === "/apple-app-site-association") {
+        return json(appleAppSiteAssociation());
+      }
+      if (path === "/.well-known/assetlinks.json") {
+        return json(assetLinks());
+      }
+      if (url.protocol === "https:") {
+        url.protocol = "http:";
+        return Response.redirect(url.toString(), 301);
+      }
+      return fetch(request);
+    }
+
     if (path === "/.well-known/apple-app-site-association" || path === "/apple-app-site-association") {
       return json(appleAppSiteAssociation());
     }

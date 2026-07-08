@@ -14,10 +14,13 @@ enum BuildConfiguration {
 }
 
 struct AppConfig {
-    /// Fixed public domain used in shared links so iOS Universal Links /
-    /// Android App Links open the app directly. Served by the Cloudflare
-    /// Worker in cloudflare/dtweet-worker/.
-    static let shareDomain = "https://dtweet.com"
+    /// Fixed public domain for deep-link share URLs (feed share button):
+    /// iOS Universal Links / Android App Links open the app directly; browsers
+    /// are redirected to the http-only web app by the Cloudflare Worker in
+    /// cloudflare/dtweet-worker/. http scheme: the web stack (Leither) is
+    /// http-only; the OS intercepts http links for associated domains anyway.
+    /// See DEEPLINKING.md for the full share-URL policy.
+    static let shareDomain = "http://dtweet.com"
 
     static let baseUrl: String = {
         switch BuildConfiguration.current {

@@ -11,6 +11,18 @@ import SwiftUI
 import Combine
 import AVFoundation
 
+/// Which URL a share action embeds — see DEEPLINKING.md for the policy.
+enum TweetShareLinkStyle {
+    /// `http://dtweet.com/tweet/{mid}/{authorId}` — standard deep-link format;
+    /// the OS opens the app when installed (feed share button)
+    case deeplink
+    /// Domain delivered by the backend's `check_upgrade`
+    /// (`hproseInstance.domainToShare`) — detail-view share button
+    case webDomain
+    /// The tweet author's provider-IP entry URL — detail-view dropdown menu
+    case providerIP
+}
+
 class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     // MARK: - Action Buttons
@@ -57,6 +69,9 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     // Context
     var isInDetailView = false
+    /// Overrides the default style (feed → .deeplink, detail → .webDomain);
+    /// set to .providerIP by buildDetailShareItems for the dropdown menu
+    var shareLinkStyleOverride: TweetShareLinkStyle?
     weak var parentTweet: Tweet?       // For comments: the parent tweet this is a comment on
     weak var commentsVMParentTweet: Tweet?  // Fallback: commentsVM?.parentTweet
 
@@ -457,11 +472,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         Task {
             print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
 
-            // If sharing from detail view, resolve IPv4 for better compatibility
-            if isInDetailView {
-                _ = await Self.getIPv4PreferredBaseUrl(for: tweet, hproseInstance: hprose)
-            }
-
             // Load attachment preview if available
             if attachmentPreviewImage == nil {
                 print("DEBUG: [SHARE] Loading attachment preview...")
@@ -519,7 +529,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// Build share items with rich preview
     private func buildShareItems(for tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
         let effectiveParentTweet = parentTweet ?? commentsVMParentTweet
-        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, isInDetailView: isInDetailView, parentTweet: effectiveParentTweet)
+        let style = shareLinkStyleOverride ?? (isInDetailView ? .webDomain : .deeplink)
+        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, style: style, parentTweet: effectiveParentTweet)
         let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
 
         var items: [Any] = [customItem]
@@ -535,10 +546,14 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return items
     }
 
+    /// Share items for the detail view's dropdown menu (TweetMenu): uses the
+    /// author's provider-IP entry URL (`.providerIP`), reachable even without
+    /// the dtweet.com / check_upgrade domains. See DEEPLINKING.md.
     @MainActor
     static func buildDetailShareItems(tweet: Tweet, hproseInstance: HproseInstance, parentTweet: Tweet? = nil) async -> [Any] {
         let helper = TweetActionBarView(frame: .zero)
         helper.isInDetailView = true
+        helper.shareLinkStyleOverride = .providerIP
         helper.parentTweet = parentTweet
 
         let preferredBaseUrl = await Self.getIPv4PreferredBaseUrl(for: tweet, hproseInstance: hproseInstance)
@@ -550,8 +565,15 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return await helper.buildShareItems(for: tweet, hproseInstance: hproseInstance)
     }
 
-    /// Build share text for a tweet
-    static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false, parentTweet: Tweet? = nil) -> String {
+    /// Build share text for a tweet.
+    ///
+    /// Share-URL policy (see DEEPLINKING.md):
+    /// - `.deeplink`   feed share button — `http://dtweet.com/tweet/{mid}/{authorId}`;
+    ///                 the OS opens the app when installed, browsers land on the web app.
+    /// - `.webDomain`  detail-view share button — domain delivered by the backend's
+    ///                 `check_upgrade` (`hproseInstance.domainToShare`).
+    /// - `.providerIP` detail-view dropdown menu — the author's provider-IP entry URL.
+    static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, style: TweetShareLinkStyle, parentTweet: Tweet? = nil) -> String {
         var shareText = ""
 
         // Priority: title > content > attachment types
@@ -571,13 +593,26 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             shareText += "\n\n"
         }
 
-        // Add URL - always the dtweet.com Universal Link / App Link domain
+        // Add URL according to the requested link style
         let urlText: String
+        let commentParams = parentTweet.map { "?fromComment=true&parentTweetId=\($0.mid)&parentAuthorId=\($0.authorId)" } ?? ""
 
-        if let parent = parentTweet {
-            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
-        } else {
-            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)"
+        switch style {
+        case .deeplink:
+            // Standard deep-link format: OS opens the app when installed
+            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+        case .webDomain:
+            // Domain delivered by the backend's check_upgrade
+            var domain = hproseInstance.domainToShare
+            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
+                domain = "http://" + domain
+            }
+            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+        case .providerIP:
+            // Author's provider-IP entry URL (hash-router format); the caller is
+            // expected to have refreshed tweet.author.baseUrl to a reachable IP
+            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
+            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         }
 
         if !shareText.isEmpty {

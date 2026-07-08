@@ -525,12 +525,7 @@ struct TweetActionButtonsView: View {
                         }
                         
                         print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
-                        
-                        // If sharing from detail view, resolve IPv4 for better compatibility
-                        if isInDetailView {
-                            _ = await getIPv4PreferredBaseUrl(for: tweet)
-                        }
-                        
+
                         // If we don't have a preloaded preview, generate it now
                         if attachmentPreviewImage == nil {
                             print("DEBUG: [SHARE] No preloaded preview, generating now...")
@@ -1608,14 +1603,21 @@ struct TweetActionButtonsView: View {
             shareText += "\n\n"
         }
         
-        // Add URL - always the dtweet.com Universal Link / App Link domain
+        // Add URL — share-URL policy (see DEEPLINKING.md):
+        // feed/list contexts use the standard deep-link format on dtweet.com;
+        // the detail view's share button uses the check_upgrade backend domain
         let urlText: String
         let effectiveParentTweet = parentTweet ?? commentsVM?.parentTweet
+        let commentParams = effectiveParentTweet.map { "?fromComment=true&parentTweetId=\($0.mid)&parentAuthorId=\($0.authorId)" } ?? ""
 
-        if let parent = effectiveParentTweet {
-            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
+        if isInDetailView {
+            var domain = hproseInstance.domainToShare
+            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
+                domain = "http://" + domain
+            }
+            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         } else {
-            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)"
+            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         }
         
         // Only add space if there's content before the URL
