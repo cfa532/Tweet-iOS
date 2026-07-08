@@ -529,24 +529,33 @@ struct TweetListView: View {
             },
             onScroll: onScroll,
             onScrollStateChange: { offset, isAtTop, isInteracting in
-                // Already on main (called from UIScrollViewDelegate) — no need to
-                // hop back through DispatchQueue.main.async on every scroll frame.
-                if !hasReceivedScrollState {
-                    hasReceivedScrollState = true
-                }
-                let atTopChanged = isFeedAtTop != isAtTop
-                let interactingChanged = isFeedScrollInteractionActive != isInteracting
-                if atTopChanged {
-                    isFeedAtTop = isAtTop
-                }
-                if interactingChanged {
-                    isFeedScrollInteractionActive = isInteracting
-                }
-                // The only external consumer (FollowingsTweetView) ignores offset and
-                // only reacts to isAtTop/isInteracting transitions — skip the forward
-                // when neither changed to avoid a per-frame @Published republish.
-                if atTopChanged || interactingChanged {
-                    onScrollStateChange?(offset, isAtTop, isInteracting)
+                // Deferred to the next run-loop turn via DispatchQueue.main.async:
+                // this callback usually fires from a genuine UIScrollViewDelegate event
+                // (safe to mutate @State synchronously), but trimTweetsIfOverCapacity and
+                // updateTweets' prepend-insert compensation both call tableView.setContentOffset
+                // directly, which synchronously re-enters scrollViewDidScroll. When THAT call
+                // originates from TweetTableView.updateUIViewController (itself invoked by
+                // SwiftUI during a view update), mutating @State here would happen mid-update —
+                // "Modifying state during view update, this will cause undefined behavior."
+                // Hopping to the next run loop turn avoids that regardless of which path called in.
+                DispatchQueue.main.async {
+                    if !hasReceivedScrollState {
+                        hasReceivedScrollState = true
+                    }
+                    let atTopChanged = isFeedAtTop != isAtTop
+                    let interactingChanged = isFeedScrollInteractionActive != isInteracting
+                    if atTopChanged {
+                        isFeedAtTop = isAtTop
+                    }
+                    if interactingChanged {
+                        isFeedScrollInteractionActive = isInteracting
+                    }
+                    // The only external consumer (FollowingsTweetView) ignores offset and
+                    // only reacts to isAtTop/isInteracting transitions — skip the forward
+                    // when neither changed to avoid a per-frame @Published republish.
+                    if atTopChanged || interactingChanged {
+                        onScrollStateChange?(offset, isAtTop, isInteracting)
+                    }
                 }
             },
             trimRequestToken: trimRequestToken,
