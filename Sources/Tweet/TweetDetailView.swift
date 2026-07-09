@@ -907,6 +907,7 @@ struct TweetDetailView: View {
     @State private var hasLoadedOriginalTweet = false
     @State private var hasServedCachedCommentsForCurrentParentTweet = false
     @State private var currentCommentsParentTweetId = ""
+    @State private var initialCommentsRequestParentTweetId = ""
     @State private var selectedCommentUserForNavigation: User?
     @State private var commentProfileNavigationPath = NavigationPath()
 
@@ -1516,8 +1517,12 @@ struct TweetDetailView: View {
     private func setupInitialData() {
         configureCommentCacheContextIfNeeded()
 
-        // READ tweet on appear (comments handled by CommentListView.task)
+        // READ tweet and seed comments on appear.
         Task { await doReadTweet() }
+        if initialCommentsRequestParentTweetId != displayTweet.mid {
+            initialCommentsRequestParentTweetId = displayTweet.mid
+            Task { await refreshComments() }
+        }
 
         // SYNC: if nodes differ, resync tweet
         let hostIds = displayTweet.author?.hostIds ?? []
@@ -1638,6 +1643,7 @@ struct TweetDetailView: View {
 
         currentCommentsParentTweetId = parentTweetId
         hasServedCachedCommentsForCurrentParentTweet = false
+        initialCommentsRequestParentTweetId = ""
 
         if let cachedComments = TweetDetailCommentsCache.shared.comments(for: parentTweetId) {
             comments = cachedComments

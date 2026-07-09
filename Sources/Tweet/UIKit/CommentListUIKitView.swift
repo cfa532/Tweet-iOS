@@ -28,8 +28,8 @@ struct CommentListUIKitView: View {
     @State private var currentPage: UInt = 0
     @State private var initialLoadComplete = false
     @State private var showNoMoreComments = false
-    @State private var hasTriggeredInitialTaskLoad = false
-    @State private var tableHeight: CGFloat = 1
+    @State private var loadedParentTweetId: String?
+    @State private var tableHeight: CGFloat = 148
 
     private let pageSize: UInt = 10
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -58,9 +58,15 @@ struct CommentListUIKitView: View {
             }
         )
         .frame(height: max(1, tableHeight))
-        .task {
-            guard !hasTriggeredInitialTaskLoad else { return }
-            hasTriggeredInitialTaskLoad = true
+        .task(id: parentTweet.mid) {
+            guard loadedParentTweetId != parentTweet.mid else { return }
+            loadedParentTweetId = parentTweet.mid
+            if !comments.isEmpty {
+                initialLoadComplete = true
+                currentPage = UInt((comments.count - 1) / Int(pageSize))
+                hasMoreComments = comments.count >= pageSize
+                return
+            }
             await refreshComments()
         }
         .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notif in
@@ -98,7 +104,9 @@ struct CommentListUIKitView: View {
             let validComments = newComments.compactMap { $0 }
 
             await MainActor.run {
-                comments = validComments
+                if comments.isEmpty {
+                    comments = validComments
+                }
                 hasMoreComments = newComments.count >= pageSize
                 initialLoadComplete = true
             }
@@ -410,7 +418,8 @@ private final class CommentListTableViewController: UIViewController, UITableVie
 
     private func reportContentHeight() {
         tableView.layoutIfNeeded()
-        let height = max(1, tableView.contentSize.height)
+        let minimumHeight: CGFloat = comments.isEmpty && !initialLoadComplete ? 148 : 1
+        let height = max(minimumHeight, tableView.contentSize.height)
         onHeightChange?(height)
     }
 
