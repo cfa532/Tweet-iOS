@@ -107,6 +107,11 @@ private enum TweetPaginationState: Equatable {
     }
 }
 
+private enum TweetServerLoadRole {
+    case refresh
+    case pagination
+}
+
 @available(iOS 16.0, *)
 struct TweetListView: View {
     // MARK: - Properties
@@ -239,9 +244,8 @@ struct TweetListView: View {
         scheduleMemoryMaintenance(delay: 0.2)
     }
 
-    /// TEMPORARY (Jul 2026 "no more tweets" flash investigation) — logs every
-    /// paginationState transition with the call-site reason. Remove once the bug is
-    /// root-caused.
+    /// Bottom pagination state. For the main feed, page-0 refreshes are a freshness
+    /// path and should not decide whether the bottom footer is exhausted.
     private func setPaginationState(_ newState: TweetPaginationState, reason: String) {
         if paginationState != newState {
             print("📊 [PAGINATION STATE] \(feedIdentifier): \(paginationState) -> \(newState) (\(reason))")
@@ -259,16 +263,42 @@ struct TweetListView: View {
         // not change whether pagination is exhausted.
     }
 
+    private func shouldUpdateBottomPaginationState(role: TweetServerLoadRole) -> Bool {
+        feedIdentifier != "mainFeed" || role == .pagination
+    }
+
+    private func setPaginationStateFromServerResponse(
+        responseCount: Int,
+        page: UInt,
+        pageSize: UInt,
+        role: TweetServerLoadRole,
+        reason: String
+    ) {
+        guard shouldUpdateBottomPaginationState(role: role) else {
+            print("📊 [PAGINATION STATE] \(feedIdentifier): keeping \(paginationState) (\(reason), refresh does not own bottom pagination)")
+            return
+        }
+
+        setPaginationState(
+            .fromServerResponseCount(responseCount, pageSize: pageSize),
+            reason: reason
+        )
+    }
+
     private func applyServerPaginationTweets(
         _ serverTweets: [Tweet],
         responseCount: Int,
         page: UInt,
-        pageSize: UInt
+        pageSize: UInt,
+        role: TweetServerLoadRole
     ) {
         applyPaginatedTweets(serverTweets, page: page)
         currentPage = max(currentPage, page)
-        setPaginationState(
-            .fromServerResponseCount(responseCount, pageSize: pageSize),
+        setPaginationStateFromServerResponse(
+            responseCount: responseCount,
+            page: page,
+            pageSize: pageSize,
+            role: role,
             reason: "applyServerPaginationTweets page=\(page) responseCount=\(responseCount)"
         )
     }
@@ -940,8 +970,11 @@ struct TweetListView: View {
                         }
                     }
                     currentPage = 0
-                    setPaginationState(
-                        .fromServerResponseCount(freshTweets.count, pageSize: pageSize),
+                    setPaginationStateFromServerResponse(
+                        responseCount: freshTweets.count,
+                        page: 0,
+                        pageSize: pageSize,
+                        role: .refresh,
                         reason: "foregroundRefresh freshTweets=\(freshTweets.count)"
                     )
 
@@ -1048,7 +1081,7 @@ struct TweetListView: View {
         Task.detached(priority: .utility) {
             // Step 2: Load from server to get the most up-to-date data (in background)
             // Additional pages are loaded automatically when user scrolls near the bottom
-            await loadFromServer(page: page, pageSize: pageSize) { _ in }
+            await loadFromServer(page: page, pageSize: pageSize, role: .refresh) { _ in }
         }
     }
     
@@ -1075,7 +1108,7 @@ struct TweetListView: View {
         //     tweets.removeAll()
         // }
 
-        await loadFromServer(page: 0, pageSize: pageSize) { _ in }
+        await loadFromServer(page: 0, pageSize: pageSize, role: .refresh) { _ in }
     }
 
     private func refreshTweetsFromUserPull() async {
@@ -1087,6 +1120,7 @@ struct TweetListView: View {
         isLoading = true
         initialLoadComplete = false
         didConfirmEmptyFromServer = false
+        setPaginationState(.canLoadMore, reason: "refreshTweetsFromUserPull")
         currentPage = 0
 
         do {
@@ -1106,7 +1140,7 @@ struct TweetListView: View {
             print("🔄 [PULL REFRESH] Cache refresh failed before server refresh, feed=\(feedIdentifier): \(error)")
         }
 
-        await loadFromServer(page: 0, pageSize: pageSize) { _ in }
+        await loadFromServer(page: 0, pageSize: pageSize, role: .pagination) { _ in }
     }
 
     func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
@@ -1180,7 +1214,7 @@ struct TweetListView: View {
             // Server response is the page boundary: only after it arrives may the
             // next page be requested.
             Task(priority: .utility) { @MainActor in
-                await loadFromServer(page: page, pageSize: pageSize, completion: completion)
+                await loadFromServer(page: page, pageSize: pageSize, role: .pagination, completion: completion)
 
                 isLoadingMore = false
                 loadingStartTime = nil
@@ -1189,7 +1223,12 @@ struct TweetListView: View {
     }
     
     // MARK: - Server Loading (No Retry)
-    private func loadFromServer(page: UInt, pageSize: UInt, completion: @escaping (Bool) -> Void) async {
+    private func loadFromServer(
+        page: UInt,
+        pageSize: UInt,
+        role: TweetServerLoadRole,
+        completion: @escaping (Bool) -> Void
+    ) async {
         var pageToLoad = page
         var skippedEmptyFullPages = 0
         let maxEmptyFullPagesToSkip = 200
@@ -1209,7 +1248,8 @@ struct TweetListView: View {
                         validServerTweets: validServerTweets,
                         tweetsFromServer: tweetsFromServer,
                         page: pageToLoad,
-                        pageSize: pageSize
+                        pageSize: pageSize,
+                        role: role
                     )
                 }
 
@@ -1275,7 +1315,7 @@ struct TweetListView: View {
                 didConfirmEmptyFromServer = false
             }
         }
-        await loadFromServer(page: 0, pageSize: pageSize) { _ in }
+        await loadFromServer(page: 0, pageSize: pageSize, role: .refresh) { _ in }
     }
     
     // Helper function to update tweets with server data
@@ -1318,7 +1358,8 @@ struct TweetListView: View {
         validServerTweets: [Tweet],
         tweetsFromServer: [Tweet?],
         page: UInt,
-        pageSize: UInt
+        pageSize: UInt,
+        role: TweetServerLoadRole
     ) {
         let renderableServerTweets: [Tweet]
         if page == 0 {
@@ -1339,16 +1380,22 @@ struct TweetListView: View {
             if page == 0 && preserveOrder {
                 tweets = renderableServerTweets
                 currentPage = max(currentPage, page)
-                setPaginationState(
-                    .fromServerResponseCount(tweetsFromServer.count, pageSize: pageSize),
+                setPaginationStateFromServerResponse(
+                    responseCount: tweetsFromServer.count,
+                    page: page,
+                    pageSize: pageSize,
+                    role: role,
                     reason: "updateTweetsWithServerData BRANCH1 preserveOrder page=0 responseCount=\(tweetsFromServer.count)"
                 )
                 scheduleMemoryMaintenance(delay: 0.2)
             } else if page == 0 && tweets.isEmpty {
                 tweets = renderableServerTweets
                 currentPage = max(currentPage, page)
-                setPaginationState(
-                    .fromServerResponseCount(tweetsFromServer.count, pageSize: pageSize),
+                setPaginationStateFromServerResponse(
+                    responseCount: tweetsFromServer.count,
+                    page: page,
+                    pageSize: pageSize,
+                    role: role,
                     reason: "updateTweetsWithServerData BRANCH1 page=0 tweets.isEmpty responseCount=\(tweetsFromServer.count)"
                 )
                 scheduleMemoryMaintenance(delay: 0.2)
@@ -1359,7 +1406,8 @@ struct TweetListView: View {
                     renderableServerTweets,
                     responseCount: tweetsFromServer.count,
                     page: page,
-                    pageSize: pageSize
+                    pageSize: pageSize,
+                    role: role
                 )
             }
 
@@ -1375,8 +1423,11 @@ struct TweetListView: View {
         } else if !validServerTweets.isEmpty {
             didConfirmEmptyFromServer = false
             currentPage = max(currentPage, page)
-            setPaginationState(
-                .fromServerResponseCount(tweetsFromServer.count, pageSize: pageSize),
+            setPaginationStateFromServerResponse(
+                responseCount: tweetsFromServer.count,
+                page: page,
+                pageSize: pageSize,
+                role: role,
                 reason: "updateTweetsWithServerData BRANCH1b deferred-behind-banner page=\(page) responseCount=\(tweetsFromServer.count)"
             )
             if page == 0 {
@@ -1388,8 +1439,11 @@ struct TweetListView: View {
         // BRANCH 2: No valid tweets AND partial page - server depleted
         } else if tweetsFromServer.count < pageSize {
             // Partial page means server ran out of bookmark/favorite entries
-            setPaginationState(
-                .serverExhausted,
+            setPaginationStateFromServerResponse(
+                responseCount: tweetsFromServer.count,
+                page: page,
+                pageSize: pageSize,
+                role: role,
                 reason: "updateTweetsWithServerData BRANCH2 partial-page page=\(page) responseCount=\(tweetsFromServer.count) validCount=\(validServerTweets.count)"
             )
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), PARTIAL PAGE - no more tweets")
@@ -1414,7 +1468,11 @@ struct TweetListView: View {
             // Full page (all nils) means server had enough entries, continue to next page
             // Example: Page has 10 deleted bookmarks (all nils) - more entries might exist
             currentPage = max(currentPage, page)
-            setPaginationState(.canLoadMore, reason: "updateTweetsWithServerData BRANCH3 full-page-all-nil page=\(page)")
+            if shouldUpdateBottomPaginationState(role: role) {
+                setPaginationState(.canLoadMore, reason: "updateTweetsWithServerData BRANCH3 full-page-all-nil page=\(page)")
+            } else {
+                print("📊 [PAGINATION STATE] \(feedIdentifier): keeping \(paginationState) (updateTweetsWithServerData BRANCH3 full-page-all-nil page=\(page), refresh does not own bottom pagination)")
+            }
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), FULL PAGE - trying next page")
         }
     }
