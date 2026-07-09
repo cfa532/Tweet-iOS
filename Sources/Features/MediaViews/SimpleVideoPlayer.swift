@@ -27,7 +27,6 @@ import QuartzCore
 enum Mode {
     case mediaCell // Normal cell in feed/grid
     case mediaBrowser // In MediaBrowserView (fullscreen browser)
-    case tweetDetail // In TweetDetailView (single tweet view)
     case embeddedDetail // In TweetDetailView, embedded/quoted tweet preview
 }
 
@@ -566,10 +565,6 @@ struct SimpleVideoPlayer: View {
     // (removed) finished-video last-frame cover behavior; last-frame is for background recovery only
     @State private var isHandlingFinishEvent: Bool = false
     
-    // TweetDetail: prevent "play from 0 then jump back" by restoring seek before playback.
-    @State private var hasAppliedDetailRestore: Bool = false
-    @State private var isApplyingDetailRestore: Bool = false
-    
     // Timer display state (MediaCell only) - exposed for parent overlay
     @State var showTimeRemaining: Bool = false
     @State private var timeRemainingDisplayTask: Task<Void, Never>?
@@ -704,129 +699,6 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-    // MARK: - Resume helpers (TweetDetail)
-    /// Returns true if we started an async seek that must complete before playback.
-    @MainActor
-    private func startTweetDetailRestoreIfNeeded(for player: AVPlayer) -> Bool {
-        guard mode == .tweetDetail else { return false }
-        if isApplyingDetailRestore { return true }
-        if hasAppliedDetailRestore { return false }
-        
-        // Check if video finished in mediaCell - if so, restart from beginning
-        // Check VideoStateCache first (even if player item not ready yet)
-        if VideoStateCache.shared.hasCachedPlaybackInfo(for: mid) {
-            // If player item is ready, check duration
-            if let playerItem = player.currentItem,
-               playerItem.status == .readyToPlay {
-                let duration = playerItem.duration
-                if duration.isValid && duration.seconds > 0 {
-                    // PHASE 1: Disable finished video detection for media cells to prevent immediate finishing
-                    // TODO: Re-enable this logic after Phase 1 when video state management is more robust
-                    /*
-                    if VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
-                        // Video finished in mediaCell - restarting from beginning
-                        isApplyingDetailRestore = true
-                        player.pause()
-                        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                            Task { @MainActor in
-                                self.isApplyingDetailRestore = false
-                                self.hasAppliedDetailRestore = true
-
-                                if finished {
-                                    // Start playback from beginning
-                                    if self.currentAutoPlay {
-                                        self.checkPlaybackConditions(autoPlay: true, isVisible: self.isVisible)
-                                    }
-                                } else {
-                                    self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
-                                }
-                            }
-                        }
-                        return true
-                    }
-                }
-            }
-            */
-                }
-            }
-        }
-        
-        guard PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .detailView),
-              let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) else {
-            hasAppliedDetailRestore = true
-            return false
-        }
-        
-        let savedSeconds = saved.currentTime.seconds
-        guard savedSeconds.isFinite, savedSeconds > 0.25 else {
-            hasAppliedDetailRestore = true
-            return false
-        }
-        
-        // Check if saved position is near the end (video finished in previous detail view session)
-        // If player item is ready, check duration; otherwise wait for it to become ready
-        if let playerItem = player.currentItem,
-           playerItem.status == .readyToPlay {
-            let duration = playerItem.duration
-            if duration.isValid && duration.seconds > 0 {
-                // If saved position is within 0.5s of end, restart from beginning
-                if savedSeconds >= duration.seconds - 0.5 {
-                    // Video saved position is near end - restarting from beginning
-                    isApplyingDetailRestore = true
-                    player.pause()
-                    player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                        Task { @MainActor in
-                            self.isApplyingDetailRestore = false
-                            self.hasAppliedDetailRestore = true
-                            
-                            if finished {
-                                // Start playback from beginning
-                                if self.currentAutoPlay {
-                                    self.checkPlaybackConditions(autoPlay: true, isVisible: self.isVisible)
-                                }
-                            } else {
-                                self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
-                            }
-                        }
-                    }
-                    return true
-                }
-            }
-        }
-        
-        let currentSeconds = player.currentTime().seconds
-        let needsSeek = !currentSeconds.isFinite || abs(currentSeconds - savedSeconds) > 0.25
-        guard needsSeek else {
-            hasAppliedDetailRestore = true
-            return false
-        }
-        
-        isApplyingDetailRestore = true
-        player.pause()
-        // Seeking to saved position
-        
-        player.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-            Task { @MainActor in
-                self.isApplyingDetailRestore = false
-                self.hasAppliedDetailRestore = true
-                
-                // If seek fails, fall back to normal autoplay logic.
-                guard finished else {
-                    self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
-                    return
-                }
-                
-                // Start playback from restored position if requested.
-                let shouldPlay = self.currentAutoPlay || saved.wasPlaying
-                if shouldPlay {
-                    self.checkPlaybackConditions(autoPlay: true, isVisible: self.isVisible)
-                }
-            }
-        }
-        
-        return true
-    }
-
     /// Lightweight watchdog: only for stuck autoplay in MediaCell
     /// Runs on background thread to avoid blocking UI
     @MainActor
@@ -857,9 +729,7 @@ struct SimpleVideoPlayer: View {
         loadingState = .idle
         playbackState = .notStarted
         
-        if mode == .tweetDetail {
-            DetailVideoManager.shared.clearCurrentVideo()
-        } else if mode == .mediaBrowser {
+        if mode == .mediaBrowser {
             FullScreenVideoManager.shared.clearSingletonPlayer()
         }
         
@@ -982,7 +852,7 @@ struct SimpleVideoPlayer: View {
     // For fullscreen and detail modes, use static autoPlay parameter
     // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls all playback via notifications
     private var currentAutoPlay: Bool {
-        if mode == .mediaBrowser || mode == .tweetDetail || mode == .embeddedDetail {
+        if mode == .mediaBrowser || mode == .embeddedDetail {
             return autoPlay
         }
         // MediaCell mode: coordinator controls playback via notifications
@@ -1061,16 +931,6 @@ struct SimpleVideoPlayer: View {
                 .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
                 .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
                 .onChange(of: loadingState) { oldState, newState in
-                    // For tweetDetail, check playback conditions when loading completes
-                    // This ensures playbackState transitions to .playing so the spinner hides
-                    if oldState.isLoading && !newState.isLoading && mode == .tweetDetail && currentAutoPlay && isVisible {
-                        if let player = player {
-                            if !startTweetDetailRestoreIfNeeded(for: player) {
-                                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-                            }
-                        }
-                    }
-
                     // For embedded videos in detail views, check autoplay when loading completes
                     if oldState.isLoading && !newState.isLoading && mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive && currentAutoPlay && isVisible {
                         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
@@ -1147,7 +1007,7 @@ struct SimpleVideoPlayer: View {
         AnyViewModifier { content in
             // Apply tap gesture for all modes when onVideoTap callback is provided
             // Apply long press only in fullscreen/browser modes to avoid interfering with scrolling in feed
-            if mode == .mediaBrowser || mode == .tweetDetail {
+            if mode == .mediaBrowser {
                 content
                     .onTapGesture { handleTap() }
                     .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
@@ -1201,16 +1061,6 @@ struct SimpleVideoPlayer: View {
                     }
                 }
                 
-            case .tweetDetail:
-                // TweetDetail mode: single video view with fit aspect ratio - use GeometryReader for dynamic sizing
-                GeometryReader { geometry in
-                    let screenWidth = geometry.size.width
-                    let screenHeight = geometry.size.height
-                    videoPlayerView()
-                        .aspectRatio(videoAR, contentMode: .fit)
-                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                }
-                
             case .embeddedDetail:
                 // Embedded/quoted tweet preview inside TweetDetailView: behave like a MediaCell (fills its grid slot)
                 videoPlayerView()
@@ -1243,8 +1093,8 @@ struct SimpleVideoPlayer: View {
             UIApplication.shared.isIdleTimerDisabled = true
         }
         
-        // For fullscreen and detail modes, always try to set up player regardless of shouldLoadVideo
-        if mode == .mediaBrowser || mode == .tweetDetail {
+        // Fullscreen always tries to set up its player regardless of shouldLoadVideo.
+        if mode == .mediaBrowser {
             if player == nil {
                 // Reset loading state if stuck
                 if loadingState.isLoading {
@@ -1418,11 +1268,6 @@ struct SimpleVideoPlayer: View {
                 player.isMuted = MuteState.shared.isMuted
                 // Restored mute state after exiting fullscreen
             }
-        } else if mode == .tweetDetail {
-            // TweetDetail: DO NOTHING.
-            // Detail view uses a singleton player (DetailVideoManager) and SwiftUI may recreate
-            // cells/views (TabView) during normal interaction. Pausing here causes the
-            // "plays briefly then stops" bug. Cleanup is handled by TweetDetailView's lifecycle.
         } else if mode == .embeddedDetail {
             // Embedded/quoted tweet video: pause and clean up (independent player instance).
             player?.pause()
@@ -1567,9 +1412,9 @@ struct SimpleVideoPlayer: View {
         
         // Handle visibility changes - simplified logic to avoid conflicts
         if visible {
-            // For fullscreen and detail modes, always allow setup regardless of shouldLoadVideo
-            if mode == .mediaBrowser || mode == .tweetDetail {
-                        // Fullscreen/Detail mode - checking state
+            // Fullscreen always allows setup regardless of shouldLoadVideo.
+            if mode == .mediaBrowser {
+                        // Fullscreen mode - checking state
                 
                 // Check if video failed and needs retry
                 if loadingState.hasFailed {
@@ -1787,23 +1632,6 @@ struct SimpleVideoPlayer: View {
                     originalMuteState: originalMuteState
                 )
                 resetProgressiveBufferTarget(for: player.currentItem)
-            }
-
-            // For tweetDetail mode, pause when scrolled out of view
-            // (onDisappear doesn't fire when just scrolling, only when view is removed)
-            if mode == .tweetDetail, let player = player {
-                if player.rate > 0 {
-                    // Save state before pausing for potential resume
-                    PersistentVideoStateManager.shared.saveState(
-                        videoMid: mid,
-                        currentTime: player.currentTime(),
-                        wasPlaying: true,
-                        context: .detailView
-                    )
-                    player.pause()
-                    playbackState = .paused
-                    print("⏸️ [SimpleVideoPlayer] Paused tweetDetail video \(mid) - scrolled out of view")
-                }
             }
 
             // NOTE: For mediaCell, pausing is handled in handleOnDisappear() to avoid conflicts
@@ -2408,7 +2236,7 @@ struct SimpleVideoPlayer: View {
                     self.playbackState = .notStarted
                     
                     // Recreate if needed
-                    let shouldRecreate = (self.shouldLoadVideo || wasPlaying || self.mode == .tweetDetail || self.mode == .mediaBrowser)
+                    let shouldRecreate = (self.shouldLoadVideo || wasPlaying || self.mode == .mediaBrowser)
                     if shouldRecreate {
                         self.setupPlayer()
                     }
@@ -2618,7 +2446,7 @@ struct SimpleVideoPlayer: View {
             playbackState = .notStarted
             
             // Only recreate if video should be loaded or was playing
-            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .tweetDetail || mode == .mediaBrowser)
+            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .mediaBrowser)
             
             if shouldRecreate {
                 setupPlayer()
@@ -2722,7 +2550,7 @@ struct SimpleVideoPlayer: View {
             self.player = nil
             loadingState = .idle
             playbackState = .notStarted
-            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .tweetDetail || mode == .mediaBrowser)
+            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .mediaBrowser)
             if shouldRecreate {
                 setupPlayer()
             }
@@ -2744,7 +2572,7 @@ struct SimpleVideoPlayer: View {
             self.player = nil
             loadingState = .idle
             playbackState = .notStarted
-            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .tweetDetail || mode == .mediaBrowser)
+            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .mediaBrowser)
             if shouldRecreate {
                 setupPlayer()
             }
@@ -2877,7 +2705,7 @@ struct SimpleVideoPlayer: View {
                     }
                 } else {
                     // For other modes, resume if was playing
-                    let shouldResume = (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
+                    let shouldResume = (shouldLoadVideo || mode == .mediaBrowser)
                     if shouldResume {
                         // Validate player is ready before playing
                         if playerItem.status == .readyToPlay {
@@ -2987,7 +2815,7 @@ struct SimpleVideoPlayer: View {
                 loadingState = .idle
             }
             
-            if shouldLoadVideo || mode == .tweetDetail {
+            if shouldLoadVideo {
                 setupPlayer()
             }
 
@@ -2996,7 +2824,7 @@ struct SimpleVideoPlayer: View {
             representableId += 1
             
             if let cachedState = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
-                let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
+                let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .mediaBrowser)
                 if shouldResume && player?.rate == 0 {
                     // CRITICAL: Always ensure muteState is correct before playing
                     if mode == .mediaCell, let player = player {
@@ -3318,9 +3146,7 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleVideoLayerRefresh() {
-        // This is called when DetailVideoManager detects screen lock recovery.
-        // Force view refresh for historical detail/fullscreen mode instances.
-        if mode == .tweetDetail || mode == .mediaBrowser {
+        if mode == .mediaBrowser {
             representableId += 1
             
             // Ensure player is in correct state
@@ -3811,113 +3637,9 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Mark as loading to prevent duplicate calls (unless already loaded from tweetDetail path)
+        // Mark as loading to prevent duplicate setup calls.
         if !loadingState.isLoaded {
             loadingState = .loading
-        }
-        
-        // SPECIAL CASE: For TweetDetail mode, use singleton DetailVideoManager
-        if mode == .tweetDetail {
-            
-            // Check if singleton already has this exact video playing
-            if let existingPlayer = DetailVideoManager.shared.currentPlayer,
-               DetailVideoManager.shared.currentVideoMid == mid {
-                // Only assign to view if player item is ready (prevents black flash).
-                // If still loading from a previous Path B Task, let that Task finish.
-                if let item = existingPlayer.currentItem, item.status == .readyToPlay {
-                    self.player = existingPlayer
-                    self.loadingState = .loaded
-                    existingPlayer.isMuted = false
-                    self.configurePlayer(existingPlayer)
-                } else if self.player == nil {
-                    // Still waiting for ready — keep spinner visible, don't re-create
-                    self.loadingState = .loading
-                }
-                return
-            }
-            
-            LocalHTTPServer.shared.clearCancelledState(for: mid)
-            LocalHTTPServer.shared.setPrimaryMediaID(mid)
-
-            // Detail uses its own player instance. SharedAssetCache may reuse the
-            // underlying asset/segments, but the live feed AVPlayer is never borrowed.
-            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
-               let cachedItem = cachedPlayer.currentItem {
-                print("📱 [DetailVideoManager] Reusing cached feed asset for detail-owned player \(mid)")
-                let playerItem = AVPlayerItem(asset: cachedItem.asset)
-                playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-                let newPlayer = AVPlayer(playerItem: playerItem)
-                newPlayer.isMuted = false
-
-                DetailVideoManager.shared.currentPlayer?.pause()
-                DetailVideoManager.shared.currentPlayer = newPlayer
-                DetailVideoManager.shared.currentVideoMid = mid
-
-                self.player = newPlayer
-                self.loadingState = playerItem.status == .readyToPlay ? .loaded : .loading
-                self.configurePlayer(newPlayer)
-
-                if playerItem.status != .readyToPlay {
-                    newPlayer.play()
-                }
-                return
-            }
-
-            print("📱 [DetailVideoManager] Loading detail-owned player for \(mid)")
-            SharedAssetCache.shared.prepareUncachedFocusedLoad(for: mid, owner: "detail")
-            setupPlayerTask?.cancel()
-            setupPlayerTask = Task.detached(priority: .userInitiated) {
-                do {
-                    // Check cancellation before proceeding
-                    try Task.checkCancellation()
-                    
-                    let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
-                        for: uniquePlayerURL,
-                        mediaID: mid,
-                        mediaType: mediaType
-                    )
-                    
-                    // Check cancellation again after async operation
-                    try Task.checkCancellation()
-                    
-                    let newPlayer = AVPlayer(playerItem: playerItem)
-                    newPlayer.isMuted = false
-                    // Enable network loading while paused for HLS data fetching
-                    playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-
-                    await MainActor.run {
-                        // Check if task was cancelled while we were waiting
-                        guard !Task.isCancelled else { return }
-
-                        // Stop old singleton player if exists
-                        DetailVideoManager.shared.currentPlayer?.pause()
-
-                        // Store new player in singleton
-                        DetailVideoManager.shared.currentPlayer = newPlayer
-                        DetailVideoManager.shared.currentVideoMid = mid
-
-                        self.player = newPlayer
-                        self.loadingState = playerItem.status == .readyToPlay ? .loaded : .loading
-                        self.configurePlayer(newPlayer)
-
-                        // Kick-start data fetching if item isn't ready yet
-                        if playerItem.status != .readyToPlay {
-                            newPlayer.play()
-                        }
-
-                        self.setupPlayerTask = nil
-                    }
-                } catch {
-                    // Only handle error if not cancelled
-                    guard !Task.isCancelled else { return }
-                    print("ERROR: Failed to create player: \(error.localizedDescription)")
-                    await MainActor.run {
-                        self.handleError(strategy: .loadFailure)
-                        self.setupPlayerTask = nil
-                    }
-                }
-            }
-            return
         }
 
         // SPECIAL CASE: Embedded/quoted tweet video inside TweetDetailView.
@@ -4074,9 +3796,9 @@ struct SimpleVideoPlayer: View {
         // Check if player has buffered any data
         let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
         
-        // For fullscreen/detail modes, ensure player has buffered data
-        if mode == .mediaBrowser || mode == .tweetDetail {
-            // Fullscreen/detail mode - trust player state, KVO will handle ready state
+        // For fullscreen mode, ensure player has buffered data
+        if mode == .mediaBrowser {
+            // Fullscreen mode - trust player state, KVO will handle ready state
         } else {
             // For MediaCell mode, check player readiness but trust players with buffered data
             if playerItem.status != .readyToPlay {
@@ -4170,8 +3892,8 @@ struct SimpleVideoPlayer: View {
         // Ensure the player is also cached in SharedAssetCache for consistency
         SharedAssetCache.shared.cachePlayer(cachedState.player, for: playerCacheKey)
         
-        // For fullscreen/detail modes, check if player needs repositioning
-        if mode == .mediaBrowser || mode == .tweetDetail {
+        // For fullscreen mode, check if player needs repositioning
+        if mode == .mediaBrowser {
             
             let currentTime = cachedState.player.currentTime()
             let duration = cachedState.player.currentItem?.duration ?? .zero
@@ -4386,59 +4108,7 @@ struct SimpleVideoPlayer: View {
             setupPlayerObservers(player)
         }
         
-        // CRITICAL: During foreground recovery, skip checkPlaybackConditions here to avoid duplicate playback
-        // The KVO observers (status + buffer) will handle playback when the player is ready
-        // This prevents flicker from multiple playback attempts
         if !hasRecoveredThisCycle {
-            // TweetDetail: restore saved position BEFORE any playback to prevent "play then jump back".
-            // For tweetDetail mode, wait for player item to be ready before checking if video finished
-            if mode == .tweetDetail {
-                // If player item is ready, check immediately
-                if let playerItem = player.currentItem,
-                   playerItem.status == .readyToPlay {
-                    if startTweetDetailRestoreIfNeeded(for: player) {
-                        return
-                    }
-                } else {
-                    // Player item not ready yet - set up observer to check when ready
-                    let playerItem = player.currentItem
-                    if playerItem != nil {
-                        // Wait for player item to become ready, then check
-                        let capturedPlayer = player
-                        Task { @MainActor in
-                            var attempts = 0
-                            while attempts < 50 {
-                                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                                if let item = self.player?.currentItem,
-                                   item.status == .readyToPlay,
-                                   self.player === capturedPlayer {
-                                    // CRITICAL: Update loadingState now that item is ready.
-                                    // Without this, checkPlaybackConditions() may bail on the
-                                    // !loadingState.isLoading guard and never start playback.
-                                    if self.loadingState.isLoading {
-                                        self.loadingState = .loaded
-                                    }
-                                    // If restore starts an async seek, it will re-trigger playback later.
-                                    if self.startTweetDetailRestoreIfNeeded(for: capturedPlayer) {
-                                        return
-                                    }
-                                    // No restore needed (or restore was a no-op): now that we're ready,
-                                    // re-run playback conditions to ensure autoplay actually starts.
-                                    self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
-                                    return
-                                }
-                                attempts += 1
-                            }
-                            // If still not ready after waiting, give normal playback a chance
-                            // while keeping the loading affordance visible.
-                            if self.player === capturedPlayer {
-                                self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
-                            }
-                        }
-                        return // Don't proceed with normal playback yet
-                    }
-                }
-            }
             // Start playback if needed (normal flow, not recovery)
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
         }
@@ -4646,7 +4316,7 @@ struct SimpleVideoPlayer: View {
         
         // Simple approach: Tell AVPlayer what to do and let IT handle the rest
         // For MediaCell mode, observe when player is ready and react accordingly
-        if mode == .mediaCell || mode == .embeddedDetail || mode == .tweetDetail {
+        if mode == .mediaCell || mode == .embeddedDetail {
             let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
             
             // Observe player status to know when it's ready
@@ -4705,12 +4375,6 @@ struct SimpleVideoPlayer: View {
                         // VideoPlaybackCoordinator controls all playback via notifications
                         if self.mode == .mediaCell {
                             // NOT auto-playing - waiting for coordinator
-                        } else if self.mode == .tweetDetail {
-                            // Detail view video became ready — update loading state and start playback
-                            if loadingState.isLoading {
-                                loadingState = .loaded
-                            }
-                            self.checkPlaybackConditions(autoPlay: true, isVisible: self.isVisible)
                         } else if self.mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
                             // Embedded video in detail view - use checkPlaybackConditions
                             self.checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: self.isVisible)
@@ -5221,7 +4885,7 @@ struct SimpleVideoPlayer: View {
                         cachedPlayer.pause()
                     }
                     cachedPlayer.isMuted = MuteState.shared.isMuted
-                } else if mode == .mediaBrowser || mode == .tweetDetail {
+                } else if mode == .mediaBrowser {
                     cachedPlayer.isMuted = false
                 }
                 
@@ -5231,28 +4895,14 @@ struct SimpleVideoPlayer: View {
     }
     
     private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
-        // TweetDetail: if we're in the middle of restoring (seek-before-play), do not start playback yet.
-        // This prevents any other lifecycle/change handlers from calling play() at t=0.
-        if mode == .tweetDetail, isApplyingDetailRestore {
-            return
-        }
-        
         // Validate and recover from invalid player states
         // These can occur due to background transitions, memory pressure, or AVFoundation issues
         if !validatePlayerState() {
             return
         }
-
-        // TweetDetail: do not start playback until the item is ready.
-        // Otherwise we can briefly play a few frames and then seek/rewind (e.g. "finished in MediaCell"),
-        // which causes a momentary black flash.
-        if mode == .tweetDetail {
-            guard let player = player, let item = player.currentItem else { return }
-            guard item.status == .readyToPlay else { return }
-        }
         
         // Check if all conditions are met for autoplay
-        // For fullscreen and tweetDetail modes, bypass shouldLoadVideo check.
+        // For fullscreen mode, bypass shouldLoadVideo check.
         // For embeddedDetail in detail views, bypass shouldLoadVideo (autoplay independently).
         // For embeddedDetail in feed, respect shouldLoadVideo (coordinator manages).
         // Use NavigationStateManager because it's set immediately when detail view appears

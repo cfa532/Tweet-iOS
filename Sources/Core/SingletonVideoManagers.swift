@@ -2929,10 +2929,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         detailStartupRecoveryItem = nil
         detailStartupRecoveryAttemptCount = 0
         detailStartupUnknownAttemptCount = 0
-        if hasKVOObserver, let playerItem = currentPlayer?.currentItem {
-            playerItem.removeObserver(self, forKeyPath: "status")
-            hasKVOObserver = false
-        }
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
@@ -3068,7 +3064,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
     }
 
     private var videoCompletionObserver: NSObjectProtocol?
-    private var hasKVOObserver = false // Track if KVO observer was added
 
     private func isSharedFeedPlayer(_ player: AVPlayer, mid: String) -> Bool {
         SharedAssetCache.shared.getCachedPlayer(for: mid) === player
@@ -3226,11 +3221,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
             NotificationCenter.default.removeObserver(obs)
             videoCompletionObserver = nil
         }
-        if hasKVOObserver, let pi = currentPlayer?.currentItem {
-            pi.removeObserver(self, forKeyPath: "status")
-            hasKVOObserver = false
-        }
-
         currentVideoMid = mid
         pendingFeedResumeTime = nil
         activeFeedHandoffTime = nil
@@ -3372,6 +3362,10 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
 
     private func applyStartupAudioMuteIfNeeded() {
         guard let player = currentPlayer else { return }
+        if player.rate > 0 || player.timeControlStatus == .playing {
+            clearStartupAudioMuteForPlayback(on: player)
+            return
+        }
         let now = Date()
         if now < startupAudioMuteUntil {
             player.isMuted = true
@@ -3386,6 +3380,13 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         } else {
             player.isMuted = false
         }
+    }
+
+    private func clearStartupAudioMuteForPlayback(on player: AVPlayer?) {
+        startupAudioUnmuteTask?.cancel()
+        startupAudioUnmuteTask = nil
+        startupAudioMuteUntil = .distantPast
+        player?.isMuted = false
     }
 
     /// Pause the current video (e.g. when swiping away)
@@ -3632,11 +3633,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         detailStartupUnknownAttemptCount = 0
         detailStallItemRebuildCount = 0
 
-        if hasKVOObserver, let playerItem = currentPlayer?.currentItem {
-            playerItem.removeObserver(self, forKeyPath: "status")
-            hasKVOObserver = false
-        }
-
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
@@ -3881,6 +3877,7 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         resetDetailRenderingProgress(to: player.currentTime())
         let bufferPolicy = applyFeedStylePrePlayBuffering(to: player, item: item)
         print("📱 [DetailVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(detailDiagnostic(player, item: item))")
+        clearStartupAudioMuteForPlayback(on: player)
         player.play()
         isPlaying = true
         didFinishPlayback = false
@@ -4370,124 +4367,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         return duration - current <= 0.5
     }
 
-    /// Set current video for detail view (LEGACY — used by SimpleVideoPlayer tweetDetail mode)
-    func setCurrentVideo(url: URL, mid: String, autoPlay: Bool = true) {
-        if detailLoadTask != nil, let oldMid = currentVideoMid {
-            SharedAssetCache.shared.cancelTransientLoading(for: oldMid)
-        }
-        detailLoadTask?.cancel()
-        detailLoadTask = nil
-        loadGeneration += 1
-        let generation = loadGeneration
-
-        // If switching to a different video, stop the current one
-        if currentVideoMid != mid {
-            currentPlayer?.pause()
-            
-            // Remove KVO observer from previous player item (only if it was added)
-            if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
-                playerItem.removeObserver(self, forKeyPath: "status")
-                hasKVOObserver = false
-            }
-            
-            // Remove video completion observer from previous video
-            if let observer = videoCompletionObserver {
-                NotificationCenter.default.removeObserver(observer)
-                videoCompletionObserver = nil
-            }
-        }
-        
-        currentVideoMid = mid
-        Task { @MainActor [weak self] in
-            guard let self, self.currentVideoMid == mid else { return }
-            self.refreshDetailCachedMediaContent(for: mid)
-        }
-        
-        // Check if we have saved state for this video
-        let hasSavedState = PersistentVideoStateManager.shared.shouldRestorePlayback(
-            videoMid: mid,
-            context: .detailView
-        )
-        
-        // Activate audio session for video playback
-        AudioSessionManager.shared.activateForVideoPlayback()
-        
-        detailLoadTask = Task(priority: .userInitiated) { @MainActor in
-            do {
-                try Task.checkCancellation()
-                
-                // Create independent player with disk caching support
-                // Get the asset from SharedAssetCache (which uses CachingPlayerItem for HLS)
-                // but create our own independent player instance
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: mid)
-                try Task.checkCancellation()
-                let playerItem = AVPlayerItem(asset: asset)
-                let newPlayer = AVPlayer(playerItem: playerItem)
-                
-                guard !Task.isCancelled,
-                      self.loadGeneration == generation,
-                      self.currentVideoMid == mid else {
-                    newPlayer.pause()
-                    newPlayer.replaceCurrentItem(with: nil)
-                    return
-                }
-                self.detailLoadTask = nil
-                // Store the new player (independent from MediaCell)
-                self.currentPlayer = newPlayer
-                
-                // Configure the player
-                self.currentPlayer?.isMuted = false // Always unmuted in detail
-                
-                // Add observers for the player item
-                if let playerItem = self.currentPlayer?.currentItem {
-                    // Add KVO observer for player item status
-                    playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
-                    self.hasKVOObserver = true
-                    
-                    // Add video completion observer
-                    self.setupVideoCompletionObserver(playerItem)
-                    
-                    // Check if player item is ready immediately
-                    if playerItem.status == .readyToPlay {
-                        // Restore saved position if available
-                        if hasSavedState,
-                           let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) {
-                            print("🔄 [DETAIL VIDEO MANAGER] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
-                            self.currentPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                                guard finished, let self = self else { return }
-                                Task { @MainActor in
-                                    if autoPlay || savedState.wasPlaying {
-                                        self.currentPlayer?.play()
-                                        self.isPlaying = true
-                                        print("▶️ [DETAIL VIDEO MANAGER] Resumed playback from saved position")
-                                    }
-                                }
-                            }
-                        } else if autoPlay {
-                            self.currentPlayer?.play()
-                            self.isPlaying = true
-                        }
-                    }
-                }
-                
-                // Auto-play immediately if requested and no saved state
-                if autoPlay && !hasSavedState {
-                    self.currentPlayer?.play()
-                    self.isPlaying = true
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Auto-playing player for mediaID: \(mid)")
-                }
-            } catch {
-                if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
-                    return
-                }
-                guard self.loadGeneration == generation,
-                      self.currentVideoMid == mid else { return }
-                self.detailLoadTask = nil
-                print("ERROR: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
-            }
-        }
-    }
-    
     /// Clear current video
     func clearCurrentVideo(preserveSharedFeedPlayback: Bool = false) {
         let pendingLoadMid = currentVideoMid
@@ -4540,12 +4419,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         pendingFeedResumeTime = nil
         activeFeedHandoffTime = nil
 
-        // Remove legacy KVO observer before clearing (only if it was added)
-        if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
-            playerItem.removeObserver(self, forKeyPath: "status")
-            hasKVOObserver = false
-        }
-
         // Remove video completion observer
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -4584,69 +4457,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         loadFailedVideoMid = nil
     }
     
-    /// Setup video completion observer
-    private func setupVideoCompletionObserver(_ playerItem: AVPlayerItem) {
-        print("DEBUG: [DETAIL VIDEO MANAGER] Setting up video completion observer for \(currentVideoMid ?? "unknown")")
-        
-        // Remove existing observer if any
-        if let observer = videoCompletionObserver {
-            print("DEBUG: [DETAIL VIDEO MANAGER] Removing existing video completion observer for \(currentVideoMid ?? "unknown")")
-            NotificationCenter.default.removeObserver(observer)
-            videoCompletionObserver = nil
-        }
-        
-        // Add new observer for video completion
-        videoCompletionObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { [weak self] notification in
-            let notificationObjectDescription = String(describing: notification.object ?? "nil")
-            MainActor.assumeIsolated {
-                guard let self = self else { return }
-                guard let player = self.currentPlayer else { 
-                    print("DEBUG: [DETAIL VIDEO MANAGER] No current player when video finished")
-                    return 
-                }
-                
-                // CRITICAL FIX: Validate that video actually finished
-                // Check that current time is near the end of duration
-                let currentTime = player.currentTime()
-                guard let item = player.currentItem else {
-                    print("⚠️ [DETAIL VIDEO MANAGER] No player item when video finished")
-                    return
-                }
-                
-                let duration = item.duration
-                let currentMid = self.currentVideoMid
-                
-                // Validate duration is valid
-                guard duration.isValid, duration.seconds > 0 else {
-                    print("⚠️ [DETAIL VIDEO MANAGER] Video finished notification but duration is invalid (\(duration.seconds)s) for \(currentMid ?? "unknown")")
-                    return
-                }
-                
-                // Check if we're actually at the end (within 0.5 seconds of duration)
-                let timeUntilEnd = duration.seconds - currentTime.seconds
-                guard timeUntilEnd < 0.5 else {
-                    print("⚠️ [DETAIL VIDEO MANAGER] Ignoring premature finish notification for \(currentMid ?? "unknown") - current: \(currentTime.seconds)s, duration: \(duration.seconds)s, remaining: \(timeUntilEnd)s")
-                    return
-                }
-                
-                print("✅ [DETAIL VIDEO MANAGER] Video legitimately finished for \(currentMid ?? "unknown") - current: \(currentTime.seconds)s, duration: \(duration.seconds)s")
-                print("DEBUG: [DETAIL VIDEO MANAGER] Notification object: \(notificationObjectDescription)")
-                print("DEBUG: [DETAIL VIDEO MANAGER] Player current item: \(player.currentItem?.description ?? "nil")")
-                
-                // Just pause - no automatic rewind
-                // Will rewind when user tries to play
-                print("DEBUG: [DETAIL VIDEO MANAGER] Video finished for \(currentMid ?? "unknown") - paused, ready to replay")
-                self.isPlaying = false
-            }
-        }
-        
-        print("DEBUG: [DETAIL VIDEO MANAGER] Video completion observer setup complete for \(currentVideoMid ?? "unknown")")
-    }
-    
     /// Toggle play/pause
     func togglePlayback() {
         guard let player = currentPlayer else { return }
@@ -4660,28 +4470,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         }
     }
     
-    // MARK: - KVO Observer
-    
-    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-        guard keyPath == "status",
-              let playerItem = object as? AVPlayerItem else { return }
-        let observedItemID = ObjectIdentifier(playerItem)
-        let observedStatus = playerItem.status
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if observedStatus == .readyToPlay {
-                if let player = currentPlayer,
-                   let currentItem = player.currentItem,
-                   ObjectIdentifier(currentItem) == observedItemID {
-                        player.play()
-                        isPlaying = true
-                }
-            } else if observedStatus == .failed {
-                print("ERROR: [DETAIL VIDEO MANAGER] Player item failed to load")
-            }
-        }
-    }
-
     private func handleReloadVisibleVideosOnly() {
         guard isActive else { return }
 
