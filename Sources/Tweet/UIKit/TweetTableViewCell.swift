@@ -7,6 +7,23 @@
 //
 import UIKit
 
+// TEMPORARY (Jul 2026 fling-scroll stall investigation) — logs when a call on this
+// instrumented path takes long enough to plausibly cause a dropped-frame/catch-up-jump
+// scroll stall. Remove once the stall is root-caused.
+enum StallLog {
+    static let thresholdMs: Double = 4
+    @inline(__always)
+    static func measure<T>(_ label: String, _ extra: @autoclosure () -> String = "", _ block: () -> T) -> T {
+        let start = CACurrentMediaTime()
+        let result = block()
+        let elapsedMs = (CACurrentMediaTime() - start) * 1000
+        if elapsedMs >= thresholdMs {
+            print("⏱️ [STALL] \(label) took \(String(format: "%.1f", elapsedMs))ms \(extra())")
+        }
+        return result
+    }
+}
+
 class TweetTableViewCell: UITableViewCell {
     static let reuseIdentifier = "TweetTableViewCell"
 
@@ -98,11 +115,13 @@ class TweetTableViewCell: UITableViewCell {
         // Detect content overflow: the cell wants more height than the table
         // allotted. This can happen when async content finishes loading after
         // initial render, but it is too expensive to run on every video relayout.
-        let desired = ceil(tweetContentView.systemLayoutSizeFitting(
-            CGSize(width: bounds.width, height: 0),
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
-        ).height)
+        let desired = StallLog.measure("systemLayoutSizeFitting", "tweetId=\(currentTweetId ?? "?")") {
+            ceil(tweetContentView.systemLayoutSizeFitting(
+                CGSize(width: bounds.width, height: 0),
+                withHorizontalFittingPriority: .required,
+                verticalFittingPriority: .fittingSizeLevel
+            ).height)
+        }
 
         if desired > bounds.height + 1 && abs(desired - lastReportedDesiredHeight) > 1 {
             lastReportedDesiredHeight = desired
@@ -199,14 +218,16 @@ class TweetTableViewCell: UITableViewCell {
             self.setNeedsLayout()
         }
 
-        tweetContentView.configure(
-            tweet: tweet,
-            hproseInstance: hproseInstance,
-            isPinned: isPinned,
-            isLastItem: isLastItem,
-            parentViewController: parentViewController,
-            allowDeleteAll: allowDeleteAll
-        )
+        StallLog.measure("TweetTableViewCell.configure", "tweetId=\(tweet.mid)") {
+            tweetContentView.configure(
+                tweet: tweet,
+                hproseInstance: hproseInstance,
+                isPinned: isPinned,
+                isLastItem: isLastItem,
+                parentViewController: parentViewController,
+                allowDeleteAll: allowDeleteAll
+            )
+        }
     }
 
     override func prepareForReuse() {

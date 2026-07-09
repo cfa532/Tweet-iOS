@@ -1229,16 +1229,25 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     // MARK: - Video
 
     private func setupVideoCell(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
+        let __stallStart = CACurrentMediaTime()
+        defer {
+            let elapsedMs = (CACurrentMediaTime() - __stallStart) * 1000
+            if elapsedMs >= StallLog.thresholdMs {
+                print("⏱️ [STALL] setupVideoCell TOTAL took \(String(format: "%.1f", elapsedMs))ms mediaID=\(attachment.mid)")
+            }
+        }
 
         // Reset any previous video state
         let hasSameVideoRecoveryCover = isVideoAttachment
             && self.attachment?.mid == attachment.mid
             && imageView.image != nil
         pendingRecoverySeekTime = nil
-        cleanupVideoPlayer(
-            reason: "setupVideoCell",
-            preserveBackgroundCover: hasSameVideoRecoveryCover
-        )
+        StallLog.measure("cleanupVideoPlayer", "mediaID=\(attachment.mid)") {
+            cleanupVideoPlayer(
+                reason: "setupVideoCell",
+                preserveBackgroundCover: hasSameVideoRecoveryCover
+            )
+        }
         if hasSameVideoRecoveryCover {
             isHoldingBackgroundVideoCover = true
             backgroundVideoCoverMid = attachment.mid
@@ -1253,16 +1262,24 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // immediately. If AVPlayer stalls before first render, a poster is much
         // better feedback than a black rectangle.
         transitionTo(imageView.image == nil ? .noContent : .thumbnail)
-        observeCachedVideoThumbnail(for: attachment.mid)
-        observePreloadedVideoPlayer(for: attachment.mid)
+        StallLog.measure("observeCachedVideoThumbnail", "mediaID=\(attachment.mid)") {
+            observeCachedVideoThumbnail(for: attachment.mid)
+        }
+        StallLog.measure("observePreloadedVideoPlayer", "mediaID=\(attachment.mid)") {
+            observePreloadedVideoPlayer(for: attachment.mid)
+        }
         if let transitionPoster = FullScreenVideoManager.shared.transitionPoster(for: attachment.mid) {
             applyCachedVideoThumbnail(transitionPoster)
         }
         if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: attachment.mid) {
             applyCachedVideoThumbnail(thumbnail, preValidated: true)
         }
-        requestCachedVideoCoverIfNeeded(for: attachment.mid)
-        requestFallbackVideoThumbnailIfNeeded(for: attachment.mid)
+        StallLog.measure("requestCachedVideoCoverIfNeeded", "mediaID=\(attachment.mid)") {
+            requestCachedVideoCoverIfNeeded(for: attachment.mid)
+        }
+        StallLog.measure("requestFallbackVideoThumbnailIfNeeded", "mediaID=\(attachment.mid)") {
+            requestFallbackVideoThumbnailIfNeeded(for: attachment.mid)
+        }
 
         // Tap gesture for fullscreen — on both videoPlayerView and imageView so that
         // any visible video is tappable (thumbnail state or non-primary use imageView).
@@ -1334,7 +1351,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             }
             .store(in: &cancellables)
 
-        schedulePlayerAcquireIfNeeded()
+        StallLog.measure("schedulePlayerAcquireIfNeeded", "mediaID=\(attachment.mid)") {
+            schedulePlayerAcquireIfNeeded()
+        }
 
         // Mute button on all feed videos; timer shown only for single-attachment videos
         setupMuteButton()

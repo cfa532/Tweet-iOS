@@ -456,8 +456,10 @@ class TweetCellContentView: UIView {
         headerView.configure(tweet: tweet)
 
         // Body
-        bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
-                           parentViewController: parentViewController)
+        StallLog.measure("bodyView.configure(regular)", "tweetId=\(tweet.mid)") {
+            bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
+                               parentViewController: parentViewController)
+        }
         bodyView.onTweetBodyTap = { [weak self] in self?.navigateToTweetDetail(tweet, source: "bodyMoreTap") }
         updateBodyToActionSpacing()
 

@@ -2337,6 +2337,13 @@ class TweetTableViewController: UITableViewController {
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let __stallStart = CACurrentMediaTime()
+        defer {
+            let elapsedMs = (CACurrentMediaTime() - __stallStart) * 1000
+            if elapsedMs >= StallLog.thresholdMs {
+                print("⏱️ [STALL] cellForRowAt row=\(indexPath.row) took \(String(format: "%.1f", elapsedMs))ms scrolling=\(isUserDragging || isDecelerating)")
+            }
+        }
         guard let cell = tableView.dequeueReusableCell(
             withIdentifier: TweetTableViewCell.reuseIdentifier,
             for: indexPath
@@ -2414,27 +2421,46 @@ class TweetTableViewController: UITableViewController {
         }
 
         // Height change callback for embedded tweets that load asynchronously
-        // When the embedded tweet loads, the cell expands and the table must re-layout
-        cell.onHeightChanged = { [weak self, weak cell] desiredHeight in
-            guard let self, let cell,
-                  let indexPath = self.tableView.indexPath(for: cell) else { return }
-            // Use Auto Layout's fitting height directly. calculateTweetHeight is a
-            // manual estimate that can disagree with the cell's actual content
-            // (esp. when an embedded tweet finishes loading after first render).
-            let tweet: Tweet
-            if indexPath.row < self.pinnedTweets.count {
-                tweet = self.pinnedTweets[indexPath.row]
-            } else {
-                let idx = indexPath.row - self.pinnedTweets.count
-                guard idx < self.tweets.count else { return }
-                tweet = self.tweets[idx]
-            }
-            self.setCachedHeight(desiredHeight, for: tweet, width: cell.bounds.width)
+        // When the embedded tweet loads, the cell expands and the table must re-layout.
+        //
+        // Only wired up for retweets/quotes: that's the ONLY case where a tweet's height
+        // can legitimately change after the deterministic calculateTweetHeight/willDisplay
+        // pass (the embedded original tweet's author/content arriving later). Plain tweets
+        // (text/image/video, no originalTweetId) have no async height dependency — their
+        // media height comes from server-provided aspectRatio metadata, not runtime player
+        // state — so leaving onHeightChanged nil here means shouldCheckForHeightOverflow()
+        // short-circuits before ever calling the expensive systemLayoutSizeFitting.
+        // Measured cost matters: that call can spike into the hundreds of ms (not its usual
+        // single-digit ms) when it runs on a cell whose video player is mid-attach, because
+        // it forces Auto Layout to synchronously query the AVPlayerLayer-backed view. Since
+        // runDeferredHeightOverflowChecksForVisibleCells() forces this check — bypassing the
+        // isUserDragging/isDecelerating defer — for every visible cell right at scroll-stop,
+        // an unlucky video cell there was blocking the main thread long enough to freeze the
+        // fling and make UIScrollView's momentum physics "teleport" once unblocked (the
+        // stop-then-catch-up-jump users saw). Restricting this to retweets/quotes removes the
+        // check for the vast majority of cells while keeping the one case it exists for.
+        if tweet.originalTweetId != nil {
+            cell.onHeightChanged = { [weak self, weak cell] desiredHeight in
+                guard let self, let cell,
+                      let indexPath = self.tableView.indexPath(for: cell) else { return }
+                // Use Auto Layout's fitting height directly. calculateTweetHeight is a
+                // manual estimate that can disagree with the cell's actual content
+                // (esp. when an embedded tweet finishes loading after first render).
+                let tweet: Tweet
+                if indexPath.row < self.pinnedTweets.count {
+                    tweet = self.pinnedTweets[indexPath.row]
+                } else {
+                    let idx = indexPath.row - self.pinnedTweets.count
+                    guard idx < self.tweets.count else { return }
+                    tweet = self.tweets[idx]
+                }
+                self.setCachedHeight(desiredHeight, for: tweet, width: cell.bounds.width)
 
-            if self.isUserDragging || self.isDecelerating {
-                self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
-            } else {
-                self.performPendingHeightRelayout(include: tweet.mid)
+                if self.isUserDragging || self.isDecelerating {
+                    self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
+                } else {
+                    self.performPendingHeightRelayout(include: tweet.mid)
+                }
             }
         }
 
@@ -3255,14 +3281,25 @@ class TweetTableViewController: UITableViewController {
         let currentCount = tableView.numberOfRows(inSection: 0)
         guard expectedCount == currentCount else { return }
 
-        // Anchor to the first visible cell so that height changes in rows above the
-        // viewport don't shift visible content.
+        // Anchor to the first visible cell whose height isn't itself among the pending
+        // changes, so the anchor's own rectForRow (measured before AND after the reflow)
+        // isn't thrown off by its own row growing/shrinking. If the changing row sits
+        // above a "first visible row" anchor that's also changing, using rectForRow
+        // before/after can disagree with how UIKit distributes the height delta,
+        // producing a visible over/undershoot (jump-then-settle) instead of a clean
+        // absorb. Falls back to the first visible row if every visible row is changing.
         var anchorIndexPath: IndexPath?
         var anchorOffset: CGFloat = 0
-        if let firstVisible = tableView.indexPathsForVisibleRows?.first {
-            let cellTop = tableView.rectForRow(at: firstVisible).origin.y
-            anchorOffset = tableView.contentOffset.y - cellTop
-            anchorIndexPath = firstVisible
+        if let visibleIndexPaths = tableView.indexPathsForVisibleRows {
+            let stableAnchor = visibleIndexPaths.first { indexPath in
+                guard let tweet = tweetForRow(indexPath.row) else { return false }
+                return !pendingHeightRelayoutTweetIds.contains(tweet.mid)
+            }
+            if let chosen = stableAnchor ?? visibleIndexPaths.first {
+                let cellTop = tableView.rectForRow(at: chosen).origin.y
+                anchorOffset = tableView.contentOffset.y - cellTop
+                anchorIndexPath = chosen
+            }
         }
 
         pendingHeightRelayoutTweetIds.removeAll()

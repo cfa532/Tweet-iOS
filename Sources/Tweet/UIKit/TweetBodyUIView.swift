@@ -383,14 +383,16 @@ class TweetBodyUIView: UIView {
 
             // Configure pure UIKit media grid
             mediaGridView.videoCoordinator = videoCoordinator
-            mediaGridView.configure(
-                tweet: tweet,
-                attachments: mediaAttachments,
-                isEmbedded: isEmbedded,
-                cellTweetId: cellTweetId,
-                shouldLoadVideo: true,
-                parentViewController: parentViewController
-            )
+            StallLog.measure("mediaGridView.configure", "tweetId=\(tweet.mid) count=\(mediaAttachments.count)") {
+                mediaGridView.configure(
+                    tweet: tweet,
+                    attachments: mediaAttachments,
+                    isEmbedded: isEmbedded,
+                    cellTweetId: cellTweetId,
+                    shouldLoadVideo: true,
+                    parentViewController: parentViewController
+                )
+            }
 
             // Caption for single video
             let caption = singleVideoCaption(tweet: tweet, attachments: mediaAttachments, hasTextContent: !contentLabel.isHidden)
