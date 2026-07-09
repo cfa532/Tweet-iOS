@@ -320,6 +320,18 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// a candidate that's about to be scrolled past a moment later.
     private let primarySelectionActiveDragDelay: TimeInterval = 0.5
 
+    /// Debounced demotion of the active-scroll primary once it appears to have left
+    /// onScreenMediaCells. onScreenMediaCells uses the same ~50% visibility threshold as
+    /// selection, and during a fling a video's measured ratio can flicker across that
+    /// boundary between consecutive throttled viewport updates even though it never truly
+    /// left the screen — demoting (and thus stopping/restarting) on a single observation
+    /// caused the same video to be selected as primary twice in a row moments apart
+    /// (stop → immediately restart), a visible playback hitch. Confirm the miss survives
+    /// one grace window before actually stopping it.
+    private nonisolated(unsafe) var pendingDemotionWorkItem: DispatchWorkItem?
+    private var pendingDemotionIdentifier: String?
+    private let primaryDemotionGraceDelay: TimeInterval = 0.3
+
     /// Cached feed-visible videos (computed from visibleTweetIds + allVideos).
     /// Only includes videos that can actually appear in `MediaGridView` (first 4 attachments).
     /// Sorted by position (topmost cell first; then attachmentIndex within the same cell).
@@ -448,6 +460,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Invalidate timers
         overlayUncoverPlaybackTimer?.invalidate()
         primarySelectionWorkItem?.cancel()
+        pendingDemotionWorkItem?.cancel()
     }
     
     private func handleOverlayCoverageChanged(isCovered: Bool?, source: String?) {
@@ -2012,15 +2025,37 @@ class VideoPlaybackCoordinator: ObservableObject {
         // is genuinely gone (not merely below the continue threshold — fully outside
         // onScreenMediaCells, so it can't come back this gesture), leaving `phase` stuck
         // at .primaryPlaying for a now-invisible video blocks this function's own
-        // `phase == .idle` precondition for the rest of the scroll. Demote it here so a
-        // new candidate can still be identified and confirmed before the scroll stops.
-        if phase == .primaryPlaying,
-           let primaryId = primaryVideoId,
-           !onScreenMediaCells.contains(primaryId) {
-            stopPrimaryVideo(identifier: primaryId)
-            phase = .idle
-            currentlyPlayingVideoIds.removeAll()
-            primaryVideoId = nil
+        // `phase == .idle` precondition for the rest of the scroll. Demote it (debounced,
+        // see primaryDemotionGraceDelay) so a new candidate can still be identified and
+        // confirmed before the scroll stops.
+        if phase == .primaryPlaying, let primaryId = primaryVideoId {
+            if onScreenMediaCells.contains(primaryId) {
+                if pendingDemotionIdentifier == primaryId {
+                    pendingDemotionWorkItem?.cancel()
+                    pendingDemotionWorkItem = nil
+                    pendingDemotionIdentifier = nil
+                }
+            } else if pendingDemotionIdentifier != primaryId {
+                pendingDemotionWorkItem?.cancel()
+                pendingDemotionIdentifier = primaryId
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.pendingDemotionWorkItem = nil
+                    guard self.pendingDemotionIdentifier == primaryId else { return }
+                    self.pendingDemotionIdentifier = nil
+                    guard self.phase == .primaryPlaying,
+                          self.primaryVideoId == primaryId,
+                          !self.onScreenMediaCells.contains(primaryId) else { return }
+                    print("🎬 [COORD] activeScroll: demoting \(self.shortIdent(primaryId)) (still absent from onScreenMediaCells after \(self.primaryDemotionGraceDelay)s grace)")
+                    self.stopPrimaryVideo(identifier: primaryId)
+                    self.phase = .idle
+                    self.currentlyPlayingVideoIds.removeAll()
+                    self.primaryVideoId = nil
+                    self.scheduleStartPrimary(debounceDelay: self.primarySelectionActiveDragDelay)
+                }
+                pendingDemotionWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + primaryDemotionGraceDelay, execute: workItem)
+            }
         }
 
         guard phase == .idle else { return }
@@ -2082,15 +2117,21 @@ class VideoPlaybackCoordinator: ObservableObject {
         cancelPendingPrimarySelection()
 
         // Stop the previous primary video if different
-        if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier {
+        let previousPrimaryId = primaryVideoId
+        if let previousPrimaryId, previousPrimaryId != primary.identifier {
             if let prevDelegate = self.delegate(forIdentifier: previousPrimaryId),
                let previousPrimary = allVideos.first(where: { $0.identifier == previousPrimaryId }) {
                 prevDelegate.shouldStopVideo(withMid: previousPrimary.videoMid)
             }
         }
 
-        // Pause all visible videos except the new primary
-        for video in visibleVideos where video != primary {
+        // Pause all visible videos except the new primary. Also exclude the previous
+        // primary — it was already fully stopped above via shouldStopVideo; routing it
+        // through pauseVideo too would redundantly re-run frame capture
+        // (captureLastFrameIfPossible) and visual-state refresh a second time, plus start
+        // a pointless volume-fade-out animation on a player that was just stopped. With
+        // frequent primary switches during active scroll this doubled cost adds up.
+        for video in visibleVideos where video != primary && video.identifier != previousPrimaryId {
             pauseVideo(video)
         }
 
