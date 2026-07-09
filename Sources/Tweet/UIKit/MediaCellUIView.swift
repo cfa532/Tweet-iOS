@@ -1268,6 +1268,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         StallLog.measure("observePreloadedVideoPlayer", "mediaID=\(attachment.mid)") {
             observePreloadedVideoPlayer(for: attachment.mid)
         }
+        observeCommentsCoordinatorPlayback(for: attachment.mid)
         if let transitionPoster = FullScreenVideoManager.shared.transitionPoster(for: attachment.mid) {
             applyCachedVideoThumbnail(transitionPoster)
         }
@@ -1379,6 +1380,49 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     return
                 }
                 self.applyCachedVideoThumbnail(thumbnail, preValidated: true)
+            }
+        }
+    }
+
+    /// CommentsVideoPlaybackCoordinator (TweetDetailView's comment list) has no scroll
+    /// tracker feeding VideoPlaybackCoordinator's onScreenMediaCells, and never registers
+    /// its videos with that coordinator at all — it drives playback purely by posting
+    /// these three NotificationCenter events (see startVideo/stopCurrentVideo in
+    /// CommentsVideoPlaybackCoordinator.swift), which SimpleVideoPlayer used to listen
+    /// for directly before the feed's video cells were rewritten in pure UIKit. Restore
+    /// that listener here so a comment's video actually reacts once it's picked as the
+    /// topmost visible comment video.
+    private func observeCommentsCoordinatorPlayback(for mediaID: String) {
+        if let o = shouldPlayObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = shouldPauseObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = shouldStopObserver { NotificationCenter.default.removeObserver(o) }
+
+        shouldPlayObserver = NotificationCenter.default.addObserver(
+            forName: .shouldPlayVideo, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard notification.userInfo?["videoMid"] as? String == mediaID else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.attachment?.mid == mediaID else { return }
+                if !self.isVisible { self.setVisible(true) }
+                self.handleCoordinatorPlayCommand()
+            }
+        }
+        shouldPauseObserver = NotificationCenter.default.addObserver(
+            forName: .shouldPauseVideo, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard notification.userInfo?["videoMid"] as? String == mediaID else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.attachment?.mid == mediaID else { return }
+                self.handleCoordinatorPauseCommand()
+            }
+        }
+        shouldStopObserver = NotificationCenter.default.addObserver(
+            forName: .shouldStopVideo, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard notification.userInfo?["videoMid"] as? String == mediaID else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.attachment?.mid == mediaID else { return }
+                self.handleCoordinatorStopCommand()
             }
         }
     }
