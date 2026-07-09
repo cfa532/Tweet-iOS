@@ -306,7 +306,19 @@ class VideoPlaybackCoordinator: ObservableObject {
     private nonisolated(unsafe) var overlayUncoverPlaybackTimer: Timer?
     private nonisolated(unsafe) var primarySelectionWorkItem: DispatchWorkItem?
     private var primarySelectionGeneration = 0
+    /// Identifier the currently-pending primarySelectionWorkItem was scheduled for, so
+    /// repeated scheduleStartPrimary() calls for the SAME candidate (e.g. one per
+    /// scrollViewDidScroll tick) don't keep resetting its confirmation timer.
+    private var pendingPrimarySelectionIdentifier: String?
     private let primarySelectionDebounceDelay: TimeInterval = 0.20
+
+    /// Confirmation window used when a primary candidate is identified while the user is
+    /// still actively dragging (finger down), rather than during deceleration-settling or
+    /// a hard scroll-stop. Longer than primarySelectionDebounceDelay because a fast fling
+    /// can cross several videos' visibility thresholds in quick succession — this window
+    /// exists specifically to avoid committing to (playing/preloading/demoting others for)
+    /// a candidate that's about to be scrolled past a moment later.
+    private let primarySelectionActiveDragDelay: TimeInterval = 0.5
 
     /// Cached feed-visible videos (computed from visibleTweetIds + allVideos).
     /// Only includes videos that can actually appear in `MediaGridView` (first 4 attachments).
@@ -1912,13 +1924,17 @@ class VideoPlaybackCoordinator: ObservableObject {
         primarySelectionGeneration += 1
         primarySelectionWorkItem?.cancel()
         primarySelectionWorkItem = nil
+        pendingPrimarySelectionIdentifier = nil
     }
 
     /// Schedule primary video playback.
     /// Fast path: idle table -> play immediately. While the table is moving, debounce
     /// candidate selection so a nearly-settled viewport can still pick the right primary.
-    private func scheduleStartPrimary() {
-        guard phase == .idle, identifyPrimaryVideo() != nil else {
+    /// `debounceDelay` lets callers use a longer confirmation window (e.g. while the user
+    /// is still actively dragging — see identifyPrimaryVideoDuringActiveScroll) than the
+    /// default deceleration-settling/scroll-stop debounce.
+    private func scheduleStartPrimary(debounceDelay: TimeInterval? = nil) {
+        guard phase == .idle, let candidate = identifyPrimaryVideo() else {
             cancelPendingPrimarySelection()
             return
         }
@@ -1931,24 +1947,57 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
+        // Don't reset an already-running confirmation timer for the same candidate.
+        // Callers like identifyPrimaryVideoDuringActiveScroll invoke this on every
+        // scrollViewDidScroll tick during a drag, even when the candidate hasn't
+        // changed — restarting the timer every call would mean it never fires until
+        // motion stops completely for a full debounce window, defeating the point of
+        // identifying a primary mid-drag.
+        if primarySelectionWorkItem != nil, pendingPrimarySelectionIdentifier == candidate.identifier {
+            return
+        }
+
+        pendingPrimarySelectionIdentifier = candidate.identifier
         primarySelectionGeneration += 1
         let generation = primarySelectionGeneration
         primarySelectionWorkItem?.cancel()
 
+        let delay = debounceDelay ?? primarySelectionDebounceDelay
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self,
                       self.primarySelectionGeneration == generation,
                       self.phase == .idle,
-                      self.identifyPrimaryVideo() != nil else {
+                      let confirmedCandidate = self.identifyPrimaryVideo(),
+                      confirmedCandidate.identifier == candidate.identifier else {
                     return
                 }
                 self.primarySelectionWorkItem = nil
+                self.pendingPrimarySelectionIdentifier = nil
                 self.startPrimaryVideoPlayback()
             }
         }
         primarySelectionWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + primarySelectionDebounceDelay, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    /// Identify a primary candidate as soon as it crosses the visibility threshold during
+    /// ACTIVE dragging (finger still down) instead of waiting for the scroll to stop or
+    /// even settle into deceleration. Only identification happens immediately here —
+    /// starting playback and preloading (in startPrimaryVideoPlayback) are withheld behind
+    /// scheduleStartPrimary's confirmation timer (primarySelectionActiveDragDelay, 0.5s),
+    /// and only committed if the same candidate still qualifies once the timer fires.
+    ///
+    /// Deliberately requires phase == .idle (enforced inside scheduleStartPrimary via its
+    /// own guard): a healthy currently-playing primary is never preempted by a new
+    /// candidate merely crossing the threshold — "keep the current primary alive while
+    /// actively scrolling" (see reconcilePlaybackForCurrentVisibility) still applies, so
+    /// other videos are never demoted to non-primary just because a candidate appeared.
+    /// They're only demoted once this candidate is confirmed and startPrimaryVideoPlayback
+    /// actually runs.
+    func identifyPrimaryVideoDuringActiveScroll() {
+        guard isScrolling, phase == .idle, !onScreenMediaCells.isEmpty else { return }
+        scheduleStartPrimary(debounceDelay: primarySelectionActiveDragDelay)
     }
 
     /// Start primary video playback — play topmost video immediately.

@@ -352,6 +352,12 @@ class FollowingsTweetViewModel: ObservableObject {
     
     func fetchTweets(page: UInt, pageSize: UInt, isPeriodicRefresh: Bool = false) async throws -> [Tweet?] {
         guard await beginPageZeroFetchIfNeeded(page: page, isPeriodicRefresh: isPeriodicRefresh) else {
+            // TEMPORARY (Jul 2026 "no more tweets" flash investigation): a deduped
+            // page-0 fetch returns [] here, which upstream (TweetListView) can't tell
+            // apart from a genuinely empty server page — if that [] flows into
+            // updateTweetsWithServerData, it can flip paginationState to
+            // .serverExhausted even though there's plenty more content.
+            print("⚠️ [PAGINATION STATE] fetchTweets page=\(page) returning [] due to page-0 dedup gate (isPeriodicRefresh=\(isPeriodicRefresh))")
             return []
         }
         defer {

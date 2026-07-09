@@ -3828,6 +3828,17 @@ class TweetTableViewController: UITableViewController {
             visibleTweetIds: visibleTweetIds
         )
 
+        // While the user's finger is still down (not just decelerating), identify a
+        // primary candidate as soon as it crosses the visibility threshold rather than
+        // waiting for the scroll to stop or settle. This only marks a tentative
+        // candidate — actually starting playback/preloading and demoting other videos
+        // to non-primary stays withheld behind a confirmation window inside the
+        // coordinator, so a fast fling that keeps crossing new thresholds doesn't
+        // thrash between candidates.
+        if isUserDragging {
+            videoCoordinator.identifyPrimaryVideoDuringActiveScroll()
+        }
+
         // Directional image preload is handled separately so video coordination stays light during scroll.
     }
     
