@@ -119,6 +119,14 @@ private struct UIKitMediaGridRepresentable: UIViewRepresentable {
             parentViewController: parentViewController
         )
         uiView.isGridVisible = isVisible
+        // This SwiftUI wrapper has no scroll-based visibility tracker of its own
+        // (unlike the feed's TweetTableViewController), so nothing else ever flips
+        // MediaCellUIView.isVisible for image cells here — without this, images in
+        // contexts like TweetDetailView's comment list never load and never show a
+        // spinner. Safe to call every configure(): setVisible(true) on an already-
+        // visible cell is a cheap no-op (see MediaCellUIView.setVisible's early-return
+        // guard).
+        uiView.markImageCellsVisibleIfNeeded()
         uiView.setNeedsLayout()
     }
 }

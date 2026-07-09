@@ -500,6 +500,23 @@ class MediaGridUIView: UIView {
         hasInitialized = true
     }
 
+    /// Marks non-video (image) cells visible so they start loading, for callers with
+    /// no scroll-based visibility tracker of their own. The feed drives per-cell
+    /// visibility precisely via TweetTableViewController's
+    /// mediaVisibilityIdentifiers()/setVisible() on every scroll pass; isGridVisible
+    /// alone was never enough to load images — it only flips this grid's own flag,
+    /// never MediaCellUIView.isVisible, so images sat blank with no spinner in
+    /// SwiftUI-only contexts (e.g. comments) that just set isGridVisible on appear.
+    /// Video cells are intentionally skipped: comments drive video visibility
+    /// separately via CommentsVideoPlaybackCoordinator, and mixing this in would
+    /// double up on that flow.
+    func markImageCellsVisibleIfNeeded() {
+        guard isGridVisible else { return }
+        for cellView in cellViews where !cellView.isVideoAttachment {
+            cellView.setVisible(true)
+        }
+    }
+
     private func handleBecameInvisible() {
         guard let parentTweet else { return }
         let hasVideos = attachments.contains { $0.type == .video || $0.type == .hls_video }
