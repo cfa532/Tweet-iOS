@@ -1272,6 +1272,21 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// If coordinator thinks primary is playing but it's actually stuck, resets and restarts.
     func requestStartPlaybackIfStalled(requesterIdentifier: String? = nil) {
         if phase == .idle {
+            // While actively scrolling, route through the same active-scroll confirmation
+            // window as identifyPrimaryVideoDuringActiveScroll (0.5s, candidate-deduped)
+            // instead of scheduleStartPrimary's shorter default debounce (0.2s). Before the
+            // fix that lets `phase` correctly go idle mid-scroll when the primary scrolls
+            // fully off-screen, phase was pinned at .primaryPlaying for virtually the whole
+            // gesture, so this "cell became ready, is anyone idle?" safety net rarely mattered
+            // mid-scroll. Now that phase goes idle more readily during scroll, every cell's
+            // player-ready callback landing here would otherwise re-trigger a primary switch
+            // on the shorter, uncoordinated timer — causing more frequent player attach/pause
+            // churn while still actively scrolling than intended.
+            if isScrolling {
+                print("🎬 [COORD] stallCheck: phase is idle (scrolling), deferring to active-scroll selection")
+                identifyPrimaryVideoDuringActiveScroll()
+                return
+            }
             print("🎬 [COORD] stallCheck: phase is idle, scheduling primary")
             scheduleStartPrimary()
             return
@@ -1988,7 +2003,27 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// They're only demoted once this candidate is confirmed and startPrimaryVideoPlayback
     /// actually runs.
     func identifyPrimaryVideoDuringActiveScroll() {
-        guard isScrolling, phase == .idle, !onScreenMediaCells.isEmpty else { return }
+        guard isScrolling, !onScreenMediaCells.isEmpty else { return }
+
+        // reconcilePlaybackForCurrentVisibility — the only thing that would normally
+        // notice the current primary scrolling off-screen and reset phase back to .idle
+        // — is intentionally skipped for the whole gesture while isScrolling is true
+        // ("keep the current primary alive during active scroll"). But once the primary
+        // is genuinely gone (not merely below the continue threshold — fully outside
+        // onScreenMediaCells, so it can't come back this gesture), leaving `phase` stuck
+        // at .primaryPlaying for a now-invisible video blocks this function's own
+        // `phase == .idle` precondition for the rest of the scroll. Demote it here so a
+        // new candidate can still be identified and confirmed before the scroll stops.
+        if phase == .primaryPlaying,
+           let primaryId = primaryVideoId,
+           !onScreenMediaCells.contains(primaryId) {
+            stopPrimaryVideo(identifier: primaryId)
+            phase = .idle
+            currentlyPlayingVideoIds.removeAll()
+            primaryVideoId = nil
+        }
+
+        guard phase == .idle else { return }
         scheduleStartPrimary(debounceDelay: primarySelectionActiveDragDelay)
     }
 

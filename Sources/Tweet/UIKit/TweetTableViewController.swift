@@ -3817,14 +3817,18 @@ class TweetTableViewController: UITableViewController {
             visibleTweetIds: visibleTweetIds
         )
 
-        // While the user's finger is still down (not just decelerating), identify a
-        // primary candidate as soon as it crosses the visibility threshold rather than
-        // waiting for the scroll to stop or settle. This only marks a tentative
-        // candidate — actually starting playback/preloading and demoting other videos
-        // to non-primary stays withheld behind a confirmation window inside the
-        // coordinator, so a fast fling that keeps crossing new thresholds doesn't
+        // Identify a primary candidate as soon as it crosses the visibility threshold,
+        // whether the user's finger is still down or the table is decelerating after a
+        // fling — rather than waiting for the scroll to fully stop. A typical fling is a
+        // short drag followed by a long momentum deceleration, so most of the scrolling
+        // (and most threshold crossings) happens during isDecelerating, not isUserDragging;
+        // gating this on isUserDragging alone meant videos that scrolled into view during
+        // the coast phase never got identified until the scroll fully stopped. This only
+        // marks a tentative candidate — actually starting playback/preloading and demoting
+        // other videos to non-primary stays withheld behind a confirmation window inside
+        // the coordinator, so a fast fling that keeps crossing new thresholds doesn't
         // thrash between candidates.
-        if isUserDragging {
+        if isUserDragging || isDecelerating {
             videoCoordinator.identifyPrimaryVideoDuringActiveScroll()
         }
 
