@@ -111,6 +111,7 @@
 		46B95F4E2E0F98CE00D81590 /* ThemeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */; };
 		46B95F502E1269F500D81590 /* IdentifiablePhotosPickerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */; };
 		46D9079A2F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */; };
+		46D9079C2F5C00010020F8AA /* CommentListUIKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D9079B2F5C00010020F8AA /* CommentListUIKitView.swift */; };
 		46DEEPLINK2E00000000000001 /* DeeplinkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */; };
 		46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */; };
 		46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32A2DDA038E00AEF31F /* AppConfig.swift */; };
@@ -271,6 +272,7 @@
 		46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentifiablePhotosPickerItem.swift; sourceTree = "<group>"; };
 		46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsVideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
+		46D9079B2F5C00010020F8AA /* CommentListUIKitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentListUIKitView.swift; sourceTree = "<group>"; };
 		46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeeplinkManager.swift; sourceTree = "<group>"; };
 		46E5B32A2DDA038E00AEF31F /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		46E5B3312DDA1AF500AEF31F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Tweet/Assets.xcassets; sourceTree = SOURCE_ROOT; };
@@ -683,6 +685,7 @@
 				26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */,
 				7A8664A026114553AC588E7A /* TweetTableViewController.swift */,
 				E2C260FE784A43EF9772A398 /* TweetTableView.swift */,
+				46D9079B2F5C00010020F8AA /* CommentListUIKitView.swift */,
 				46B795852F21B0D70060DCB3 /* LightweightVideoPlayerView.swift */,
 				8847CCE1FD4E422DA4B12B94 /* AvatarUIView.swift */,
 				A172CBEA1C9C4682B758AE93 /* TweetHeaderUIView.swift */,
@@ -861,6 +864,7 @@
 				46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */,
 				7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */,
 				46D9079A2F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift in Sources */,
+				46D9079C2F5C00010020F8AA /* CommentListUIKitView.swift in Sources */,
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */,

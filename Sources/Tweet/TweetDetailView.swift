@@ -907,6 +907,8 @@ struct TweetDetailView: View {
     @State private var hasLoadedOriginalTweet = false
     @State private var hasServedCachedCommentsForCurrentParentTweet = false
     @State private var currentCommentsParentTweetId = ""
+    @State private var selectedCommentUserForNavigation: User?
+    @State private var commentProfileNavigationPath = NavigationPath()
 
     // Bottom navigation bar scroll tracking
     @State private var isNavigationBarVisible = true
@@ -1071,6 +1073,19 @@ struct TweetDetailView: View {
         }
         .sheet(item: $menuShareItems) { data in
             ShareSheetView(items: data.items)
+        }
+        .navigationDestination(item: $selectedCommentUserForNavigation) { user in
+            ProfileView(
+                user: user,
+                onLogout: nil,
+                navigationPath: $commentProfileNavigationPath,
+                onShowLogin: { showLoginSheet = true },
+                onShowToast: { message, isError in
+                    toastMessage = message
+                    toastIsError = isError
+                    showToast = true
+                }
+            )
         }
         .overlay(alignment: .top) {
             if showToast {
@@ -1426,9 +1441,9 @@ struct TweetDetailView: View {
     }
     
     private var commentsListView: some View {
-        CommentListView(
-            title: "Comments",
+        CommentListUIKitView(
             comments: $comments,
+            parentTweet: displayTweet,
             commentFetcher: { page, size in
                 let parentTweet = await MainActor.run { displayTweet }
 
@@ -1459,7 +1474,6 @@ struct TweetDetailView: View {
                 }
                 return fetched
             },
-            showTitle: false,
             notifications: [
                 CommentListNotification(
                     name: .newCommentAdded,
@@ -1483,31 +1497,18 @@ struct TweetDetailView: View {
                     }
                 )
             ],
-            isEmbedded: true, // Embedded in TweetDetailView's ScrollView, avoid nested scrolling
             hasUserScrolled: $hasUserScrolledComments,
-            rowView: { comment in
-                CommentVideoTrackingWrapper(
-                    parentTweet: displayTweet,
-                    comment: comment,
-                    coordinator: commentsVideoCoordinator,
-                    scrollCoordinateSpace: "commentsScroll"
-                )
-                .environment(\.videoListProvider, { videoMid, outerTweetId, mediaTweetId, attachmentIndex in
-                    let list = commentsVideoCoordinator.getVideoListForFullscreen()
-                    guard !list.isEmpty else { return nil }
-                    let startIndex = list.firstIndex(where: {
-                        $0.videoMid == videoMid &&
-                        $0.contextTweetId == outerTweetId &&
-                        $0.mediaTweetId == mediaTweetId &&
-                        $0.attachmentIndex == attachmentIndex
-                    }) ?? list.firstIndex(where: {
-                        $0.videoMid == videoMid &&
-                        $0.contextTweetId == displayTweet.mid &&
-                        $0.mediaTweetId == mediaTweetId &&
-                        $0.attachmentIndex == attachmentIndex
-                    }) ?? 0
-                    return (list, startIndex)
-                })
+            commentsVideoCoordinator: commentsVideoCoordinator,
+            onAvatarTap: { user in
+                selectedCommentUserForNavigation = user
+            },
+            onShowLogin: {
+                showLoginSheet = true
+            },
+            onShowToast: { message, isError in
+                toastMessage = message
+                toastIsError = isError
+                showToast = true
             }
         )
     }

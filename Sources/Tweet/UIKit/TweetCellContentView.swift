@@ -21,6 +21,7 @@ class TweetCellContentView: UIView {
         let isPrivate: Bool
         let isOwnTweet: Bool
         let showsAdminEdit: Bool
+        let commentParentTweetId: String?
     }
 
     // MARK: - Subviews
@@ -97,6 +98,7 @@ class TweetCellContentView: UIView {
     private var cachedMenu: UIMenu?
     private var currentTweetId: String?
     private weak var currentTweet: Tweet?
+    private weak var commentParentTweet: Tweet?
     private weak var parentViewController: UIViewController?
 
     /// Per-feed video coordinator (set by TweetTableViewCell)
@@ -362,9 +364,11 @@ class TweetCellContentView: UIView {
     func configure(tweet: Tweet, hproseInstance: HproseInstance,
                    isPinned: Bool, isLastItem: Bool,
                    parentViewController: UIViewController,
-                   allowDeleteAll: Bool = false) {
+                   allowDeleteAll: Bool = false,
+                   commentParentTweet: Tweet? = nil) {
         self.parentViewController = parentViewController
         self.currentTweet = tweet
+        self.commentParentTweet = commentParentTweet
 
         // Propagate per-feed coordinator to subviews
         bodyView.videoCoordinator = videoCoordinator
@@ -374,18 +378,26 @@ class TweetCellContentView: UIView {
         bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
         embeddedTweetView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
-        let showDelete = Gadget.canShowTweetDeleteMenu(
-            appUser: hproseInstance.appUser,
-            tweetAuthorId: tweet.authorId,
-            allowDeleteAll: allowDeleteAll
-        )
         separatorView.isHidden = isLastItem
-        applyTweetMenuIfNeeded(
-            tweet: tweet,
-            isPinned: isPinned,
-            showDelete: showDelete,
-            hproseInstance: hproseInstance
-        )
+        if let commentParentTweet {
+            applyCommentMenuIfNeeded(
+                comment: tweet,
+                parentTweet: commentParentTweet,
+                hproseInstance: hproseInstance
+            )
+        } else {
+            let showDelete = Gadget.canShowTweetDeleteMenu(
+                appUser: hproseInstance.appUser,
+                tweetAuthorId: tweet.authorId,
+                allowDeleteAll: allowDeleteAll
+            )
+            applyTweetMenuIfNeeded(
+                tweet: tweet,
+                isPinned: isPinned,
+                showDelete: showDelete,
+                hproseInstance: hproseInstance
+            )
+        }
 
         // Skip if same tweet
         if currentTweetId == tweet.mid { return }
@@ -466,6 +478,7 @@ class TweetCellContentView: UIView {
         // Action bar
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
+        actionBar.parentTweet = commentParentTweet
         // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
@@ -573,6 +586,7 @@ class TweetCellContentView: UIView {
         // Action bar on original tweet
         actionBar.configure(tweet: originalTweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
+        actionBar.parentTweet = commentParentTweet
         // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
@@ -636,6 +650,7 @@ class TweetCellContentView: UIView {
         // Action bar on quoting tweet
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
+        actionBar.parentTweet = commentParentTweet
         // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
@@ -739,7 +754,8 @@ class TweetCellContentView: UIView {
             showDelete: showDelete,
             isPrivate: tweet.isPrivate == true,
             isOwnTweet: tweet.authorId == hproseInstance.appUser.mid,
-            showsAdminEdit: showsAdminEdit
+            showsAdminEdit: showsAdminEdit,
+            commentParentTweetId: nil
         )
 
         if currentMenuKey != key {
@@ -887,6 +903,91 @@ class TweetCellContentView: UIView {
         return UIMenu(title: "", children: actions)
     }
 
+    private func applyCommentMenuIfNeeded(
+        comment: Tweet,
+        parentTweet: Tweet,
+        hproseInstance: HproseInstance
+    ) {
+        let canDelete = comment.authorId == hproseInstance.appUser.mid
+            || parentTweet.authorId == hproseInstance.appUser.mid
+            || Gadget.isResearchAdminUser(hproseInstance.appUser)
+        let key = MenuCacheKey(
+            tweetId: comment.mid,
+            isPinned: false,
+            showDelete: canDelete,
+            isPrivate: comment.isPrivate == true,
+            isOwnTweet: comment.authorId == hproseInstance.appUser.mid,
+            showsAdminEdit: false,
+            commentParentTweetId: parentTweet.mid
+        )
+
+        if currentMenuKey != key {
+            cachedMenu = createCommentMenu(
+                comment: comment,
+                parentTweet: parentTweet,
+                canDelete: canDelete,
+                hproseInstance: hproseInstance
+            )
+            currentMenuKey = key
+        }
+
+        if let cachedMenu {
+            headerView.setMenu(cachedMenu)
+        }
+    }
+
+    private func createCommentMenu(
+        comment: Tweet,
+        parentTweet: Tweet,
+        canDelete: Bool,
+        hproseInstance: HproseInstance
+    ) -> UIMenu {
+        var actions: [UIAction] = []
+
+        let truncatedId = String(comment.mid.prefix(8)) + "..."
+        actions.append(UIAction(title: truncatedId, image: UIImage(systemName: "doc.on.clipboard")) { _ in
+            UIPasteboard.general.string = comment.mid
+        })
+
+        guard canDelete else {
+            return UIMenu(title: "", children: actions)
+        }
+
+        let deleteAction = UIAction(
+            title: NSLocalizedString("Delete", comment: "Menu item"),
+            image: UIImage(systemName: "trash"),
+            attributes: .destructive
+        ) { _ in
+            NotificationCenter.default.post(
+                name: .commentDeleted,
+                object: nil,
+                userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
+            )
+            parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
+
+            Task {
+                if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
+                   let count = response["count"] as? Int {
+                    await MainActor.run {
+                        parentTweet.commentCount = count
+                    }
+                } else {
+                    NotificationCenter.default.post(
+                        name: .commentRestored,
+                        object: nil,
+                        userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
+                    )
+                    await MainActor.run {
+                        parentTweet.commentCount = (parentTweet.commentCount ?? 0) + 1
+                    }
+                }
+            }
+        }
+        actions.append(deleteAction)
+
+        return UIMenu(title: "", children: actions)
+    }
+
     // MARK: - Visibility
 
     /// Forward media visibility to the body's media grid and embedded tweet's media grid
@@ -958,6 +1059,7 @@ class TweetCellContentView: UIView {
         cachedMenu = nil
         currentTweetId = nil
         currentTweet = nil
+        commentParentTweet = nil
 
         avatarView.prepareForReuse()
         headerView.prepareForReuse()

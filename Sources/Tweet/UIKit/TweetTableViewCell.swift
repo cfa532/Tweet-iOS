@@ -193,7 +193,8 @@ class TweetTableViewCell: UITableViewCell {
         onTweetTap: ((Tweet) -> Void)?,
         onShowLogin: (() -> Void)?,
         onShowToast: ((String, Bool) -> Void)?,
-        allowDeleteAll: Bool = false
+        allowDeleteAll: Bool = false,
+        commentParentTweet: Tweet? = nil
     ) {
         currentTweetId = tweet.mid
         applyTheme()
@@ -225,7 +226,8 @@ class TweetTableViewCell: UITableViewCell {
                 isPinned: isPinned,
                 isLastItem: isLastItem,
                 parentViewController: parentViewController,
-                allowDeleteAll: allowDeleteAll
+                allowDeleteAll: allowDeleteAll,
+                commentParentTweet: commentParentTweet
             )
         }
     }
