@@ -872,7 +872,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         _ parentTweet: Tweet,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
-    ) async throws -> ([Tweet?], failedIds: [String]) {
+    ) async throws -> [Tweet?] {
         let result = try await fetchComments(
             forTweetId: parentTweet.mid,
             authorId: parentTweet.authorId,
@@ -893,7 +893,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         authorId: MimeiId,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
-    ) async throws -> ([Tweet?], failedIds: [String]) {
+    ) async throws -> [Tweet?] {
         let entry = "get_comments"
         // Phase A (demotion prep): snapshot @MainActor appUser.mid.
         let appUserMid = await MainActor.run { self.appUser.mid }
@@ -948,9 +948,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
         }
         
-        // Process each item in the response array, preserving nil positions
+        // Process each item in the response array, preserving nil positions.
+        // A malformed/unparseable entry means the comment either hasn't synced
+        // from the author's write node to the read node yet, or is genuinely
+        // gone — either way, the server (`get_comments`) now handles cleaning
+        // up IDs it can confirm are stale, so the client no longer needs to
+        // sync or retry individual comment IDs itself.
         var commentsWithAuthors: [Tweet?] = []
-        var failedIds: [String] = []
         for item in response {
             if let dict = item {
                 do {
@@ -983,63 +987,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     commentsWithAuthors.append(comment)
                 } catch {
                     print("Error processing comment: \(error)")
-                    if let commentId = dict["mid"] as? String {
-                        failedIds.append(commentId)
-                    }
                     commentsWithAuthors.append(nil)
                 }
             } else {
                 commentsWithAuthors.append(nil)
             }
         }
-        return (commentsWithAuthors, failedIds)
-    }
-
-    /// Sync a single comment from the author's home node to the current read node, then retry fetching it.
-    func syncComment(commentId: String, parentTweet: Tweet) async -> Tweet? {
-        // Phase A (demotion prep): snapshot @MainActor parentTweet.author + appUser.mid.
-        let existingAuthor = await MainActor.run { parentTweet.author }
-        let author: User
-        if let existingAuthor {
-            author = existingAuthor
-        } else {
-            guard let fetched = try? await fetchUser(parentTweet.authorId) else { return nil }
-            author = fetched
-        }
-        let authorSnap = await MainActor.run { UserRecord(user: author) }
-        let appUserMid = await MainActor.run { self.appUser.mid }
-        guard let authorBaseUrl = authorSnap.baseUrl,
-              let authorHostId = authorSnap.hostIds?.first else { return nil }
-        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
-
-        let updateParams: [String: Any] = [
-            "aid": appId, "ver": "last", "version": "v2",
-            "hostid": authorHostId, "userid": parentTweet.authorId, "mid": commentId
-        ]
-        _ = await invokeRunMApp(using: client, entry: "node_update_mid_by_score", params: updateParams)
-
-        let retryParams: [String: Any] = [
-            "aid": appId, "ver": "last", "version": "v2",
-            "tweetid": commentId, "appuserid": appUserMid
-        ]
-        guard let raw = await invokeRunMApp(using: client, entry: "get_tweet", params: retryParams),
-              let unwrapped = try? Self.unwrapV2Response(raw),
-              let dict = unwrapped as? [String: Any],
-              let comment = try? await mergeTweetFromDict(dict) else {
-            blackList.recordFailure(commentId)
-            return nil
-        }
-
-        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
-        let cachedAuthorValid = await MainActor.run { cachedAuthor.username != nil && cachedAuthor.baseUrl != nil }
-        if cachedAuthorValid {
-            await MainActor.run { comment.author = cachedAuthor }
-        } else if let commentAuthor = try? await fetchUser(comment.authorId) {
-            await MainActor.run { comment.author = commentAuthor }
-        } else {
-            await MainActor.run { comment.author = User.getInstance(mid: comment.authorId) }
-        }
-        return comment
+        return commentsWithAuthors
     }
 
     // MARK: - Tweet Operations

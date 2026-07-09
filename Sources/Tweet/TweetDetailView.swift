@@ -896,7 +896,6 @@ struct TweetDetailView: View {
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
-    @State private var failedCommentIds: Set<String> = []
     // Flipped to true on the first real user pan, detected via the
     // BottomBarScrollTracker observing the parent UIScrollView. Used by
     // CommentListView to suppress the open-time auto-probe's flash.
@@ -1447,7 +1446,7 @@ struct TweetDetailView: View {
                     }
                 }
 
-                let (fetched, failed) = try await hproseInstance.fetchComments(
+                let fetched = try await hproseInstance.fetchComments(
                     parentTweet,
                     pageNumber: page,
                     pageSize: size
@@ -1457,9 +1456,6 @@ struct TweetDetailView: View {
                         hasServedCachedCommentsForCurrentParentTweet = true
                         TweetDetailCommentsCache.shared.setComments(fetched.compactMap { $0 }, for: parentTweet.mid)
                     }
-                }
-                if !failed.isEmpty {
-                    await MainActor.run { failedCommentIds.formUnion(failed) }
                 }
                 return fetched
             },
@@ -1522,11 +1518,10 @@ struct TweetDetailView: View {
         // READ tweet on appear (comments handled by CommentListView.task)
         Task { await doReadTweet() }
 
-        // SYNC: if nodes differ, resync tweet + any already-known failed comments
+        // SYNC: if nodes differ, resync tweet
         let hostIds = displayTweet.author?.hostIds ?? []
         if hostIds.count >= 2 && hostIds[0] != hostIds[1] {
             Task { await doResyncTweet() }
-            Task { await syncMissingComments() }
         }
 
         // 5-min tick: resync if nodes differ
@@ -1534,8 +1529,7 @@ struct TweetDetailView: View {
             Task { @MainActor in
                 let ids = displayTweet.author?.hostIds ?? []
                 guard ids.count >= 2, ids[0] != ids[1] else { return }
-                Task { await doResyncTweet() }
-                await syncMissingComments()
+                await doResyncTweet()
             }
         }
     }
@@ -1592,20 +1586,17 @@ struct TweetDetailView: View {
         }
     }
 
-    // Pull-to-refresh: READ tweet + comments on hostIds[1], then fire background sync for failed comments
+    // Pull-to-refresh: READ tweet + comments on hostIds[1]. The server
+    // (`get_comments`) now handles cleaning up genuinely-stale comment IDs
+    // itself, so the client no longer needs to sync them.
     private func refreshTweetAndComments() async {
         async let tweetRead: Void = doReadTweet()
         async let commentsRead: Void = refreshComments()
         await tweetRead
         await commentsRead
-
-        let hostIds = displayTweet.author?.hostIds ?? []
-        if hostIds.count >= 2 && hostIds[0] != hostIds[1] && !failedCommentIds.isEmpty {
-            Task { await syncMissingComments() }
-        }
     }
 
-    // READ comments page-by-page on hostIds[1] until overlap or end; collects failedIds
+    // READ comments page-by-page on hostIds[1] until overlap or end.
     private func refreshComments() async {
         do {
             var allNewComments: [Tweet] = []
@@ -1614,10 +1605,9 @@ struct TweetDetailView: View {
             var hasOverlap = false
 
             while !hasOverlap {
-                let (freshComments, failed) = try await hproseInstance.fetchComments(
+                let freshComments = try await hproseInstance.fetchComments(
                     displayTweet, pageNumber: currentPage, pageSize: pageSize
                 )
-                await MainActor.run { failedCommentIds.formUnion(failed) }
 
                 let validComments = freshComments.compactMap { $0 }
                 if validComments.isEmpty { break }
@@ -1637,24 +1627,6 @@ struct TweetDetailView: View {
                 }
             }
         } catch {}
-    }
-
-    // SYNC: for each failed comment not blacklisted, call node_update_mid_by_score then retry
-    private func syncMissingComments() async {
-        let pending = Array(failedCommentIds).filter { !BlackList.shared.isBlacklisted($0) }
-        for commentId in pending {
-            if let comment = await hproseInstance.syncComment(commentId: commentId, parentTweet: displayTweet) {
-                await MainActor.run {
-                    failedCommentIds.remove(commentId)
-                    guard !comments.contains(where: { $0.mid == comment.mid }) else { return }
-                    NotificationCenter.default.post(
-                        name: .commentSynced,
-                        object: nil,
-                        userInfo: ["comment": comment, "parentTweetId": displayTweet.mid]
-                    )
-                }
-            }
-        }
     }
 
     private func configureCommentCacheContextIfNeeded() {
