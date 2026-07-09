@@ -2612,11 +2612,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// A video is visually ready once playback has started and either the layer is
     /// display-ready or the video output has observed a recent decoded frame.
     private func isVisibleVideoFrameReady(_ player: AVPlayer) -> Bool {
-        guard player.timeControlStatus == .playing else { return false }
-        guard videoPlayerView.isLayerReadyForDisplay || hasRecentDecodedPlayback(for: player, maxAge: 1.0) else { return false }
+        let hasRecentDecodedFrame = hasRecentDecodedPlayback(for: player, maxAge: 1.0)
+        guard videoPlayerView.isLayerReadyForDisplay || hasRecentDecodedFrame else { return false }
+        guard player.timeControlStatus == .playing || hasRecentDecodedFrame else { return false }
 
-        // Cached players can report .playing while AVPlayerLayer is still showing
-        // the previous still frame. Keep loading feedback until time actually moves.
+        // AVPlayer can keep reporting `.waitingToPlayAtSpecifiedRate` while decoded
+        // frames and the playback clock are already advancing. Keep loading feedback
+        // until time actually moves, but do not require timeControlStatus to catch up.
         return hasVisiblePlaybackProgress(for: player)
     }
 
@@ -4656,6 +4658,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 || abs(decodedSeconds - lastDecodedPlaybackSeconds) > 0.03) {
                 lastDecodedPlaybackSeconds = decodedSeconds
                 lastDecodedPlaybackProgressDate = Date()
+                lastActualPlaybackDate = lastDecodedPlaybackProgressDate
                 hasRenderedFrameForCurrentPlayer = true
                 if !didLogFirstDecodedPlayback {
                     didLogFirstDecodedPlayback = true
