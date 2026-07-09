@@ -512,7 +512,16 @@ class MediaGridUIView: UIView {
     /// double up on that flow.
     func markImageCellsVisibleIfNeeded() {
         guard isGridVisible else { return }
-        for cellView in cellViews where !cellView.isVideoAttachment {
+        // Video cells are normally left invisible here — this SwiftUI wrapper has no
+        // scroll tracker, so video loading/autoplay is meant to stay driven by the
+        // feed's VideoPlaybackCoordinator (see comment on `isEmbedded` at the call
+        // site). But an embedded/quoted tweet rendered inside TweetDetailView never
+        // gets registered with that coordinator (it's feed-only), so without this its
+        // video would never load at all. Match the existing embeddedDetail precedent
+        // (SimpleVideoPlayer/NavigationStateManager.isDetailViewActive) and let it
+        // load + autoplay independently while a detail view is on screen.
+        let autoplayEmbeddedVideoInDetail = isEmbedded && NavigationStateManager.shared.isDetailViewActive
+        for cellView in cellViews where !cellView.isVideoAttachment || autoplayEmbeddedVideoInDetail {
             cellView.setVisible(true)
         }
     }

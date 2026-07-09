@@ -5231,6 +5231,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 schedulePlayerAcquireIfNeeded()
             }
 
+            // An embedded/quoted tweet's video inside a detail view is never added to
+            // VideoPlaybackCoordinator's video list (that registration only happens for
+            // feed contexts — see TweetItemView/EmbeddedTweetUIView), so it would never
+            // be selected as primary and coordinatorWantsToPlay would stay false forever.
+            // Drive it directly, matching the embeddedDetail precedent elsewhere.
+            if isVideoAttachment, shouldAcquirePlayer, isEmbeddedMedia,
+               NavigationStateManager.shared.isDetailViewActive {
+                handleCoordinatorPlayCommand()
+            }
+
             // Setup foreground observer for images and videos
             setupForegroundObserver()
         } else {
