@@ -3852,8 +3852,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return imageView.image != nil
         }
 
-        let didPreserveCover = preserveFrameToCache(skipImageView: true)
-            || preserveFrameToCache(useVideoOutput: false, skipImageView: true)
+        // showCover=false (the common prepareForReuse case: cell already off-screen,
+        // isVisible=false) means nothing needs the captured frame to display right
+        // now — only the cache needs it for a future re-display. Use the async path
+        // there so the synchronous copyPixelBuffer/downscale work (real main-thread
+        // cost) doesn't run during cell dequeue while scrolling. showCover=true (cell
+        // still visible, e.g. explicit pause/stop) keeps the sync path since the
+        // image must be set before hiding the video layer, to avoid a blank flash.
+        let captureAsync = !showCover
+        let didPreserveCover = preserveFrameToCache(async: captureAsync, skipImageView: true)
+            || preserveFrameToCache(useVideoOutput: false, async: captureAsync, skipImageView: true)
 
         if !didPreserveCover {
             restoreCachedPosterForFailureIfNeeded()

@@ -1994,6 +1994,18 @@ class VideoPlaybackCoordinator: ObservableObject {
                 }
                 self.primarySelectionWorkItem = nil
                 self.pendingPrimarySelectionIdentifier = nil
+                // identifyPrimaryVideo() only requires onScreenMediaCells membership
+                // (the start threshold). During a fast fling this candidate can have
+                // been picked while still comfortably visible, then by the time this
+                // confirmation timer fires (up to primarySelectionActiveDragDelay
+                // later) already dropped below the continue threshold — starting it
+                // now would just mean an immediate enforcePrimaryVisibilityThreshold
+                // stop the instant scroll settles, i.e. play-then-instantly-stop
+                // right as its cell crosses the viewport edge. Skip; the next
+                // viewport pass will pick a candidate with more margin.
+                guard self.continuePlaybackMediaCells.contains(confirmedCandidate.identifier) else {
+                    return
+                }
                 self.startPrimaryVideoPlayback()
             }
         }
