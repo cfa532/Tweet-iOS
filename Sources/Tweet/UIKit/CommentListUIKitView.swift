@@ -223,11 +223,35 @@ private struct CommentListTableRepresentable: UIViewControllerRepresentable {
         Coordinator(tableHeight: $tableHeight)
     }
 
+    @MainActor
     final class Coordinator {
         var tableHeight: Binding<CGFloat>
+        private var pendingHeight: CGFloat?
+        private var isHeightUpdateScheduled = false
 
         init(tableHeight: Binding<CGFloat>) {
             self.tableHeight = tableHeight
+        }
+
+        func scheduleTableHeightUpdate(_ height: CGFloat) {
+            pendingHeight = height
+            guard !isHeightUpdateScheduled else { return }
+
+            isHeightUpdateScheduled = true
+            Task { @MainActor [weak self] in
+                self?.applyPendingHeightUpdate()
+            }
+        }
+
+        private func applyPendingHeightUpdate() {
+            guard let height = pendingHeight else {
+                isHeightUpdateScheduled = false
+                return
+            }
+
+            pendingHeight = nil
+            isHeightUpdateScheduled = false
+            tableHeight.wrappedValue = height
         }
     }
 
@@ -235,7 +259,7 @@ private struct CommentListTableRepresentable: UIViewControllerRepresentable {
         let controller = CommentListTableViewController()
         let coordinator = context.coordinator
         controller.onHeightChange = { height in
-            coordinator.tableHeight.wrappedValue = height
+            coordinator.scheduleTableHeightUpdate(height)
         }
         return controller
     }
