@@ -1000,7 +1000,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         invalidateVisibleVideoCache()
     }
 
-    private func reconcilePlaybackForCurrentVisibility(allowWhileScrolling: Bool = false) {
+    private func reconcilePlaybackForCurrentVisibility() {
         // Video visibility depends on video (media cell) only — use onScreenMediaCells as source of truth
         let currentVisibleIdentifiers = onScreenMediaCells
         let primaryDroppedBelowContinueThreshold: Bool = {
@@ -1023,9 +1023,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         // While the user is actively scrolling, keep the current primary alive.
-        // A slow-deceleration pass may opt in so primary selection can happen
-        // before the final scroll-stop callback.
-        guard !isScrolling || allowWhileScrolling else { return }
+        // (identifyPrimaryVideoDuringActiveScroll handles early candidate identification
+        // separately, without preempting a healthy playing primary — see its doc comment.)
+        guard !isScrolling else { return }
 
         // Stop all videos if none are visible
         if currentVisibleIdentifiers.isEmpty {
@@ -1135,14 +1135,6 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Clear preserve flag when user explicitly scrolls
         shouldPreserveStateOnForeground = false
-    }
-
-    /// Let slow deceleration choose the same primary that scroll-stop would choose,
-    /// without marking the table idle or starting directional player preloads.
-    func reconcilePlaybackForSettlingScroll() {
-        guard isScrolling, !isTableViewScrollIdle else { return }
-        guard !onScreenMediaCells.isEmpty else { return }
-        reconcilePlaybackForCurrentVisibility(allowWhileScrolling: true)
     }
 
     private func stopPrimaryVideo(identifier: String) {

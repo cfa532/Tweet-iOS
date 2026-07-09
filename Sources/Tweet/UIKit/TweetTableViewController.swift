@@ -3089,7 +3089,6 @@ class TweetTableViewController: UITableViewController {
             lastVideoVisibilityUpdate = now
             scheduleVideoVisibilityUpdateNextRunLoop()
         }
-        reconcilePrimaryVideoIfDecelerationIsSettling()
 
         let isUserDrivenScroll = isUserDragging || isDecelerating || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
         if isUserDrivenScroll {
@@ -3178,16 +3177,6 @@ class TweetTableViewController: UITableViewController {
         lastScrollVelocitySampleTime = now
     }
 
-    private func reconcilePrimaryVideoIfDecelerationIsSettling() {
-        guard isDecelerating,
-              !isUserDragging,
-              abs(estimatedScrollVelocityY) <= FeedPlaybackTuning.earlyPrimarySelectionVelocityThreshold else {
-            return
-        }
-
-        videoCoordinator.reconcilePlaybackForSettlingScroll()
-    }
-    
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         // User started dragging - reset callback baseline to current position
         // so accumulated delta starts fresh from the new drag gesture
