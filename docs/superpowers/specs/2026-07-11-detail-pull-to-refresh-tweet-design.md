@@ -16,8 +16,8 @@ Call `refresh_tweet` only from explicit pull-to-refresh gestures in Tweet Detail
 
 - Opening the view keeps its existing `get_tweet` detail-view read.
 - The outer comment-detail scroll view gains pull-to-refresh.
-- Pull-to-refresh calls `refresh_tweet` for the displayed comment and applies the returned data to the existing comment model.
-- Reply pagination behavior remains unchanged.
+- Pull-to-refresh calls `refresh_tweet` for the displayed comment, applies the returned data to the existing comment model, and then calls `get_comments` for page zero of that comment's replies.
+- The refreshed page-zero replies replace the bound reply list. A small external refresh token tells the embedded comment list to reset its page and `hasMoreComments` state so subsequent pagination continues from the refreshed page zero.
 
 ## Failure and Cancellation Behavior
 
@@ -35,4 +35,5 @@ This change does not alter `HproseInstance`, backend request models, comment pag
 - Confirm Tweet Detail pull-to-refresh reaches `doResyncTweet` and then comments.
 - Confirm the five-minute timer reaches `doReadTweet(isInitialLoad: false)` instead of `doResyncTweet`.
 - Confirm Comment Detail pull-to-refresh reaches `refreshTweet` while its open-time task still reaches `getTweet`.
+- Confirm Comment Detail pull-to-refresh subsequently fetches page-zero replies with `fetchComments` and resets embedded pagination state.
 - Build the iOS app target for the simulator.
