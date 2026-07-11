@@ -26,8 +26,10 @@ enum StallLog {
 
 class TweetTableViewCell: UITableViewCell {
     static let reuseIdentifier = "TweetTableViewCell"
+    static let pinnedTweetsDividerHeight: CGFloat = 25
 
     let tweetContentView = TweetCellContentView()
+    private let pinnedTweetsDivider = PinnedTweetsDividerView()
     private var currentTweetId: String?
 
     // Height change tracking
@@ -52,6 +54,7 @@ class TweetTableViewCell: UITableViewCell {
     // Padding constraints (updated per-configure to match list-level padding)
     private var leadingConstraint: NSLayoutConstraint!
     private var trailingConstraint: NSLayoutConstraint!
+    private var pinnedTweetsDividerHeightConstraint: NSLayoutConstraint!
     private var interfaceStyleTraitRegistration: UITraitChangeRegistration?
 
     /// Publicly accessible tweet ID for video orchestration
@@ -153,22 +156,29 @@ class TweetTableViewCell: UITableViewCell {
         }
 
         tweetContentView.translatesAutoresizingMaskIntoConstraints = false
+        pinnedTweetsDivider.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(tweetContentView)
+        contentView.addSubview(pinnedTweetsDivider)
 
         leadingConstraint = tweetContentView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor)
         trailingConstraint = tweetContentView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
 
-        let bottomConstraint = tweetContentView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        let bottomConstraint = pinnedTweetsDivider.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         // Use high priority (not required) so the estimated row height
         // (UIView-Encapsulated-Layout-Height) doesn't conflict during initial layout.
         // The cell will still self-size correctly.
         bottomConstraint.priority = .defaultHigh
 
+        pinnedTweetsDividerHeightConstraint = pinnedTweetsDivider.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             tweetContentView.topAnchor.constraint(equalTo: contentView.topAnchor),
             leadingConstraint,
             trailingConstraint,
-            bottomConstraint,
+            tweetContentView.bottomAnchor.constraint(equalTo: pinnedTweetsDivider.topAnchor),
+            pinnedTweetsDivider.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            pinnedTweetsDivider.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            pinnedTweetsDividerHeightConstraint,
+            bottomConstraint
         ])
     }
 
@@ -177,12 +187,14 @@ class TweetTableViewCell: UITableViewCell {
         contentView.backgroundColor = XTheme.background
         selectedBackgroundView?.backgroundColor = XTheme.background
         tweetContentView.applyTheme()
+        pinnedTweetsDivider.applyTheme()
     }
 
     func configure(
         with tweet: Tweet,
         hproseInstance: HproseInstance,
         isPinned: Bool,
+        isLastPinnedTweet: Bool = false,
         isLastItem: Bool,
         parentViewController: UIViewController,
         leadingPadding: CGFloat,
@@ -198,6 +210,8 @@ class TweetTableViewCell: UITableViewCell {
     ) {
         currentTweetId = tweet.mid
         applyTheme()
+        pinnedTweetsDivider.isHidden = !isLastPinnedTweet
+        pinnedTweetsDividerHeightConstraint.constant = isLastPinnedTweet ? Self.pinnedTweetsDividerHeight : 0
 
         // Apply list-level padding to the cell content
         leadingConstraint.constant = leadingPadding
@@ -246,5 +260,57 @@ class TweetTableViewCell: UITableViewCell {
         tweetContentView.onContentDidChangeHeightAsync = nil
         currentTweetId = nil
         tweetContentView.prepareForReuse()
+        pinnedTweetsDivider.isHidden = true
+        pinnedTweetsDividerHeightConstraint.constant = 0
+    }
+}
+
+private final class PinnedTweetsDividerView: UIView {
+    private let leftLine = UIView()
+    private let dot = UIView()
+    private let rightLine = UIView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isAccessibilityElement = false
+        accessibilityElementsHidden = true
+        isUserInteractionEnabled = false
+
+        [leftLine, dot, rightLine].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            addSubview($0)
+        }
+
+        dot.layer.cornerRadius = 3
+        NSLayoutConstraint.activate([
+            dot.centerXAnchor.constraint(equalTo: centerXAnchor),
+            dot.centerYAnchor.constraint(equalTo: centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 6),
+            dot.heightAnchor.constraint(equalTo: dot.widthAnchor),
+
+            leftLine.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            leftLine.trailingAnchor.constraint(equalTo: dot.leadingAnchor, constant: -8),
+            leftLine.centerYAnchor.constraint(equalTo: centerYAnchor),
+            leftLine.heightAnchor.constraint(equalToConstant: 1),
+
+            rightLine.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 8),
+            rightLine.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            rightLine.centerYAnchor.constraint(equalTo: centerYAnchor),
+            rightLine.heightAnchor.constraint(equalToConstant: 1)
+        ])
+
+        applyTheme()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func applyTheme() {
+        backgroundColor = XTheme.background
+        let color = XTheme.secondaryText.withAlphaComponent(0.65)
+        leftLine.backgroundColor = color
+        dot.backgroundColor = color
+        rightLine.backgroundColor = color
     }
 }

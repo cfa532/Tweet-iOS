@@ -2365,6 +2365,7 @@ class TweetTableViewController: UITableViewController {
 
         let totalRows = pinnedTweets.count + tweets.count
         let isLastItem = indexPath.row == totalRows - 1
+        let isLastPinnedTweet = !pinnedTweets.isEmpty && indexPath.row == pinnedTweets.count - 1
 
         cell.shouldDeferHeightOverflowCheck = { [weak self] in
             guard let self else { return false }
@@ -2376,7 +2377,8 @@ class TweetTableViewController: UITableViewController {
                 with: tweet,
                 hproseInstance: hprose,
                 isPinned: indexPath.row < pinnedTweets.count,
-                isLastItem: isLastItem,
+                isLastPinnedTweet: isLastPinnedTweet,
+                isLastItem: isLastItem || isLastPinnedTweet,
                 parentViewController: self,
                 leadingPadding: leadingPadding,
                 trailingPadding: trailingPadding,
@@ -2469,6 +2471,12 @@ class TweetTableViewController: UITableViewController {
     
     // MARK: - UITableViewDelegate
 
+    private func pinnedTweetsDividerHeight(forRow row: Int) -> CGFloat {
+        !pinnedTweets.isEmpty && row == pinnedTweets.count - 1
+            ? TweetTableViewCell.pinnedTweetsDividerHeight
+            : 0
+    }
+
     override func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
         let totalRows = pinnedTweets.count + tweets.count
         guard indexPath.row < totalRows else { return 200 }
@@ -2483,10 +2491,11 @@ class TweetTableViewController: UITableViewController {
         }
 
         let layoutWidth = currentRowLayoutWidth
+        let dividerHeight = pinnedTweetsDividerHeight(forRow: indexPath.row)
 
         // Use in-memory cached height if available — set by willDisplay from actual Auto Layout
         if let cachedHeight = cachedHeight(for: tweet, width: layoutWidth) {
-            return cachedHeight
+            return cachedHeight + dividerHeight
         }
 
         // Use persisted height cache (survives app restarts) as second-best estimate.
@@ -2495,7 +2504,7 @@ class TweetTableViewController: UITableViewController {
         // (e.g., from a session where the cell didn't fully render). Only willDisplay
         // should set cachedHeight after Auto Layout verifies the actual height.
         if let persistedHeight = TweetHeightCache.shared.getHeight(for: tweet.mid, width: layoutWidth) {
-            return persistedHeight
+            return persistedHeight + dividerHeight
         }
 
         // Check if the per-tweet text-height cache (set by a prior calculateTweetHeight call) is
@@ -2550,6 +2559,7 @@ class TweetTableViewController: UITableViewController {
                       "cachedMeasuredTextWidth=\(displayTweet.cachedMeasuredTextWidth)")
             }
             return Self.calculateTweetHeight(for: tweet, rowWidth: layoutWidth, cellHorizontalPadding: padding)
+                + dividerHeight
         }
 
         // Pre-warm path: background task has measured text height via boundingRect — better than
@@ -2562,7 +2572,7 @@ class TweetTableViewController: UITableViewController {
                                         isRetweet: isRetweet, hasOwnContent: hasOwnContent,
                                         rowWidth: layoutWidth, contentWidth: contentWidth,
                                         cellHorizontalPadding: padding,
-                                        prewarmTextHeight: prewarmTextH)
+                                        prewarmTextHeight: prewarmTextH) + dividerHeight
     }
 
     /// Height estimate for tweets whose UILabel-accurate text height is not yet in cache.
@@ -2960,17 +2970,18 @@ class TweetTableViewController: UITableViewController {
         }
 
         let layoutWidth = currentRowLayoutWidth
+        let dividerHeight = pinnedTweetsDividerHeight(forRow: indexPath.row)
 
         // Use cached height if available (set by willDisplay from actual Auto Layout).
         if let cachedHeight = cachedHeight(for: tweet, width: layoutWidth) {
-            return cachedHeight
+            return cachedHeight + dividerHeight
         }
 
         // Use persisted measured height before falling back to deterministic calculation.
         // estimatedHeightForRowAt uses the same value; keeping both paths aligned avoids
         // a visible grow-after-render pass for previously measured tweets.
         if let persistedHeight = TweetHeightCache.shared.getHeight(for: tweet.mid, width: layoutWidth) {
-            return persistedHeight
+            return persistedHeight + dividerHeight
         }
 
         // Use deterministic calculation instead of Auto Layout.
@@ -2981,7 +2992,7 @@ class TweetTableViewController: UITableViewController {
             for: tweet,
             rowWidth: layoutWidth,
             cellHorizontalPadding: leadingPadding + trailingPadding
-        )
+        ) + dividerHeight
     }
 
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
@@ -3008,11 +3019,13 @@ class TweetTableViewController: UITableViewController {
         //    (indicates cell hasn't fully rendered — e.g., media grid not yet laid out)
         if cell.frame.height > 0 {
             let cellWidth = cell.bounds.width > 0 ? cell.bounds.width : currentRowLayoutWidth
+            let dividerHeight = pinnedTweetsDividerHeight(forRow: indexPath.row)
+            let tweetHeight = cell.frame.height - dividerHeight
             // Fast path: height already cached and matches the rendered cell — nothing to update.
             // Skips the expensive calculateTweetHeight (sizeThatFits + maybe TextKit layout)
             // on every willDisplay call for stable cells.
             if let existing = cachedHeight(for: tweet, width: cellWidth),
-               abs(existing - cell.frame.height) <= 1 {
+               abs(existing - tweetHeight) <= 1 {
                 return
             }
 
@@ -3028,10 +3041,10 @@ class TweetTableViewController: UITableViewController {
                     rowWidth: cellWidth,
                     cellHorizontalPadding: self.leadingPadding + self.trailingPadding
                 )
-                let isReasonable = cell.frame.height >= expectedHeight - 20
+                let isReasonable = tweetHeight >= expectedHeight - 20
 
                 if isReasonable {
-                    setCachedHeight(cell.frame.height, for: tweet, width: cell.bounds.width)
+                    setCachedHeight(tweetHeight, for: tweet, width: cell.bounds.width)
                 } else {
                     clearCachedHeight(for: tweet)
                 }

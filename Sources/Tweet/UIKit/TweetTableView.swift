@@ -115,6 +115,7 @@ struct TweetTableView: UIViewControllerRepresentable {
 
         // Only update pinned tweets if they actually changed
         let currentPinnedTweetIds = pinnedTweets.map { $0.mid }
+        let pinnedVisibilityChanged = coordinator.lastPinnedTweetIds.isEmpty != currentPinnedTweetIds.isEmpty
         if coordinator.lastPinnedTweetIds != currentPinnedTweetIds {
             coordinator.lastPinnedTweetIds = currentPinnedTweetIds
             uiViewController.updatePinnedTweets(pinnedTweets)
@@ -157,7 +158,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         let headerChanged = (header != nil) != (uiViewController.headerViewBuilder != nil)
         let headerRefreshChanged = coordinator.lastHeaderRefreshToken != headerRefreshToken
         uiViewController.headerViewBuilder = header
-        if headerChanged || headerRefreshChanged || coordinator.lastHeaderWasPresent != (header != nil) {
+        if headerChanged || headerRefreshChanged || pinnedVisibilityChanged || coordinator.lastHeaderWasPresent != (header != nil) {
             coordinator.lastHeaderWasPresent = header != nil
             coordinator.lastHeaderRefreshToken = headerRefreshToken
             uiViewController.updateHeader()
