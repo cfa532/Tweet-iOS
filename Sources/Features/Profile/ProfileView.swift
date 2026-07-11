@@ -104,7 +104,7 @@ struct ProfileView: View {
                 didLoad = true
                 await Task.yield()
                 guard !Task.isCancelled else { return }
-                await refreshProfileData()
+                await refreshProfileData(resyncIfNeeded: false)
             }
             .onChange(of: user.mid) { _, _ in
                 // Reset didLoad when user changes so the new user's data is fetched
@@ -236,7 +236,9 @@ struct ProfileView: View {
                             selectedUserForNavigation = tappedUser
                         }
                     },
-                    onPinnedTweetsRefresh: refreshPinnedTweets,
+                    onProfileRefresh: {
+                        await refreshProfileData(resyncIfNeeded: true)
+                    },
                     onScroll: { offset, delta in
                         handleScroll(offset: offset, delta: delta)
                     },
@@ -716,7 +718,7 @@ struct ProfileView: View {
         }
     }
     
-    private func refreshProfileData() async {
+    private func refreshProfileData(resyncIfNeeded: Bool) async {
         var refreshedProfileUser: User?
         let profileUserId = user.mid
         let cachedRoute = user.baseUrl?.absoluteString ?? ""
@@ -756,8 +758,10 @@ struct ProfileView: View {
             return
         }
         
-        Task {
-            await refreshPinnedTweets()
+        await refreshPinnedTweets()
+
+        guard resyncIfNeeded else {
+            return
         }
         
         guard shouldResyncProfileUser(refreshedProfileUser) else {

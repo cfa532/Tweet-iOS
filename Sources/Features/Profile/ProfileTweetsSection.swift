@@ -122,7 +122,7 @@ struct ProfileTweetsSection<Header: View>: View {
     let onUserSelect: (User) -> Void
     let onTweetTap: (Tweet) -> Void
     let onAvatarTapInProfile: ((User) -> Void)?
-    let onPinnedTweetsRefresh: () async -> Void
+    let onProfileRefresh: () async -> Void
     let onScroll: (CGFloat, CGFloat) -> Void  // (offset, delta)
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
@@ -141,7 +141,7 @@ struct ProfileTweetsSection<Header: View>: View {
         onUserSelect: @escaping (User) -> Void,
         onTweetTap: @escaping (Tweet) -> Void,
         onAvatarTapInProfile: ((User) -> Void)? = nil,
-        onPinnedTweetsRefresh: @escaping () async -> Void,
+        onProfileRefresh: @escaping () async -> Void,
         onScroll: @escaping (CGFloat, CGFloat) -> Void,  // (offset, delta)
         onShowLogin: (() -> Void)? = nil,
         onShowToast: ((String, Bool) -> Void)? = nil,
@@ -158,7 +158,7 @@ struct ProfileTweetsSection<Header: View>: View {
         self.onUserSelect = onUserSelect
         self.onTweetTap = onTweetTap
         self.onAvatarTapInProfile = onAvatarTapInProfile
-        self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
+        self.onProfileRefresh = onProfileRefresh
         self.onScroll = onScroll
         self.onShowLogin = onShowLogin
         self.onShowToast = onShowToast
@@ -247,7 +247,7 @@ struct ProfileTweetsSection<Header: View>: View {
                 )
             },
             headerRefreshToken: headerRefreshToken,
-            onRefreshExtra: onPinnedTweetsRefresh,
+            onRefreshExtra: onProfileRefresh,
             onAvatarTap: { user in
                 // If onAvatarTapInProfile is provided, use it (for scroll-to-top in profile)
                 // Otherwise use onUserSelect for navigation
