@@ -1518,7 +1518,7 @@ struct TweetDetailView: View {
         configureCommentCacheContextIfNeeded()
 
         // READ tweet and seed comments on appear.
-        Task { await doReadTweet() }
+        Task { await doReadTweet(isInitialLoad: true) }
         if initialCommentsRequestParentTweetId != displayTweet.mid {
             initialCommentsRequestParentTweetId = displayTweet.mid
             Task { await refreshComments() }
@@ -1540,26 +1540,31 @@ struct TweetDetailView: View {
         }
     }
 
-    // READ: get_tweet on hostIds[1] (author's read node), bypasses cache
-    private func doReadTweet() async {
+    // READ: get_tweet on hostIds[1] (author's read node), bypasses cache.
+    // fromDetailView (server-side DHT provider sync) only needs to fire once per
+    // detail-view open (isInitialLoad), not on every pull-to-refresh — except for
+    // the embedded/quoted original tweet, which always gets it since it isn't
+    // covered by any other "opened from feed" sync.
+    private func doReadTweet(isInitialLoad: Bool) async {
         if let originalTweetId = tweet.originalTweetId,
            let originalAuthorId = tweet.originalAuthorId {
             let isPureRetweet = (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)
             if isPureRetweet {
+                // The original tweet is the only thing displayed (as the embedded card).
                 if let refreshed = try? await hproseInstance.getTweet(
-                    tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true
+                    tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true
                 ) {
                     await MainActor.run { originalTweet = refreshed }
                 }
             } else {
-                async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true)
-                async let originalResult = hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true)
+                async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad)
+                async let originalResult = hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true)
                 if let refreshed = try? await tweetResult { await MainActor.run { try? tweet.update(from: refreshed) } }
                 if let refreshedOriginal = try? await originalResult { await MainActor.run { originalTweet = refreshedOriginal } }
             }
         } else {
             if let refreshed = try? await hproseInstance.getTweet(
-                tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true
+                tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad
             ) {
                 await MainActor.run { try? tweet.update(from: refreshed) }
             }
@@ -1596,7 +1601,7 @@ struct TweetDetailView: View {
     // (`get_comments`) now handles cleaning up genuinely-stale comment IDs
     // itself, so the client no longer needs to sync them.
     private func refreshTweetAndComments() async {
-        async let tweetRead: Void = doReadTweet()
+        async let tweetRead: Void = doReadTweet(isInitialLoad: false)
         async let commentsRead: Void = refreshComments()
         await tweetRead
         await commentsRead

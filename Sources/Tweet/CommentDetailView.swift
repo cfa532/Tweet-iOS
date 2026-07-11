@@ -178,16 +178,13 @@ struct CommentDetailView: View {
         .onDisappear {
             // Mark detail view as inactive
             NavigationStateManager.shared.setDetailViewActive(false)
-            
+
             // Deactivate detail video manager
             DetailVideoManager.shared.deactivate()
         }
         .task {
-            // Refresh comment after a short delay
-            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-            await refreshComment()
+            await syncComment()
         }
-
     }
     
     private var mediaSection: some View {
@@ -343,14 +340,17 @@ struct CommentDetailView: View {
         .padding(.leading, -8)
         .padding(.trailing, 4)
     }
-    
-    private func refreshComment() async {
-        do {
-            if let refreshedComment = try await hproseInstance.getTweet(tweetId: comment.mid, authorId: comment.authorId) {
-                try comment.update(from: refreshedComment)
-            }
-        } catch {
-            print("Failed to refresh comment: \(error)")
+
+    // A comment is itself a tweet on the backend, so opening its detail view needs the
+    // same fromDetailView DHT provider sync/registration that TweetDetailView triggers for
+    // top-level tweets. bypassCache is required for fromDetailView to actually reach the
+    // server — comment is already populated from the feed, so a cache hit would otherwise
+    // short-circuit before the sync ever runs.
+    private func syncComment() async {
+        if let refreshed = try? await hproseInstance.getTweet(
+            tweetId: comment.mid, authorId: comment.authorId, bypassCache: true, fromDetailView: true
+        ) {
+            try? comment.update(from: refreshed)
         }
     }
 }

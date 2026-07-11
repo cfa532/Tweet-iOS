@@ -1378,12 +1378,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ///   - tweetId: The ID of the tweet to retrieve
     ///   - authorId: The ID of the tweet's author
     ///   - nodeUrl: Optional node URL (unused)
+    ///   - fromDetailView: When true, tells the server this is a detail-view read so it can
+    ///     sync/provide the tweet on its end if this node isn't already a DHT provider for it.
+    ///     Also passes along the author's write hostId (if known) so the server doesn't have
+    ///     to look it up itself.
     /// - Returns: The tweet object, or nil if not found
     func getTweet(
         tweetId: String,
         authorId: String,
         nodeUrl: String? = nil,
-        bypassCache: Bool = false
+        bypassCache: Bool = false,
+        fromDetailView: Bool = false
     ) async throws -> Tweet? {
         // Check if tweet is blacklisted before attempting fetch
         if blackList.isBlacklisted(tweetId) {
@@ -1404,23 +1409,30 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
 
         // Fetch from server using get_tweet API (like Android's fetchTweet)
-        // Phase A (demotion prep): resolve author client via clientPool from snapshot baseUrl.
-        let authorBaseUrl = await MainActor.run { author?.baseUrl }
+        // Phase A (demotion prep): snapshot @MainActor author + appUser reads in one hop.
+        let (authorBaseUrl, authorHostId, appUserMid) = await MainActor.run {
+            (author?.baseUrl, author?.hostIds?.first, self.appUser.mid)
+        }
         guard let authorBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author client not initialized", comment: "Author client initialization error")])
         }
         let authorClient = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
 
         let entry = "get_tweet"
-        let appUserMid = await MainActor.run { self.appUser.mid }
-        let params = [
+        var params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "tweetid": tweetId,
             "appuserid": appUserMid
         ]
-        
+        if fromDetailView {
+            params["fromdetailview"] = true
+            if let authorHostId {
+                params["authorhostid"] = authorHostId
+            }
+        }
+
         do {
             let rawResponse = await invokeRunMApp(using: authorClient, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
