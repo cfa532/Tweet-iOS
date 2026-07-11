@@ -150,10 +150,70 @@ struct TweetMenu: View {
         self.onShareTap = onShareTap
         self._isCurrentlyPinned = State(initialValue: isPinned)
     }
+
+    private var immediateActions: [UIAction] {
+        var actions = [UIAction(title: truncatedTweetId(tweet.mid), image: UIImage(systemName: "doc.on.clipboard")) { _ in
+            UIPasteboard.general.string = tweet.mid
+        }]
+        actions.append(UIAction(title: NSLocalizedString("Share", comment: "Menu item"), image: UIImage(systemName: "square.and.arrow.up")) { _ in
+            onShareTap?()
+        })
+        actions.append(UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"), image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { _ in
+            showFilterSheet = true
+        })
+        if tweet.authorId != appUser.mid {
+            actions.append(UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"), image: UIImage(systemName: "flag")) { _ in
+                showReportSheet = true
+            })
+        }
+        if Gadget.isResearchAdminUser(appUser) {
+            actions.append(UIAction(title: NSLocalizedString("Edit content (admin)", comment: "Admin research menu"), image: UIImage(systemName: "pencil.line")) { _ in
+                showAdminEditSheet = true
+            })
+        }
+        if tweet.authorId == appUser.mid {
+            let pinTitle = isCurrentlyPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
+            actions.append(UIAction(title: pinTitle, image: UIImage(systemName: isCurrentlyPinned ? "pin.slash" : "pin")) { _ in
+                togglePin()
+            })
+            let privacyTitle = tweet.isPrivate == true ? NSLocalizedString("Make Public", comment: "Menu item") : NSLocalizedString("Make Private", comment: "Menu item")
+            actions.append(UIAction(title: privacyTitle, image: UIImage(systemName: tweet.isPrivate == true ? "globe" : "lock")) { _ in
+                togglePrivacy()
+            })
+        }
+        if showDeleteButton {
+            actions.append(UIAction(title: NSLocalizedString("Delete", comment: "Menu item"), image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+                Task { try? await deleteTweet(tweet) }
+            })
+        }
+        return actions
+    }
+
+    private func togglePin() {
+        Task {
+            guard let pinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) else { return }
+            await MainActor.run {
+                isCurrentlyPinned = pinned
+                NotificationCenter.default.post(name: .tweetPinStatusChanged, object: nil, userInfo: ["tweetId": tweet.mid, "isPinned": pinned])
+            }
+        }
+    }
+
+    private func togglePrivacy() {
+        Task {
+            guard let isPrivate = try? await hproseInstance.toggleTweetPrivacy(tweetId: tweet.mid) else { return }
+            await MainActor.run {
+                tweet.isPrivate = isPrivate
+                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                NotificationCenter.default.post(name: .tweetPrivacyChanged, object: nil, userInfo: ["tweetId": tweet.mid])
+            }
+        }
+    }
     
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Menu {
+            if false {
+                Menu {
                 Button(action: {
                     UIPasteboard.general.string = tweet.mid
                 }) {
@@ -336,7 +396,13 @@ struct TweetMenu: View {
                     .accessibilityLabel("Tweet options")
                     .accessibilityHint("Double tap to open tweet menu")
             }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
+            } else {
+                ImmediateMenuButtonView(actions: immediateActions)
+                    .frame(width: 44, height: 44)
+                    .accessibilityLabel("Tweet options")
+                    .accessibilityHint("Double tap to open tweet menu")
+            }
         }
         .sheet(isPresented: $showFilterSheet) {
             ContentFilterView(tweet: tweet)

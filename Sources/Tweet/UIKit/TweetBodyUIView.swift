@@ -410,11 +410,11 @@ class TweetBodyUIView: UIView {
             if hasAudio {
                 contentStack.setCustomSpacing(8, after: audioContainerView)
             } else if contentLabel.isHidden {
-                // No text: 4pt top padding before media
-                contentStack.setCustomSpacing(4, after: contentLabel)
+                // Give media-only feed items a little more breathing room below the header.
+                contentStack.setCustomSpacing(6, after: contentLabel)
             } else {
-                // Text present: 8pt gap
-                contentStack.setCustomSpacing(8, after: contentLabel)
+                // Keep the text-to-media gap compact in feed cells.
+                contentStack.setCustomSpacing(6, after: contentLabel)
             }
         } else {
             mediaContainerView.isHidden = true

@@ -7,10 +7,120 @@
 //
 import UIKit
 import Combine
+import SwiftUI
+
+class ImmediateMenuButton: UIButton, UIPopoverPresentationControllerDelegate {
+    var menuActions: [UIAction] = []
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        addTarget(self, action: #selector(showImmediateMenu), for: .touchUpInside)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        addTarget(self, action: #selector(showImmediateMenu), for: .touchUpInside)
+    }
+
+    @objc private func showImmediateMenu() {
+        guard !menuActions.isEmpty, let presenter = nearestViewController else { return }
+        let controller = ImmediateMenuViewController(actions: menuActions)
+        controller.modalPresentationStyle = .popover
+        controller.preferredContentSize = CGSize(width: 210, height: CGFloat(menuActions.count) * 48)
+        guard let popover = controller.popoverPresentationController else { return }
+        popover.sourceView = self
+        popover.sourceRect = CGRect(x: bounds.maxX, y: bounds.maxY, width: 1, height: 1)
+        popover.permittedArrowDirections = []
+        popover.backgroundColor = XTheme.secondaryBackground
+        popover.delegate = self
+        presenter.present(controller, animated: true)
+    }
+
+    func adaptivePresentationStyle(for controller: UIPresentationController) -> UIModalPresentationStyle {
+        .none
+    }
+
+    private var nearestViewController: UIViewController? {
+        sequence(first: next, next: { $0?.next })
+            .first { $0 is UIViewController } as? UIViewController
+    }
+}
+
+private final class ImmediateMenuViewController: UITableViewController {
+    private let actions: [UIAction]
+
+    init(actions: [UIAction]) {
+        self.actions = actions
+        super.init(style: .plain)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.isScrollEnabled = false
+        tableView.rowHeight = 48
+        tableView.separatorInset = .zero
+        tableView.separatorColor = XTheme.border
+        tableView.backgroundColor = XTheme.secondaryBackground
+        view.backgroundColor = XTheme.secondaryBackground
+        view.layer.cornerRadius = 4
+        view.layer.borderWidth = 1 / UIScreen.main.scale
+        view.layer.borderColor = XTheme.border.cgColor
+        view.clipsToBounds = true
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        actions.count
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let action = actions[indexPath.row]
+        let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+        cell.backgroundColor = XTheme.secondaryBackground
+        cell.textLabel?.text = action.title
+        cell.imageView?.image = action.image
+        cell.tintColor = action.attributes.contains(.destructive) ? .systemRed : .label
+        cell.textLabel?.textColor = cell.tintColor
+        cell.selectionStyle = .default
+        let selectedBackground = UIView()
+        selectedBackground.backgroundColor = XTheme.border.withAlphaComponent(0.35)
+        cell.selectedBackgroundView = selectedBackground
+        cell.isUserInteractionEnabled = !action.attributes.contains(.disabled)
+        cell.accessibilityTraits = action.attributes.contains(.destructive) ? [.button] : [.button]
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let action = actions[indexPath.row]
+        dismiss(animated: true) {
+            UIButton(primaryAction: action).sendActions(for: .primaryActionTriggered)
+        }
+    }
+}
+
+struct ImmediateMenuButtonView: UIViewRepresentable {
+    let actions: [UIAction]
+
+    func makeUIView(context: Context) -> ImmediateMenuButton {
+        let button = ImmediateMenuButton(type: .system)
+        let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        button.setImage(UIImage(systemName: "ellipsis", withConfiguration: config), for: .normal)
+        button.tintColor = XTheme.secondaryText
+        button.contentHorizontalAlignment = .left
+        return button
+    }
+
+    func updateUIView(_ button: ImmediateMenuButton, context: Context) {
+        button.menuActions = actions
+    }
+}
 
 class TweetHeaderUIView: UIView {
 
-    private final class MenuButton: UIButton {
+    private final class MenuButton: ImmediateMenuButton {
         override var isHighlighted: Bool {
             get { false }
             set { super.isHighlighted = false }
@@ -31,13 +141,11 @@ class TweetHeaderUIView: UIView {
         return label
     }()
 
-    private let menuButton: UIButton = {
+    private let menuButton: MenuButton = {
         let button = MenuButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         button.setImage(UIImage(systemName: "ellipsis", withConfiguration: config), for: .normal)
         button.tintColor = XTheme.secondaryText
-        button.showsMenuAsPrimaryAction = true
-        button.changesSelectionAsPrimaryAction = false
         return button
     }()
 
@@ -78,7 +186,7 @@ class TweetHeaderUIView: UIView {
 
     /// Set the UIMenu for the menu button
     func setMenu(_ menu: UIMenu) {
-        menuButton.menu = menu
+        menuButton.menuActions = menu.children.compactMap { $0 as? UIAction }
     }
 
     /// Check if a tap location (in header view's coordinate space) is within the menu button
@@ -206,7 +314,7 @@ class TweetHeaderUIView: UIView {
         currentTweet = nil
         currentTimestampText = ""
         headerLabel.attributedText = nil
-        menuButton.menu = nil
+        menuButton.menuActions = []
     }
 
     // MARK: - Time Difference (ported from TweetItemHeaderView)
