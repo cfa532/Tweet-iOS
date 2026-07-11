@@ -907,7 +907,7 @@ struct TweetDetailView: View {
     @State private var hasLoadedOriginalTweet = false
     @State private var hasServedCachedCommentsForCurrentParentTweet = false
     @State private var currentCommentsParentTweetId = ""
-    @State private var initialCommentsRequestParentTweetId = ""
+    @State private var initialLoadParentTweetId = ""
     @State private var selectedCommentUserForNavigation: User?
     @State private var commentProfileNavigationPath = NavigationPath()
 
@@ -1517,27 +1517,26 @@ struct TweetDetailView: View {
     private func setupInitialData() {
         configureCommentCacheContextIfNeeded()
 
-        // READ tweet and seed comments on appear.
-        Task { await doReadTweet(isInitialLoad: true) }
-        if initialCommentsRequestParentTweetId != displayTweet.mid {
-            initialCommentsRequestParentTweetId = displayTweet.mid
-            Task { await refreshComments() }
+        // The server syncs the tweet and its comments when this detail-view read
+        // completes. Keep one owner for the ordered read so comments are fetched
+        // exactly once, after that sync opportunity.
+        if initialLoadParentTweetId != displayTweet.mid {
+            initialLoadParentTweetId = displayTweet.mid
+            Task { await loadInitialServerData() }
         }
 
-        // SYNC: if nodes differ, resync tweet
-        let hostIds = displayTweet.author?.hostIds ?? []
-        if hostIds.count >= 2 && hostIds[0] != hostIds[1] {
-            Task { await doResyncTweet() }
-        }
-
-        // 5-min tick: resync if nodes differ
+        // Periodically reload the current provider without triggering a cross-node sync.
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
-                let ids = displayTweet.author?.hostIds ?? []
-                guard ids.count >= 2, ids[0] != ids[1] else { return }
-                await doResyncTweet()
+                await doReadTweet(isInitialLoad: false)
             }
         }
+    }
+
+    private func loadInitialServerData() async {
+        await doReadTweet(isInitialLoad: true)
+        // A failed tweet read must not prevent a best-effort comments refresh.
+        await refreshComments()
     }
 
     // READ: get_tweet on hostIds[1] (author's read node), bypasses cache.
@@ -1597,14 +1596,10 @@ struct TweetDetailView: View {
         }
     }
 
-    // Pull-to-refresh: READ tweet + comments on hostIds[1]. The server
-    // (`get_comments`) now handles cleaning up genuinely-stale comment IDs
-    // itself, so the client no longer needs to sync them.
+    // Pull-to-refresh: sync the latest tweet state, then reload comments.
     private func refreshTweetAndComments() async {
-        async let tweetRead: Void = doReadTweet(isInitialLoad: false)
-        async let commentsRead: Void = refreshComments()
-        await tweetRead
-        await commentsRead
+        await doResyncTweet()
+        await refreshComments()
     }
 
     // READ comments page-by-page on hostIds[1] until overlap or end.
@@ -1648,8 +1643,7 @@ struct TweetDetailView: View {
 
         currentCommentsParentTweetId = parentTweetId
         hasServedCachedCommentsForCurrentParentTweet = false
-        initialCommentsRequestParentTweetId = ""
-
+        initialLoadParentTweetId = ""
         if let cachedComments = TweetDetailCommentsCache.shared.comments(for: parentTweetId) {
             comments = cachedComments
             hasServedCachedCommentsForCurrentParentTweet = true

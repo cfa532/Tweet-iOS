@@ -71,7 +71,11 @@ struct CommentDetailViewWithParent: View {
         }
         
         do {
-            let parent = try await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+            let parent = try await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId,
+                bypassCache: true
+            )
             await MainActor.run {
                 self.parentTweet = parent
                 self.isLoading = false
@@ -94,6 +98,7 @@ struct CommentDetailView: View {
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
     @State private var replies: [Tweet] = []
+    @State private var repliesRefreshToken = 0
     
     // Reply editor states
     @State private var showReplyEditor = true
@@ -134,6 +139,9 @@ struct CommentDetailView: View {
                     
                     repliesListView
                 }
+            }
+            .refreshable {
+                await refreshCommentAndReplies()
             }
             .background(Color(.systemBackground))
             
@@ -327,6 +335,7 @@ struct CommentDetailView: View {
                 )
             ],
             isEmbedded: true, // Embedded in CommentDetailView's ScrollView, avoid nested scrolling
+            externalRefreshToken: repliesRefreshToken,
             rowView: { reply in
                 CommentItemView(
                     parentTweet: comment,
@@ -351,6 +360,24 @@ struct CommentDetailView: View {
             tweetId: comment.mid, authorId: comment.authorId, bypassCache: true, fromDetailView: true
         ) {
             try? comment.update(from: refreshed)
+        }
+    }
+
+    private func refreshCommentAndReplies() async {
+        if let refreshed = try? await hproseInstance.refreshTweet(
+            tweetId: comment.mid,
+            authorId: comment.authorId
+        ) {
+            try? comment.update(from: refreshed)
+        }
+
+        if let refreshedReplies = try? await hproseInstance.fetchComments(
+            comment,
+            pageNumber: 0,
+            pageSize: 10
+        ) {
+            replies = refreshedReplies.compactMap { $0 }
+            repliesRefreshToken += 1
         }
     }
 }

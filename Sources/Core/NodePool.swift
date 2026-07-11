@@ -105,7 +105,6 @@ final class NodePool: @unchecked Sendable {
         return queue.sync {
             let accessNodeMid = hostIds[1]
             if let node = nodes[accessNodeMid], let ip = node.getPreferredIP() {
-                print("DEBUG: [NodePool] Using IP from access node \(accessNodeMid): \(ip)")
                 return ip
             }
             

@@ -23,6 +23,7 @@ struct CommentListView<RowView: View>: View {
     let rowView: (Tweet) -> RowView
     let notifications: [CommentListNotification]
     let isEmbedded: Bool // When true, don't use ScrollView (for nested scroll situations)
+    let externalRefreshToken: Int
     // Bound to a parent-owned flag (driven by the parent's UIScrollView
     // observer) that flips to true on the first real user pan. Used to
     // suppress the open-time auto-probe's "No more comments" flash. The
@@ -56,6 +57,7 @@ struct CommentListView<RowView: View>: View {
         showTitle: Bool = true,
         notifications: [CommentListNotification]? = nil,
         isEmbedded: Bool = false,
+        externalRefreshToken: Int = 0,
         hasUserScrolled: Binding<Bool> = .constant(true),
         rowView: @escaping (Tweet) -> RowView
     ) {
@@ -65,6 +67,7 @@ struct CommentListView<RowView: View>: View {
         self.showTitle = showTitle
         self.notifications = notifications ?? []
         self.isEmbedded = isEmbedded
+        self.externalRefreshToken = externalRefreshToken
         self.hasUserScrolled = hasUserScrolled
         self.rowView = rowView
     }
@@ -130,6 +133,11 @@ struct CommentListView<RowView: View>: View {
                 guard !hasTriggeredInitialTaskLoad else { return }
                 hasTriggeredInitialTaskLoad = true
                 await refreshComments()
+            }
+            .onChange(of: externalRefreshToken) { _, _ in
+                currentPage = 0
+                hasMoreComments = comments.count >= Int(pageSize)
+                initialLoadComplete = true
             }
             // Listen to all notifications
             .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notif in

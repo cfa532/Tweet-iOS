@@ -1500,6 +1500,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         if let hostId = authorHostId {
             params["hostid"] = hostId
         }
+        print("DEBUG: [refreshTweet] Calling refresh_tweet for tweetId: \(tweetId), authorId: \(authorId), baseUrl: \(baseUrl.absoluteString)")
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
@@ -1518,6 +1519,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
                 // Record success if tweet was successfully fetched
                 blackList.recordSuccess(tweetId)
+                print("DEBUG: [refreshTweet] Successfully refreshed tweet: \(tweetId)")
                 
                 return tweet
             } catch {

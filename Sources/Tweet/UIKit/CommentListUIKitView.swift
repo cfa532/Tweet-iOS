@@ -61,13 +61,13 @@ struct CommentListUIKitView: View {
         .task(id: parentTweet.mid) {
             guard loadedParentTweetId != parentTweet.mid else { return }
             loadedParentTweetId = parentTweet.mid
+            // TweetDetailView owns the ordered page-zero server refresh. This view
+            // only reflects the bound cache/server results and handles pagination.
+            initialLoadComplete = true
             if !comments.isEmpty {
-                initialLoadComplete = true
                 currentPage = UInt((comments.count - 1) / Int(pageSize))
                 hasMoreComments = comments.count >= pageSize
-                return
             }
-            await refreshComments()
         }
         .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notif in
             if let comment = notif.userInfo?["comment"] as? Tweet,
