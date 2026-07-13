@@ -3174,8 +3174,48 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
                     await MainActor.run {
                         tweet.author = cachedAuthor
+                        // Membership in these server-owned lists is authoritative even
+                        // when the access-node copy has stale viewer interaction flags.
+                        if type == .BOOKMARKS {
+                            tweet.isBookmarked = true
+                        } else if type == .FAVORITES {
+                            tweet.isFavorite = true
+                        }
                     }
                     scheduleBackgroundAuthorFetch(authorId: tweet.authorId)
+
+                    // Saved comments need their immediate parent available before the
+                    // bookmark/favorite cell can render it as embedded context. This is
+                    // an ordinary access-node read; it does not force synchronization.
+                    if isBookmarkOrFavorite,
+                       let parentTweetId = await MainActor.run(body: { tweet.parentTweetId }) {
+                        let cachedParent = await TweetCacheManager.shared.fetchTweet(mid: parentTweetId)
+                        if case nil = cachedParent {
+                            let parentRawResponse = await invokeRunMApp(
+                                using: client,
+                                entry: "get_tweet",
+                                params: [
+                                    "aid": appId,
+                                    "ver": "last",
+                                    "version": "v2",
+                                    "tweetid": parentTweetId,
+                                    "appuserid": appUserMid
+                                ]
+                            )
+
+                            if let parentPayload = try? Self.unwrapV2Response(parentRawResponse),
+                               let parentDict = Self.asStringKeyedDictionary(parentPayload),
+                               let parentTweet = try? await mergeTweetFromDict(parentDict) {
+                                let parentAuthor = await TweetCacheManager.shared.fetchUser(mid: parentTweet.authorId)
+                                await MainActor.run {
+                                    parentTweet.author = parentAuthor
+                                    TweetCacheManager.shared.saveTweet(parentTweet, userId: parentTweet.authorId)
+                                }
+                                scheduleBackgroundAuthorFetch(authorId: parentTweet.authorId)
+                            }
+                        }
+                    }
+
                     // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed.
                     // Use format: "bookmark_list_userId" or "favorite_list_userId".
                     // saveTweet will automatically mark media as permanent based on the prefix
@@ -3341,7 +3381,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         if let tweetDict = response["tweet"] as? [String: Any] {
             let ut = try await mergeTweetFromDict(tweetDict)
             updatedTweet = ut
-            await MainActor.run { TweetCacheManager.shared.saveTweet(ut, userId: ut.authorId) }
         }
 
         return (updatedTweet, updatedUser)
@@ -3394,7 +3433,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         if let tweetDict = response["tweet"] as? [String: Any] {
             let ut = try await mergeTweetFromDict(tweetDict)
             updatedTweet = ut
-            await MainActor.run { TweetCacheManager.shared.saveTweet(ut, userId: ut.authorId) }
         }
 
         return (updatedTweet, updatedUser)
@@ -3896,11 +3934,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "commentid": commentId,
             "appuserid": appUserMid
         ]
-        guard let authorBaseUrl = authorSnap.baseUrl else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: nil", comment: "Client initialization error")])
+        let writableUrl = try await author.resolveWritableUrl()
+        guard let client = await author.writableClient(timeout: 15) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's writable client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
-        print("DEBUG: [deleteComment] delete_comment via author's baseUrl (\(authorBaseUrl.absoluteString))")
+        print("DEBUG: [deleteComment] delete_comment via parent's author writableUrl (\(writableUrl.absoluteString))")
         
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         if let err = rawResponse as? Error {

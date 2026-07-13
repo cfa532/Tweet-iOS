@@ -311,6 +311,7 @@ private final class CommentListTableViewController: UIViewController, UITableVie
     private var contentSizeObservation: NSKeyValueObservation?
     private var visibilityDisplayLink: CADisplayLink?
     private var lastVisibilitySampleTime: CFTimeInterval = 0
+    private var isVisibilityUpdateScheduled = false
     private var currentFooterMode: FooterMode = .none
     private var currentFooterWidth: CGFloat = 0
 
@@ -409,7 +410,8 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         view.backgroundColor = XTheme.background
         updateFooter()
 
-        if oldIds != newIds || rowsNeedStatusReload {
+        let reloadedRows = oldIds != newIds || rowsNeedStatusReload
+        if reloadedRows {
             tableView.reloadData()
         } else {
             for cell in tableView.visibleCells {
@@ -420,7 +422,11 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         }
 
         reportContentHeight()
-        updateCommentVideoVisibility()
+        if reloadedRows {
+            scheduleCommentVideoVisibilityUpdate()
+        } else {
+            updateCommentVideoVisibility()
+        }
     }
 
     private var rowsNeedStatusReload: Bool {
@@ -568,7 +574,9 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         if indexPath.row == comments.count - 1, hasSentReachBottomForCommentIds.insert(comment.mid).inserted {
             onReachBottom?()
         }
-        updateCommentVideoVisibility()
+        // UIKit is still installing this row here; querying visibleCells from this
+        // callback triggers UITableViewAlertForVisibleCellsAccessDuringUpdate.
+        scheduleCommentVideoVisibilityUpdate()
     }
 
     func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
@@ -583,7 +591,7 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         super.viewDidLayoutSubviews()
         updateFooter()
         reportContentHeight()
-        updateCommentVideoVisibility()
+        scheduleCommentVideoVisibilityUpdate()
     }
 
     private func startVisibilityDisplayLink() {
@@ -604,7 +612,20 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         updateCommentVideoVisibility()
     }
 
+    private func scheduleCommentVideoVisibilityUpdate() {
+        guard !isVisibilityUpdateScheduled else { return }
+        isVisibilityUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isVisibilityUpdateScheduled = false
+            self.updateCommentVideoVisibility()
+        }
+    }
+
     private func updateCommentVideoVisibility() {
+        // A queued scan means UIKit is still completing a reload/layout callback.
+        // Let the scheduled next-run-loop scan observe the stable visible-cell set.
+        guard !isVisibilityUpdateScheduled else { return }
         guard view.window != nil, let parentTweet else { return }
         guard let window = view.window else { return }
         let visibleRect = window.bounds

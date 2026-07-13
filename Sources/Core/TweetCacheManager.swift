@@ -308,6 +308,13 @@ extension TweetCacheManager {
                 return .skip
             }
 
+            // Comments are authored by their writer but are not top-level profile
+            // tweets. Older toggle code could cache them under the writer's profile
+            // key, so keep those polluted rows out of profile results.
+            if shouldFilterByAuthorId && tweet.parentTweetId != nil {
+                return .skip
+            }
+
             let authorRecord = cachedUserRecord(mid: tweet.authorId, in: context)
 
             let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
