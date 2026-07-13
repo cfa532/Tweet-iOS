@@ -3729,7 +3729,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
     
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
-        return try await withRetry {
+        // add_comment is non-idempotent: a retry after a lost/late response can create
+        // a second comment even though the first request already succeeded on the node.
+        // Surface ambiguous failures to the caller instead of automatically resubmitting.
             // Comments are stored on the tweet author's node (same as get_comments / fetchComments).
             let existingAuthor = await MainActor.run { tweet.author }
             let author: User
@@ -3753,12 +3755,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
 
             let authorSnap = await MainActor.run { UserRecord(user: author) }
-            guard let authorBaseUrl = authorSnap.baseUrl else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: nil", comment: "Client initialization error")])
+            let writableUrl = try await author.resolveWritableUrl()
+            guard let commentClient = await author.writableClient(timeout: 15) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's writable client not initialized", comment: "Client initialization error")])
             }
-            let commentClient = self.clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
 
-            print("DEBUG: [addComment] add_comment via author's baseUrl (\(authorBaseUrl.absoluteString)), tweet hostid: \(authorSnap.hostIds?.first ?? "nil")")
+            print("DEBUG: [addComment] add_comment via parent's author writableUrl (\(writableUrl.absoluteString)), tweet hostid: \(authorSnap.hostIds?.first ?? "nil")")
 
             // Encode the comment and read tweet.mid on the main actor (Tweet is @MainActor).
             let (commentJSON, tweetMid): (String, String) = try await MainActor.run {
@@ -3862,7 +3864,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 
                 return comment
             }
-        }
     }
 
     // both author and tweet author can delete this comment
@@ -6769,6 +6770,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         if let originalAuthorId = tweet.originalAuthorId {
             uploadPayload["originalAuthorId"] = originalAuthorId
+        }
+        if let parentTweetId = tweet.parentTweetId {
+            uploadPayload["parentTweetId"] = parentTweetId
         }
         if let attachments = tweet.attachments, !attachments.isEmpty {
             uploadPayload["attachments"] = attachments.map { attachment in

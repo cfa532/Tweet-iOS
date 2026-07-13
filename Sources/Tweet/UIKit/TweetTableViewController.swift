@@ -221,6 +221,17 @@ class TweetTableViewController: UITableViewController {
 
     // Feed identifier for persistent scroll position storage
     var feedIdentifier: String = "mainFeed"  // Default to main feed
+
+    private var presentsSavedCommentContext: Bool {
+        feedIdentifier.hasPrefix("bookmarks_") || feedIdentifier.hasPrefix("favorites_")
+    }
+
+    private func effectiveEmbeddedTweetId(for tweet: Tweet) -> String? {
+        if let originalTweetId = tweet.originalTweetId {
+            return originalTweetId
+        }
+        return presentsSavedCommentContext ? tweet.parentTweetId : nil
+    }
     var isDarkModeEnabled: Bool = false
     
     // Track scroll direction for height caching strategy
@@ -2359,8 +2370,9 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[indexPath.row - pinnedTweets.count]
         }
 
-        if let originalTweetId = tweet.originalTweetId {
-            prefetchEmbeddedTweetIfNeeded(originalTweetId: originalTweetId)
+        let effectiveEmbeddedTweetId = effectiveEmbeddedTweetId(for: tweet)
+        if let effectiveEmbeddedTweetId {
+            prefetchEmbeddedTweetIfNeeded(originalTweetId: effectiveEmbeddedTweetId)
         }
 
         let totalRows = pinnedTweets.count + tweets.count
@@ -2388,7 +2400,8 @@ class TweetTableViewController: UITableViewController {
                 onTweetTap: onTweetTap,
                 onShowLogin: onShowLogin,
                 onShowToast: onShowToast,
-                allowDeleteAll: allowDeleteAll
+                allowDeleteAll: allowDeleteAll,
+                savedParentTweetId: tweet.originalTweetId == nil ? effectiveEmbeddedTweetId : nil
             )
         }
 
@@ -2441,7 +2454,7 @@ class TweetTableViewController: UITableViewController {
         // fling and make UIScrollView's momentum physics "teleport" once unblocked (the
         // stop-then-catch-up-jump users saw). Restricting this to retweets/quotes removes the
         // check for the vast majority of cells while keeping the one case it exists for.
-        if tweet.originalTweetId != nil {
+        if effectiveEmbeddedTweetId != nil {
             cell.onHeightChanged = { [weak self, weak cell] desiredHeight in
                 guard let self, let cell,
                       let indexPath = self.tableView.indexPath(for: cell) else { return }
@@ -2456,7 +2469,11 @@ class TweetTableViewController: UITableViewController {
                     guard idx < self.tweets.count else { return }
                     tweet = self.tweets[idx]
                 }
-                self.setCachedHeight(desiredHeight, for: tweet, width: cell.bounds.width)
+                let isSavedCommentContext = tweet.originalTweetId == nil
+                    && self.effectiveEmbeddedTweetId(for: tweet) != nil
+                if !isSavedCommentContext {
+                    self.setCachedHeight(desiredHeight, for: tweet, width: cell.bounds.width)
+                }
 
                 if self.isUserDragging || self.isDecelerating {
                     self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
@@ -2969,6 +2986,13 @@ class TweetTableViewController: UITableViewController {
             return UITableView.automaticDimension
         }
 
+        // Saved comments gain an embedded parent only in bookmark/favorite lists.
+        // Let Auto Layout measure this presentation-specific card rather than polluting
+        // the shared Tweet height cache used by ordinary comment screens.
+        if tweet.originalTweetId == nil, effectiveEmbeddedTweetId(for: tweet) != nil {
+            return UITableView.automaticDimension
+        }
+
         let layoutWidth = currentRowLayoutWidth
         let dividerHeight = pinnedTweetsDividerHeight(forRow: indexPath.row)
 
@@ -3008,6 +3032,10 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
+        if tweet.originalTweetId == nil, effectiveEmbeddedTweetId(for: tweet) != nil {
+            return
+        }
+
         // Cache the actual Auto Layout height from the cell frame.
         // heightForRowAt returns automaticDimension on first display, so cell.frame.height
         // reflects the true Auto Layout result. Cache it for future use so that
@@ -3029,9 +3057,10 @@ class TweetTableViewController: UITableViewController {
                 return
             }
 
-            let needsEmbeddedTweet = tweet.originalTweetId != nil
+            let effectiveEmbeddedTweetId = effectiveEmbeddedTweetId(for: tweet)
+            let needsEmbeddedTweet = effectiveEmbeddedTweetId != nil
             let embeddedTweetLoaded = !needsEmbeddedTweet ||
-                                     (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
+                                     (Tweet.getInstance(for: effectiveEmbeddedTweetId!)?.author != nil)
             if embeddedTweetLoaded {
                 // Sanity check: if the actual height is much smaller than expected,
                 // the cell likely hasn't finished rendering (async content pending).

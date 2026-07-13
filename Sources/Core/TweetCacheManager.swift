@@ -310,11 +310,14 @@ extension TweetCacheManager {
 
             let authorRecord = cachedUserRecord(mid: tweet.authorId, in: context)
 
+            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+            let embeddedTweetId = tweet.originalTweetId ?? (isBookmarkOrFavorite ? tweet.parentTweetId : nil)
+
             var originalTweetRecord: TweetRecord?
             var originalAuthorRecord: UserRecord?
-            if let originalTweetId = tweet.originalTweetId, tweet.originalAuthorId != nil {
+            if let embeddedTweetId {
                 let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-                origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
+                origRequest.predicate = NSPredicate(format: "tid == %@", embeddedTweetId)
                 origRequest.fetchLimit = 1
                 if let cdOrigTweet = try? context.fetch(origRequest).first,
                    let decodedOriginal = try? decodeTweetRecord(from: cdOrigTweet) {
@@ -327,8 +330,6 @@ extension TweetCacheManager {
                 print("ERROR: [TweetCacheManager] Found cached tweet with invalid timestamp: \(tweet.timestamp), skipping")
                 return .emit(nil)
             }
-
-            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
 
             if tweet.isPrivate == true && !isBookmarkOrFavorite {
                 if shouldFilterByAuthorId && currentUserId != nil && userId == currentUserId {
@@ -902,6 +903,7 @@ extension Tweet {
                 title: tweet.title,
                 originalTweetId: tweet.originalTweetId,
                 originalAuthorId: tweet.originalAuthorId,
+                parentTweetId: tweet.parentTweetId,
                 author: tweet.author,
                 favorites: tweet.favorites,
                 favoriteCount: tweet.favoriteCount ?? 0,

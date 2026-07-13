@@ -9,7 +9,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     /// Get or create a Tweet singleton instance
     /// Always use this instead of direct Tweet() initialization to ensure singleton pattern
     static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
-                          originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
+                          originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, parentTweetId: MimeiId? = nil, author: User? = nil,
                           favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
                           downloadable: Bool? = nil) -> Tweet {
@@ -20,6 +20,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             // Update existing instance with new values
             if let content = content { existingInstance.content = content }
             if let title = title { existingInstance.title = title }
+            if let parentTweetId = parentTweetId { existingInstance.parentTweetId = parentTweetId }
             if let author = author { existingInstance.author = author }
             if let favorites = favorites { existingInstance.favorites = favorites }
             existingInstance.favoriteCount = favoriteCount
@@ -33,7 +34,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         }
         
         let newInstance = Tweet(mid: mid, authorId: authorId, content: content, timestamp: timestamp, title: title,
-                              originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, author: author,
+                              originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, parentTweetId: parentTweetId, author: author,
                               favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
                               retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
                               isPrivate: isPrivate, downloadable: downloadable)
@@ -102,6 +103,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     
     var originalTweetId: MimeiId? // retweet id of the original tweet
     var originalAuthorId: MimeiId? // authorId of the forwarded tweet
+    var parentTweetId: MimeiId? // immediate parent for comments and replies
         
     // Media attachments
     var attachments: [MimeiFileType]? {
@@ -207,6 +209,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         case title
         case originalTweetId
         case originalAuthorId
+        case parentTweetId
         // author is NOT saved - always reconstructed from singleton
         case favorites
         case favoriteCount
@@ -227,6 +230,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         title = try container.decodeIfPresent(String.self, forKey: .title)
         originalTweetId = try container.decodeIfPresent(String.self, forKey: .originalTweetId)
         originalAuthorId = try container.decodeIfPresent(String.self, forKey: .originalAuthorId)
+        parentTweetId = try container.decodeIfPresent(String.self, forKey: .parentTweetId)
         // author is NOT decoded - always reconstructed from singleton using authorId
         author = nil
         favorites = try container.decodeIfPresent([Bool].self, forKey: .favorites)
@@ -240,7 +244,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     }
     
     init(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
-         originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
+         originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, parentTweetId: MimeiId? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
          downloadable: Bool? = nil) {
@@ -251,6 +255,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         self.title = title
         self.originalTweetId = originalTweetId
         self.originalAuthorId = originalAuthorId
+        self.parentTweetId = parentTweetId
         self.author = author
         self.favorites = favorites
         self.favoriteCount = favoriteCount
@@ -276,6 +281,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         try container.encodeIfPresent(title, forKey: .title)
         try container.encodeIfPresent(originalTweetId, forKey: .originalTweetId)
         try container.encodeIfPresent(originalAuthorId, forKey: .originalAuthorId)
+        try container.encodeIfPresent(parentTweetId, forKey: .parentTweetId)
         // author is NOT encoded - always reconstructed from singleton using authorId
         try container.encodeIfPresent(favorites, forKey: .favorites)
         try container.encodeIfPresent(favoriteCount, forKey: .favoriteCount)
@@ -297,6 +303,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             // Update all properties except author
             if let content = other.content { self.content = content }
             if let title = other.title { self.title = title }
+            if let parentTweetId = other.parentTweetId { self.parentTweetId = parentTweetId }
             if let favorites = other.favorites { self.favorites = favorites }
             self.favoriteCount = other.favoriteCount
             self.bookmarkCount = other.bookmarkCount
@@ -382,6 +389,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             performBatchUpdate {
                 if let content = tempTweet.content { self.content = content }
                 if let title = tempTweet.title { self.title = title }
+                if let parentTweetId = tempTweet.parentTweetId { self.parentTweetId = parentTweetId }
                 if let author = tempTweet.author { self.author = author }
                 if let favorites = tempTweet.favorites { self.favorites = favorites }
                 self.favoriteCount = tempTweet.favoriteCount
@@ -487,7 +495,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             
             let instance = getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
                              timestamp: tweet.timestamp, title: tweet.title,
-                             originalTweetId: tweet.originalTweetId, originalAuthorId: tweet.originalAuthorId,
+                             originalTweetId: tweet.originalTweetId, originalAuthorId: tweet.originalAuthorId, parentTweetId: tweet.parentTweetId,
                              author: tweet.author, favorites: tweet.favorites,
                              favoriteCount: tweet.favoriteCount ?? 0,
                              bookmarkCount: tweet.bookmarkCount ?? 0,
@@ -553,6 +561,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             title: title ?? self.title,
             originalTweetId: self.originalTweetId,
             originalAuthorId: self.originalAuthorId,
+            parentTweetId: self.parentTweetId,
             author: author ?? self.author,
             favorites: favorites ?? self.favorites,
             favoriteCount: favoriteCount ?? self.favoriteCount ?? 0,

@@ -365,7 +365,8 @@ class TweetCellContentView: UIView {
                    isPinned: Bool, isLastItem: Bool,
                    parentViewController: UIViewController,
                    allowDeleteAll: Bool = false,
-                   commentParentTweet: Tweet? = nil) {
+                   commentParentTweet: Tweet? = nil,
+                   savedParentTweetId: String? = nil) {
         self.parentViewController = parentViewController
         self.currentTweet = tweet
         self.commentParentTweet = commentParentTweet
@@ -407,12 +408,46 @@ class TweetCellContentView: UIView {
         cancellables.removeAll()
 
         let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil
+        let savedParentTweet = savedParentTweetId.flatMap { Tweet.getInstance(for: $0) }
 
         // Determine which tweet's content to show
         if isRetweet {
             configureAsRetweet(tweet: tweet, hproseInstance: hproseInstance,
                                isPinned: isPinned, parentViewController: parentViewController,
                                allowDeleteAll: allowDeleteAll)
+        } else if let savedParentTweetId {
+            configureQuotedTweet(
+                tweet: tweet,
+                embeddedTweet: savedParentTweet,
+                originalTweetId: savedParentTweetId,
+                originalAuthorId: savedParentTweet?.authorId ?? "",
+                hproseInstance: hproseInstance,
+                isPinned: isPinned,
+                parentViewController: parentViewController,
+                allowDeleteAll: allowDeleteAll,
+                allowNetworkLoad: false
+            )
+
+            if savedParentTweet == nil {
+                retweetLoadTask = Task { [weak self] in
+                    guard let loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: savedParentTweetId),
+                          !Task.isCancelled else { return }
+                    await MainActor.run {
+                        guard let self, self.currentTweetId == tweet.mid else { return }
+                        self.configureQuotedTweet(
+                            tweet: tweet,
+                            embeddedTweet: loadedTweet,
+                            originalTweetId: savedParentTweetId,
+                            originalAuthorId: loadedTweet.authorId,
+                            hproseInstance: hproseInstance,
+                            isPinned: isPinned,
+                            parentViewController: parentViewController,
+                            allowDeleteAll: allowDeleteAll
+                        )
+                        self.onContentDidChangeHeightAsync?()
+                    }
+                }
+            }
         } else {
             configureAsRegularTweet(tweet: tweet, hproseInstance: hproseInstance,
                                     isPinned: isPinned, parentViewController: parentViewController,
@@ -423,8 +458,8 @@ class TweetCellContentView: UIView {
         loadAuthorIfNeeded(tweet: tweet, hproseInstance: hproseInstance)
 
         // Also load original tweet's author for retweets/quoted tweets
-        if isRetweet, let originalId = tweet.originalTweetId,
-           let originalTweet = Tweet.getInstance(for: originalId),
+        if let embeddedId = tweet.originalTweetId ?? savedParentTweetId,
+           let originalTweet = Tweet.getInstance(for: embeddedId),
            originalTweet.author == nil || originalTweet.author?.username == nil {
             loadAuthorIfNeeded(tweet: originalTweet, hproseInstance: hproseInstance)
         }
@@ -596,7 +631,8 @@ class TweetCellContentView: UIView {
                                        originalTweetId: String, originalAuthorId: String,
                                        hproseInstance: HproseInstance, isPinned: Bool,
                                        parentViewController: UIViewController,
-                                       allowDeleteAll: Bool = false) {
+                                       allowDeleteAll: Bool = false,
+                                       allowNetworkLoad: Bool = true) {
         // Hide retweet banner
         showRetweetBanner(false)
 
@@ -635,7 +671,7 @@ class TweetCellContentView: UIView {
         if let embeddedTweet {
             embeddedTweetView.configure(tweet: embeddedTweet, quotingTweetId: tweet.mid,
                                          parentViewController: parentViewController)
-        } else {
+        } else if allowNetworkLoad {
             embeddedTweetView.loadEmbeddedTweet(
                 originalTweetId: originalTweetId,
                 originalAuthorId: originalAuthorId,
@@ -643,6 +679,8 @@ class TweetCellContentView: UIView {
                 hproseInstance: hproseInstance,
                 parentViewController: parentViewController
             )
+        } else {
+            embeddedTweetView.showPlaceholder()
         }
         embeddedTweetView.onTap = { [weak self] t in self?.navigateToTweetDetail(t, source: "embeddedTweetTap") }
         embeddedTweetView.onAsyncConfigured = { [weak self] in self?.onContentDidChangeHeightAsync?() }

@@ -133,6 +133,7 @@ final class TweetStore {
             title: record.title,
             originalTweetId: record.originalTweetId,
             originalAuthorId: record.originalAuthorId,
+            parentTweetId: record.parentTweetId,
             author: author,
             favorites: record.favorites,
             favoriteCount: record.favoriteCount ?? 0,
@@ -154,6 +155,7 @@ final class TweetStore {
         tweet.performBatchUpdate {
             if let content = record.content { tweet.content = content }
             if let title = record.title { tweet.title = title }
+            if let parentTweetId = record.parentTweetId { tweet.parentTweetId = parentTweetId }
             if let favorites = record.favorites { tweet.favorites = favorites }
             tweet.favoriteCount = record.favoriteCount
             tweet.bookmarkCount = record.bookmarkCount

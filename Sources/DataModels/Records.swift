@@ -347,6 +347,7 @@ struct TweetRecord: Codable, Sendable {
     var title: String?
     var originalTweetId: MimeiId?
     var originalAuthorId: MimeiId?
+    var parentTweetId: MimeiId?
     var favorites: [Bool]?
     var favoriteCount: Int?
     var bookmarkCount: Int?
@@ -364,6 +365,7 @@ struct TweetRecord: Codable, Sendable {
         case title
         case originalTweetId
         case originalAuthorId
+        case parentTweetId
         case favorites
         case favoriteCount
         case bookmarkCount
@@ -382,6 +384,7 @@ struct TweetRecord: Codable, Sendable {
         title: String? = nil,
         originalTweetId: MimeiId? = nil,
         originalAuthorId: MimeiId? = nil,
+        parentTweetId: MimeiId? = nil,
         favorites: [Bool]? = [false, false, false],
         favoriteCount: Int? = 0,
         bookmarkCount: Int? = 0,
@@ -398,6 +401,7 @@ struct TweetRecord: Codable, Sendable {
         self.title = title
         self.originalTweetId = originalTweetId
         self.originalAuthorId = originalAuthorId
+        self.parentTweetId = parentTweetId
         self.favorites = favorites
         self.favoriteCount = favoriteCount
         self.bookmarkCount = bookmarkCount
@@ -418,6 +422,7 @@ struct TweetRecord: Codable, Sendable {
             title: tweet.title,
             originalTweetId: tweet.originalTweetId,
             originalAuthorId: tweet.originalAuthorId,
+            parentTweetId: tweet.parentTweetId,
             favorites: tweet.favorites,
             favoriteCount: tweet.favoriteCount,
             bookmarkCount: tweet.bookmarkCount,
@@ -470,6 +475,7 @@ extension TweetRecord {
             title: title,
             originalTweetId: originalTweetId,
             originalAuthorId: originalAuthorId,
+            parentTweetId: parentTweetId,
             author: author,
             favorites: favorites,
             favoriteCount: favoriteCount ?? 0,
