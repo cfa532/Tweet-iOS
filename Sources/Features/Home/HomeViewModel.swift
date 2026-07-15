@@ -320,7 +320,6 @@ struct UserListDestinationView: View {
             title: userListTitle(for: destination),
             userId: destination.userId,
             userFetcher: { page, size in
-                let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
                 let targetUser = User.getInstance(mid: destination.userId)
                 var cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
 
@@ -331,44 +330,25 @@ struct UserListDestinationView: View {
                     cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
                 }
 
-                if page == 0, let cachedIds, !cachedIds.isEmpty {
-                    // Serve cached IDs instantly so rows render without a spinner;
-                    // refresh the list in the background for the next access.
-                    Task {
-                        guard let ids = try? await hproseInstance.getListByType(user: targetUser, entry: entry) else { return }
-                        await MainActor.run {
-                            if destination.listType == .FOLLOWER {
-                                targetUser.fansList = ids
-                            } else {
-                                targetUser.followingList = ids
-                            }
-                            // Persist so the list is available instantly on cold start.
-                            TweetCacheManager.shared.saveUser(targetUser)
-                        }
-                    }
-                } else if page == 0 || cachedIds == nil {
-                    let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
-                    await MainActor.run {
-                        if destination.listType == .FOLLOWER {
-                            targetUser.fansList = ids
-                        } else {
-                            targetUser.followingList = ids
-                        }
-                        // Persist so the list is available instantly on cold start.
-                        TweetCacheManager.shared.saveUser(targetUser)
-                    }
-                }
-
-                let ids: [String]
-                if destination.listType == .FOLLOWER {
-                    ids = targetUser.fansList ?? []
-                } else {
-                    ids = targetUser.followingList ?? []
-                }
+                let ids = cachedIds ?? []
                 let startIndex = page * size
                 guard startIndex < ids.count else { return [] }
                 let endIndex = min(startIndex + size, ids.count)
                 return Array(ids[startIndex..<endIndex])
+            },
+            authoritativeUserFetcher: {
+                let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                let targetUser = User.getInstance(mid: destination.userId)
+                let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
+
+                if destination.listType == .FOLLOWER {
+                    targetUser.fansList = ids
+                } else {
+                    targetUser.followingList = ids
+                }
+                // Persist the authoritative IDs for cache-first rendering next time.
+                TweetCacheManager.shared.saveUser(targetUser)
+                return ids
             },
             navigationPath: $navigationPath,
             onFollowToggle: { user in
