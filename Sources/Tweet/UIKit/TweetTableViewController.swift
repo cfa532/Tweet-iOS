@@ -2471,6 +2471,16 @@ class TweetTableViewController: UITableViewController {
                 }
                 let isSavedCommentContext = tweet.originalTweetId == nil
                     && self.effectiveEmbeddedTweetId(for: tweet) != nil
+#if DEBUG
+                let oldCachedHeight = self.cachedHeight(for: tweet, width: cell.bounds.width)
+                print("🧭 [SCROLL JUMP TRACE] height-request " +
+                      "feed=\(self.feedIdentifier) tweet=\(tweet.mid) row=\(indexPath.row) " +
+                      "oldHeight=\(oldCachedHeight.map(String.init(describing:)) ?? "nil") " +
+                      "requestedHeight=\(desiredHeight) offset=\(self.tableView.contentOffset.y) " +
+                      "contentHeight=\(self.tableView.contentSize.height) " +
+                      "dragging=\(self.isUserDragging) decelerating=\(self.isDecelerating) " +
+                      "savedCommentContext=\(isSavedCommentContext)")
+#endif
                 if !isSavedCommentContext {
                     self.setCachedHeight(desiredHeight, for: tweet, width: cell.bounds.width)
                 }
@@ -3333,6 +3343,20 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
+#if DEBUG
+        let tracePendingTweetIds = pendingHeightRelayoutTweetIds.sorted()
+        let traceAnchorTweetId = anchorIndexPath.flatMap { tweetForRow($0.row)?.mid } ?? "none"
+        let traceAnchorRow = anchorIndexPath?.row ?? -1
+        let traceOffsetBefore = tableView.contentOffset.y
+        let traceContentHeightBefore = tableView.contentSize.height
+        print("🧭 [SCROLL JUMP TRACE] relayout-before " +
+              "feed=\(feedIdentifier) pending=\(tracePendingTweetIds) " +
+              "anchorTweet=\(traceAnchorTweetId) anchorRow=\(traceAnchorRow) " +
+              "anchorOffset=\(anchorOffset) offset=\(traceOffsetBefore) " +
+              "contentHeight=\(traceContentHeightBefore) " +
+              "dragging=\(isUserDragging) decelerating=\(isDecelerating)")
+#endif
+
         pendingHeightRelayoutTweetIds.removeAll()
         UIView.performWithoutAnimation {
             isTableViewUpdating = true
@@ -3341,13 +3365,49 @@ class TweetTableViewController: UITableViewController {
             isTableViewUpdating = false
         }
 
+#if DEBUG
+        let traceRawOffsetAfter = tableView.contentOffset.y
+        let traceContentHeightAfter = tableView.contentSize.height
+        print("🧭 [SCROLL JUMP TRACE] relayout-raw-after " +
+              "feed=\(feedIdentifier) pending=\(tracePendingTweetIds) " +
+              "anchorTweet=\(traceAnchorTweetId) anchorRow=\(traceAnchorRow) " +
+              "offset=\(traceRawOffsetAfter) offsetDelta=\(traceRawOffsetAfter - traceOffsetBefore) " +
+              "contentHeight=\(traceContentHeightAfter) " +
+              "contentHeightDelta=\(traceContentHeightAfter - traceContentHeightBefore)")
+#endif
+
         // Restore position relative to the anchor cell to absorb any content-offset drift.
         if let anchor = anchorIndexPath {
             let newCellTop = tableView.rectForRow(at: anchor).origin.y
             let newOffset = newCellTop + anchorOffset
             if abs(newOffset - tableView.contentOffset.y) > 0.5 {
+#if DEBUG
+                let correctionDelta = newOffset - tableView.contentOffset.y
+                print("🧭 [SCROLL JUMP TRACE] anchor-correction " +
+                      "feed=\(feedIdentifier) anchorTweet=\(traceAnchorTweetId) " +
+                      "anchorRow=\(anchor.row) newCellTop=\(newCellTop) " +
+                      "targetOffset=\(newOffset) correctionDelta=\(correctionDelta)")
+#endif
                 tableView.setContentOffset(CGPoint(x: 0, y: newOffset), animated: false)
+#if DEBUG
+                print("🧭 [SCROLL JUMP TRACE] anchor-corrected " +
+                      "feed=\(feedIdentifier) anchorTweet=\(traceAnchorTweetId) " +
+                      "anchorRow=\(anchor.row) actualOffset=\(tableView.contentOffset.y)")
+#endif
+            } else {
+#if DEBUG
+                print("🧭 [SCROLL JUMP TRACE] anchor-no-correction " +
+                      "feed=\(feedIdentifier) anchorTweet=\(traceAnchorTweetId) " +
+                      "anchorRow=\(anchor.row) newCellTop=\(newCellTop) " +
+                      "offset=\(tableView.contentOffset.y) drift=\(newOffset - tableView.contentOffset.y)")
+#endif
             }
+        } else {
+#if DEBUG
+            print("🧭 [SCROLL JUMP TRACE] anchor-missing " +
+                  "feed=\(feedIdentifier) pending=\(tracePendingTweetIds) " +
+                  "offset=\(tableView.contentOffset.y)")
+#endif
         }
     }
 
