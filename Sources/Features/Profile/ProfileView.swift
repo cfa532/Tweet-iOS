@@ -729,7 +729,7 @@ struct ProfileView: View {
             let refreshedUser = try await Task.detached(priority: .utility) {
                 try await hproseInstance.fetchUser(
                     profileUserId,
-                    baseUrl: cachedRoute,
+                    baseUrl: "",
                     forceRefresh: true,
                     refreshExpiredCacheInBackground: false
                 )

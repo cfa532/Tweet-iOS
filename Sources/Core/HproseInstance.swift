@@ -2220,7 +2220,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ) async throws -> URL {
         // Phase A (demotion prep): snapshot @MainActor user reads (mid for logs, hostIds for read-node fallback).
         let (userMid, userHostIds) = await MainActor.run { (user.mid, user.hostIds) }
-        if let url = await applyNodePoolBaseUrlIfAvailable(for: user, reason: "NodePool route") {
+        // Forced resolution must validate a pooled route through getHostIP below.
+        // That health check removes an unreachable IP before discovering a replacement.
+        if !forceFreshIP,
+           let url = await applyNodePoolBaseUrlIfAvailable(for: user, reason: "NodePool route") {
             print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using NodePool IP: \(url.absoluteString) for userId: \(userMid)")
             return url
         }
@@ -2250,7 +2253,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         
         if let accessNodeMid = userHostIds.flatMap({ $0.count > 1 ? $0[1] : nil }) {
             print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving read node \(accessNodeMid) for userId: \(userMid), reason: \(reason)")
-            if let accessIP = await getHostIP(accessNodeMid, v4Only: v4Only),
+            if let accessIP = await getHostIP(
+                accessNodeMid,
+                v4Only: v4Only,
+                forceHealthCheck: forceFreshIP
+            ),
                let url = URL(string: ensureHttpPrefix(accessIP)) {
                 return url
             }
@@ -7980,8 +7987,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// - Parameters:
     ///   - nodeId: The node ID to resolve IPs for
     ///   - v4Only: Whether to request IPv4 addresses only
+    ///   - forceHealthCheck: Whether to bypass a cached health result for a pooled IP
     /// - Returns: A healthy IP address for the node, or nil if none found
-    func getHostIP(_ nodeId: String, v4Only: Bool = false) async -> String? {
+    func getHostIP(
+        _ nodeId: String,
+        v4Only: Bool = false,
+        forceHealthCheck: Bool = false
+    ) async -> String? {
         print("DEBUG: [getHostIP] Resolving IPs for node \(nodeId)")
         
         // Step 0: Check NodePool first for cached IP
@@ -7989,7 +8001,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             print("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
             
             // Test if pooled IP is still healthy
-            let isHealthy = await isServerHealthyWithTimeout(pooledIP, timeout: 5.0)
+            let isHealthy = await isServerHealthyWithTimeout(
+                pooledIP,
+                timeout: 5.0,
+                useCache: !forceHealthCheck
+            )
             
             if isHealthy {
                 print("DEBUG: [getHostIP] ✅ Pooled IP \(pooledIP) is healthy, using it")
