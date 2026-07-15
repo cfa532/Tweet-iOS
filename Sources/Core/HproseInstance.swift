@@ -1914,6 +1914,64 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return false
     }
 
+    /// Validates the route currently displayed by a profile without delaying cached rendering.
+    /// Returns true when the current route is healthy or an unhealthy route was replaced.
+    func validateAndRepairProfileRoute(for user: User) async -> Bool {
+        let (userMid, currentBaseUrl, accessNodeMid) = await MainActor.run {
+            (
+                user.mid,
+                user.baseUrl?.absoluteString,
+                user.hostIds.flatMap { $0.count > 1 ? $0[1] : nil }
+            )
+        }
+
+        if let currentBaseUrl, !currentBaseUrl.isEmpty {
+            let currentHostPort = normalizeHostPort(currentBaseUrl)
+            hproseDebug("DEBUG: [ProfileRoute] Fresh health check for user \(userMid) at \(currentHostPort)")
+            let routeIsHealthy = await isServerHealthyWithTimeout(
+                currentHostPort,
+                timeout: 5.0,
+                useCache: false
+            )
+            if routeIsHealthy {
+                hproseDebug("DEBUG: [ProfileRoute] Current route is healthy for user \(userMid); refreshing profile data")
+                return true
+            }
+            guard !Task.isCancelled else { return false }
+
+            hproseWarning("DEBUG: [ProfileRoute] Current route is unhealthy for user \(userMid): \(currentHostPort)")
+            invalidateIPCacheForBaseUrl(currentBaseUrl)
+            if let accessNodeMid {
+                await MainActor.run {
+                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: currentBaseUrl)
+                }
+            }
+        }
+
+        var replacementIP: String?
+        if let accessNodeMid {
+            replacementIP = await getHostIP(
+                accessNodeMid,
+                v4Only: false,
+                forceHealthCheck: true
+            )
+        }
+        if replacementIP == nil {
+            replacementIP = try? await getProviderIP(userMid, v4Only: false)
+        }
+
+        guard let replacementIP,
+              let replacementURL = URL(string: ensureHttpPrefix(replacementIP)),
+              !Task.isCancelled else {
+            hproseWarning("DEBUG: [ProfileRoute] Could not resolve a healthy replacement route for user \(userMid)")
+            return false
+        }
+
+        await applyBaseUrlIfNeeded(user, url: replacementURL, reason: "profile health repair")
+        hproseDebug("DEBUG: [ProfileRoute] Repaired route for user \(userMid): \(replacementURL.absoluteString)")
+        return true
+    }
+
     private func evictNodeRouteAfterFailure(
         user: User,
         attemptedBaseUrl: String?,

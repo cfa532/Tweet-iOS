@@ -104,7 +104,7 @@ struct ProfileView: View {
                 didLoad = true
                 await Task.yield()
                 guard !Task.isCancelled else { return }
-                await refreshProfileData(resyncIfNeeded: false)
+                await validateProfileRouteOnOpen()
             }
             .onChange(of: user.mid) { _, _ in
                 // Reset didLoad when user changes so the new user's data is fetched
@@ -718,6 +718,19 @@ struct ProfileView: View {
         }
     }
     
+    private func validateProfileRouteOnOpen() async {
+        let routeBeforeValidation = user.baseUrl?.absoluteString
+        let routeIsReady = await hproseInstance.validateAndRepairProfileRoute(for: user)
+        guard routeIsReady, !Task.isCancelled else { return }
+
+        if user.baseUrl?.absoluteString != routeBeforeValidation {
+            await MainActor.run {
+                profileTweetsRefreshToken += 1
+            }
+        }
+        await refreshProfileData(resyncIfNeeded: false)
+    }
+
     private func refreshProfileData(resyncIfNeeded: Bool) async {
         var refreshedProfileUser: User?
         let profileUserId = user.mid
