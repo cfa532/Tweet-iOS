@@ -380,12 +380,8 @@ struct UserRowView: View {
                             guard !Task.isCancelled else {
                                 throw CancellationError()
                             }
-                            print("DEBUG: [UserRowView] Refreshing cached user with ID: \(userId)")
-                            return try await hproseInstance.fetchUser(
-                                userId,
-                                forceRefresh: true,
-                                refreshExpiredCacheInBackground: false
-                            )
+                            print("DEBUG: [UserRowView] Refreshing expired cached user if needed: \(userId)")
+                            return try await hproseInstance.fetchUser(userId)
                         }
                     } catch is CancellationError {
                         print("DEBUG: [UserRowView] Cached refresh cancelled for user \(userId)")

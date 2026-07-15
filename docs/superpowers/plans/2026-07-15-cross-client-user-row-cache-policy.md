@@ -98,7 +98,7 @@ Expected: exit 0 with no output.
 Run from `/Users/cfa532/Documents/GitHub/Tweet`:
 
 ```bash
-python3 -c 'from pathlib import Path; s=Path("app/src/main/java/us/fireshare/tweet/viewmodel/UserViewModel.kt").read_text(); init=s[s.index("suspend fun initLoad"):s.index("fun refreshUserData", s.index("suspend fun initLoad"))]; refresh=s[s.index("private suspend fun refreshUserDataFromServer"):s.index("fun refreshPinnedTweets", s.index("private suspend fun refreshUserDataFromServer"))]; assert "validateAndRepairProfileRoute" in init; assert "refreshUserDataFromServer()" in init; assert "forceRefresh = true" in refresh'
+python3 -c 'from pathlib import Path; s=Path("app/src/main/java/us/fireshare/tweet/viewmodel/UserViewModel.kt").read_text(); init=s[s.index("suspend fun initLoad"):s.index("fun refreshUserData", s.index("suspend fun initLoad"))]; refresh=s[s.index("private suspend fun refreshUserDataFromServer"):s.index("suspend fun resyncProfileUser", s.index("private suspend fun refreshUserDataFromServer"))]; assert "validateAndRepairProfileRoute" in init; assert "refreshUserDataFromServer()" in init; assert "forceRefresh = true" in refresh'
 ```
 
 Expected: exit 0 with no output.
@@ -166,4 +166,3 @@ git -C /Users/cfa532/Documents/GitHub/Tweet status --short
 ```
 
 Expected: all assertions and diff checks pass; the iOS production diff is limited to `UserRowView.swift`; existing unrelated modifications in both repositories remain preserved.
-
