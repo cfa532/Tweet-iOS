@@ -6,6 +6,9 @@
 //
 import SwiftUI
 import Combine
+import OSLog
+
+private let userRowLogger = Logger(subsystem: "com.zz", category: "UserRowView")
 
 actor UserRowLoadGate {
     static let shared = UserRowLoadGate(limit: Constants.USER_VISIBLE_BATCH_SIZE)
@@ -380,7 +383,7 @@ struct UserRowView: View {
                             guard !Task.isCancelled else {
                                 throw CancellationError()
                             }
-                            print("DEBUG: [UserRowView] Refreshing expired cached user if needed: \(userId)")
+                            userRowLogger.debug("Refreshing expired cached user if needed: \(userId, privacy: .private(mask: .hash))")
                             return try await hproseInstance.fetchUser(userId)
                         }
                     } catch is CancellationError {
