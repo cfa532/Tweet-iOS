@@ -363,7 +363,7 @@ struct UserRowView: View {
             do {
                 // Check if this task should be cancelled before starting
                 guard taskCancellationToken == currentCancellationToken else {
-                    print("DEBUG: [UserRowView] Task cancelled before starting for user \(userId)")
+                    userRowLogger.debug("User load cancelled before start: \(userId, privacy: .private(mask: .hash))")
                     return
                 }
 
@@ -387,9 +387,9 @@ struct UserRowView: View {
                             return try await hproseInstance.fetchUser(userId)
                         }
                     } catch is CancellationError {
-                        print("DEBUG: [UserRowView] Cached refresh cancelled for user \(userId)")
+                        userRowLogger.debug("Cached user refresh cancelled: \(userId, privacy: .private(mask: .hash))")
                     } catch {
-                        print("DEBUG: [UserRowView] Cached refresh failed for user \(userId), keeping cached row: \(error)")
+                        userRowLogger.warning("Cached user refresh failed; retaining row for \(userId, privacy: .public): \(error.localizedDescription, privacy: .public)")
                     }
                     return
                 }
@@ -398,7 +398,7 @@ struct UserRowView: View {
                     guard !Task.isCancelled else {
                         throw CancellationError()
                     }
-                    print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
+                    userRowLogger.info("Loading uncached user: \(userId, privacy: .public)")
                     // Keep spinner showing while fetchUser is in progress (includes retries)
                     // fetchUser will retry up to 3 times before returning skeleton on failure
                     return try await hproseInstance.fetchUser(userId, refreshExpiredCacheInBackground: false)
@@ -406,7 +406,7 @@ struct UserRowView: View {
                 
                 // Check if task should be cancelled before processing
                 guard taskCancellationToken == currentCancellationToken else {
-                    print("DEBUG: [UserRowView] Task cancelled during processing for user \(userId)")
+                    userRowLogger.debug("User load cancelled during processing: \(userId, privacy: .private(mask: .hash))")
                     return
                 }
                 
@@ -416,7 +416,7 @@ struct UserRowView: View {
                 // A successful load must include a real name or username.
                 if let fetchedUser = fetchedUser, hasRenderableIdentity(fetchedUser) {
                     // Valid user loaded - hide spinner and show user
-                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid)")
+                    userRowLogger.info("Loaded user row: \(fetchedUser.mid, privacy: .public)")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
@@ -430,9 +430,9 @@ struct UserRowView: View {
                     )
                 }
             } catch is CancellationError {
-                print("DEBUG: [UserRowView] Loading cancelled for user \(userId)")
+                userRowLogger.debug("User load cancelled: \(userId, privacy: .private(mask: .hash))")
             } catch {
-                print("DEBUG: [UserRowView] Error loading user \(userId) after retries: \(error)")
+                userRowLogger.error("User load failed after retries for \(userId, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 await hideAndBlacklistUser(
                     taskCancellationToken: taskCancellationToken,
                     reason: "fetchUser threw after retries"
@@ -447,7 +447,7 @@ struct UserRowView: View {
     }
 
     private func hideAndBlacklistUser(taskCancellationToken: UUID, reason: String) async {
-        print("⚠️ [UserRowView] \(reason) for ID: \(userId) - blacklisting candidate and hiding row")
+        userRowLogger.error("Dismissing user row \(userId, privacy: .public): \(reason, privacy: .public)")
         BlackList.shared.recordFailure(userId)
 
         await MainActor.run {
