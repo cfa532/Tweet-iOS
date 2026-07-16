@@ -463,7 +463,7 @@ struct MediaBrowserView: View {
             let downwardOffset = max(dragOffset.height, 0)
             let fadeDistance = max(UIScreen.main.bounds.height * 0.35, 1)
             let progress = min(downwardOffset / fadeDistance, 1)
-            return 1 - (0.1 * Double(progress))
+            return 1 - (0.15 * Double(progress))
         }
 
         private var controlsOverlay: some View {
