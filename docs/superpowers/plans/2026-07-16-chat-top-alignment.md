@@ -4,7 +4,7 @@
 
 **Goal:** Make short chat conversations start at the top while keeping overflowing conversations positioned at their newest message.
 
-**Architecture:** Preserve `ChatScreen`'s current chronological data and explicit auto-scroll behavior. Separate underfilled-content alignment from the existing initial scroll position with SwiftUI's role-specific default scroll anchor.
+**Architecture:** Preserve `ChatScreen`'s current chronological data and auto-scroll triggers. Separate underfilled-content alignment from the existing initial scroll position with SwiftUI's role-specific default scroll anchor, and let programmatic scrolling use the minimum movement needed to reveal the newest message.
 
 **Tech Stack:** Swift 6, SwiftUI, iOS 18
 
@@ -52,3 +52,19 @@ Inspect the focused diff and confirm it contains only the role-specific anchor p
 - [x] **Step 4: Leave runtime verification unexecuted**
 
 Do not run tests under the repository instruction. The expected manual scenarios are: zero messages; one message at the top; several short messages growing downward; overflow with newest at the bottom; and another new message pushing older messages upward.
+
+- [x] **Step 5: Remove the explicit bottom override from programmatic scrolling**
+
+Change the newest-message and keyboard scroll calls from:
+
+```swift
+proxy.scrollTo(lastMessage.id, anchor: .bottom)
+```
+
+to:
+
+```swift
+proxy.scrollTo(lastMessage.id)
+```
+
+This preserves the auto-scroll triggers while preventing them from bottom-aligning content that is shorter than the scroll view.

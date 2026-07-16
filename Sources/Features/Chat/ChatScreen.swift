@@ -255,19 +255,19 @@ struct ChatScreen: View {
 
                 if shouldAnimateScroll {
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        proxy.scrollTo(lastMessage.id)
                     }
                 } else {
-                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    proxy.scrollTo(lastMessage.id)
                 }
                 shouldScrollToBottom = false
                 shouldAnimateScroll = true
             }
             .onChange(of: keyboardHeight) { _, newHeight in
-                // Scroll to bottom when keyboard appears
+                // Keep the latest message visible when the keyboard appears.
                 if newHeight > 0, let lastMessage = messages.last {
                     withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        proxy.scrollTo(lastMessage.id)
                     }
                 }
             }
