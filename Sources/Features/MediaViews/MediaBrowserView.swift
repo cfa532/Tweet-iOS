@@ -1004,25 +1004,21 @@ struct ImageViewWithPlaceholder: View {
             return
         }
         
-        // Request photo library permission and save
-        PHPhotoLibrary.requestAuthorization { status in
-            guard status == .authorized else {
-                DispatchQueue.main.async {
-                    self.showDownloadToast(message: NSLocalizedString("Photo library access denied", comment: "Photo library permission error"))
-                }
+        Task { @MainActor in
+            let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            guard status == .authorized || status == .limited else {
+                showDownloadToast(message: NSLocalizedString("Photo library access denied", comment: "Photo library permission error"))
                 return
             }
-            
-            PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
-            }) { success, error in
-                DispatchQueue.main.async {
-                    if success {
-                        self.showDownloadToast(message: NSLocalizedString("Image saved to Photos", comment: "Image save success"))
-                    } else {
-                        self.showDownloadToast(message: NSLocalizedString("Failed to save image", comment: "Image save error"))
-                    }
+
+            do {
+                let changes: @Sendable () -> Void = {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
                 }
+                try await PHPhotoLibrary.shared().performChanges(changes)
+                showDownloadToast(message: NSLocalizedString("Image saved to Photos", comment: "Image save success"))
+            } catch {
+                showDownloadToast(message: NSLocalizedString("Failed to save image", comment: "Image save error"))
             }
         }
     }
