@@ -124,6 +124,8 @@ class TweetCellContentView: UIView {
     var onContentExpanded: (() -> Void)?
     /// Called when async content loads and may have changed cell height (retweet/embedded tweet).
     var onContentDidChangeHeightAsync: (() -> Void)?
+    /// Called only when a pure retweet's original is unavailable from both cache and server.
+    var onRetweetUnavailable: ((String) -> Void)?
 
     // MARK: - Init
 
@@ -539,18 +541,31 @@ class TweetCellContentView: UIView {
                                   parentViewController: parentViewController,
                                   allowDeleteAll: allowDeleteAll)
         } else if !hasOwnContent {
+            // Keep one authoritative loader for pure retweets so success promotes the
+            // original into the cell and failure can remove the retweet entirely.
             configureQuotedTweet(tweet: tweet, embeddedTweet: nil,
                                   originalTweetId: originalTweetId,
                                   originalAuthorId: originalAuthorId,
                                   hproseInstance: hproseInstance, isPinned: isPinned,
                                   parentViewController: parentViewController,
-                                  allowDeleteAll: allowDeleteAll)
+                                  allowDeleteAll: allowDeleteAll,
+                                  allowNetworkLoad: false)
 
             retweetLoadTask = Task { [weak self] in
-                guard let loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId),
-                      !Task.isCancelled else { return }
+                var loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
+                if loadedTweet == nil, !Task.isCancelled {
+                    loadedTweet = try? await hproseInstance.getTweet(
+                        tweetId: originalTweetId,
+                        authorId: originalAuthorId
+                    )
+                }
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self, self.currentTweetId == tweet.mid else { return }
+                    guard let loadedTweet else {
+                        self.onRetweetUnavailable?(tweet.mid)
+                        return
+                    }
                     self.configurePureRetweet(
                         tweet: tweet,
                         originalTweet: loadedTweet,
@@ -1152,5 +1167,6 @@ class TweetCellContentView: UIView {
         onShowLogin = nil
         onShowToast = nil
         onContentExpanded = nil
+        onRetweetUnavailable = nil
     }
 }

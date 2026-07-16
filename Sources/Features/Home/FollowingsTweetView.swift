@@ -65,7 +65,7 @@ struct FollowingsTweetView: View {
                     name: .tweetPrivacyChanged,
                     key: "tweetId",
                     shouldAccept: { _ in true },
-                    action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
+                    action: { tweet in viewModel.handlePrivacyChangedTweet(tweet) }
                 )
             ],
             onScroll: { offset, delta in

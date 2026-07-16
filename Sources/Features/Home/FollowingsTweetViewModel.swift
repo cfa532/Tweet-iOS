@@ -501,6 +501,10 @@ class FollowingsTweetViewModel: ObservableObject {
         // Also remove from main feed cache if it exists there
         // Note: deleteTweet removes by tweet ID, so it will remove from all caches
     }
+
+    func handlePrivacyChangedTweet(_ tweet: Tweet) {
+        tweets.removeAll { $0.mid == tweet.mid }
+    }
     
     // Remove all tweets from a specific user (e.g., when unfollowing)
     func removeTweetsFromUser(_ userId: MimeiId) {

@@ -8,6 +8,11 @@
 import SwiftUI
 
 struct TweetTableView: UIViewControllerRepresentable {
+    struct TweetRenderKey: Equatable {
+        let id: String
+        let isPrivate: Bool
+    }
+
     @Binding var tweets: [Tweet]
     let colorScheme: ColorScheme
     let isDarkMode: Bool
@@ -42,6 +47,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     let onTweetTap: ((Tweet) -> Void)?
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
+    let onRetweetUnavailable: ((String) -> Void)?
     let allowDeleteAll: Bool
 
     func makeCoordinator() -> Coordinator {
@@ -49,7 +55,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     }
 
     class Coordinator {
-        var lastTweetIds: [String] = []
+        var lastTweetRenderKeys: [TweetRenderKey] = []
         var lastPinnedTweetIds: [String] = []
         var lastHeaderWasPresent: Bool?
         var lastHeaderRefreshToken: Int?
@@ -88,6 +94,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.onTweetTap = onTweetTap
         controller.onShowLogin = onShowLogin
         controller.onShowToast = onShowToast
+        controller.onRetweetUnavailable = onRetweetUnavailable
         controller.allowDeleteAll = allowDeleteAll
         controller.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
         controller.onTweetsTrimmed = onTweetsTrimmed
@@ -106,11 +113,15 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
         uiViewController.applyTheme()
 
-        // Only update tweets if they actually changed
-        let currentTweetIds = tweets.map { $0.mid }
-        if coordinator.lastTweetIds != currentTweetIds {
-            coordinator.lastTweetIds = currentTweetIds
-            uiViewController.updateTweets(tweets)
+        // Update when row identity or render-affecting state changes.
+        let currentTweetRenderKeys = tweets.map {
+            TweetRenderKey(id: $0.mid, isPrivate: $0.isPrivate == true)
+        }
+        let previousTweetRenderKeys = coordinator.lastTweetRenderKeys
+        if coordinator.lastTweetRenderKeys != currentTweetRenderKeys {
+            coordinator.lastTweetRenderKeys = currentTweetRenderKeys
+            let sameTweetIds = previousTweetRenderKeys.map(\.id) == currentTweetRenderKeys.map(\.id)
+            uiViewController.updateTweets(tweets, reloadSameOrderRows: sameTweetIds)
         }
 
         // Only update pinned tweets if they actually changed
@@ -144,6 +155,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.onTweetTap = onTweetTap
         uiViewController.onShowLogin = onShowLogin
         uiViewController.onShowToast = onShowToast
+        uiViewController.onRetweetUnavailable = onRetweetUnavailable
         uiViewController.allowDeleteAll = allowDeleteAll
         uiViewController.onTweetsTrimmed = onTweetsTrimmed
 

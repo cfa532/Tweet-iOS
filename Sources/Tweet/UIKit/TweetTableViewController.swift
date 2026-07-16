@@ -139,6 +139,7 @@ class TweetTableViewController: UITableViewController {
     var onTweetTap: ((Tweet) -> Void)?
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)?
+    var onRetweetUnavailable: ((String) -> Void)?
     var allowDeleteAll: Bool = false
     /// True on the main feed: prepended tweets must not move the scroll position.
     /// False elsewhere (profile/list/bookmarks): prepended tweets scroll to the top.
@@ -1563,7 +1564,7 @@ class TweetTableViewController: UITableViewController {
         scheduleVideoVisibilityRefresh(reason: "pinnedTweetsReload")
     }
     
-    func updateTweets(_ newTweets: [Tweet]) {
+    func updateTweets(_ newTweets: [Tweet], reloadSameOrderRows: Bool = false) {
         let oldCount = tweets.count
         let oldTweets = tweets
 
@@ -1636,9 +1637,12 @@ class TweetTableViewController: UITableViewController {
             }
 
             if sameOrder {
-                // OPTIMIZATION: Same tweets in same order - only hit counts changed
-                // Tweet.getInstance() already updated the @Published count properties
-                // SwiftUI will automatically re-render action buttons, no need to reload cells
+                if reloadSameOrderRows {
+                    isTableViewUpdating = true
+                    let indexPaths = (0..<oldCount).map { regularTweetIndexPath($0) }
+                    tableView.reloadRows(at: indexPaths, with: .none)
+                    isTableViewUpdating = false
+                }
                 scheduleVideoVisibilityRefresh(reason: "tweetsSameOrder")
                 return
             }
@@ -2396,13 +2400,22 @@ class TweetTableViewController: UITableViewController {
                 trailingPadding: trailingPadding,
                 rowWidth: currentRowLayoutWidth,
                 videoCoordinator: videoCoordinator,
-                onAvatarTap: onAvatarTap,
+                onAvatarTap: { [weak self] user in
+                    guard user.hasValidUsername else { return }
+                    self?.onAvatarTap?(user)
+                },
                 onTweetTap: onTweetTap,
                 onShowLogin: onShowLogin,
                 onShowToast: onShowToast,
                 allowDeleteAll: allowDeleteAll,
                 savedParentTweetId: tweet.originalTweetId == nil ? effectiveEmbeddedTweetId : nil
             )
+        }
+
+        cell.onRetweetUnavailable = { [weak self, weak cell] tweetId in
+            guard let self, let cell, cell.tweetId == tweetId else { return }
+            cell.isHidden = true
+            self.onRetweetUnavailable?(tweetId)
         }
 
         // Content expansion callback — fires when user taps "More..." to expand truncated text.

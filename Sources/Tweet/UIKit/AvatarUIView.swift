@@ -14,16 +14,24 @@ class AvatarUIView: UIView {
         let iv = UIImageView()
         iv.contentMode = .scaleAspectFill
         iv.clipsToBounds = true
-        iv.backgroundColor = .systemGray5
+        iv.backgroundColor = .clear
         return iv
+    }()
+
+    private let placeholderBackgroundView: UIView = {
+        let view = UIView()
+        view.clipsToBounds = true
+        view.backgroundColor = .systemGray5
+        return view
     }()
 
     private let placeholderImageView: UIImageView = {
         let iv = UIImageView()
-        iv.contentMode = .scaleAspectFill
+        iv.contentMode = .scaleAspectFit
         iv.clipsToBounds = true
-        iv.image = UIImage(named: "manyone")
-        iv.alpha = 0.3
+        iv.backgroundColor = .clear
+        iv.image = UIImage(named: "tweet_icon")
+        iv.alpha = 0.24
         return iv
     }()
 
@@ -48,6 +56,7 @@ class AvatarUIView: UIView {
     }
 
     private func setupViews() {
+        addSubview(placeholderBackgroundView)
         addSubview(placeholderImageView)
         addSubview(imageView)
 
@@ -63,9 +72,11 @@ class AvatarUIView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         imageView.frame = bounds
+        placeholderBackgroundView.frame = bounds
         placeholderImageView.frame = bounds
         let cornerRadius = bounds.width / 2
         imageView.layer.cornerRadius = cornerRadius
+        placeholderBackgroundView.layer.cornerRadius = cornerRadius
         placeholderImageView.layer.cornerRadius = cornerRadius
     }
 
@@ -131,7 +142,7 @@ class AvatarUIView: UIView {
                 let avatarAttachment = MimeiFileType(mid: "avatar_\(avatar)", mediaType: .image)
                 if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
                     self.imageView.image = cached
-                    self.placeholderImageView.isHidden = true
+                    self.setPlaceholderVisible(false)
                 }
             }
         }
@@ -155,7 +166,7 @@ class AvatarUIView: UIView {
         guard let avatarUrl = user.avatarUrl else {
             // No avatar URL - show placeholder
             imageView.image = nil
-            placeholderImageView.isHidden = false
+            setPlaceholderVisible(true)
             return
         }
 
@@ -166,12 +177,12 @@ class AvatarUIView: UIView {
         // Check memory cache first (synchronous, fast)
         if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
             imageView.image = cached
-            placeholderImageView.isHidden = true
+            setPlaceholderVisible(false)
             return
         }
 
         // Show placeholder while loading
-        placeholderImageView.isHidden = false
+        setPlaceholderVisible(true)
 
         // Load asynchronously (detached so disk I/O does not run on main actor)
         loadTask?.cancel()
@@ -180,14 +191,14 @@ class AvatarUIView: UIView {
             if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
                 await MainActor.run {
                     self?.imageView.image = cached
-                    self?.placeholderImageView.isHidden = true
+                    self?.setPlaceholderVisible(false)
                 }
                 return
             }
 
             // Fetch from network
             guard let url = URL(string: avatarUrl) else {
-                await MainActor.run { self?.placeholderImageView.isHidden = false }
+                await MainActor.run { self?.setPlaceholderVisible(true) }
                 return
             }
 
@@ -198,9 +209,9 @@ class AvatarUIView: UIView {
             await MainActor.run {
                 if let image = result {
                     self?.imageView.image = image
-                    self?.placeholderImageView.isHidden = true
+                    self?.setPlaceholderVisible(false)
                 } else {
-                    self?.placeholderImageView.isHidden = false
+                    self?.setPlaceholderVisible(true)
                 }
             }
         }
@@ -212,10 +223,15 @@ class AvatarUIView: UIView {
         cancellables.removeAll()
         removeNotificationObservers()
         imageView.image = nil
-        placeholderImageView.isHidden = false
+        setPlaceholderVisible(true)
         currentUserId = nil
         currentAvatarId = nil
         onTap = nil
+    }
+
+    private func setPlaceholderVisible(_ isVisible: Bool) {
+        placeholderBackgroundView.isHidden = !isVisible
+        placeholderImageView.isHidden = !isVisible
     }
 
     private func removeNotificationObservers() {

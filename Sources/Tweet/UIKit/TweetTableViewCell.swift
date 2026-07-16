@@ -50,6 +50,7 @@ class TweetTableViewCell: UITableViewCell {
     var onHeightChanged: ((CGFloat) -> Void)?
     var shouldDeferHeightOverflowCheck: (() -> Bool)?
     var onContentExpanded: (() -> Void)?
+    var onRetweetUnavailable: ((String) -> Void)?
 
     // Padding constraints (updated per-configure to match list-level padding)
     private var leadingConstraint: NSLayoutConstraint!
@@ -209,6 +210,7 @@ class TweetTableViewCell: UITableViewCell {
         commentParentTweet: Tweet? = nil,
         savedParentTweetId: String? = nil
     ) {
+        isHidden = false
         currentTweetId = tweet.mid
         applyTheme()
         pinnedTweetsDivider.isHidden = !isLastPinnedTweet
@@ -226,6 +228,9 @@ class TweetTableViewCell: UITableViewCell {
         tweetContentView.onShowLogin = onShowLogin
         tweetContentView.onShowToast = onShowToast
         tweetContentView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
+        tweetContentView.onRetweetUnavailable = { [weak self] tweetId in
+            self?.onRetweetUnavailable?(tweetId)
+        }
         tweetContentView.onContentDidChangeHeightAsync = { [weak self] in
             guard let self else { return }
             self.lastHeightOverflowCheckTime = 0
@@ -259,7 +264,9 @@ class TweetTableViewCell: UITableViewCell {
         onHeightChanged = nil
         shouldDeferHeightOverflowCheck = nil
         onContentExpanded = nil
+        onRetweetUnavailable = nil
         tweetContentView.onContentDidChangeHeightAsync = nil
+        tweetContentView.onRetweetUnavailable = nil
         currentTweetId = nil
         tweetContentView.prepareForReuse()
         pinnedTweetsDivider.isHidden = true

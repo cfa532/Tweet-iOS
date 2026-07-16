@@ -616,6 +616,9 @@ struct TweetListView: View {
             onTweetTap: onTweetTap,
             onShowLogin: onShowLogin,
             onShowToast: onShowToast,
+            onRetweetUnavailable: { tweetId in
+                tweets.removeAll { $0.mid == tweetId }
+            },
             allowDeleteAll: allowDeleteAll
         )
     }
@@ -832,12 +835,9 @@ struct TweetListView: View {
                                 }
                                 TweetCacheManager.shared.deleteTweet(mid: tweetId)
                             } else if notification.name == .tweetPrivacyChanged {
-                                // For privacy changes, handle removal directly here
                                 if let index = tweetIndex {
-                                    let tweetToRemove = tweetsBinding.wrappedValue[index]
-                                    tweetsBinding.wrappedValue.remove(at: index)
-                                    // Call custom handler with the tweet that was removed
-                                    notification.action(tweetToRemove)
+                                    let changedTweet = tweetsBinding.wrappedValue[index]
+                                    notification.action(changedTweet)
                                 }
                             } else {
                                 // For other notifications, call the custom handler

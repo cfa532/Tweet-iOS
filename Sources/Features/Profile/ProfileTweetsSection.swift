@@ -91,10 +91,6 @@ final class ProfileTweetsViewModel: ObservableObject {
     }
     
     func handlePrivacyChange(tweetId: String) {
-        // TweetListView's .tweetPrivacyChanged listener unconditionally removes
-        // the tweet from the bound array before calling this action. For the
-        // appUser's own profile we want to keep it visible (the cell renders the
-        // updated public/private state). Re-insert from the singleton.
         if user.mid == hproseInstance.appUser.mid {
             guard let tweet = Tweet.getInstance(for: tweetId) else { return }
             // Don't add the tweet if it's pinned (pinned section renders separately)
