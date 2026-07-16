@@ -184,6 +184,7 @@ struct MediaBrowserView: View {
                     loadImageIfNeeded(for: selectedAttachment, at: newIndex)
                 }
             }
+            .presentationBackground(.clear)
     }
 
     private func dismissFullScreen() {
@@ -354,8 +355,9 @@ struct MediaBrowserView: View {
         
         var body: some View {
             ZStack {
-                // Background layer - stays in place (not affected by offset)
-                Color.black
+                // Fade the shared backdrop as the current media is pulled down so
+                // the presenting screen is already visible when dismissal begins.
+                Color.black.opacity(dismissBackdropOpacity)
                     .ignoresSafeArea(.all, edges: .all)
                 
                 currentContentLayer
@@ -417,14 +419,14 @@ struct MediaBrowserView: View {
                                 pdfView(for: attachment, index: index)
                             }
                         }
-                        .background(isImageAttachment(attachment) ? Color.clear : Color.black)
+                        .background(Color.clear)
                         .offset(y: verticalOffset(for: index))
                         .scaleEffect(contentScale(for: index))
                         .animation(nil, value: dragOffset)
                         .tag(index)
                     }
                 }
-                .background(Color.black)
+                .background(Color.clear)
                 .tabViewStyle(.page)
                 .indexViewStyle(.page(backgroundDisplayMode: .always))
                 .transaction { txn in
@@ -455,6 +457,13 @@ struct MediaBrowserView: View {
             guard index == currentIndex else { return 1.0 }
             let progress = min(abs(verticalOffset(for: index)), 520.0)
             return max(0.78, 1.0 - progress / 1300.0)
+        }
+
+        private var dismissBackdropOpacity: Double {
+            let downwardOffset = max(dragOffset.height, 0)
+            let fadeDistance = max(UIScreen.main.bounds.height * 0.35, 1)
+            let progress = min(downwardOffset / fadeDistance, 1)
+            return 1 - (0.1 * Double(progress))
         }
 
         private var controlsOverlay: some View {
@@ -580,16 +589,7 @@ struct MediaBrowserView: View {
             guard !isCompletingDismiss else { return }
             isCompletingDismiss = true
             isDragging = false
-
-            Task { @MainActor in
-                let slideDistance = UIScreen.main.bounds.height
-                withAnimation(.easeOut(duration: 0.16)) {
-                    dragOffset = CGSize(width: 0, height: slideDistance)
-                }
-
-                try? await Task.sleep(nanoseconds: 160_000_000)
-                dismiss()
-            }
+            dismiss()
         }
 
         private func pushToNextVideoInCurrentTweet(_ nextVideoIndex: Int) {

@@ -5082,7 +5082,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             cellTweetId: cellTweetId ?? parentTweet.mid
         )
         let hostingVC = UIHostingController(rootView: browserView)
-        hostingVC.modalPresentationStyle = .fullScreen
+        hostingVC.view.backgroundColor = .clear
+        hostingVC.modalPresentationStyle = .overFullScreen
         hostingVC.modalTransitionStyle = .crossDissolve
         parentVC.present(hostingVC, animated: true)
     }
@@ -5129,7 +5130,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 cellTweetId: self?.cellTweetId ?? parentTweet.mid
             )
             let hostingVC = UIHostingController(rootView: browserView)
-            hostingVC.modalPresentationStyle = .fullScreen
+            hostingVC.view.backgroundColor = .clear
+            hostingVC.modalPresentationStyle = .overFullScreen
             hostingVC.modalTransitionStyle = .crossDissolve
 
             parentVC.present(hostingVC, animated: true)
