@@ -111,14 +111,7 @@ struct ProfileView: View {
                 didLoad = false
             }
             .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
-                if let _ = notification.userInfo?["tweetId"] as? String,
-                   let _ = notification.userInfo?["isPinned"] as? Bool {
-                    Task {
-                        // Add delay to allow server to update before refreshing
-                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                        await refreshPinnedTweets()
-                    }
-                }
+                handlePinStatusChanged(notification: notification)
             }
             .navigationDestination(item: $selectedUserForNavigation) { user in
                 userDestinationView(for: user)
@@ -833,6 +826,31 @@ struct ProfileView: View {
             }
         } catch {
             print("DEBUG: [ProfileView] Failed to refresh pinned tweets: \(error)")
+        }
+    }
+
+    private func handlePinStatusChanged(notification: Notification) {
+        guard let tweetId = notification.userInfo?["tweetId"] as? String,
+              let isPinned = notification.userInfo?["isPinned"] as? Bool else {
+            return
+        }
+
+        if isPinned {
+            guard let tweet = Tweet.getInstance(for: tweetId),
+                  tweet.authorId == user.mid else {
+                return
+            }
+            pinnedTweetIds.insert(tweetId)
+            if !pinnedTweets.contains(where: { $0.mid == tweetId }) {
+                pinnedTweets.insert(tweet, at: 0)
+            }
+        } else {
+            guard pinnedTweetIds.contains(tweetId)
+                    || Tweet.getInstance(for: tweetId)?.authorId == user.mid else {
+                return
+            }
+            pinnedTweetIds.remove(tweetId)
+            pinnedTweets.removeAll { $0.mid == tweetId }
         }
     }
     

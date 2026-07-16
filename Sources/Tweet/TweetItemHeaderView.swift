@@ -190,11 +190,48 @@ struct TweetMenu: View {
     }
 
     private func togglePin() {
+        let previousPinStatus = isCurrentlyPinned
+        let intendedPinStatus = !previousPinStatus
+        isCurrentlyPinned = intendedPinStatus
+        NotificationCenter.default.post(
+            name: .tweetPinStatusChanged,
+            object: nil,
+            userInfo: ["tweetId": tweet.mid, "isPinned": intendedPinStatus]
+        )
+
         Task {
-            guard let pinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) else { return }
-            await MainActor.run {
-                isCurrentlyPinned = pinned
-                NotificationCenter.default.post(name: .tweetPinStatusChanged, object: nil, userInfo: ["tweetId": tweet.mid, "isPinned": pinned])
+            do {
+                guard let pinned = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) else {
+                    throw NSError(
+                        domain: "PinToggle",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")]
+                    )
+                }
+                if pinned != intendedPinStatus {
+                    await MainActor.run {
+                        isCurrentlyPinned = pinned
+                        NotificationCenter.default.post(
+                            name: .tweetPinStatusChanged,
+                            object: nil,
+                            userInfo: ["tweetId": tweet.mid, "isPinned": pinned]
+                        )
+                    }
+                }
+            } catch {
+                let message = ErrorMessageHelper.userFriendlyMessage(from: error)
+                await MainActor.run {
+                    isCurrentlyPinned = previousPinStatus
+                    NotificationCenter.default.post(
+                        name: .tweetPinStatusChanged,
+                        object: nil,
+                        userInfo: ["tweetId": tweet.mid, "isPinned": previousPinStatus]
+                    )
+                    NotificationCenter.default.post(
+                        name: .errorOccurred,
+                        object: NSError(domain: "PinToggle", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+                    )
+                }
             }
         }
     }

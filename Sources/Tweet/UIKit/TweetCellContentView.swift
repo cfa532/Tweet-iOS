@@ -862,17 +862,53 @@ class TweetCellContentView: UIView {
             let pinTitle = isPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
             let pinIcon = isPinned ? "pin.slash" : "pin"
             let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { _ in
+                let intendedPinStatus = !isPinned
+                NotificationCenter.default.post(
+                    name: .tweetPinStatusChanged,
+                    object: nil,
+                    userInfo: ["tweetId": tweet.mid, "isPinned": intendedPinStatus]
+                )
+
                 Task {
                     do {
                         if let newPinStatus = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
+                            if newPinStatus != intendedPinStatus {
+                                NotificationCenter.default.post(
+                                    name: .tweetPinStatusChanged,
+                                    object: nil,
+                                    userInfo: ["tweetId": tweet.mid, "isPinned": newPinStatus]
+                                )
+                            }
+                        } else {
                             NotificationCenter.default.post(
                                 name: .tweetPinStatusChanged,
                                 object: nil,
-                                userInfo: ["tweetId": tweet.mid, "isPinned": newPinStatus]
+                                userInfo: ["tweetId": tweet.mid, "isPinned": isPinned]
+                            )
+                            NotificationCenter.default.post(
+                                name: .errorOccurred,
+                                object: NSError(
+                                    domain: "PinToggle",
+                                    code: -1,
+                                    userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")]
+                                )
                             )
                         }
                     } catch {
                         print("Pin toggle failed: \(error)")
+                        NotificationCenter.default.post(
+                            name: .tweetPinStatusChanged,
+                            object: nil,
+                            userInfo: ["tweetId": tweet.mid, "isPinned": isPinned]
+                        )
+                        NotificationCenter.default.post(
+                            name: .errorOccurred,
+                            object: NSError(
+                                domain: "PinToggle",
+                                code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: ErrorMessageHelper.userFriendlyMessage(from: error)]
+                            )
+                        )
                     }
                 }
             }

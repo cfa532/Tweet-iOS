@@ -360,7 +360,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
         Task {
             do {
-                let (updatedTweet, updatedUser) = try await hproseInstance.toggleFavorite(tweet)
+                let (updatedTweet, updatedUser) = try await hproseInstance.toggleFavorite(
+                    tweet,
+                    isFavorite: !wasFavorite
+                )
 
                 if let updatedUser {
                     await MainActor.run {
@@ -415,7 +418,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
         Task {
             do {
-                let (updatedTweet, updatedUser) = try await hproseInstance.toggleBookmark(tweet)
+                let (updatedTweet, updatedUser) = try await hproseInstance.toggleBookmark(
+                    tweet,
+                    isBookmarked: !wasBookmarked
+                )
 
                 if let updatedUser {
                     await MainActor.run {

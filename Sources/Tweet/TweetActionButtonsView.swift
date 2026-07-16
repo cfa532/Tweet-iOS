@@ -328,7 +328,10 @@ struct TweetActionButtonsView: View {
                         }
                         
                         do {
-                            let (updatedTweet, updatedUser) = try await hproseInstance.toggleFavorite(tweet)
+                            let (updatedTweet, updatedUser) = try await hproseInstance.toggleFavorite(
+                                tweet,
+                                isFavorite: !wasFavorite
+                            )
                             
                             // Update appUser with server response if available
                             if let updatedUser = updatedUser {
@@ -420,7 +423,10 @@ struct TweetActionButtonsView: View {
                         }
                         
                         do {
-                            let (updatedTweet, updatedUser) = try await hproseInstance.toggleBookmark(tweet)
+                            let (updatedTweet, updatedUser) = try await hproseInstance.toggleBookmark(
+                                tweet,
+                                isBookmarked: !wasBookmarked
+                            )
                             
                             // Update appUser with server response if available
                             if let updatedUser = updatedUser {

@@ -28,7 +28,12 @@ final class ProfileTweetsViewModel: ObservableObject {
         
         // Add back any tweets that are no longer pinned
         let newlyUnpinnedIds = pinnedTweetIds.subtracting(newPinnedTweetIds)
-        if !newlyUnpinnedIds.isEmpty {
+        for tweetId in newlyUnpinnedIds {
+            guard let tweet = Tweet.getInstance(for: tweetId),
+                  !TweetDeletionRegistry.shared.isDeleted(tweetId) else {
+                continue
+            }
+            tweets.mergeTweets([tweet])
         }
         
         pinnedTweetIds = newPinnedTweetIds

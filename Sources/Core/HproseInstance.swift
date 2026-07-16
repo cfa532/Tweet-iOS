@@ -3381,7 +3381,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /*
      Return an updated tweet object after toggling favorite status of the tweet by appUser.
      */
-    func toggleFavorite(_ tweet: Tweet) async throws -> (Tweet?, User?) {
+    func toggleFavorite(_ tweet: Tweet, isFavorite: Bool) async throws -> (Tweet?, User?) {
         // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
         // Phase A (demotion prep): snapshot @MainActor Tweet + appUser reads.
         let author = await MainActor.run { tweet.author }
@@ -3403,7 +3403,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "appuserid": appUserMid,
             "tweetid": tweetMid,
             "authorid": tweetAuthorId,
-            "userhostid": appHostId as Any
+            "userhostid": appHostId as Any,
+            "isfavorite": isFavorite
         ]
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         // Hprose syncInvoke returns the error object (not throws) on failure
@@ -3433,7 +3434,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return (updatedTweet, updatedUser)
     }
 
-    func toggleBookmark(_ tweet: Tweet) async throws -> (Tweet?, User?) {
+    func toggleBookmark(_ tweet: Tweet, isBookmarked: Bool) async throws -> (Tweet?, User?) {
         // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
         // Phase A (demotion prep): snapshot @MainActor Tweet + appUser reads.
         let author = await MainActor.run { tweet.author }
@@ -3455,7 +3456,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "userid": appUserMid,
             "tweetid": tweetMid,
             "authorid": tweetAuthorId,
-            "userhostid": appHostId as Any
+            "userhostid": appHostId as Any,
+            "isbookmarked": isBookmarked
         ]
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         // Hprose syncInvoke returns the error object (not throws) on failure
@@ -7448,7 +7450,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     func togglePinnedTweet(tweetId: String) async throws -> Bool? {
         let entry = "toggle_pinned_tweet"
         // Phase A (demotion prep): snapshot @MainActor appUser reads.
-        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
+        let (appUserMid, appUserInstance) = await MainActor.run { (self.appUser.mid, self.appUser) }
         let params = [
             "aid": appId,
             "ver": "last",
@@ -7456,25 +7458,32 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "tweetid": tweetId,
             "appuserid": appUserMid,
         ]
-        guard let baseUrl = appUserBaseUrl else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+
+        // Pinning mutates the app user's data, so route directly to its writable node.
+        _ = try await appUserInstance.resolveWritableUrl()
+        guard let pinClient = await appUserInstance.writableClient(timeout: 15) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
-        let pinClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let rawResponse = await invokeRunMApp(using: pinClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         // For v2 API: server returns {success: true, data: {isPinned: bool}}
         // After unwrapV2Response, we get {isPinned: bool}
-        if let dataDict = unwrappedResponse as? [String: Any] {
-            if let isPinned = dataDict["isPinned"] as? Bool {
-                return isPinned
-            }
+        if let dataDict = Self.asStringKeyedDictionary(unwrappedResponse),
+           let isPinned = (dataDict["isPinned"] as? Bool)
+            ?? (dataDict["isPinned"] as? NSNumber)?.boolValue {
+            return isPinned
         }
         
         // Fallback: check if it's a direct Bool (legacy format)
         if let boolResponse = unwrappedResponse as? Bool {
             return boolResponse
         }
+        if let numericResponse = unwrappedResponse as? NSNumber {
+            return numericResponse.boolValue
+        }
+
+        hproseWarning("[togglePinnedTweet] Unexpected response type: \(Swift.type(of: unwrappedResponse)) value: \(String(describing: unwrappedResponse))")
         
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")])
     }

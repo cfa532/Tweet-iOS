@@ -521,27 +521,33 @@ struct ContentView: View {
             }
         )
 
-        // 6a. Tweet deletion failed
+        // 6a. Tweet action failed
         notificationObservers.append(
             NotificationCenter.default.addObserver(
                 forName: .errorOccurred,
                 object: nil,
                 queue: .main
             ) { notification in
-                let deletionErrorMessage: String?
-                if let error = notification.object as? NSError,
-                   error.domain == "TweetDeletion" {
-                    deletionErrorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                let actionError: (message: String, type: ToastView.ToastType)?
+                if let error = notification.object as? NSError {
+                    switch error.domain {
+                    case "TweetDeletion":
+                        actionError = (ErrorMessageHelper.userFriendlyMessage(from: error), .error)
+                    case "PinToggle":
+                        actionError = (ErrorMessageHelper.userFriendlyMessage(from: error), .warning)
+                    default:
+                        actionError = nil
+                    }
                 } else {
-                    deletionErrorMessage = nil
+                    actionError = nil
                 }
                 MainActor.assumeIsolated {
-                    guard let deletionErrorMessage else {
+                    guard let actionError else {
                         return
                     }
 
-                    self.toastMessage = deletionErrorMessage
-                    self.toastType = .error
+                    self.toastMessage = actionError.message
+                    self.toastType = actionError.type
                     self.showToast = true
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
