@@ -38,12 +38,16 @@ const APP_STORE_ID = "6751131431";
 // at the server; nginx's dtweet.com.conf (*.dtweet.com) proxies to Leither :8080
 // preserving the Host header, so Leither domain routing can take over later.
 const ORIGIN = "http://dl.dtweet.com";
-// "tweet1" app on that node — history-mode router handles /tweet/:tweetId/:authorId?
-// and /author/:authorId client-side once the entry HTML is loaded
-const ENTRY_PATH = "/entry?aid=heWgeGkeBX2gaENbIBS_Iy1mdTS&ver=last";
-
+const STATIC_ASSETS = new Set([
+  "/index_entry.js",
+  "/hprose.js",
+  "/popper.min.js",
+  "/bootstrap.min.js",
+  "/gtag.js",
+  "/ic_splash.png",
+]);
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
 
     if (url.hostname === "www.dtweet.com") {
@@ -53,10 +57,17 @@ export default {
 
     const path = url.pathname;
 
-    // dl.dtweet.com is the http-only web host. Browsers speculatively upgrade
-    // http links to https; redirecting https back to http signals "upgrade
-    // failed" and they settle on http silently. Plain http passes through to
-    // the origin (same-zone subrequests skip this worker, so no recursion).
+    if (request.method === "GET" && STATIC_ASSETS.has(path)) {
+      const asset = await env.ASSETS.fetch(request);
+      const response = new Response(asset.body, asset);
+      response.headers.set("x-dtweet-static-asset", path);
+      return response;
+    }
+
+    // Keep dl.dtweet.com on HTTPS. Modern browsers upgrade HTTP navigations,
+    // so redirecting HTTPS back to HTTP creates an upgrade/downgrade loop.
+    // Proxy through Cloudflare instead; subrequests to the HTTP origin skip
+    // this route and reach nginx directly.
     if (url.hostname === "dl.dtweet.com") {
       if (path === "/.well-known/apple-app-site-association" || path === "/apple-app-site-association") {
         return json(appleAppSiteAssociation());
@@ -64,11 +75,11 @@ export default {
       if (path === "/.well-known/assetlinks.json") {
         return json(assetLinks());
       }
-      if (url.protocol === "https:") {
-        url.protocol = "http:";
-        return Response.redirect(url.toString(), 301);
+      if (isHtmlNavigation(request)) {
+        return env.ASSETS.fetch(request);
       }
-      return fetch(request);
+      const originUrl = ORIGIN + path + url.search;
+      return fetch(originUrl, new Request(originUrl, request));
     }
 
     if (path === "/.well-known/apple-app-site-association" || path === "/apple-app-site-association") {
@@ -78,7 +89,7 @@ export default {
       return json(assetLinks());
     }
 
-    return proxyToTweetWeb(request, url);
+    return proxyToTweetWeb(request, url, env);
   },
 };
 
@@ -119,17 +130,20 @@ function assetLinks() {
   }));
 }
 
-async function proxyToTweetWeb(request, url) {
+function isHtmlNavigation(request) {
+  return request.method === "GET" &&
+    (request.headers.get("accept") || "").includes("text/html");
+}
+
+async function proxyToTweetWeb(request, url, env) {
   // App deep-link paths use /user|/profile; TweetWeb's route is /author
   const path = url.pathname.replace(/^\/(user|profile)(\/|$)/, "/author$2");
 
-  // Leither/TweetWeb is http-only: the app calls http://<host>/webapi/, which
-  // an https page cannot do (mixed content). So browser page-loads are sent to
-  // the http-only web host, where Leither's domain routing serves everything.
+  // Keep the fallback on HTTPS. dl.dtweet.com proxies the HTTP-only Leither
+  // origin, including /webapi/, without exposing mixed content to browsers.
   // App users never get here — the OS opens the app before any HTTP happens.
-  const wantsHTML = (request.headers.get("accept") || "").includes("text/html");
-  if (request.method === "GET" && wantsHTML) {
-    return Response.redirect("http://dl.dtweet.com" + path + url.search, 302);
+  if (isHtmlNavigation(request)) {
+    return env.ASSETS.fetch(request);
   }
 
   // Non-navigation requests (e.g. stray /webapi/ RPC posts): proxy to Leither.
