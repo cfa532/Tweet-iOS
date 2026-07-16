@@ -313,6 +313,7 @@ struct HomeView: View {
 struct UserListDestinationView: View {
     let destination: UserListDestination
     @Binding var navigationPath: NavigationPath
+    let onShowLogin: (() -> Void)?
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     var body: some View {
@@ -355,7 +356,8 @@ struct UserListDestinationView: View {
                 Task {
                     await handleToggleFollowing(for: user)
                 }
-            }
+            },
+            onShowLogin: onShowLogin
         )
     }
     

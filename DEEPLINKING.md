@@ -160,18 +160,22 @@ applinks:dtweet.com
 The Worker response for `/.well-known/assetlinks.json` must be JSON, over
 HTTPS, with no redirect.
 
-Current packages:
+Current public package:
 
 ```text
 us.fireshare.tweet
-us.fireshare.tweet.debug
 ```
 
 Keep all required SHA-256 fingerprints in the Worker:
 
 - Google Play App Signing key
 - local upload key used by release sideloads
-- debug keystore for debug builds
+
+Do not include `us.fireshare.tweet.debug` in the public `dtweet.com`
+`assetlinks.json`. Android may choose the debug app for production links if the
+debug package is verified for the same host. Debug builds should use a separate
+debug-only host or a direct `adb am start ...` command when testing deep-link
+parsing.
 
 ## TweetWeb gateway behavior
 
@@ -302,8 +306,8 @@ Sources/Core/HproseInstance.swift
 2. Serve the iOS and Android association files from the Worker over HTTPS with
    no redirect.
 3. Add `applinks:dtweet.com` to the iOS entitlements.
-4. Configure Android intent filters for `dtweet.com` and keep `assetlinks.json`
-   in sync with all signing certificates.
+4. Configure Android release intent filters for `dtweet.com` and keep
+   `assetlinks.json` in sync with release signing certificates only.
 5. Build TweetWeb so `dist/index.html` uses bare local asset names.
 6. Keep TweetWeb gateway detection limited to the exact dtweet host allowlist.
 7. Publish/deploy the Worker and Leither app using the owner's normal release
@@ -373,3 +377,14 @@ Check:
 - The Android manifest has the matching App Link intent filter.
 - `https://dtweet.com/.well-known/assetlinks.json` returns JSON with no
   redirect.
+
+### Android opens the debug app instead of the release app
+
+Check:
+
+- `assetlinks.json` does not list `us.fireshare.tweet.debug`.
+- The debug build does not declare `dtweet.com` as its public app-link host.
+- The Android app's debug build uses a placeholder host such as
+  `debug.dtweet.invalid` with auto-verify disabled.
+- Clear any manually chosen "open by default" setting for the debug app on the
+  device after changing the association.

@@ -17,6 +17,7 @@ struct UserListView: View {
     let userFetcher: @MainActor @Sendable (Int, Int) async throws -> [String]
     let authoritativeUserFetcher: @MainActor @Sendable () async throws -> [String]
     let onFollowToggle: ((User) async -> Void)?
+    let onShowLogin: (() -> Void)?
     let onUserTap: ((User) -> Void)?
 
     @State private var allUserIds: [String] = []
@@ -49,6 +50,7 @@ struct UserListView: View {
         authoritativeUserFetcher: @escaping @MainActor @Sendable () async throws -> [String],
         navigationPath: Binding<NavigationPath>,
         onFollowToggle: ((User) async -> Void)? = nil,
+        onShowLogin: (() -> Void)? = nil,
         onUserTap: ((User) -> Void)? = nil
     ) {
         self.title = title
@@ -57,6 +59,7 @@ struct UserListView: View {
         self.authoritativeUserFetcher = authoritativeUserFetcher
         self._navigationPath = navigationPath
         self.onFollowToggle = onFollowToggle
+        self.onShowLogin = onShowLogin
         self.onUserTap = onUserTap
     }
 
@@ -83,6 +86,7 @@ struct UserListView: View {
                         userId: rowUserId,
                         cancellationToken: cancellationToken,
                         onFollowToggle: onFollowToggle,
+                        onShowLogin: onShowLogin,
                         onTap: { selectedUser in
                             navigationPath.append(selectedUser)
                         },

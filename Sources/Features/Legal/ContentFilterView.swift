@@ -8,6 +8,7 @@ struct ContentFilterView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
+    @State private var showLoginSheet = false
     
     // Filter options
     @State private var blockUser = false
@@ -137,9 +138,16 @@ struct ContentFilterView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
+        }
     }
     
     private func applyFilters() {
+        guard !hproseInstance.appUser.isGuest else {
+            showLoginSheet = true
+            return
+        }
         Task {
             do {
                 // Apply user blocking

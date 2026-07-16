@@ -9,6 +9,7 @@ struct ReportTweetView: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var isSubmitting = false
+    @State private var showLoginSheet = false
     
     // Report categories
     @State private var selectedCategory: ReportCategory? = nil
@@ -207,9 +208,16 @@ struct ReportTweetView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
+        }
     }
     
     private func submitReport() {
+        guard !hproseInstance.appUser.isGuest else {
+            showLoginSheet = true
+            return
+        }
         guard let category = selectedCategory else { return }
         
         isSubmitting = true

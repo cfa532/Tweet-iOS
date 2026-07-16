@@ -19,6 +19,7 @@ struct TweetItemView: View, @MainActor Equatable {
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
     @State private var showBrowser = false
+    @State private var showLoginSheet = false
     @State private var selectedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
 
@@ -118,6 +119,9 @@ struct TweetItemView: View, @MainActor Equatable {
                 initialIndex: selectedMediaIndex,
                 cellTweetId: tweet.mid // Pass visible tweet ID for feed navigation
             )
+        }
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
         }
         .task {
             isVisible = true
@@ -327,7 +331,12 @@ struct TweetItemView: View, @MainActor Equatable {
                         HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: originalTweet)
                             Spacer(minLength: 0)
-                            TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                            TweetMenu(
+                                tweet: tweet,
+                                isPinned: isPinned,
+                                showDeleteButton: showDeleteButton,
+                                onShowLogin: { showLoginSheet = true }
+                            )
                                 .padding(.trailing, -20)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -373,7 +382,12 @@ struct TweetItemView: View, @MainActor Equatable {
                         HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: tweet)
                             Spacer(minLength: 0)
-                            TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                            TweetMenu(
+                                tweet: tweet,
+                                isPinned: isPinned,
+                                showDeleteButton: showDeleteButton,
+                                onShowLogin: { showLoginSheet = true }
+                            )
                                 .padding(.trailing, -20)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -439,7 +453,12 @@ struct TweetItemView: View, @MainActor Equatable {
                     HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
                         Spacer(minLength: 0)
-                        TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                        TweetMenu(
+                            tweet: tweet,
+                            isPinned: isPinned,
+                            showDeleteButton: showDeleteButton,
+                            onShowLogin: { showLoginSheet = true }
+                        )
                             .padding(.trailing, -12)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -517,7 +536,12 @@ struct TweetItemView: View, @MainActor Equatable {
                     HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
                         Spacer(minLength: 0)
-                        TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                        TweetMenu(
+                            tweet: tweet,
+                            isPinned: isPinned,
+                            showDeleteButton: showDeleteButton,
+                            onShowLogin: { showLoginSheet = true }
+                        )
                             .padding(.trailing, -20)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

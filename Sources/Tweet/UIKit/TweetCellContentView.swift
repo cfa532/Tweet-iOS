@@ -840,7 +840,11 @@ class TweetCellContentView: UIView {
 
         // Filter Content
         let filterAction = UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"),
-                                     image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { _ in
+                                     image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { [weak self] _ in
+            guard !hproseInstance.appUser.isGuest else {
+                self?.onShowLogin?()
+                return
+            }
             // TODO: Show filter sheet
             print("Filter content tapped")
         }
@@ -865,7 +869,11 @@ class TweetCellContentView: UIView {
         if tweet.authorId != hproseInstance.appUser.mid {
             let reportAction = UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"),
                                         image: UIImage(systemName: "flag"),
-                                        attributes: .destructive) { _ in
+                                        attributes: .destructive) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
                 // TODO: Show report sheet
                 print("Report tapped")
             }
@@ -876,7 +884,11 @@ class TweetCellContentView: UIView {
         if tweet.authorId == hproseInstance.appUser.mid {
             let pinTitle = isPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
             let pinIcon = isPinned ? "pin.slash" : "pin"
-            let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { _ in
+            let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
                 let intendedPinStatus = !isPinned
                 NotificationCenter.default.post(
                     name: .tweetPinStatusChanged,
@@ -934,7 +946,11 @@ class TweetCellContentView: UIView {
                 NSLocalizedString("Make Public", comment: "Menu item") :
                 NSLocalizedString("Make Private", comment: "Menu item")
             let privacyIcon = tweet.isPrivate == true ? "globe" : "lock"
-            let privacyAction = UIAction(title: privacyTitle, image: UIImage(systemName: privacyIcon)) { _ in
+            let privacyAction = UIAction(title: privacyTitle, image: UIImage(systemName: privacyIcon)) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
                 Task {
                     do {
                         let newPrivacy = try await hproseInstance.toggleTweetPrivacy(tweetId: tweet.mid)
@@ -960,7 +976,11 @@ class TweetCellContentView: UIView {
         if showDelete {
             let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: "Menu item"),
                                         image: UIImage(systemName: "trash"),
-                                        attributes: .destructive) { _ in
+                                        attributes: .destructive) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
                 // Optimistic UI update — remove immediately
                 NotificationCenter.default.post(
                     name: .tweetDeleted,
@@ -1046,7 +1066,11 @@ class TweetCellContentView: UIView {
             title: NSLocalizedString("Delete", comment: "Menu item"),
             image: UIImage(systemName: "trash"),
             attributes: .destructive
-        ) { _ in
+        ) { [weak self] _ in
+            guard !hproseInstance.appUser.isGuest else {
+                self?.onShowLogin?()
+                return
+            }
             NotificationCenter.default.post(
                 name: .commentDeleted,
                 object: nil,

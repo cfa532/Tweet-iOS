@@ -1376,7 +1376,8 @@ struct TweetDetailView: View {
                             menuShareItems = ShareSheetData(items: items)
                         }
                     }
-                }
+                },
+                onShowLogin: { showLoginSheet = true }
             )
             .padding(.trailing, -20)
         }

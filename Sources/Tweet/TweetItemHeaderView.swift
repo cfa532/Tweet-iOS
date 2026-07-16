@@ -134,6 +134,7 @@ struct TweetMenu: View {
     let isPinned: Bool
     let showDeleteButton: Bool
     let onShareTap: (() -> Void)?
+    let onShowLogin: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -143,11 +144,18 @@ struct TweetMenu: View {
     @State private var showFilterSheet = false
     @State private var showAdminEditSheet = false
     
-    init(tweet: Tweet, isPinned: Bool, showDeleteButton: Bool = false, onShareTap: (() -> Void)? = nil) {
+    init(
+        tweet: Tweet,
+        isPinned: Bool,
+        showDeleteButton: Bool = false,
+        onShareTap: (() -> Void)? = nil,
+        onShowLogin: (() -> Void)? = nil
+    ) {
         self.tweet = tweet
         self.isPinned = isPinned
         self.showDeleteButton = showDeleteButton
         self.onShareTap = onShareTap
+        self.onShowLogin = onShowLogin
         self._isCurrentlyPinned = State(initialValue: isPinned)
     }
 
@@ -159,10 +167,12 @@ struct TweetMenu: View {
             onShareTap?()
         })
         actions.append(UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"), image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { _ in
+            guard requireAuthenticatedForWrite() else { return }
             showFilterSheet = true
         })
         if tweet.authorId != appUser.mid {
             actions.append(UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"), image: UIImage(systemName: "flag")) { _ in
+                guard requireAuthenticatedForWrite() else { return }
                 showReportSheet = true
             })
         }
@@ -183,6 +193,7 @@ struct TweetMenu: View {
         }
         if showDeleteButton {
             actions.append(UIAction(title: NSLocalizedString("Delete", comment: "Menu item"), image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+                guard requireAuthenticatedForWrite() else { return }
                 Task { try? await deleteTweet(tweet) }
             })
         }
@@ -190,6 +201,7 @@ struct TweetMenu: View {
     }
 
     private func togglePin() {
+        guard requireAuthenticatedForWrite() else { return }
         let previousPinStatus = isCurrentlyPinned
         let intendedPinStatus = !previousPinStatus
         isCurrentlyPinned = intendedPinStatus
@@ -237,6 +249,7 @@ struct TweetMenu: View {
     }
 
     private func togglePrivacy() {
+        guard requireAuthenticatedForWrite() else { return }
         Task {
             guard let isPrivate = try? await hproseInstance.toggleTweetPrivacy(tweetId: tweet.mid) else { return }
             await MainActor.run {
@@ -265,6 +278,7 @@ struct TweetMenu: View {
                 
                 // Content filtering option
                 Button(action: {
+                    guard requireAuthenticatedForWrite() else { return }
                     showFilterSheet = true
                 }) {
                     Label(LocalizedStringKey("Filter Content"), systemImage: "line.3.horizontal.decrease.circle")
@@ -273,6 +287,7 @@ struct TweetMenu: View {
                 // Report tweet option (only show for tweets not authored by current user)
                 if tweet.authorId != appUser.mid {
                     Button(action: {
+                        guard requireAuthenticatedForWrite() else { return }
                         showReportSheet = true
                     }) {
                         Label(LocalizedStringKey("Report Tweet"), systemImage: "flag")
@@ -454,6 +469,7 @@ struct TweetMenu: View {
     }
     
     private func deleteTweet(_ tweet: Tweet) async throws {
+        guard requireAuthenticatedForWrite() else { return }
         print("DEBUG: [TweetItemHeaderView] Starting tweet deletion for: \(tweet.mid)")
         
         // Post notification for optimistic UI update
@@ -524,6 +540,12 @@ struct TweetMenu: View {
                 )
             }
         }
+    }
+
+    private func requireAuthenticatedForWrite() -> Bool {
+        guard appUser.isGuest else { return true }
+        onShowLogin?()
+        return false
     }
     
     /// Truncates a tweet ID to show first 8 and last 4 characters with ellipsis in the middle

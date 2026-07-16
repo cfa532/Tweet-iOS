@@ -75,6 +75,7 @@ struct UserRowView: View {
     let userId: String
     let cancellationToken: UUID
     let onFollowToggle: ((User) async -> Void)?
+    let onShowLogin: (() -> Void)?
     let onTap: ((User) -> Void)?
     let onLoadFailed: ((String) -> Void)?
     @ObservedObject private var user: User
@@ -96,12 +97,14 @@ struct UserRowView: View {
         userId: String,
         cancellationToken: UUID,
         onFollowToggle: ((User) async -> Void)? = nil,
+        onShowLogin: (() -> Void)? = nil,
         onTap: ((User) -> Void)? = nil,
         onLoadFailed: ((String) -> Void)? = nil
     ) {
         self.userId = userId
         self.cancellationToken = cancellationToken
         self.onFollowToggle = onFollowToggle
+        self.onShowLogin = onShowLogin
         self.onTap = onTap
         self.onLoadFailed = onLoadFailed
         self._currentCancellationToken = State(initialValue: cancellationToken)
@@ -166,12 +169,15 @@ struct UserRowView: View {
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                                // Only show follow/unfollow button if app user is not a guest and onFollowToggle is provided
-                                if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest, userId != hproseInstance.appUser.mid {
+                                if let onFollowToggle = onFollowToggle, userId != hproseInstance.appUser.mid {
                                     DebounceButton(
                                         cooldownDuration: 0.5,
                                         enableHaptic: false
                                     ) {
+                                        guard !hproseInstance.appUser.isGuest else {
+                                            onShowLogin?()
+                                            return
+                                        }
                                         guard !isToggling else { return }
                                         isToggling = true
                                         isFollowing.toggle()

@@ -23,13 +23,6 @@ const ANDROID_APPS = [
       "42:B9:90:AF:10:57:F6:2B:14:02:F2:14:BC:C1:F8:87:57:64:FA:AC:9C:8A:15:D2:B7:16:02:77:6B:F2:37:39",
     ],
   },
-  {
-    package: "us.fireshare.tweet.debug",
-    sha256: [
-      // debug-keystore/debug.keystore
-      "90:9D:FF:B9:6B:29:6C:6D:F5:B5:99:FD:22:3C:B5:D8:B9:20:C0:E4:55:22:86:27:F1:31:84:BD:B5:E8:22:D8",
-    ],
-  },
 ];
 
 const APP_STORE_ID = "6751131431";

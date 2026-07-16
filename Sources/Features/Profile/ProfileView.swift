@@ -254,6 +254,10 @@ struct ProfileView: View {
                                     }
                                 },
                                 onFollowToggle: {
+                                    guard !hproseInstance.appUser.isGuest else {
+                                        onShowLogin?()
+                                        return
+                                    }
                                     let optimisticFollowing = !profileHeaderState.isFollowing
                                     setFollowingState(optimisticFollowing)
                                     Task {
@@ -355,23 +359,25 @@ struct ProfileView: View {
                             .foregroundColor(XTheme.accentColor)
                     }
 
-                    if !hproseInstance.appUser.isGuest {
-                        Menu {
-                            Button(role: .destructive) {
-                                Task {
-                                    await handleBlockUser()
-                                }
-                            } label: {
-                                Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
+                    Menu {
+                        Button(role: .destructive) {
+                            guard !hproseInstance.appUser.isGuest else {
+                                onShowLogin?()
+                                return
+                            }
+                            Task {
+                                await handleBlockUser()
                             }
                         } label: {
-                            Image(systemName: "ellipsis")
-                                .rotationEffect(.degrees(90))
-                                .foregroundColor(XTheme.textColor)
-                                .font(.system(size: 16, weight: .medium))
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
+                            Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
                         }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .rotationEffect(.degrees(90))
+                            .foregroundColor(XTheme.textColor)
+                            .font(.system(size: 16, weight: .medium))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                 }
             }
