@@ -249,6 +249,7 @@ struct ChatScreen: View {
                 .padding()
             }
             .defaultScrollAnchor(.bottom)
+            .defaultScrollAnchor(.top, for: .alignment)
             .onChange(of: shouldScrollToBottom) { _, newValue in
                 guard newValue, let lastMessage = messages.last else { return }
 
