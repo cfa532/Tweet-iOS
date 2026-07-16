@@ -296,22 +296,46 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
               let obj = try? JSONSerialization.jsonObject(with: data) else { return value }
         return obj
     }
-    
+
+    /// Recursively convert Foundation containers returned by Hprose into their Swift
+    /// equivalents. Do not decode nested strings as JSON: tweet content and other text
+    /// fields must retain their original types even when they contain JSON-looking text.
+    nonisolated private static func normalizeHproseContainers(_ value: Any?) -> Any? {
+        guard let value else { return nil }
+
+        if let dict = value as? [String: Any] {
+            var normalized: [String: Any] = [:]
+            normalized.reserveCapacity(dict.count)
+            for (key, child) in dict {
+                normalized[key] = normalizeHproseContainers(child) ?? child
+            }
+            return normalized
+        }
+
+        if let dict = value as? NSDictionary {
+            var normalized: [String: Any] = [:]
+            normalized.reserveCapacity(dict.count)
+            for (key, child) in dict {
+                guard let stringKey = key as? String else { continue }
+                normalized[stringKey] = normalizeHproseContainers(child) ?? child
+            }
+            return normalized
+        }
+
+        if let array = value as? [Any] {
+            return array.map { normalizeHproseContainers($0) ?? $0 }
+        }
+
+        if let array = value as? NSArray {
+            return array.map { normalizeHproseContainers($0) ?? $0 }
+        }
+
+        return value
+    }
+
     /// `NSDictionary` / JSON sometimes fail to cast directly to `[String: Any]`; normalize for parsing.
     nonisolated private static func asStringKeyedDictionary(_ value: Any?) -> [String: Any]? {
-        if let d = value as? [String: Any] { return d }
-        if let d = value as? NSDictionary {
-            var out: [String: Any] = [:]
-            out.reserveCapacity(d.count)
-            for (k, v) in d {
-                if let ks = k as? String { out[ks] = v }
-            }
-            return out
-        }
-        if let parsed = jsonObjectIfEncodedAsString(value) as? [String: Any] {
-            return parsed
-        }
-        return nil
+        normalizeHproseContainers(jsonObjectIfEncodedAsString(value)) as? [String: Any]
     }
 
     nonisolated private static func stringValues(in value: Any?) -> [String] {
@@ -374,8 +398,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// Also handles Int success values: {success: 1, data: result} or {success: 0, message: "..."}
     /// Returns the unwrapped data if success, throws error if failure
     nonisolated private static func unwrapV2Response(_ response: Any?) throws -> Any? {
-        let normalizedRoot = jsonObjectIfEncodedAsString(response)
-        guard let dict = asStringKeyedDictionary(normalizedRoot) else {
+        let normalizedRoot = normalizeHproseContainers(jsonObjectIfEncodedAsString(response))
+        guard let dict = normalizedRoot as? [String: Any] else {
             return normalizedRoot
         }
         
@@ -394,7 +418,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             if success {
                 // Success case - return data field if present, otherwise return the whole dict
                 if let data = dict["data"] {
-                    return jsonObjectIfEncodedAsString(data)
+                    return normalizeHproseContainers(jsonObjectIfEncodedAsString(data))
                 }
                 // If no data field, the result might be directly in the dict (e.g., {success: true, mid: "...", count: ...})
                 return dict
@@ -8228,10 +8252,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
             let rawResponse = await invokeRunMApp(using: senderClient, entry: entry, params: params)
             let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
-            let response = unwrappedResponse ?? rawResponse
+            let response = unwrappedResponse ?? Self.normalizeHproseContainers(rawResponse)
             
             // Handle new response format: {success: false, error: e.message}
-            if let responseDict = response as? [String: Any] {
+            if let responseDict = Self.asStringKeyedDictionary(response) {
                 if let success = responseDict["success"] as? Bool, !success {
                     let errorMessage = responseDict["error"] as? String ?? "Unknown error"
                     lastError = errorMessage
@@ -8381,10 +8405,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
             let rawReceiptResponse = await invokeRunMApp(using: recipientClient, entry: receiptEntry, params: receiptParams)
             let receiptResponseUnwrapped = try? Self.unwrapV2Response(rawReceiptResponse)
-            let receiptResponse = receiptResponseUnwrapped ?? rawReceiptResponse
+            let receiptResponse = receiptResponseUnwrapped ?? Self.normalizeHproseContainers(rawReceiptResponse)
             
             // Handle new response format for message_incoming
-            if let receiptResponseDict = receiptResponse as? [String: Any] {
+            if let receiptResponseDict = Self.asStringKeyedDictionary(receiptResponse) {
                 if let success = receiptResponseDict["success"] as? Bool, !success {
                     let errorMessage = receiptResponseDict["error"] as? String ?? "Failed to send to recipient node"
                     lastError = errorMessage
