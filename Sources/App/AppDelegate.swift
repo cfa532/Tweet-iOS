@@ -724,8 +724,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
 
-        BackgroundResumeStateStore.shared.clear(reason: "same process foreground resume")
-
         guard let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date else {
             if didLaunchInBackground {
                 print("⚠️ [AppDelegate] Background-launched app entered foreground without timestamp - running foreground recovery")
