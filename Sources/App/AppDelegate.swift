@@ -26,7 +26,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// True once background memory release has actually run.
     /// When false on foreground return, players and server are still intact → fast path.
     private(set) static var didPerformAggressiveCleanup = false
-    private let shortBackgroundVideoGracePeriod: TimeInterval = 20
+    private let shortBackgroundVideoGracePeriod: TimeInterval = 10
     
     private enum BackgroundMessageCheck {
         static let identifier = "com.example.ZZ.messageCheck"

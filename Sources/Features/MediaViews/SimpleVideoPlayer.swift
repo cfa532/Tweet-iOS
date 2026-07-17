@@ -983,6 +983,9 @@ struct SimpleVideoPlayer: View {
                 .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in handleAppUserReady() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in handleWillResignActive() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
+                .onReceive(NotificationCenter.default.publisher(for: .prepareVisibleVideosForBackground)) { notification in
+                    handlePrepareForBackground(notification)
+                }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
                 .onReceive(NotificationCenter.default.publisher(for: .requestVideoTimerUpdate)) { notification in
@@ -2093,6 +2096,58 @@ struct SimpleVideoPlayer: View {
         // App actually went to background (not just screen lock)
         didEnterBackground = true  // Mark that we went to background (not just screen lock)
     }
+
+    /// Release view-owned AVFoundation resources when AppDelegate's 10-second
+    /// background grace period expires. The last-frame cache remains intact so
+    /// visible videos still have a small poster during foreground recovery.
+    private func handlePrepareForBackground(_ notification: Notification) {
+        guard notification.userInfo?["aggressive"] as? Bool == true else { return }
+
+        // Preserve resume metadata before detaching the local player. The global
+        // cleanup immediately converts VideoStateCache entries to metadata-only.
+        cachePlayerStateForBackground()
+
+        setupPlayerTask?.cancel()
+        setupPlayerTask = nil
+        retryTask?.cancel()
+        retryTask = nil
+        waitingForPlayerTask?.cancel()
+        waitingForPlayerTask = nil
+        recoveryCoverTask?.cancel()
+        recoveryCoverTask = nil
+        recoveryTimeoutTask?.cancel()
+        recoveryTimeoutTask = nil
+        stopTimeRemainingDisplayCycle()
+
+        isWaitingForPlayerReady = false
+        coordinatorWantsToPlay = false
+        isBuffering = false
+        isSeekingToBeginning = false
+        hasInitialized = false
+        needsHealthCheckAfterForeground = true
+
+        removePlayerObservers()
+
+        // AVPlayerItemVideoOutput can retain decoded pixel buffers independently
+        // of SharedAssetCache, so detach it before dropping the player item.
+        if let item = videoOutputAttachedItem, let output = videoOutput {
+            item.remove(output)
+        }
+        videoOutput = nil
+        videoOutputAttachedItem = nil
+
+        let detachedPlayer = player
+        player = nil
+        detachedPlayer?.currentItem?.asset.cancelLoading()
+        detachedPlayer?.pause()
+        detachedPlayer?.replaceCurrentItem(with: nil)
+
+        isPlayerDetached = true
+        loadingState = .idle
+        if !playbackState.hasFinished {
+            playbackState = .notStarted
+        }
+    }
     
     private func handleWillEnterForeground() {
         coordinateRecovery(source: .willEnterForeground)
@@ -2843,7 +2898,19 @@ struct SimpleVideoPlayer: View {
     /// so we must revalidate and recreate *visible* MediaCell players here.
     @MainActor
     private func handleReloadVisibleVideosOnly() {
-        guard mode == .mediaCell else { return }
+        // Embedded-detail players are independent of SharedAssetCache and are now
+        // explicitly released by the delayed background purge. Recreate only the
+        // visible surface after AppDelegate reports that infrastructure is ready.
+        if mode != .mediaCell {
+            guard isVisible,
+                  shouldLoadVideo || mode == .mediaBrowser,
+                  player == nil || player?.currentItem == nil else { return }
+            isPlayerDetached = false
+            loadingState = .idle
+            playbackState = .notStarted
+            setupPlayer()
+            return
+        }
 
         // CRITICAL FAILSAFE: Check if player is broken BEFORE checking overlay visibility
         // This prevents videos from getting stuck with black screen + spinner after share sheet

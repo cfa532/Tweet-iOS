@@ -5652,12 +5652,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     /// Release foreground media state before the global background cleanup runs.
-    /// Video cells keep a poster, and image cells keep only a small cover image for the app switcher.
+    /// Visible video and image cells keep their existing poster for the app switcher.
     func prepareForBackground(aggressive: Bool = false) {
         if isVideoAttachment {
             prepareVideoForBackground(aggressive: aggressive)
         } else if attachment?.type == .image {
-            prepareImageForBackground()
+            prepareImageForBackground(aggressive: aggressive)
         }
     }
 
@@ -5676,8 +5676,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = !aggressive
         }
 
-        let didCaptureCover = preserveReleaseCoverForCurrentVideo(reason: "background", showCover: true)
-        if didCaptureCover || restoreCachedPosterForBackgroundIfNeeded(mid: mid) {
+        // Aggressive cleanup must be allocation-free: capturing a pixel buffer or
+        // rendering the player layer here raises RSS immediately before suspension.
+        // Reuse an existing displayed/cached poster instead. Short transitions may
+        // still capture a fresh frame because their player remains attached.
+        let didPreserveCover = aggressive
+            ? preserveExistingPosterForBackground(mid: mid)
+            : preserveReleaseCoverForCurrentVideo(reason: "background", showCover: true)
+        if didPreserveCover || restoreCachedPosterForBackgroundIfNeeded(mid: mid) {
             isHoldingBackgroundVideoCover = true
             backgroundVideoCoverMid = mid
             SharedAssetCache.shared.protectBackgroundPoster(for: mid)
@@ -5706,7 +5712,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         teardownPlayerAndObservers()
     }
 
-    private func prepareImageForBackground() {
+    private func prepareImageForBackground(aggressive: Bool) {
         guard isVisible, let attachment, attachment.type == .image else { return }
 
         imageLoadTask?.cancel()
@@ -5715,11 +5721,31 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         loadingSpinner.stopAnimating()
         retryButton.isHidden = true
 
+        // The visible image is already decoded. During aggressive cleanup, retain
+        // that one poster as-is instead of allocating another bitmap to downscale it.
+        guard !aggressive else { return }
+
         guard let image = imageView.image else { return }
         let displayedMaxDimension = max(bounds.width, bounds.height) * UIScreen.main.scale
         let coverMaxDimension = max(240, min(480, displayedMaxDimension))
         imageView.image = VideoFrameExtractor.downscale(image, maxDimension: coverMaxDimension)
         imageView.isHidden = false
+    }
+
+    private func preserveExistingPosterForBackground(mid: String) -> Bool {
+        if let existingImage = imageView.image, !isInvalidVideoCover(existingImage) {
+            SharedAssetCache.shared.updateCachedThumbnail(existingImage, for: mid)
+            SharedAssetCache.shared.protectBackgroundPoster(for: mid)
+            imageView.isHidden = false
+            videoPlayerView.isHidden = true
+            return true
+        }
+
+        guard restoreCachedPosterForBackgroundIfNeeded(mid: mid) else { return false }
+        SharedAssetCache.shared.protectBackgroundPoster(for: mid)
+        imageView.isHidden = false
+        videoPlayerView.isHidden = true
+        return true
     }
 
     private func restoreCachedPosterForBackgroundIfNeeded(mid: String) -> Bool {

@@ -634,7 +634,10 @@ class TweetTableViewController: UITableViewController {
         ) { [weak self] notification in
             let aggressive = notification.userInfo?["aggressive"] as? Bool ?? false
             guard aggressive else { return }
-            Task { @MainActor [weak self] in
+            // AppDelegate posts this custom notification synchronously from its
+            // @MainActor cleanup path. Finish local teardown before global caches
+            // are released and the background task is ended.
+            MainActor.assumeIsolated { [weak self] in
                 self?.prepareVisibleVideosForBackground(
                     reason: "preGlobalMemoryRelease",
                     aggressive: true
