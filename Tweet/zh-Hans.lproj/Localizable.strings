@@ -423,6 +423,17 @@
 // MARK: - Content Moderation
 "Filter Content" = "过滤内容";
 "Report Tweet" = "举报推文";
+"Block %@?" = "要屏蔽 %@ 吗？";
+"this user" = "此用户";
+"This will remove %@ from your following list and hide their content." = "这将取消关注 %@，并隐藏其内容。";
+"Block and Apply Filters" = "屏蔽并应用过滤器";
+"Applying these filters will also block %@ and hide their posts." = "应用这些过滤器还会屏蔽 %@，并隐藏其帖子。";
+"Submit this report?" = "要提交此举报吗？";
+"This report will be sent for review and the tweet will be hidden from your current view." = "此举报将提交审核，该推文也会从当前视图中隐藏。";
+"Delete Tweet?" = "删除推文？";
+"This tweet will be permanently deleted. This action cannot be undone." = "此推文将被永久删除。此操作无法撤销。";
+"Delete Comment?" = "删除评论？";
+"This comment will be permanently deleted. This action cannot be undone." = "此评论将被永久删除。此操作无法撤销。";
 "Content Filtering" = "内容过滤";
 "Control what content you see on your timeline" = "控制您在时间线上看到的内容";
 "User Actions" = "用户操作";

@@ -17,6 +17,7 @@ struct CommentMenu: View {
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var isDeleting = false
+    @State private var showDeleteConfirmation = false
 
     private var canDeleteComment: Bool {
         comment.authorId == appUser.mid
@@ -28,19 +29,7 @@ struct CommentMenu: View {
         Menu {
             if canDeleteComment {
                 Button(role: .destructive) {
-                    isDeleting = true
-                    // Start deletion in background
-                    Task {
-                        do {
-                            try await deleteComment(comment)
-                        } catch {
-                            await MainActor.run {
-                                alertMessage = "Failed to delete comment. \(error)"
-                                showAlert = true
-                            }
-                        }
-                        isDeleting = false
-                    }
+                    showDeleteConfirmation = true
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
@@ -57,6 +46,34 @@ struct CommentMenu: View {
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 )
+        }
+        .confirmationDialog(
+            NSLocalizedString("Delete Comment?", comment: "Delete comment confirmation title"),
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(NSLocalizedString("Delete Comment", comment: "Confirm comment deletion"), role: .destructive) {
+                isDeleting = true
+                Task {
+                    do {
+                        try await deleteComment(comment)
+                    } catch {
+                        await MainActor.run {
+                            alertMessage = "Failed to delete comment. \(error)"
+                            showAlert = true
+                        }
+                    }
+                    isDeleting = false
+                }
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel comment deletion"), role: .cancel) { }
+        } message: {
+            Text(
+                NSLocalizedString(
+                    "This comment will be permanently deleted. This action cannot be undone.",
+                    comment: "Delete comment confirmation message"
+                )
+            )
         }
         .alert(NSLocalizedString("Delete Comment", comment: "Delete comment alert title"), isPresented: $showAlert) {
             Button(NSLocalizedString("OK", comment: "OK button"), role: .cancel) { }

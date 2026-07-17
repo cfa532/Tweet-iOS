@@ -903,6 +903,10 @@ struct TweetDetailView: View {
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var menuShareItems: ShareSheetData?
+    @State private var showMenuFilterSheet = false
+    @State private var showMenuReportSheet = false
+    @State private var showMenuDeleteConfirmation = false
+    @State private var pendingMenuDeleteAction: (() -> Void)?
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
     @State private var hasServedCachedCommentsForCurrentParentTweet = false
@@ -1071,6 +1075,32 @@ struct TweetDetailView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .sheet(isPresented: $showMenuFilterSheet) {
+            ContentFilterView(tweet: displayTweet)
+        }
+        .sheet(isPresented: $showMenuReportSheet) {
+            ReportTweetView(tweet: displayTweet)
+        }
+        .alert(
+            NSLocalizedString("Delete Tweet?", comment: "Delete tweet confirmation title"),
+            isPresented: $showMenuDeleteConfirmation
+        ) {
+            Button(NSLocalizedString("Delete Tweet", comment: "Confirm tweet deletion"), role: .destructive) {
+                let deleteAction = pendingMenuDeleteAction
+                pendingMenuDeleteAction = nil
+                deleteAction?()
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel tweet deletion"), role: .cancel) {
+                pendingMenuDeleteAction = nil
+            }
+        } message: {
+            Text(
+                NSLocalizedString(
+                    "This tweet will be permanently deleted. This action cannot be undone.",
+                    comment: "Delete tweet confirmation message"
+                )
+            )
         }
         .sheet(item: $menuShareItems) { data in
             ShareSheetView(items: data.items)
@@ -1377,7 +1407,13 @@ struct TweetDetailView: View {
                         }
                     }
                 },
-                onShowLogin: { showLoginSheet = true }
+                onShowLogin: { showLoginSheet = true },
+                onFilterTap: { showMenuFilterSheet = true },
+                onReportTap: { showMenuReportSheet = true },
+                onDeleteTap: { deleteAction in
+                    pendingMenuDeleteAction = deleteAction
+                    showMenuDeleteConfirmation = true
+                }
             )
             .padding(.trailing, -20)
         }

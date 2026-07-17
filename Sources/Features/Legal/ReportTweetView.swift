@@ -10,6 +10,7 @@ struct ReportTweetView: View {
     @State private var toastType: ToastView.ToastType = .info
     @State private var isSubmitting = false
     @State private var showLoginSheet = false
+    @State private var showSubmitConfirmation = false
     
     // Report categories
     @State private var selectedCategory: ReportCategory? = nil
@@ -190,7 +191,7 @@ struct ReportTweetView: View {
                     dismiss()
                 },
                 trailing: Button(LocalizedStringKey("Submit Report")) {
-                    submitReport()
+                    showSubmitConfirmation = true
                 }
                 .fontWeight(.semibold)
                 .disabled(selectedCategory == nil || isSubmitting)
@@ -210,6 +211,22 @@ struct ReportTweetView: View {
         )
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .alert(
+            NSLocalizedString("Submit this report?", comment: "Report tweet confirmation title"),
+            isPresented: $showSubmitConfirmation
+        ) {
+            Button(NSLocalizedString("Submit Report", comment: "Confirm report submission"), role: .destructive) {
+                submitReport()
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel report submission"), role: .cancel) { }
+        } message: {
+            Text(
+                NSLocalizedString(
+                    "This report will be sent for review and the tweet will be hidden from your current view.",
+                    comment: "Report tweet confirmation message"
+                )
+            )
         }
     }
     

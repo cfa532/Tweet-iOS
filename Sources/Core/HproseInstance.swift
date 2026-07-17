@@ -384,12 +384,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return nil
     }
     
-    /// Parse numeric counts from Hprose / JSON (Int, NSNumber, Int64, Double).
+    /// Parse integer-valued fields from Hprose / JSON. Relationship timestamps
+    /// may arrive as integers, floating-point numbers, or numeric strings.
     nonisolated private static func intField(_ dict: [String: Any], key: String) -> Int? {
         if let v = dict[key] as? Int { return v }
         if let v = dict[key] as? Int64 { return Int(v) }
         if let v = dict[key] as? NSNumber { return v.intValue }
         if let v = dict[key] as? Double { return Int(v) }
+        if let v = dict[key] as? String { return Int(v) }
+        if let v = dict[key] as? NSString { return Int(v as String) }
         return nil
     }
     
@@ -3002,8 +3005,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         
         let sorted = response.sorted {
             (lhs, rhs) in
-            let lval = (lhs["value"] as? Int) ?? 0
-            let rval = (rhs["value"] as? Int) ?? 0
+            let lval = Self.intField(lhs, key: "value") ?? 0
+            let rval = Self.intField(rhs, key: "value") ?? 0
             return lval > rval
         }
         return sorted.compactMap { $0["field"] as? String }
@@ -3048,8 +3051,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             
             let sorted = response.sorted { (lhs, rhs) in
-                let lval = (lhs["value"] as? Int) ?? 0
-                let rval = (rhs["value"] as? Int) ?? 0
+                let lval = Self.intField(lhs, key: "value") ?? 0
+                let rval = Self.intField(rhs, key: "value") ?? 0
                 return lval > rval
             }
             await MainActor.run { NodePool.shared.updateFromUser(user) }
@@ -3145,8 +3148,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             
             let sorted = response.sorted { (lhs, rhs) in
-                let lval = (lhs["value"] as? Int) ?? 0
-                let rval = (rhs["value"] as? Int) ?? 0
+                let lval = Self.intField(lhs, key: "value") ?? 0
+                let rval = Self.intField(rhs, key: "value") ?? 0
                 return lval > rval
             }
             await MainActor.run { NodePool.shared.updateFromUser(user) }

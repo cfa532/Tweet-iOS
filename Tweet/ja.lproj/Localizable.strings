@@ -410,6 +410,19 @@
 "Failed to add bookmark" = "ブックマークに追加できませんでした";
 "Failed to remove bookmark" = "ブックマークから削除できませんでした";
 
+// MARK: - Content Moderation Confirmations
+"Block %@?" = "%@をブロックしますか？";
+"this user" = "このユーザー";
+"This will remove %@ from your following list and hide their content." = "%@のフォローを解除し、そのコンテンツを非表示にします。";
+"Block and Apply Filters" = "ブロックしてフィルターを適用";
+"Applying these filters will also block %@ and hide their posts." = "これらのフィルターを適用すると、%@もブロックされ、その投稿が非表示になります。";
+"Submit this report?" = "この報告を送信しますか？";
+"This report will be sent for review and the tweet will be hidden from your current view." = "この報告は審査のために送信され、このツイートは現在の画面から非表示になります。";
+"Delete Tweet?" = "ツイートを削除しますか？";
+"This tweet will be permanently deleted. This action cannot be undone." = "このツイートは完全に削除されます。この操作は取り消せません。";
+"Delete Comment?" = "コメントを削除しますか？";
+"This comment will be permanently deleted. This action cannot be undone." = "このコメントは完全に削除されます。この操作は取り消せません。";
+
 // MARK: - Status Messages
 "Offline - Showing cached content" = "オフライン - キャッシュされたコンテンツを表示中";
 "Creating Account..." = "アカウント作成中...";

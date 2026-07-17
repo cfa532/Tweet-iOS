@@ -450,6 +450,17 @@
 // MARK: - Content Moderation
 "Filter Content" = "Filter Content";
 "Report Tweet" = "Report Tweet";
+"Block %@?" = "Block %@?";
+"this user" = "this user";
+"This will remove %@ from your following list and hide their content." = "This will remove %@ from your following list and hide their content.";
+"Block and Apply Filters" = "Block and Apply Filters";
+"Applying these filters will also block %@ and hide their posts." = "Applying these filters will also block %@ and hide their posts.";
+"Submit this report?" = "Submit this report?";
+"This report will be sent for review and the tweet will be hidden from your current view." = "This report will be sent for review and the tweet will be hidden from your current view.";
+"Delete Tweet?" = "Delete Tweet?";
+"This tweet will be permanently deleted. This action cannot be undone." = "This tweet will be permanently deleted. This action cannot be undone.";
+"Delete Comment?" = "Delete Comment?";
+"This comment will be permanently deleted. This action cannot be undone." = "This comment will be permanently deleted. This action cannot be undone.";
 "Content Filtering" = "Content Filtering";
 "Control what content you see on your timeline" = "Control what content you see on your timeline";
 "User Actions" = "User Actions";

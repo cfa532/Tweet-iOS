@@ -48,6 +48,18 @@ struct ProfileView: View {
     private var isAppUser: Bool {
         user.mid == hproseInstance.appUser.mid
     }
+
+    private var blockUserDisplayName: String {
+        if let username = user.username?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !username.isEmpty {
+            return "@\(username)"
+        }
+        if let name = user.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty {
+            return name
+        }
+        return NSLocalizedString("this user", comment: "Fallback name in block confirmation")
+    }
     
     // Scroll detection state
     @State private var isNavigationVisible = true
@@ -80,6 +92,30 @@ struct ProfileView: View {
                 if !isShowing {
                     chatNavigationPath.removeLast(chatNavigationPath.count)
                 }
+            }
+            .alert(
+                String(
+                    format: NSLocalizedString("Block %@?", comment: "Block user confirmation title"),
+                    blockUserDisplayName
+                ),
+                isPresented: $showBlockUserMenu
+            ) {
+                Button(NSLocalizedString("Block User", comment: "Block user confirmation action"), role: .destructive) {
+                    Task {
+                        await handleBlockUser()
+                    }
+                }
+                Button(NSLocalizedString("Cancel", comment: "Cancel block user confirmation"), role: .cancel) { }
+            } message: {
+                Text(
+                    String(
+                        format: NSLocalizedString(
+                            "This will remove %@ from your following list and hide their content.",
+                            comment: "Block user confirmation message"
+                        ),
+                        blockUserDisplayName
+                    )
+                )
             }
     }
     
@@ -365,9 +401,7 @@ struct ProfileView: View {
                                 onShowLogin?()
                                 return
                             }
-                            Task {
-                                await handleBlockUser()
-                            }
+                            showBlockUserMenu = true
                         } label: {
                             Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
                         }

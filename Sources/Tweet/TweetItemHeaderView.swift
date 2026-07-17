@@ -130,11 +130,16 @@ struct TweetItemHeaderView: View {
 
 @available(iOS 16.0, *)
 struct TweetMenu: View {
+    typealias DeleteConfirmationPresenter = (@escaping () -> Void) -> Void
+
     @ObservedObject var tweet: Tweet
     let isPinned: Bool
     let showDeleteButton: Bool
     let onShareTap: (() -> Void)?
     let onShowLogin: (() -> Void)?
+    let onFilterTap: (() -> Void)?
+    let onReportTap: (() -> Void)?
+    let onDeleteTap: DeleteConfirmationPresenter?
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -143,19 +148,26 @@ struct TweetMenu: View {
     @State private var showReportSheet = false
     @State private var showFilterSheet = false
     @State private var showAdminEditSheet = false
+    @State private var showDeleteConfirmation = false
     
     init(
         tweet: Tweet,
         isPinned: Bool,
         showDeleteButton: Bool = false,
         onShareTap: (() -> Void)? = nil,
-        onShowLogin: (() -> Void)? = nil
+        onShowLogin: (() -> Void)? = nil,
+        onFilterTap: (() -> Void)? = nil,
+        onReportTap: (() -> Void)? = nil,
+        onDeleteTap: DeleteConfirmationPresenter? = nil
     ) {
         self.tweet = tweet
         self.isPinned = isPinned
         self.showDeleteButton = showDeleteButton
         self.onShareTap = onShareTap
         self.onShowLogin = onShowLogin
+        self.onFilterTap = onFilterTap
+        self.onReportTap = onReportTap
+        self.onDeleteTap = onDeleteTap
         self._isCurrentlyPinned = State(initialValue: isPinned)
     }
 
@@ -168,12 +180,20 @@ struct TweetMenu: View {
         })
         actions.append(UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"), image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { _ in
             guard requireAuthenticatedForWrite() else { return }
-            showFilterSheet = true
+            if let onFilterTap {
+                onFilterTap()
+            } else {
+                showFilterSheet = true
+            }
         })
         if tweet.authorId != appUser.mid {
             actions.append(UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"), image: UIImage(systemName: "flag")) { _ in
                 guard requireAuthenticatedForWrite() else { return }
-                showReportSheet = true
+                if let onReportTap {
+                    onReportTap()
+                } else {
+                    showReportSheet = true
+                }
             })
         }
         if Gadget.isResearchAdminUser(appUser) {
@@ -194,7 +214,13 @@ struct TweetMenu: View {
         if showDeleteButton {
             actions.append(UIAction(title: NSLocalizedString("Delete", comment: "Menu item"), image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
                 guard requireAuthenticatedForWrite() else { return }
-                Task { try? await deleteTweet(tweet) }
+                if let onDeleteTap {
+                    onDeleteTap {
+                        Task { try? await deleteTweet(tweet) }
+                    }
+                } else {
+                    showDeleteConfirmation = true
+                }
             })
         }
         return actions
@@ -409,19 +435,12 @@ struct TweetMenu: View {
                 }
                 if showDeleteButton {
                     Button(role: .destructive) {
-                        // Start deletion in background
-                        Task {
-                            do {
-                                try await deleteTweet(tweet)
-                            } catch {
-                                print("Tweet deletion failed. \(tweet)")
-                                await MainActor.run {
-                                    NotificationCenter.default.post(
-                                        name: .errorOccurred,
-                                        object: error
-                                    )
-                                }
+                        if let onDeleteTap {
+                            onDeleteTap {
+                                Task { try? await deleteTweet(tweet) }
                             }
+                        } else {
+                            showDeleteConfirmation = true
                         }
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -465,6 +484,22 @@ struct TweetMenu: View {
         .sheet(isPresented: $showAdminEditSheet) {
             AdminTweetContentEditSheet(tweet: tweet)
                 .environmentObject(hproseInstance)
+        }
+        .alert(
+            NSLocalizedString("Delete Tweet?", comment: "Delete tweet confirmation title"),
+            isPresented: $showDeleteConfirmation
+        ) {
+            Button(NSLocalizedString("Delete Tweet", comment: "Confirm tweet deletion"), role: .destructive) {
+                Task { try? await deleteTweet(tweet) }
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel tweet deletion"), role: .cancel) { }
+        } message: {
+            Text(
+                NSLocalizedString(
+                    "This tweet will be permanently deleted. This action cannot be undone.",
+                    comment: "Delete tweet confirmation message"
+                )
+            )
         }
     }
     

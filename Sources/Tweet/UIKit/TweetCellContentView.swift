@@ -827,6 +827,28 @@ class TweetCellContentView: UIView {
         }
     }
 
+    private func presentDeleteConfirmation(
+        title: String,
+        message: String,
+        confirmTitle: String,
+        from viewController: UIViewController,
+        onConfirm: @escaping () -> Void
+    ) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(
+            UIAlertAction(
+                title: NSLocalizedString("Cancel", comment: "Cancel deletion"),
+                style: .cancel
+            )
+        )
+        alert.addAction(
+            UIAlertAction(title: confirmTitle, style: .destructive) { _ in
+                onConfirm()
+            }
+        )
+        viewController.present(alert, animated: true)
+    }
+
     private func createTweetMenu(tweet: Tweet, isPinned: Bool, showDelete: Bool, showsAdminEdit: Bool,
                                   hproseInstance: HproseInstance) -> UIMenu {
         var actions: [UIAction] = []
@@ -845,8 +867,12 @@ class TweetCellContentView: UIView {
                 self?.onShowLogin?()
                 return
             }
-            // TODO: Show filter sheet
-            print("Filter content tapped")
+            guard let self, let parentViewController = self.parentViewController else { return }
+            let sheet = UIHostingController(
+                rootView: ContentFilterView(tweet: tweet).environmentObject(hproseInstance)
+            )
+            sheet.modalPresentationStyle = .pageSheet
+            parentViewController.present(sheet, animated: true)
         }
         actions.append(filterAction)
 
@@ -874,8 +900,12 @@ class TweetCellContentView: UIView {
                     self?.onShowLogin?()
                     return
                 }
-                // TODO: Show report sheet
-                print("Report tapped")
+                guard let self, let parentViewController = self.parentViewController else { return }
+                let sheet = UIHostingController(
+                    rootView: ReportTweetView(tweet: tweet).environmentObject(hproseInstance)
+                )
+                sheet.modalPresentationStyle = .pageSheet
+                parentViewController.present(sheet, animated: true)
             }
             actions.append(reportAction)
         }
@@ -981,28 +1011,39 @@ class TweetCellContentView: UIView {
                     self?.onShowLogin?()
                     return
                 }
-                // Optimistic UI update — remove immediately
-                NotificationCenter.default.post(
-                    name: .tweetDeleted,
-                    object: nil,
-                    userInfo: ["tweetId": tweet.mid]
-                )
-                Task {
-                    do {
-                        _ = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId)
-                    } catch {
-                        print("DEBUG: [TweetCellContentView] deleteTweet FAILED — raw error: \(error) | localizedDescription: \(error.localizedDescription)")
-                        // Restore tweet on failure
-                        TweetDeletionRegistry.shared.unmarkDeleted(tweet.mid)
-                        NotificationCenter.default.post(
-                            name: .tweetRestored,
-                            object: nil,
-                            userInfo: ["tweetId": tweet.mid]
-                        )
-                        NotificationCenter.default.post(
-                            name: .errorOccurred,
-                            object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
-                        )
+                guard let self, let parentViewController = self.parentViewController else { return }
+                self.presentDeleteConfirmation(
+                    title: NSLocalizedString("Delete Tweet?", comment: "Delete tweet confirmation title"),
+                    message: NSLocalizedString(
+                        "This tweet will be permanently deleted. This action cannot be undone.",
+                        comment: "Delete tweet confirmation message"
+                    ),
+                    confirmTitle: NSLocalizedString("Delete Tweet", comment: "Confirm tweet deletion"),
+                    from: parentViewController
+                ) {
+                    // Optimistic UI update — remove immediately after confirmation.
+                    NotificationCenter.default.post(
+                        name: .tweetDeleted,
+                        object: nil,
+                        userInfo: ["tweetId": tweet.mid]
+                    )
+                    Task {
+                        do {
+                            _ = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId)
+                        } catch {
+                            print("DEBUG: [TweetCellContentView] deleteTweet FAILED — raw error: \(error) | localizedDescription: \(error.localizedDescription)")
+                            // Restore tweet on failure
+                            TweetDeletionRegistry.shared.unmarkDeleted(tweet.mid)
+                            NotificationCenter.default.post(
+                                name: .tweetRestored,
+                                object: nil,
+                                userInfo: ["tweetId": tweet.mid]
+                            )
+                            NotificationCenter.default.post(
+                                name: .errorOccurred,
+                                object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                            )
+                        }
                     }
                 }
             }
@@ -1071,27 +1112,38 @@ class TweetCellContentView: UIView {
                 self?.onShowLogin?()
                 return
             }
-            NotificationCenter.default.post(
-                name: .commentDeleted,
-                object: nil,
-                userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
-            )
-            parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
+            guard let self, let parentViewController = self.parentViewController else { return }
+            self.presentDeleteConfirmation(
+                title: NSLocalizedString("Delete Comment?", comment: "Delete comment confirmation title"),
+                message: NSLocalizedString(
+                    "This comment will be permanently deleted. This action cannot be undone.",
+                    comment: "Delete comment confirmation message"
+                ),
+                confirmTitle: NSLocalizedString("Delete Comment", comment: "Confirm comment deletion"),
+                from: parentViewController
+            ) {
+                NotificationCenter.default.post(
+                    name: .commentDeleted,
+                    object: nil,
+                    userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
+                )
+                parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
 
-            Task {
-                if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
-                   let count = response["count"] as? Int {
-                    await MainActor.run {
-                        parentTweet.commentCount = count
-                    }
-                } else {
-                    NotificationCenter.default.post(
-                        name: .commentRestored,
-                        object: nil,
-                        userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
-                    )
-                    await MainActor.run {
-                        parentTweet.commentCount = (parentTweet.commentCount ?? 0) + 1
+                Task {
+                    if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
+                       let count = response["count"] as? Int {
+                        await MainActor.run {
+                            parentTweet.commentCount = count
+                        }
+                    } else {
+                        NotificationCenter.default.post(
+                            name: .commentRestored,
+                            object: nil,
+                            userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
+                        )
+                        await MainActor.run {
+                            parentTweet.commentCount = (parentTweet.commentCount ?? 0) + 1
+                        }
                     }
                 }
             }
