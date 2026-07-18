@@ -239,6 +239,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         // Register background tasks before application finishes launching
         registerBackgroundTasks()
+        // A pending request can survive process termination. Cancel it before
+        // the cold-start main feed can issue update_following_tweets.
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundMainFeedCheck.identifier)
         
         // Setup app lifecycle notifications
         setupAppLifecycleNotifications()
@@ -455,6 +458,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
     @MainActor
     private func scheduleNextMainFeedCheck() {
+        // Cancellation must be issued even when Background App Refresh is
+        // unavailable so a stale request cannot race a foreground opening call.
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundMainFeedCheck.identifier)
+
         guard UIApplication.shared.backgroundRefreshStatus == .available else {
             print("[AppDelegate] ℹ️ Background main feed check not scheduled; Background App Refresh is \(backgroundRefreshStatusDescription())")
             return
@@ -464,7 +471,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         request.earliestBeginDate = Date(timeIntervalSinceNow: BackgroundMainFeedCheck.interval)
 
         do {
-            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundMainFeedCheck.identifier)
             try BGTaskScheduler.shared.submit(request)
             print("[AppDelegate] 📅 Next background main feed check scheduled for \(request.earliestBeginDate ?? Date())")
         } catch {
@@ -812,10 +818,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
     private func scheduleMainFeedCheckAfterForegroundReturn() {
         Task { @MainActor in
+            // Keep cancellation/resubmission and the new session in one ordered
+            // task so update_following_tweets cannot start first.
             self.scheduleNextMainFeedCheck()
-        }
-        if #available(iOS 16.0, *) {
-            Task.detached(priority: .utility) {
+
+            if #available(iOS 16.0, *) {
                 await FollowingsTweetViewModel.shared.performForegroundFeedRefresh()
             }
         }

@@ -40,6 +40,12 @@ class FollowingsTweetViewModel: ObservableObject {
     private let pageZeroFetchGate = PageZeroFetchGate()
     private var isMainFeedAtTop: Bool = true
     private var isMainFeedScrollInteractionActive: Bool = false
+    // A cold start begins at generation 0. Each foreground return advances the
+    // generation so navigation within one session cannot repeat the opening RPC.
+    private var mainFeedSessionGeneration = 0
+    private var openedMainFeedSessionGeneration: Int?
+    private var mainFeedSessionOpeningTask: Task<Void, Never>?
+    private var mainFeedSessionOpeningTaskGeneration: Int?
     
     // Shared instance to keep tweets in memory across navigation
     static let shared = FollowingsTweetViewModel(hproseInstance: HproseInstance.shared)
@@ -49,10 +55,13 @@ class FollowingsTweetViewModel: ObservableObject {
     }
 
     func performForegroundFeedRefresh() async {
+        let sessionGeneration = beginMainFeedSession()
+        scheduleMainFeedSessionOpening(pageSize: 5, generation: sessionGeneration)
         await performFeedRefreshPair(
             reason: "foreground feed refresh",
             pageSize: 5,
-            renderGetTweetFeedUsingScrollState: true
+            renderGetTweetFeedUsingScrollState: true,
+            includeFollowingTweetsUpdate: false
         )
     }
 
@@ -67,7 +76,8 @@ class FollowingsTweetViewModel: ObservableObject {
     private func performFeedRefreshPair(
         reason: String,
         pageSize: UInt,
-        renderGetTweetFeedUsingScrollState: Bool
+        renderGetTweetFeedUsingScrollState: Bool,
+        includeFollowingTweetsUpdate: Bool = true
     ) async {
         let didBegin = await MainActor.run {
             guard !isPeriodicFeedRefreshActive else { return false }
@@ -110,6 +120,8 @@ class FollowingsTweetViewModel: ObservableObject {
             print("ERROR: [FollowingsTweetViewModel] \(reason) get_tweet_feed failed: \(error)")
         }
 
+        guard includeFollowingTweetsUpdate else { return }
+
         do {
             let followingTweets = try await fetchFollowingTweetsForBanner(pageSize: pageSize)
             await MainActor.run {
@@ -117,6 +129,69 @@ class FollowingsTweetViewModel: ObservableObject {
             }
         } catch {
             print("ERROR: [FollowingsTweetViewModel] \(reason) update_following_tweets failed: \(error)")
+        }
+    }
+
+    private func beginMainFeedSession() -> Int {
+        mainFeedSessionOpeningTask?.cancel()
+        mainFeedSessionOpeningTask = nil
+        mainFeedSessionOpeningTaskGeneration = nil
+        mainFeedSessionGeneration += 1
+        return mainFeedSessionGeneration
+    }
+
+    private func consumeMainFeedOpening(for generation: Int) -> Bool {
+        guard generation == mainFeedSessionGeneration,
+              openedMainFeedSessionGeneration != generation else {
+            return false
+        }
+        openedMainFeedSessionGeneration = generation
+        return true
+    }
+
+    private func scheduleMainFeedSessionOpening(pageSize: UInt, generation: Int? = nil) {
+        let generation = generation ?? mainFeedSessionGeneration
+        guard generation == mainFeedSessionGeneration,
+              openedMainFeedSessionGeneration != generation,
+              mainFeedSessionOpeningTaskGeneration != generation else {
+            return
+        }
+
+        mainFeedSessionOpeningTaskGeneration = generation
+        mainFeedSessionOpeningTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.mainFeedSessionOpeningTaskGeneration == generation {
+                    self.mainFeedSessionOpeningTask = nil
+                    self.mainFeedSessionOpeningTaskGeneration = nil
+                }
+            }
+
+            while !self.hproseInstance.isAppInitialized {
+                guard !Task.isCancelled,
+                      generation == self.mainFeedSessionGeneration else {
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+
+            guard !Task.isCancelled,
+                  !self.hproseInstance.appUser.isGuest else {
+                return
+            }
+
+            while !Task.isCancelled,
+                  generation == self.mainFeedSessionGeneration,
+                  self.openedMainFeedSessionGeneration != generation {
+                if self.hproseInstance.appUser.isGuest { return }
+                await self.refreshFollowingTweetsAsync(
+                    pageSize: pageSize,
+                    ignoreDebounce: true,
+                    sessionOpeningGeneration: generation
+                )
+                if self.openedMainFeedSessionGeneration == generation { return }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
         }
     }
 
@@ -364,6 +439,10 @@ class FollowingsTweetViewModel: ObservableObject {
             endPageZeroFetchIfNeeded(page: page)
         }
 
+        if page == 0 {
+            scheduleMainFeedSessionOpening(pageSize: pageSize)
+        }
+
         let startTime = Date()
         print("🌐 [SERVER FETCH] fetchTweets START - page: \(page), pageSize: \(pageSize)")
         
@@ -421,8 +500,6 @@ class FollowingsTweetViewModel: ObservableObject {
             if page == 0 {
                 if isPeriodicRefresh {
                     await refreshFollowingTweetsAsync(pageSize: pageSize)
-                } else {
-                    refreshFollowingTweets(pageSize: pageSize)
                 }
             }
             
@@ -436,20 +513,29 @@ class FollowingsTweetViewModel: ObservableObject {
         }
     }
 
-    private func refreshFollowingTweets(pageSize: UInt) {
-        Task { [weak self] in
-            guard let self = self else { return }
-            await self.refreshFollowingTweetsAsync(pageSize: pageSize)
+    private func refreshFollowingTweetsAsync(
+        pageSize: UInt,
+        ignoreDebounce: Bool = false,
+        sessionOpeningGeneration: Int? = nil
+    ) async {
+        let onRpcStarted: (@Sendable () async -> Bool)?
+        if let sessionOpeningGeneration {
+            onRpcStarted = { @Sendable [weak self] in
+                guard let self else { return false }
+                return await self.consumeMainFeedOpening(for: sessionOpeningGeneration)
+            }
+        } else {
+            onRpcStarted = nil
         }
-    }
 
-    private func refreshFollowingTweetsAsync(pageSize: UInt) async {
         do {
             let newTweets = try await hproseInstance.fetchTweetFeed(
                 user: hproseInstance.appUser,
                 pageNumber: 0,
                 pageSize: pageSize,
-                entry: Self.followingTweetsBannerEntry
+                entry: Self.followingTweetsBannerEntry,
+                ignoreFollowingTweetsDebounce: ignoreDebounce,
+                onFollowingTweetsRpcStarted: onRpcStarted
             )
             let filteredTweets = newTweets.compactMap { $0 }
             guard !filteredTweets.isEmpty else { return }

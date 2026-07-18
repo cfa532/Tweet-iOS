@@ -273,11 +273,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func shouldAttemptHeavyCall(_ key: String, interval: TimeInterval = HproseInstance.heavyCallInterval) -> Bool {
+    private func shouldAttemptHeavyCall(
+        _ key: String,
+        interval: TimeInterval = HproseInstance.heavyCallInterval,
+        ignoreDebounce: Bool = false
+    ) -> Bool {
         heavyCallLock.lock()
         defer { heavyCallLock.unlock() }
 
         let now = Date()
+        if ignoreDebounce {
+            heavyCallLastAttemptAt[key] = now
+            return true
+        }
         if let lastAttempt = heavyCallLastAttemptAt[key],
            now.timeIntervalSince(lastAttempt) < interval {
             let remaining = Int(interval - now.timeIntervalSince(lastAttempt))
@@ -1045,7 +1053,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         user: User,
         pageNumber: UInt = 0,
         pageSize: UInt = 20,
-        entry: String = "get_tweet_feed"
+        entry: String = "get_tweet_feed",
+        ignoreFollowingTweetsDebounce: Bool = false,
+        onFollowingTweetsRpcStarted: (@Sendable () async -> Bool)? = nil
     ) async throws -> [Tweet?] {
         let isFollowingTweetUpdate = entry == HproseInstance.updateFollowingTweetsEntry
 
@@ -1076,11 +1086,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return legacyCachedTweets
         }
 
-        if isFollowingTweetUpdate,
-           !shouldAttemptHeavyCall(HproseInstance.updateFollowingTweetsEntry) {
-            return []
-        }
-        
         let client: HproseClient?
         if isFollowingTweetUpdate {
             client = try await followingTweetsHomeClient()
@@ -1104,6 +1109,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         if isFollowingTweetUpdate {
             params["hostid"] = appSnap.hostIds?.first
+            guard appSnap.mid != Constants.GUEST_ID,
+                  await onFollowingTweetsRpcStarted?() != false,
+                  shouldAttemptHeavyCall(
+                    HproseInstance.updateFollowingTweetsEntry,
+                    ignoreDebounce: ignoreFollowingTweetsDebounce
+                  ) else {
+                return []
+            }
         }
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
