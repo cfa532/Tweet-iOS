@@ -129,8 +129,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         return writableClient(timeout: 10)
     }
 
-    /// Writable-node client with a specific timeout class (e.g. 30s for slow
-    /// toggle/delete/edit mutations).
+    /// Writable-node client with a specific timeout class (e.g. extended timeouts
+    /// for slow toggle/delete/edit mutations).
     public func writableClient(timeout: TimeInterval) -> HproseClient? {
         guard let writableUrl = writableUrl else {
             return nil

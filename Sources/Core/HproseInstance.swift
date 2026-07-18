@@ -1202,7 +1202,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // writable client on the main actor.
         let appUserInstance = await MainActor.run { self.appUser }
         let writableUrl = try await appUserInstance.resolveWritableUrl()
-        guard let client = await appUserInstance.writableClient(timeout: 15) else {
+        guard let client = await appUserInstance.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: "Writable client not available for \(writableUrl.absoluteString)"
             ])
@@ -1232,7 +1232,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         var accessParams = requestParams
         accessParams["homeupdated"] = true
 
-        let accessClient = clientPool.getClientByIP(for: accessIP, timeout: 15)
+        let accessClient = clientPool.getClientByIP(for: accessIP, timeout: 30)
 
         do {
             let rawResponse = await invokeRunMApp(using: accessClient, entry: HproseInstance.updateFollowingTweetsEntry, params: accessParams)
@@ -3391,7 +3391,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // failure on the client. By calling the home node directly we bypass it.
         let appUserInstance = await MainActor.run { self.appUser }
         let writableUrl = try await appUserInstance.resolveWritableUrl()
-        let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 30)
+        let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 60)
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
@@ -3419,7 +3419,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
         }
         _ = try await author.resolveWritableUrl()
-        guard let client = await author.writableClient(timeout: 30) else {
+        guard let client = await author.writableClient(timeout: 60) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let entry = "toggle_favorite"
@@ -3472,7 +3472,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
         }
         _ = try await author.resolveWritableUrl()
-        guard let client = await author.writableClient(timeout: 30) else {
+        guard let client = await author.writableClient(timeout: 60) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let entry = "toggle_bookmark"
