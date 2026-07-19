@@ -1063,7 +1063,10 @@ class TweetTableViewController: UITableViewController {
         videoCoordinator.isFeedVisible = false
         feedPlaybackResumeGeneration += 1
 
-        if !NavigationStateManager.shared.shouldPreserveFeedForDetailTransition {
+        if NavigationStateManager.shared.shouldPreserveFeedForDetailTransition,
+           let videoMid = NavigationStateManager.shared.videoMidToPreserveForDetailTransition {
+            videoCoordinator.suspendForDetailHandoff(preservingVideoMid: videoMid)
+        } else {
             // Stop all feed videos when navigating away to non-detail destinations.
             // Detail borrows the shared feed AVPlayer, so stopping here creates a
             // pause/reattach cycle and a visible freeze when returning.

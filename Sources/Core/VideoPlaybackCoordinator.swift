@@ -1216,6 +1216,45 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
+    /// Suspend feed playback while detail borrows one cached player. Every distinct
+    /// media player except the borrowed one is stopped, and pending coordinator work
+    /// is cancelled so the hidden feed cannot start another video during the handoff.
+    func suspendForDetailHandoff(preservingVideoMid videoMid: String) {
+        overlayUncoverPlaybackTimer?.invalidate()
+        overlayUncoverPlaybackTimer = nil
+        cancelPendingPrimarySelection()
+        pendingDemotionWorkItem?.cancel()
+        pendingDemotionWorkItem = nil
+        pendingDemotionIdentifier = nil
+        cancelActiveAsyncTasks()
+
+        let preservedIdentifiers = Set(
+            allVideos.lazy
+                .filter { $0.videoMid == videoMid }
+                .map(\.identifier)
+        )
+
+        if let primaryVideoId, preservedIdentifiers.contains(primaryVideoId) {
+            currentlyPlayingVideoIds.formIntersection(preservedIdentifiers)
+            cachedVisibilityRatios = cachedVisibilityRatios.filter { preservedIdentifiers.contains($0.key) }
+        } else {
+            currentlyPlayingVideoIds.removeAll()
+            primaryVideoId = nil
+            phase = .idle
+            cachedVisibilityRatios.removeAll()
+        }
+
+        for video in allVideos where video.videoMid != videoMid {
+            if let delegate = delegate(forIdentifier: video.identifier) {
+                delegate.shouldStopVideo(withMid: video.videoMid)
+            } else {
+                SharedAssetCache.shared.getCachedPlayer(for: video.videoMid)?.pause()
+            }
+        }
+
+        print("🎬 [COORD] Detail handoff preserving \(shortMID(videoMid)); all other feed videos stopped")
+    }
+
     /// Notify coordinator that the primary video has failed (buffering timeout or retries exhausted).
     /// Resets phase to idle and picks a new primary from remaining visible videos.
     /// Won't re-pick the same failed video — prevents infinite retry loops.

@@ -350,15 +350,17 @@ class TweetCellContentView: UIView {
     }
 
     private func navigateToTweetDetail(_ tweet: Tweet, source: String) {
+        let videoMid = Self.firstVideoAttachmentMid(tweet)
         NavigationStateManager.shared.markDetailNavigationPending(
             source: source,
-            preserveFeedPlayback: Self.hasVideoAttachment(tweet)
+            preserveFeedPlayback: videoMid != nil,
+            videoMid: videoMid
         )
         onTweetTap?(tweet)
     }
 
-    private static func hasVideoAttachment(_ tweet: Tweet) -> Bool {
-        tweet.attachments?.contains { $0.type == .video || $0.type == .hls_video } == true
+    private static func firstVideoAttachmentMid(_ tweet: Tweet) -> String? {
+        tweet.attachments?.first { $0.type == .video || $0.type == .hls_video }?.mid
     }
 
     // MARK: - Configure

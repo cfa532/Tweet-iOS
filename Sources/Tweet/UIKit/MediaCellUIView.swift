@@ -1347,8 +1347,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // Observe MuteState changes → forward to player
         MuteState.shared.$isMuted
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] muted in
-                self?.player?.isMuted = muted
+            .sink { [weak self] _ in
+                guard let self, let player = self.player else { return }
+                self.applyFeedMuteState(to: player)
             }
             .store(in: &cancellables)
 
@@ -1573,7 +1574,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         setupPlayerTask = nil
         playerAcquireDebounceTask?.cancel()
         playerAcquireDebounceTask = nil
-        cachedPlayer.isMuted = MuteState.shared.isMuted
+        applyFeedMuteState(to: cachedPlayer, mid: mid)
 
         if player === cachedPlayer {
             attachPlayerToLayer(cachedPlayer)
@@ -1656,7 +1657,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             print("\(logPrefix) 🔍 acquirePlayer: → Tier1 VideoStateCache hit, itemNil=\(cachedState.player.currentItem == nil)")
             let cachedPlayer = cachedState.player
-            cachedPlayer.isMuted = MuteState.shared.isMuted
+            applyFeedMuteState(to: cachedPlayer, mid: mid)
 
             // Validate cached player
             guard cachedPlayer.currentItem != nil else {
@@ -1699,7 +1700,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         print("\(logPrefix) 🔍 acquirePlayer: Tier2 check cachedPlayer=\(tier2Player != nil) itemNil=\(tier2Player?.currentItem == nil)")
         if let cachedPlayer = tier2Player, cachedPlayer.currentItem != nil {
             print("\(logPrefix) 🔍 acquirePlayer: → Tier2 SharedAssetCache hit")
-            cachedPlayer.isMuted = MuteState.shared.isMuted
+            applyFeedMuteState(to: cachedPlayer, mid: mid)
             if shouldRebuildCachedFeedPlayer(cachedPlayer, mid: mid, source: "SharedAssetCache") {
                 guard rebuildCachedFeedPlayer(cachedPlayer, mid: mid, reason: "SharedAssetCache cached player wedged") else { return }
                 acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
@@ -1748,9 +1749,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 try Task.checkCancellation()
 
                 let newPlayer = AVPlayer(playerItem: playerItem)
-                let muteState = await MainActor.run { MuteState.shared.isMuted }
-                newPlayer.isMuted = muteState
-
                 await MainActor.run { [weak self] in
                     guard !Task.isCancelled, let self else { return }
                     guard self.attachment?.mid == expectedMid,
@@ -1761,7 +1759,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     }
 
                     newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = self.isVisible || self.coordinatorWantsToPlay
-                    newPlayer.isMuted = MuteState.shared.isMuted
+                    self.applyFeedMuteState(to: newPlayer, mid: expectedMid)
                     self.configurePlayer(newPlayer)
                     self.setupPlayerTask = nil
                 }
@@ -2093,10 +2091,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 )
                 try Task.checkCancellation()
 
-                // Apply mute state immediately after creation
-                let muteState = await MainActor.run { MuteState.shared.isMuted }
-                newPlayer.isMuted = muteState
-
                 await MainActor.run { [weak self] in
                     guard !Task.isCancelled, let self else { return }
                     // Staleness check: if the cell was reused for a different attachment
@@ -2107,7 +2101,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                         print("\(self.logPrefix) ⚠️ Player for \(expectedMid) arrived after cell reuse — discarding")
                         return
                     }
-                    newPlayer.isMuted = MuteState.shared.isMuted
+                    self.applyFeedMuteState(to: newPlayer, mid: expectedMid)
                     self.configurePlayer(newPlayer)
                     self.setupPlayerTask = nil
                 }
@@ -2179,6 +2173,23 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             || FullScreenVideoManager.shared.isTransferringPlayerToFeed(player, mid: mid)
             || DetailVideoManager.shared.currentVideoMid == mid && DetailVideoManager.shared.currentPlayer === player
             || DetailVideoManager.shared.isTransferringPlayerToFeed(player, mid: mid)
+    }
+
+    private func isOwnedByDetail(_ player: AVPlayer, mid: String) -> Bool {
+        DetailVideoManager.shared.currentVideoMid == mid
+            && DetailVideoManager.shared.currentPlayer === player
+    }
+
+    /// Feed callbacks can outlive the surface transition. Once detail owns the
+    /// shared player, only detail may decide its audible state.
+    private func applyFeedMuteState(to player: AVPlayer, mid: String? = nil) {
+        if let mid = mid ?? attachment?.mid,
+           isOwnedByDetail(player, mid: mid) {
+            player.isMuted = false
+            player.volume = 1.0
+        } else {
+            player.isMuted = MuteState.shared.isMuted
+        }
     }
 
     private func beginLiveHandoffProtection(for player: AVPlayer, mid: String, reason: String) {
@@ -2277,7 +2288,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func preparePlayerForConfiguration(_ newPlayer: AVPlayer) {
         let previousPlayer = player
         if newPlayer.rate > 0 { newPlayer.pause() }
-        newPlayer.isMuted = MuteState.shared.isMuted
+        applyFeedMuteState(to: newPlayer)
         if isVisible {
             newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         }
@@ -2515,7 +2526,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             removePlayerTimeObserver()
             removePlayerObservers()
             player = newPlayer
-            newPlayer.isMuted = MuteState.shared.isMuted
+            applyFeedMuteState(to: newPlayer)
             if imageView.image == nil, let mid = attachment?.mid,
                let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
                 imageView.image = cached
@@ -3054,7 +3065,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             lastWatchdogNudgeDate = now
             applyAVPlayerBufferDefaults(to: player)
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            player.isMuted = MuteState.shared.isMuted
+            applyFeedMuteState(to: player)
             player.play()
             updateLoadingSpinnerForPlayback(player)
             print("\(logPrefix) ▶️ watchdog nudge (\(reason)): pos=\(String(format: "%.1f", currentSeconds))s, buffered=\(String(format: "%.1f", bufferedAhead))s, stalled=\(String(format: "%.1f", stalledFor))s, itemStatus=\(status?.rawValue ?? -1), timeControl=\(player.timeControlStatus.rawValue)")
@@ -3080,7 +3091,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             showPrimarySpinnerAfterDebounce(for: player)
         }
         applyAVPlayerBufferDefaults(to: player)
-        player.isMuted = MuteState.shared.isMuted
+        applyFeedMuteState(to: player)
         if player.rate == 0 {
             player.play()
         }
@@ -3372,6 +3383,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard let mid = attachment?.mid else { return }
         coordinatorWantsToPlay = false
 
+        if let player, isOwnedByDetail(player, mid: mid) {
+            applyFeedMuteState(to: player, mid: mid)
+            return
+        }
+
         if let player = player {
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
@@ -3381,7 +3397,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // Volume fade-out then pause
             UIView.animate(withDuration: 0.2, animations: {
                 player.volume = 0
-            }, completion: { _ in
+            }, completion: { [weak self, weak player] _ in
+                guard let self, let player else { return }
+                if self.isOwnedByDetail(player, mid: mid) {
+                    player.isMuted = false
+                    player.volume = 1.0
+                    return
+                }
                 player.pause()
             })
         } else {
@@ -3393,6 +3415,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private func handleCoordinatorStopCommand() {
         guard let mid = attachment?.mid else { return }
         coordinatorWantsToPlay = false
+
+        if let player, isOwnedByDetail(player, mid: mid) {
+            applyFeedMuteState(to: player, mid: mid)
+            return
+        }
 
         if let player = player {
             if player.rate > 0 {
@@ -3442,8 +3469,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     private func handleStopAllVideos() {
-        guard isVideoAttachment else { return }
+        guard isVideoAttachment, let mid = attachment?.mid else { return }
         coordinatorWantsToPlay = false
+
+        if let player, isOwnedByDetail(player, mid: mid) {
+            applyFeedMuteState(to: player, mid: mid)
+            return
+        }
 
         if let player = player {
             if player.rate > 0 {
@@ -3456,7 +3488,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 transitionTo(.paused)
             }
             player.pause()
-            player.isMuted = MuteState.shared.isMuted
+            applyFeedMuteState(to: player)
         }
     }
 
@@ -3598,7 +3630,6 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         } else {
             isLiveHandoff = false
         }
-
         if player.rate > 0 {
             lastPlaybackRequestDate = Date()
             resetPlaybackProgressTracking(to: player.currentTime())
@@ -3614,7 +3645,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             updateLoadingSpinnerForPlayback(player)
             retryButton.isHidden = true
             applyAVPlayerBufferDefaults(to: player)
-            player.isMuted = MuteState.shared.isMuted
+            applyFeedMuteState(to: player)
             player.volume = 1.0
             if isSingleMedia, let mid = attachment?.mid {
                 setupVideoTimer(videoMid: mid)
@@ -3674,7 +3705,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // paused with background-friendly settings, so restore AVPlayer's normal
         // stall handling before issuing play().
         applyAVPlayerBufferDefaults(to: player)
-        player.isMuted = MuteState.shared.isMuted
+        applyFeedMuteState(to: player, mid: mid)
+        player.volume = 1.0
         lastPlaybackRequestDate = Date()
         resetPlaybackProgressTracking(to: player.currentTime())
         startPlayerTimeObserver()
@@ -4215,7 +4247,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         // Pause immediately
         player.pause()
-        player.isMuted = MuteState.shared.isMuted
+        applyFeedMuteState(to: player)
         // Cache a final frame for later release/offscreen recovery, but do not put it
         // over the still-attached player. Finished videos should show the AVPlayerLayer's
         // last frame until the player is actually released.
@@ -5298,6 +5330,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // but tearing down the feed surface forces a pause/reattach cycle on return.
             if OverlayVisibilityCoordinator.shared.isCovered ||
                 NavigationStateManager.shared.shouldPreserveFeedForDetailTransition {
+                if NavigationStateManager.shared.shouldPreserveFeedForDetailTransition {
+                    // The visible feed player may be borrowed by detail, but feed-only
+                    // acquisition work must not land after ownership has transferred.
+                    playerAcquireDebounceTask?.cancel()
+                    playerAcquireDebounceTask = nil
+                    setupPlayerTask?.cancel()
+                    setupPlayerTask = nil
+                }
                 // Revert the isVisible flag — the cell is logically still visible
                 isVisible = true
                 return
@@ -5366,7 +5406,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                         saveCurrentPosition(player: player, wasPlaying: player.rate > 0)
                     }
                     player.pause()
-                    player.isMuted = MuteState.shared.isMuted
+                    applyFeedMuteState(to: player, mid: attachment.mid)
 
                 }
                 releaseCurrentIndependentPlayer(reason: "becameInvisible", showCover: true)

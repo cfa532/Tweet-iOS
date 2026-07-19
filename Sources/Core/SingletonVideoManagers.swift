@@ -22,20 +22,27 @@ class NavigationStateManager {
     @Published var isDetailViewActive = false
     @Published private(set) var isDetailNavigationPending = false
     private var shouldPreserveFeedPlaybackForPendingDetail = false
+    private var pendingDetailVideoMid: String?
 
     var shouldPreserveFeedForDetailTransition: Bool {
         isDetailNavigationPending && shouldPreserveFeedPlaybackForPendingDetail
     }
 
-    func markDetailNavigationPending(source: String, preserveFeedPlayback: Bool) {
+    var videoMidToPreserveForDetailTransition: String? {
+        shouldPreserveFeedForDetailTransition ? pendingDetailVideoMid : nil
+    }
+
+    func markDetailNavigationPending(source: String, preserveFeedPlayback: Bool, videoMid: String? = nil) {
         isDetailNavigationPending = true
         shouldPreserveFeedPlaybackForPendingDetail = preserveFeedPlayback
+        pendingDetailVideoMid = preserveFeedPlayback ? videoMid : nil
         print("DEBUG: [NAVIGATION STATE] Detail navigation pending from \(source)")
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self, !self.isDetailViewActive else { return }
             self.isDetailNavigationPending = false
             self.shouldPreserveFeedPlaybackForPendingDetail = false
+            self.pendingDetailVideoMid = nil
         }
     }
 
@@ -44,6 +51,7 @@ class NavigationStateManager {
         if !active {
             isDetailNavigationPending = false
             shouldPreserveFeedPlaybackForPendingDetail = false
+            pendingDetailVideoMid = nil
         }
         print("DEBUG: [NAVIGATION STATE] Detail view active: \(active)")
     }
@@ -3344,7 +3352,7 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
             }
             resetDetailRenderingProgress(to: currentPlayer?.currentTime() ?? .zero)
             setupDetailVideoOutput(for: cachedItem)
-            applyStartupAudioMuteIfNeeded()
+            clearStartupAudioMuteForPlayback(on: candidate.player)
             setupDetailCompletionObserver(cachedItem)
             setupDetailTimeControlObserver()
             startDetailPlayback(playerItem: cachedItem, mid: mid)
@@ -3387,6 +3395,7 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         startupAudioUnmuteTask = nil
         startupAudioMuteUntil = .distantPast
         player?.isMuted = false
+        player?.volume = 1.0
     }
 
     /// Pause the current video (e.g. when swiping away)
@@ -4595,8 +4604,8 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         
         // Layer 1 (Basic Restoration): Player is healthy, restore state
         
-        // Ensure mute state is correct
-        player.isMuted = false
+        // Detail playback owns both AVPlayer audio controls while it is active.
+        clearStartupAudioMuteForPlayback(on: player)
         
         // Try to get persistent state first, fall back to local saved state
         let wasPlaying: Bool
