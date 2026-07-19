@@ -286,6 +286,13 @@ struct DecodedUserRecord: Sendable {
     var explicitNullFields: Set<String>
 }
 
+/// One backend page of follower/following users after their complete user
+/// objects have been merged into `UserStore` and cached locally.
+struct RelationshipUserPage: Sendable {
+    let userIds: [MimeiId]
+    let hasMore: Bool
+}
+
 extension UserRecord {
     static func fromCacheData(_ data: Data) throws -> UserRecord {
         let decoder = JSONDecoder()

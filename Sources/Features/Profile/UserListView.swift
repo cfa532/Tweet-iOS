@@ -14,8 +14,8 @@ struct UserListView: View {
     // MARK: - Properties
     let title: String
     let userId: String // Profile owner whose baseUrl we watch for refresh
-    let userFetcher: @MainActor @Sendable (Int, Int) async throws -> [String]
-    let authoritativeUserFetcher: @MainActor @Sendable () async throws -> [String]
+    let cachedUserFetcher: @MainActor @Sendable () async -> [String]
+    let userPageFetcher: @MainActor @Sendable (Int) async throws -> RelationshipUserPage
     let onFollowToggle: ((User) async -> Void)?
     let onShowLogin: (() -> Void)?
     let onUserTap: ((User) -> Void)?
@@ -31,12 +31,11 @@ struct UserListView: View {
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
     @State private var nextPageNumber: Int = 0
-    @State private var nextDisplayIndex: Int = 0
     @State private var cancellationToken: UUID = UUID()
 
-    /// Match Android's ID page size, but reveal only the visible row count.
-    private let pageSize: Int = Constants.USER_BATCH_SIZE
-    private let visibleBatchSize: Int = Constants.USER_VISIBLE_BATCH_SIZE
+    /// Enough rows to cover a full iPhone screen without geometry-driven auto-fill,
+    /// which previously caused concurrent pagination races during navigation.
+    private let minimumFillRowCount: Int = 12
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -46,8 +45,8 @@ struct UserListView: View {
     init(
         title: String,
         userId: String,
-        userFetcher: @escaping @MainActor @Sendable (Int, Int) async throws -> [String],
-        authoritativeUserFetcher: @escaping @MainActor @Sendable () async throws -> [String],
+        cachedUserFetcher: @escaping @MainActor @Sendable () async -> [String],
+        userPageFetcher: @escaping @MainActor @Sendable (Int) async throws -> RelationshipUserPage,
         navigationPath: Binding<NavigationPath>,
         onFollowToggle: ((User) async -> Void)? = nil,
         onShowLogin: (() -> Void)? = nil,
@@ -55,8 +54,8 @@ struct UserListView: View {
     ) {
         self.title = title
         self.userId = userId
-        self.userFetcher = userFetcher
-        self.authoritativeUserFetcher = authoritativeUserFetcher
+        self.cachedUserFetcher = cachedUserFetcher
+        self.userPageFetcher = userPageFetcher
         self._navigationPath = navigationPath
         self.onFollowToggle = onFollowToggle
         self.onShowLogin = onShowLogin
@@ -93,7 +92,6 @@ struct UserListView: View {
                         onLoadFailed: { failedUserId in
                             displayedUserIds.removeAll { $0 == failedUserId }
                             allUserIds.removeAll { $0 == failedUserId }
-                            nextDisplayIndex = min(nextDisplayIndex, displayedUserIds.count)
                             Task { await loadNextUserToFillGap() }
                         }
                     )
@@ -106,6 +104,7 @@ struct UserListView: View {
                 } else if hasMoreUsers {
                     ProgressView()
                         .padding()
+                        .id(nextPageNumber)
                         .onAppear {
                             loadMoreUsers()
                         }
@@ -150,45 +149,56 @@ struct UserListView: View {
 
     func refreshUsers() async {
         refreshTask?.cancel()
+        loadMoreTask?.cancel()
+        loadMoreTask = nil
         refreshTask = Task {
             await MainActor.run {
                 isLoading = displayedUserIds.isEmpty
+                isLoadingMore = false
                 errorMessage = nil
             }
 
-            // Publish cached relationship IDs immediately. Each row independently
-            // renders its cached user, or a placeholder while that user loads.
-            do {
-                let cachedPageIds = try await userFetcher(0, pageSize)
-                let filteredCachedIds = await filteredUniqueUserIds(from: cachedPageIds)
-                guard !Task.isCancelled else { return }
+            // Keep already-renderable cached users as a fast/offline fallback. A
+            // relationship ID without cached identity data must not create a row:
+            // the backend page will supply the complete User object shortly.
+            let cachedUserIds = await cachedUserFetcher()
+            let renderableCachedIds = await renderableCachedUserIds(from: cachedUserIds)
+            let filteredCachedIds = await filteredUniqueUserIds(from: renderableCachedIds)
+            guard !Task.isCancelled else { return }
 
-                if !filteredCachedIds.isEmpty {
-                    await MainActor.run {
-                        publishUserIds(
-                            filteredCachedIds,
-                            minimumVisibleCount: displayedUserIds.count,
-                            hasMoreServerPages: cachedPageIds.count >= pageSize
-                        )
-                        isLoading = false
-                    }
+            if !filteredCachedIds.isEmpty {
+                await MainActor.run {
+                    publishUserIds(
+                        filteredCachedIds,
+                        nextPageNumber: 0,
+                        hasMoreServerPages: false
+                    )
+                    isLoading = false
                 }
-            } catch is CancellationError {
-                return
-            } catch {
-                userListLogger.error("Failed to read cached user list: \(error.localizedDescription, privacy: .public)")
             }
 
             do {
-                let authoritativeIds = try await authoritativeUserFetcher()
-                let filteredAuthoritativeIds = await filteredUniqueUserIds(from: authoritativeIds)
+                var pageNumber = 0
+                var fetchedUserIds: [String] = []
+                var hasMorePages = true
+
+                while fetchedUserIds.count < minimumFillRowCount && hasMorePages {
+                    let page = try await userPageFetcher(pageNumber)
+                    let filteredPageIds = await filteredUniqueUserIds(
+                        from: page.userIds,
+                        excluding: Set(fetchedUserIds)
+                    )
+                    fetchedUserIds.append(contentsOf: filteredPageIds)
+                    pageNumber += 1
+                    hasMorePages = page.hasMore
+                }
                 guard !Task.isCancelled else { return }
 
                 await MainActor.run {
                     publishUserIds(
-                        filteredAuthoritativeIds,
-                        minimumVisibleCount: displayedUserIds.count,
-                        hasMoreServerPages: false
+                        fetchedUserIds,
+                        nextPageNumber: pageNumber,
+                        hasMoreServerPages: hasMorePages
                     )
                     isLoading = false
                     errorMessage = nil
@@ -212,16 +222,14 @@ struct UserListView: View {
     @MainActor
     private func publishUserIds(
         _ userIds: [String],
-        minimumVisibleCount: Int,
+        nextPageNumber: Int,
         hasMoreServerPages: Bool
     ) {
         allUserIds = userIds
-        let visibleCount = min(max(minimumVisibleCount, visibleBatchSize), userIds.count)
-        displayedUserIds = Array(userIds.prefix(visibleCount))
-        nextDisplayIndex = displayedUserIds.count
-        nextPageNumber = 1
+        displayedUserIds = userIds
+        self.nextPageNumber = nextPageNumber
         self.hasMoreServerPages = hasMoreServerPages
-        hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
+        hasMoreUsers = hasMoreServerPages
     }
 
     func loadMoreUsers() {
@@ -231,32 +239,35 @@ struct UserListView: View {
         loadMoreTask = Task {
             await MainActor.run { isLoadingMore = true }
 
-            let didRevealCachedUsers = revealNextVisibleBatch()
-            if didRevealCachedUsers {
-                await MainActor.run { isLoadingMore = false }
-                return
-            }
-
-            let pageToLoad = nextPageNumber
-            let existingUserIds = Set(allUserIds)
-
             do {
-                let pageIds = try await userFetcher(pageToLoad, pageSize)
-                let filteredUserIds = await filteredUniqueUserIds(from: pageIds, excluding: existingUserIds)
+                var pageNumber = nextPageNumber
+                var fetchedUserIds: [String] = []
+                var hasMorePages = hasMoreServerPages
+
+                // A backend page can contain only blocked/invalid users. Continue
+                // until at least one visible row is found or the server is exhausted.
+                repeat {
+                    let page = try await userPageFetcher(pageNumber)
+                    let filteredPageIds = await filteredUniqueUserIds(
+                        from: page.userIds,
+                        excluding: Set(allUserIds + fetchedUserIds)
+                    )
+                    fetchedUserIds.append(contentsOf: filteredPageIds)
+                    pageNumber += 1
+                    hasMorePages = page.hasMore
+                } while fetchedUserIds.isEmpty && hasMorePages
                 guard !Task.isCancelled else { return }
 
                 await MainActor.run {
-                    allUserIds.append(contentsOf: filteredUserIds)
-                    nextPageNumber = pageToLoad + 1
-                    let revealEndIndex = min(nextDisplayIndex + visibleBatchSize, allUserIds.count)
-                    if nextDisplayIndex < revealEndIndex {
-                        displayedUserIds.append(contentsOf: allUserIds[nextDisplayIndex..<revealEndIndex])
-                        nextDisplayIndex = revealEndIndex
-                    }
-                    hasMoreServerPages = pageIds.count >= pageSize
-                    hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
+                    allUserIds.append(contentsOf: fetchedUserIds)
+                    displayedUserIds.append(contentsOf: fetchedUserIds)
+                    nextPageNumber = pageNumber
+                    hasMoreServerPages = hasMorePages
+                    hasMoreUsers = hasMorePages
                     isLoadingMore = false
                 }
+            } catch is CancellationError {
+                await MainActor.run { isLoadingMore = false }
             } catch {
                 userListLogger.error("Failed to load more users: \(error.localizedDescription, privacy: .public)")
                 guard !Task.isCancelled else { return }
@@ -266,16 +277,6 @@ struct UserListView: View {
                 }
             }
         }
-    }
-
-    @MainActor
-    private func revealNextVisibleBatch() -> Bool {
-        guard nextDisplayIndex < allUserIds.count else { return false }
-        let endIndex = min(nextDisplayIndex + visibleBatchSize, allUserIds.count)
-        displayedUserIds.append(contentsOf: allUserIds[nextDisplayIndex..<endIndex])
-        nextDisplayIndex = endIndex
-        hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
-        return true
     }
 
     private func filteredUniqueUserIds(from userIds: [String], excluding existingUserIds: Set<String> = []) async -> [String] {
@@ -293,6 +294,25 @@ struct UserListView: View {
             seenUserIds.insert(userId)
             return userId
         }
+    }
+
+    private func renderableCachedUserIds(from userIds: [String]) async -> [String] {
+        var renderableUserIds: [String] = []
+        renderableUserIds.reserveCapacity(min(userIds.count, minimumFillRowCount))
+
+        // Only the initially visible batch can render before page zero arrives.
+        // Limiting cache reads also prevents a large relationship list from delaying
+        // the authoritative backend request.
+        for userId in userIds.prefix(minimumFillRowCount) {
+            guard !Task.isCancelled else { break }
+            let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+            let hasRenderableIdentity = await MainActor.run { cachedUser.hasValidUsername }
+            if hasRenderableIdentity {
+                renderableUserIds.append(userId)
+            }
+        }
+
+        return renderableUserIds
     }
 
     private func loadNextUserToFillGap() async {

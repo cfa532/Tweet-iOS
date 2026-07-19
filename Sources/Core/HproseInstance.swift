@@ -3024,6 +3024,104 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         return sorted.compactMap { $0["field"] as? String }
     }
+
+    /// Fetches one zero-based page of complete follower user objects.
+    func getFollowers(user: User, pageNumber: Int) async throws -> RelationshipUserPage {
+        try await getRelationshipUsers(
+            user: user,
+            pageNumber: pageNumber,
+            entry: "get_followers"
+        )
+    }
+
+    /// Fetches one zero-based page of complete following user objects.
+    func getFollowings(user: User, pageNumber: Int) async throws -> RelationshipUserPage {
+        try await getRelationshipUsers(
+            user: user,
+            pageNumber: pageNumber,
+            entry: "get_followings"
+        )
+    }
+
+    private func getRelationshipUsers(
+        user: User,
+        pageNumber: Int,
+        entry: String
+    ) async throws -> RelationshipUserPage {
+        let pageSize = 10
+        let snap = await MainActor.run { UserRecord(user: user) }
+        guard let baseUrl = snap.baseUrl else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: NSLocalizedString(
+                        "Client not initialized",
+                        comment: "Client initialization error"
+                    )
+                ]
+            )
+        }
+
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "userid": snap.mid,
+            "pn": max(0, pageNumber)
+        ]
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
+        try Task.checkCancellation()
+        if let error = rawResponse as? NSError {
+            throw error
+        }
+
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        guard let response = Self.asStringKeyedDictionary(unwrappedResponse),
+              let rawUsers = response["users"] as? [Any] else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: NSLocalizedString(
+                        "Invalid response format from server",
+                        comment: "Server response error"
+                    )
+                ]
+            )
+        }
+
+        var decodedUsers: [DecodedUserRecord] = []
+        decodedUsers.reserveCapacity(rawUsers.count)
+        for rawUser in rawUsers {
+            guard let userDictionary = Self.asStringKeyedDictionary(rawUser) else {
+                hproseWarning("DEBUG: [\(entry)] Ignoring non-object user in page \(pageNumber)")
+                continue
+            }
+            do {
+                decodedUsers.append(try UserRecord.fromDictionary(userDictionary))
+            } catch {
+                hproseWarning("DEBUG: [\(entry)] Ignoring invalid user in page \(pageNumber): \(error)")
+            }
+        }
+
+        let userIds = await MainActor.run {
+            let ids = decodedUsers.map { decodedUser in
+                let mergedUser = UserStore.shared.merge(decodedUser)
+                mergedUser.cacheStatus = .fresh
+                TweetCacheManager.shared.saveUser(mergedUser)
+                return mergedUser.mid
+            }
+            NodePool.shared.updateFromUser(user)
+            return ids
+        }
+
+        return RelationshipUserPage(
+            userIds: userIds,
+            hasMore: rawUsers.count >= pageSize
+        )
+    }
     
     /**
      * Get a list of users that the given user is following, sorted by timestamp when followed.

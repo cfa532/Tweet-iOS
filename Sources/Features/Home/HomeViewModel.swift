@@ -320,7 +320,7 @@ struct UserListDestinationView: View {
         UserListView(
             title: userListTitle(for: destination),
             userId: destination.userId,
-            userFetcher: { page, size in
+            cachedUserFetcher: {
                 let targetUser = User.getInstance(mid: destination.userId)
                 var cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
 
@@ -330,26 +330,36 @@ struct UserListDestinationView: View {
                     _ = await TweetCacheManager.shared.fetchUser(mid: destination.userId)
                     cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
                 }
-
-                let ids = cachedIds ?? []
-                let startIndex = page * size
-                guard startIndex < ids.count else { return [] }
-                let endIndex = min(startIndex + size, ids.count)
-                return Array(ids[startIndex..<endIndex])
+                return cachedIds ?? []
             },
-            authoritativeUserFetcher: {
-                let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+            userPageFetcher: { pageNumber in
                 let targetUser = User.getInstance(mid: destination.userId)
-                let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
-
+                let page: RelationshipUserPage
                 if destination.listType == .FOLLOWER {
-                    targetUser.fansList = ids
+                    page = try await hproseInstance.getFollowers(
+                        user: targetUser,
+                        pageNumber: pageNumber
+                    )
                 } else {
-                    targetUser.followingList = ids
+                    page = try await hproseInstance.getFollowings(
+                        user: targetUser,
+                        pageNumber: pageNumber
+                    )
                 }
-                // Persist the authoritative IDs for cache-first rendering next time.
+                try Task.checkCancellation()
+
+                let previousIds: [String] = pageNumber == 0
+                    ? []
+                    : (destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList) ?? []
+                var knownIds = Set(previousIds)
+                let relationshipIds = previousIds + page.userIds.filter { knownIds.insert($0).inserted }
+                if destination.listType == .FOLLOWER {
+                    targetUser.fansList = relationshipIds
+                } else {
+                    targetUser.followingList = relationshipIds
+                }
                 TweetCacheManager.shared.saveUser(targetUser)
-                return ids
+                return page
             },
             navigationPath: $navigationPath,
             onFollowToggle: { user in
