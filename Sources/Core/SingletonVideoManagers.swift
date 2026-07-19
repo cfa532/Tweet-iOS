@@ -3825,7 +3825,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                 guard self.currentPlayer === player,
                       self.currentVideoMid != nil,
                       player.currentItem != nil else { return }
-                print("📱 [DetailVideoManager] timeControl \(self.shortMID(self.currentVideoMid)): \(self.detailDiagnostic(player, item: player.currentItem))")
                 let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 let isPlayingNow = player.timeControlStatus == .playing
                 if let item = player.currentItem {
@@ -3835,13 +3834,34 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                     self.updateDetailBufferedData(for: item)
                 }
                 let isBufferEdge = player.currentItem.map { self.isPlaybackAtBufferEdge(player: player, item: $0) } ?? false
-                self.isBuffering = self.shouldKeepDetailBuffering(player: player, item: player.currentItem)
+                // Once detail playback has rendered, a native `.paused` state is the
+                // user's control intent rather than a stall. Clear the recovery intent
+                // so the paused frame stays visible without a buffering spinner.
+                let isStableUserPause = player.timeControlStatus == .paused
+                    && player.rate == 0
+                    && self.isPlaying
+                    && self.isItemReady
+                    && self.isPlaybackRendering
+                    && !self.isSeekingToStartupPosition
+                    && !self.didFinishPlayback
+                if isStableUserPause {
+                    self.isPlaying = false
+                    self.isBuffering = false
+                    self.detailStartupRecoveryTask?.cancel()
+                    self.detailStartupRecoveryTask = nil
+                    self.detailStartupRecoveryItem = nil
+                } else {
+                    self.isBuffering = self.shouldKeepDetailBuffering(player: player, item: player.currentItem)
+                }
                 if !self.isUsingBorrowedFeedPlayer,
                    isWaiting,
                    let item = player.currentItem {
                     self.scheduleDetailStartupRecovery(for: item, mid: self.currentVideoMid)
                 }
                 if isPlayingNow {
+                    // Native AVPlayerViewController controls call play() directly, so
+                    // mirror that resumed state back into the detail manager as well.
+                    self.isPlaying = true
                     self.isSeekingToStartupPosition = false
                     self.isItemReady = true
                     if self.isPlaybackRendering {

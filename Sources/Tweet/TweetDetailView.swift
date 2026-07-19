@@ -859,16 +859,95 @@ private struct DetailSingletonVideoPlayerView: View {
 private struct DetailAVPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        weak var player: AVPlayer?
+        private var wasPlayingBeforeSurfaceTap = false
+
+        func attach(player: AVPlayer) {
+            self.player = player
+        }
+
+        @objc func handleSurfaceTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            let shouldPreservePlayback = wasPlayingBeforeSurfaceTap
+            wasPlayingBeforeSurfaceTap = false
+
+            // AVPlayerViewController handles the same tap first to reveal its controls.
+            // Restore only an already-playing video; a paused video stays paused.
+            guard shouldPreservePlayback else { return }
+            DispatchQueue.main.async { [weak player] in
+                guard let player,
+                      player.timeControlStatus == .paused,
+                      player.rate == 0 else { return }
+                player.play()
+            }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldReceive touch: UITouch) -> Bool {
+            guard !touchTargetsControl(touch.view, within: gestureRecognizer.view) else {
+                wasPlayingBeforeSurfaceTap = false
+                return false
+            }
+
+            if let player {
+                wasPlayingBeforeSurfaceTap = player.rate > 0
+                    || player.timeControlStatus == .playing
+                    || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            } else {
+                wasPlayingBeforeSurfaceTap = false
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
+        }
+
+        private func touchTargetsControl(_ touchedView: UIView?, within rootView: UIView?) -> Bool {
+            var candidate = touchedView
+            while let view = candidate {
+                if view is UIControl {
+                    return true
+                }
+                if view === rootView {
+                    break
+                }
+                candidate = view.superview
+            }
+            return false
+        }
+    }
+
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.player = player
         vc.showsPlaybackControls = true
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
+
+        let coordinator = context.coordinator
+        coordinator.attach(player: player)
+        let surfaceTap = UITapGestureRecognizer(
+            target: coordinator,
+            action: #selector(Coordinator.handleSurfaceTap(_:))
+        )
+        surfaceTap.cancelsTouchesInView = false
+        surfaceTap.delaysTouchesBegan = false
+        surfaceTap.delaysTouchesEnded = false
+        surfaceTap.delegate = coordinator
+        vc.view.addGestureRecognizer(surfaceTap)
+
         return vc
     }
 
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        context.coordinator.attach(player: player)
         if vc.player !== player {
             vc.player = player
         }
@@ -877,7 +956,7 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         }
     }
 
-    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: ()) {
+    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
         vc.player = nil
     }
 }
