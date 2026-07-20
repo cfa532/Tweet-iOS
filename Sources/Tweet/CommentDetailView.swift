@@ -182,13 +182,14 @@ struct CommentDetailView: View {
             
             // Activate detail video manager
             DetailVideoManager.shared.activateForDetail()
+            DetailVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
         }
         .onDisappear {
-            // Mark detail view as inactive
-            NavigationStateManager.shared.setDetailViewActive(false)
-
-            // Deactivate detail video manager
-            DetailVideoManager.shared.deactivate()
+            // Keep feed autoplay suppressed until the outgoing player's fade and
+            // handoff are complete.
+            DetailVideoManager.shared.deactivate(audioFadeDuration: 0.35) {
+                NavigationStateManager.shared.setDetailViewActive(false)
+            }
         }
         .task {
             await syncComment()

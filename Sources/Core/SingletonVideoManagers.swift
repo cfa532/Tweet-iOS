@@ -346,6 +346,86 @@ enum FullscreenVideoVisualState {
     }
 }
 
+/// Cancellable volume interpolation for players that can move between feed,
+/// detail, and fullscreen ownership. Every cancelled ramp can restore the
+/// player before another surface borrows it.
+@MainActor
+private final class PlayerVolumeRamp {
+    private var task: Task<Void, Never>?
+    private weak var currentPlayer: AVPlayer?
+    private var generation: UInt = 0
+
+    func cancel(restoringVolume: Float? = nil) {
+        generation &+= 1
+        task?.cancel()
+        task = nil
+
+        if let restoringVolume, let currentPlayer {
+            currentPlayer.isMuted = false
+            currentPlayer.volume = restoringVolume
+        }
+        currentPlayer = nil
+    }
+
+    func fade(
+        player: AVPlayer,
+        from startVolume: Float? = nil,
+        to targetVolume: Float,
+        duration: TimeInterval,
+        completion: @escaping @MainActor () -> Void = {}
+    ) {
+        cancel()
+        currentPlayer = player
+        player.isMuted = false
+
+        if let startVolume {
+            player.volume = startVolume
+        }
+
+        let initialVolume = player.volume
+        let safeDuration = max(0, duration)
+        guard safeDuration > 0 else {
+            player.volume = targetVolume
+            currentPlayer = nil
+            completion()
+            return
+        }
+
+        let rampGeneration = generation
+        let stepCount = max(1, Int(ceil(safeDuration * 60)))
+        let stepDelay = UInt64((safeDuration / Double(stepCount)) * 1_000_000_000)
+
+        task = Task { @MainActor [weak self] in
+            for step in 1...stepCount {
+                do {
+                    try await Task.sleep(nanoseconds: stepDelay)
+                } catch {
+                    return
+                }
+
+                guard let self,
+                      !Task.isCancelled,
+                      self.generation == rampGeneration,
+                      self.currentPlayer === player else {
+                    return
+                }
+
+                let progress = Float(step) / Float(stepCount)
+                player.volume = initialVolume + ((targetVolume - initialVolume) * progress)
+            }
+
+            guard let self,
+                  self.generation == rampGeneration,
+                  self.currentPlayer === player else {
+                return
+            }
+            self.task = nil
+            self.currentPlayer = nil
+            completion()
+        }
+    }
+}
+
 /// Singleton video manager for fullscreen video playback with auto-advance
 /// Uses a dedicated singleton player instance independent from MediaCell players
 @MainActor
@@ -364,9 +444,18 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     var isFullscreenActive: Bool { isActive }
     private var feedHandoffMid: String?
     private var feedHandoffExpiresAt: Date = .distantPast
+    private let audioVolumeRamp = PlayerVolumeRamp()
+    private var pendingStartupAudioFadeDuration: TimeInterval?
+    private var pendingDeactivationTransferPlayback = false
+    private var pendingDeactivationCompletion: (@MainActor () -> Void)?
     
     /// Activate manager when fullscreen view appears
     func activateForFullscreen() {
+        if pendingDeactivationCompletion != nil {
+            audioVolumeRamp.cancel(restoringVolume: 1)
+            finishFullscreenDeactivation()
+        }
+
         // Pause any detail view videos when entering fullscreen mode
         // This ensures videos playing in TweetDetailView or CommentDetailView are paused
         // when opening attachments in fullscreen, but can resume when fullscreen closes
@@ -398,30 +487,25 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     }
     
     /// Deactivate manager when fullscreen view disappears
-    func deactivate(transferPlaybackToUnderlyingSurface: Bool = false) {
-        guard isActive else { return }
-        isActive = false
-        teardownAppLifecycleNotifications()
-        startupAudioUnmuteTask?.cancel()
-        startupAudioUnmuteTask = nil
-        startupAudioMuteUntil = .distantPast
-
-        // Save playback position so the feed cell and the next fullscreen open can restore it.
-        if let player = singletonPlayer,
-           let videoMid = currentVideoMid,
-           player.currentItem != nil {
-            let wasPlaying = player.rate > 0
-            let currentTime = player.currentTime()
-            let duration = player.currentItem?.duration ?? .invalid
-            saveFullscreenPlaybackState(
-                videoMid: videoMid,
-                currentTime: currentTime,
-                wasPlaying: wasPlaying,
-                duration: duration
-            )
+    func deactivate(
+        transferPlaybackToUnderlyingSurface: Bool = false,
+        audioFadeDuration: TimeInterval = 0,
+        completion: @escaping @MainActor () -> Void = {}
+    ) {
+        guard isActive else {
+            if pendingDeactivationCompletion == nil {
+                completion()
+            }
+            return
         }
 
-        // CRITICAL: Set intent flags to false BEFORE optional pause().
+        isActive = false
+        teardownAppLifecycleNotifications()
+        pendingStartupAudioFadeDuration = nil
+        pendingDeactivationTransferPlayback = transferPlaybackToUnderlyingSurface
+        pendingDeactivationCompletion = completion
+
+        // CRITICAL: Set intent flags to false before the eventual pause.
         // AVFoundation fires KVO callbacks (timeControlStatus, loadedTimeRanges, etc.)
         // on background threads when the player pauses. Those callbacks run
         // updateBufferingState which checks isPlaying/wasPlayingBeforeWaiting to decide
@@ -430,7 +514,6 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         // audio right after we intentionally stopped it. Setting them first prevents this.
         isPlaying = false
         wasPlayingBeforeWaiting = false
-        singletonPlayer?.pause()
         resetPlaybackSurfaceState()
 
         // Cancel all timers and observers that could wake the player back up.
@@ -453,6 +536,59 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         hasBufferedData = false
         hasCachedMediaContent = false
         hasPlayableMediaContent = false
+
+        guard let player = singletonPlayer,
+              player.currentItem != nil,
+              audioFadeDuration > 0,
+              (player.rate > 0 || player.timeControlStatus == .playing),
+              player.volume > 0 else {
+            audioVolumeRamp.cancel(restoringVolume: 1)
+            finishFullscreenDeactivation()
+            return
+        }
+
+        audioVolumeRamp.fade(
+            player: player,
+            to: 0,
+            duration: audioFadeDuration
+        ) { [weak self] in
+            guard let self else {
+                player.volume = 1
+                return
+            }
+            guard !self.isActive else {
+                player.volume = 1
+                return
+            }
+            player.volume = 1
+            self.finishFullscreenDeactivation()
+        }
+    }
+
+    private func finishFullscreenDeactivation() {
+        let transferPlaybackToUnderlyingSurface = pendingDeactivationTransferPlayback
+        let completion = pendingDeactivationCompletion
+        pendingDeactivationTransferPlayback = false
+        pendingDeactivationCompletion = nil
+        audioVolumeRamp.cancel()
+
+        // Save the final position after fade-out so reopening does not jump back.
+        if let player = singletonPlayer,
+           let videoMid = currentVideoMid,
+           player.currentItem != nil {
+            let currentTime = player.currentTime()
+            let duration = player.currentItem?.duration ?? .invalid
+            saveFullscreenPlaybackState(
+                videoMid: videoMid,
+                currentTime: currentTime,
+                wasPlaying: player.rate > 0,
+                duration: duration
+            )
+        }
+
+        singletonPlayer?.isMuted = false
+        singletonPlayer?.volume = 1
+        singletonPlayer?.pause()
 
         let releasedBrokenBorrowedPlayer: Bool
         if isUsingBorrowedFeedPlayer,
@@ -490,6 +626,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
 
         let cleanupResult = releasedBrokenBorrowedPlayer ? "broken borrowed player released" : "fullscreen player paused"
         print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, \(cleanupResult)")
+        completion?()
     }
 
     func isTransferringPlayerToFeed(_ player: AVPlayer, mid: String) -> Bool {
@@ -626,6 +763,8 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     }
     
     func clearBrokenPlayer() {
+        audioVolumeRamp.cancel(restoringVolume: 1)
+        pendingStartupAudioFadeDuration = nil
         if let videoMid = currentVideoMid {
             // Long-background recovery can dismiss fullscreen before the feed has a
             // chance to capture its own frame. Preserve the fullscreen frame first.
@@ -833,8 +972,6 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     @Published private var hasFullscreenVisiblePlaybackProgress = false
     
     private var nearEndAdvanceTask: DispatchWorkItem?
-    private var startupAudioMuteUntil: Date = .distantPast
-    private var startupAudioUnmuteTask: Task<Void, Never>?
 
     // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
     private var fullscreenLoadTask: Task<Void, Never>?
@@ -1270,8 +1407,6 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
                     self.isUsingBorrowedFeedPlayer = false
                     self.refreshCachedMediaContent(for: mid)
 
-                    self.applyStartupAudioMuteIfNeeded()
-                    
                     // Setup video completion observer
                     self.setupVideoCompletionObserver(playerItem)
                     
@@ -1304,28 +1439,9 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         }
     }
     
-    func setStartupAudioMuteWindow(duration: TimeInterval) {
-        let safeDuration = max(0, duration)
-        startupAudioMuteUntil = Date().addingTimeInterval(safeDuration)
-        applyStartupAudioMuteIfNeeded()
-    }
-
-    private func applyStartupAudioMuteIfNeeded() {
-        guard let player = singletonPlayer else { return }
-        let now = Date()
-        if now < startupAudioMuteUntil {
-            player.isMuted = true
-            startupAudioUnmuteTask?.cancel()
-            let delay = startupAudioMuteUntil.timeIntervalSince(now)
-            let nanos = UInt64(max(0, delay) * 1_000_000_000)
-            startupAudioUnmuteTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: nanos)
-                guard Date() >= self.startupAudioMuteUntil else { return }
-                self.singletonPlayer?.isMuted = false
-            }
-        } else {
-            player.isMuted = false
-        }
+    func prepareStartupAudioFade(duration: TimeInterval) {
+        pendingStartupAudioFadeDuration = max(0, duration)
+        audioVolumeRamp.cancel(restoringVolume: 1)
     }
     
     /// Clean up all observers
@@ -2186,7 +2302,22 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
             fullscreenPlaybackStartSeconds = currentSeconds.isFinite ? currentSeconds : nil
             hasFullscreenVisiblePlaybackProgress = false
         }
+
+        let startupFadeDuration = pendingStartupAudioFadeDuration
+        pendingStartupAudioFadeDuration = nil
+        player.isMuted = false
+        if startupFadeDuration != nil {
+            player.volume = 0
+        }
         player.play()
+        if let startupFadeDuration {
+            audioVolumeRamp.fade(
+                player: player,
+                from: 0,
+                to: 1,
+                duration: startupFadeDuration
+            )
+        }
         isPlaying = true
     }
 
@@ -2686,9 +2817,13 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
     private var isActive: Bool = false
     private var feedHandoffMid: String?
     private var feedHandoffExpiresAt: Date = .distantPast
+    private let audioVolumeRamp = PlayerVolumeRamp()
+    private var pendingStartupAudioFadeDuration: TimeInterval?
     
     /// Activate manager when detail view appears
     func activateForDetail() {
+        audioVolumeRamp.cancel(restoringVolume: 1)
+
         // Completely stop and clear any currently playing video when a new detail view becomes active
         // This ensures videos from previous detail views (like TweetDetailView) are completely stopped
         // when navigating to another detail view (like CommentDetailView)
@@ -2713,10 +2848,13 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
     }
     
     /// Deactivate manager when all detail views disappear
-    func deactivate() {
+    func deactivate(
+        audioFadeDuration: TimeInterval = 0,
+        completion: @escaping @MainActor () -> Void = {}
+    ) {
         // CRITICAL: Always call endDetailViewSession() to decrement count
         // Only teardown lifecycle observers when count reaches 0
-        endDetailViewSession()
+        endDetailViewSession(keepPlayingForAudioFade: audioFadeDuration > 0)
 
         guard isActive && activeDetailViewCount == 0 else {
             print("📱 [DetailVideoManager] Session ended - count now \(activeDetailViewCount)")
@@ -2725,22 +2863,57 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         isActive = false
         teardownAppLifecycleNotifications()
         teardownCoordinatorNotificationObservers()
-        startupAudioUnmuteTask?.cancel()
-        startupAudioUnmuteTask = nil
-        startupAudioMuteUntil = .distantPast
+        pendingStartupAudioFadeDuration = nil
+
+        // Cancel the delayed clear; final cleanup now belongs to this exit path.
+        scheduledClearTask?.cancel()
+        scheduledClearTask = nil
+
+        guard let player = currentPlayer,
+              player.currentItem != nil,
+              audioFadeDuration > 0,
+              (player.rate > 0 || player.timeControlStatus == .playing),
+              player.volume > 0 else {
+            audioVolumeRamp.cancel(restoringVolume: 1)
+            finishDetailDeactivation(completion: completion)
+            return
+        }
+
+        audioVolumeRamp.fade(
+            player: player,
+            to: 0,
+            duration: audioFadeDuration
+        ) { [weak self] in
+            guard let self else {
+                player.volume = 1
+                completion()
+                return
+            }
+            guard !self.isActive else {
+                player.volume = 1
+                return
+            }
+            player.volume = 1
+            self.finishDetailDeactivation(completion: completion)
+        }
+    }
+
+    private func finishDetailDeactivation(completion: @MainActor () -> Void) {
+        audioVolumeRamp.cancel()
+        // Detail playback is always audible, but a borrowed player must return to
+        // the feed with the current global mute preference already applied.
+        currentPlayer?.isMuted = MuteState.shared.isMuted
+        currentPlayer?.volume = 1
         mainTweetAttachmentMids.removeAll()
         mainTweetAttachments.removeAll()
         mainTweetBaseUrl = nil
 
-        // Cancel the delayed clear from endDetailViewSession() — we're about to clear immediately.
-        scheduledClearTask?.cancel()
-        scheduledClearTask = nil
-
-        // CRITICAL: Clear the current video player so isDetailViewActive() returns false
-        // This allows feed videos to resume playback when returning from detail view
+        // Clear only after fade-out so borrowed feed playback cannot inherit
+        // zero volume or resume audibly beneath the outgoing detail view.
         clearCurrentVideo(preserveSharedFeedPlayback: true)
 
         print("📱 [DetailVideoManager] Deactivated - lifecycle observers removed, player cleared")
+        completion()
     }
 
     private func teardownAppLifecycleNotifications() {
@@ -2886,9 +3059,15 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         scheduledClearTask = nil
     }
 
-    func endDetailViewSession() {
+    func endDetailViewSession(keepPlayingForAudioFade: Bool = false) {
         activeDetailViewCount = max(0, activeDetailViewCount - 1)
         guard activeDetailViewCount == 0 else { return }
+
+        if keepPlayingForAudioFade {
+            scheduledClearTask?.cancel()
+            scheduledClearTask = nil
+            return
+        }
 
         // If detail borrowed the feed player, leaving detail is an ownership transfer.
         // Do not pause the player here; the feed will reattach and resume ownership.
@@ -2935,6 +3114,8 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
     }
     
     func clearBrokenPlayer() {
+        audioVolumeRamp.cancel(restoringVolume: 1)
+        pendingStartupAudioFadeDuration = nil
         if let player = currentPlayer,
            let videoMid = currentVideoMid {
             preserveDetailFrameToCache(player: player, mediaID: videoMid)
@@ -3033,8 +3214,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
     private var activeFeedHandoffTime: CMTime?
     private var isUsingBorrowedFeedPlayer = false
     private var isSeekingToStartupPosition = false
-    private var startupAudioMuteUntil: Date = .distantPast
-    private var startupAudioUnmuteTask: Task<Void, Never>?
 
     private struct DetailRecoveryRequest {
         let url: URL
@@ -3143,7 +3322,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                 return
             }
             loadFailedVideoMid = nil
-            applyStartupAudioMuteIfNeeded()
             if let player = currentPlayer,
                let item = player.currentItem,
                item.status == .readyToPlay {
@@ -3299,7 +3477,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                     self.refreshDetailCachedMediaContent(for: mid)
                     self.resetDetailRenderingProgress(to: self.currentPlayer?.currentTime() ?? .zero)
                     self.setupDetailVideoOutput(for: playerItem)
-                    self.applyStartupAudioMuteIfNeeded()
                     self.setupDetailCompletionObserver(playerItem)
                     self.setupDetailTimeControlObserver()
                     self.startDetailPlayback(playerItem: playerItem, mid: mid)
@@ -3369,7 +3546,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
             }
             resetDetailRenderingProgress(to: currentPlayer?.currentTime() ?? .zero)
             setupDetailVideoOutput(for: cachedItem)
-            clearStartupAudioMuteForPlayback(on: candidate.player)
             setupDetailCompletionObserver(cachedItem)
             setupDetailTimeControlObserver()
             startDetailPlayback(playerItem: cachedItem, mid: mid)
@@ -3379,40 +3555,9 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         return false
     }
     
-    func setStartupAudioMuteWindow(duration: TimeInterval) {
-        let safeDuration = max(0, duration)
-        startupAudioMuteUntil = Date().addingTimeInterval(safeDuration)
-        applyStartupAudioMuteIfNeeded()
-    }
-
-    private func applyStartupAudioMuteIfNeeded() {
-        guard let player = currentPlayer else { return }
-        if player.rate > 0 || player.timeControlStatus == .playing {
-            clearStartupAudioMuteForPlayback(on: player)
-            return
-        }
-        let now = Date()
-        if now < startupAudioMuteUntil {
-            player.isMuted = true
-            startupAudioUnmuteTask?.cancel()
-            let delay = startupAudioMuteUntil.timeIntervalSince(now)
-            let nanos = UInt64(max(0, delay) * 1_000_000_000)
-            startupAudioUnmuteTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: nanos)
-                guard Date() >= self.startupAudioMuteUntil else { return }
-                self.currentPlayer?.isMuted = false
-            }
-        } else {
-            player.isMuted = false
-        }
-    }
-
-    private func clearStartupAudioMuteForPlayback(on player: AVPlayer?) {
-        startupAudioUnmuteTask?.cancel()
-        startupAudioUnmuteTask = nil
-        startupAudioMuteUntil = .distantPast
-        player?.isMuted = false
-        player?.volume = 1.0
+    func prepareStartupAudioFade(duration: TimeInterval) {
+        pendingStartupAudioFadeDuration = max(0, duration)
+        audioVolumeRamp.cancel(restoringVolume: 1)
     }
 
     /// Pause the current video (e.g. when swiping away)
@@ -3545,7 +3690,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                           self.currentVideoMid == mid else { return }
                     self.isSeekingToStartupPosition = false
                     self.resetDetailRenderingProgress(to: .zero)
-                    self.applyStartupAudioMuteIfNeeded()
                     self.startDetailPlayback(player: player, item: playerItem, log: "\(log) at end")
                     print("▶️ [DetailVideoManager] Continued from live handoff at end - rewound")
                 }
@@ -3565,7 +3709,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
            isNear(player.currentTime(), adjustedFeedResumeTime, tolerance: 0.35) {
             isSeekingToStartupPosition = false
             resetDetailRenderingProgress(to: player.currentTime())
-            applyStartupAudioMuteIfNeeded()
             startDetailPlayback(player: player, item: playerItem, log: "\(log) near target")
             print("▶️ [DetailVideoManager] Continued from live handoff near position \(savedSec)s")
             return true
@@ -3580,7 +3723,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                 self.isSeekingToStartupPosition = false
                 guard finished else { return }
                 self.resetDetailRenderingProgress(to: adjustedFeedResumeTime)
-                self.applyStartupAudioMuteIfNeeded()
                 self.startDetailPlayback(player: player, item: playerItem, log: log)
                 print("▶️ [DetailVideoManager] Continued from live handoff position \(savedSec)s")
             }
@@ -3711,7 +3853,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                     currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                         Task { @MainActor [weak self] in
                             self?.isSeekingToStartupPosition = false
-                            self?.applyStartupAudioMuteIfNeeded()
                             self?.startDetailPlayback(player: player, item: playerItem, log: "borrowed feed player at end")
                             print("▶️ [DetailVideoManager] Playing borrowed feed player from beginning")
                         }
@@ -3719,7 +3860,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                     return
                 }
             }
-            applyStartupAudioMuteIfNeeded()
             startDetailPlayback(player: currentPlayer, item: playerItem, log: "borrowed feed player")
             print("▶️ [DetailVideoManager] Playing borrowed feed player without seek")
             return
@@ -3738,7 +3878,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                     currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                         Task { @MainActor [weak self] in
                             self?.isSeekingToStartupPosition = false
-                            self?.applyStartupAudioMuteIfNeeded()
                             self?.startDetailPlayback(player: player, item: playerItem, log: "saved position at end")
                             print("▶️ [DetailVideoManager] Playing from beginning (was at end)")
                         }
@@ -3761,7 +3900,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                         Task { @MainActor [weak self] in
                             self?.isSeekingToStartupPosition = false
                             guard finished else { return }
-                            self?.applyStartupAudioMuteIfNeeded()
                             self?.startDetailPlayback(player: player, item: playerItem, log: "saved position")
                             print("▶️ [DetailVideoManager] Playing from saved position \(adjustedSavedSec)s")
                         }
@@ -3780,7 +3918,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                 currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                     Task { @MainActor [weak self] in
                         self?.isSeekingToStartupPosition = false
-                        self?.applyStartupAudioMuteIfNeeded()
                         self?.startDetailPlayback(player: player, item: playerItem, log: "rewind")
                         print("▶️ [DetailVideoManager] Playing from beginning (rewind)")
                     }
@@ -3788,7 +3925,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                 return
             }
         }
-        applyStartupAudioMuteIfNeeded()
         startDetailPlayback(player: currentPlayer, item: playerItem, log: "immediate")
         print("▶️ [DetailVideoManager] Playing immediately")
     }
@@ -3923,8 +4059,21 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         resetDetailRenderingProgress(to: player.currentTime())
         let bufferPolicy = applyFeedStylePrePlayBuffering(to: player, item: item)
         print("📱 [DetailVideoManager] play(\(log)) \(shortMID(currentVideoMid)): autoWait=\(player.automaticallyWaitsToMinimizeStalling), buffered=\(String(format: "%.2f", bufferPolicy.bufferedAhead)), required=\(String(format: "%.2f", bufferPolicy.requiredBuffer)), keepUp=\(bufferPolicy.keepUp), \(detailDiagnostic(player, item: item))")
-        clearStartupAudioMuteForPlayback(on: player)
+        let startupFadeDuration = pendingStartupAudioFadeDuration
+        pendingStartupAudioFadeDuration = nil
+        player.isMuted = false
+        if startupFadeDuration != nil {
+            player.volume = 0
+        }
         player.play()
+        if let startupFadeDuration {
+            audioVolumeRamp.fade(
+                player: player,
+                from: 0,
+                to: 1,
+                duration: startupFadeDuration
+            )
+        }
         isPlaying = true
         didFinishPlayback = false
         isBuffering = shouldKeepDetailBuffering(player: player, item: item)
@@ -4060,7 +4209,6 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         isPlaybackRendering = false
         loadFailedVideoMid = nil
 
-        applyStartupAudioMuteIfNeeded()
         setupDetailCompletionObserver(replacementItem)
         setupDetailTimeControlObserver()
         if let mid {
@@ -4415,6 +4563,7 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
 
     /// Clear current video
     func clearCurrentVideo(preserveSharedFeedPlayback: Bool = false) {
+        audioVolumeRamp.cancel(restoringVolume: 1)
         let pendingLoadMid = currentVideoMid
 
         // Save playback state before clearing — but only if time is valid.
@@ -4622,7 +4771,9 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         // Layer 1 (Basic Restoration): Player is healthy, restore state
         
         // Detail playback owns both AVPlayer audio controls while it is active.
-        clearStartupAudioMuteForPlayback(on: player)
+        audioVolumeRamp.cancel(restoringVolume: 1)
+        player.isMuted = false
+        player.volume = 1
         
         // Try to get persistent state first, fall back to local saved state
         let wasPlaying: Bool

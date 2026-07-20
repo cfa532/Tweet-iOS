@@ -347,9 +347,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         .rootViewController?
                         .setNeedsUpdateOfSupportedInterfaceOrientations()
 
-                    windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: preferredOrientation)) { error in
-                        print("DEBUG: [AppDelegate] Orientation geometry update failed: \(error.localizedDescription)")
-                    }
+                    windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: preferredOrientation))
                 }
         }
     }

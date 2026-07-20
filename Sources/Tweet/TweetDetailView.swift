@@ -1282,9 +1282,7 @@ struct TweetDetailView: View {
             // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
             DetailVideoManager.shared.activateForDetail()
 
-            // Prevent audible playback during the push transition while still allowing
-            // immediate player attachment (avoids black flicker on open).
-            DetailVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
+            DetailVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
             if let initialVideo = firstMainTweetVideoToAutoplay {
                 DetailVideoManager.shared.loadVideo(
                     url: initialVideo.url,
@@ -1323,12 +1321,11 @@ struct TweetDetailView: View {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
 
-            // Deactivate manager first so feed resume cannot race detail's observer
-            // teardown/state save while both surfaces point at the shared AVPlayer.
-            DetailVideoManager.shared.deactivate()
-
-            // Mark detail view as inactive only after handoff state is established.
-            NavigationStateManager.shared.setDetailViewActive(false)
+            // Keep feed autoplay suppressed until the outgoing player's fade and
+            // handoff are complete.
+            DetailVideoManager.shared.deactivate(audioFadeDuration: 0.35) {
+                NavigationStateManager.shared.setDetailViewActive(false)
+            }
 
             // Deactivate comments video playback coordinator
             commentsVideoCoordinator.deactivate()

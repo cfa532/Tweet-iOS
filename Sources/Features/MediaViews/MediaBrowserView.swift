@@ -146,7 +146,7 @@ struct MediaBrowserView: View {
 
                 // Activate manager first to register lifecycle observers
                 FullScreenVideoManager.shared.activateForFullscreen()
-                FullScreenVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
+                FullScreenVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
                 setupFullScreenManager()
                 OverlayVisibilityCoordinator.shared.beginOverlayIfNeeded(id: "mediaBrowserView", source: "MediaBrowserView")
                 NotificationCenter.default.post(name: .stopAllVideos, object: nil)
@@ -163,9 +163,14 @@ struct MediaBrowserView: View {
                     && FullScreenVideoManager.shared.currentVideoMid == attachments[currentIndex].mid
 
                 FullScreenVideoManager.shared.deactivate(
-                    transferPlaybackToUnderlyingSurface: shouldTransferVideoPlayback
-                )
-                OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
+                    transferPlaybackToUnderlyingSurface: shouldTransferVideoPlayback,
+                    audioFadeDuration: 0.35
+                ) {
+                    OverlayVisibilityCoordinator.shared.endOverlay(
+                        id: "mediaBrowserView",
+                        source: "MediaBrowserView"
+                    )
+                }
                 
                 // CRITICAL: Clean up controls timer to prevent CPU cycles accumulation
                 controlsTimer?.invalidate()
