@@ -1518,11 +1518,9 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         }
         
         // Observe timeControlStatus as backup
-        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] _, _ in
+        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { _, _ in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self else { return }
-                    print("🎬 [FullScreenVideoManager] timeControl \(self.shortMID(self.currentVideoMid)): \(self.playerDiagnostic(player, item: playerItem))")
                     updateBufferingState()
                 }
             }
