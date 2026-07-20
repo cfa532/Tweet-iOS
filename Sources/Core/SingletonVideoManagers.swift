@@ -1006,8 +1006,12 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     ) -> Bool {
         guard hasPoster, !isFullscreenVideoAtEnd(player) else { return false }
 
+        // Only cover the player with a poster while we don't yet have a real frame
+        // to show (buffering) — not on a deliberate pause. A paused AVPlayerLayer
+        // keeps its last decoded frame on screen, and covering it here also hides
+        // AVKit's native controls (rendered above the poster in the view stack).
         return !layerReadyForDisplay
-            || player.timeControlStatus != .playing
+            || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
             || !isItemReady
             || isBeforeFirstVisibleFrame(player)
     }
@@ -1436,11 +1440,18 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
                     return // Still waiting for restoration
                 }
                 
+                // AVPlayer only reports .paused when nothing is trying to play — a genuine
+                // buffering stall (even with automaticallyWaitsToMinimizeStalling = false)
+                // always reports .waitingToPlayAtSpecifiedRate instead. So .paused here means
+                // pause() was called, either by us or externally (e.g. AVPlayerViewController's
+                // native pause button). Must not treat that as a stall to auto-resume from.
+                let isExplicitlyPaused = player.timeControlStatus == .paused
+
                 // If we want to play, have data, and player is not playing, resume.
                 // Skip if already in .waitingToPlayAtSpecifiedRate — player is already trying
                 // to play; redundant play() calls disrupt AVPlayer's buffering state machine
                 // and cause timeControlStatus oscillation (play button flickering).
-                if wantsToPlay && isReadyToPlay && hasEnoughBuffer && isNotPlaying && !isAlreadyWaiting {
+                if wantsToPlay && isReadyToPlay && hasEnoughBuffer && isNotPlaying && !isAlreadyWaiting && !isExplicitlyPaused {
                     self.startFullscreenPlayback(player: player, item: item, log: "buffer recovered")
                     self.wasPlayingBeforeWaiting = false
                 } else if player.timeControlStatus == .playing || player.rate > 0 || isAlreadyWaiting {
@@ -1452,6 +1463,14 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
                     if !self.isPlaying && (player.timeControlStatus == .playing || isAlreadyWaiting) {
                         self.isPlaying = true
                     }
+                } else if isExplicitlyPaused && isReadyToPlay {
+                    // Sync isPlaying if player was paused externally (e.g. AVPlayerViewController
+                    // native controls). Without this, isPlaying stays stale-true and the resume
+                    // branch above would immediately call play() again, undoing the user's tap.
+                    if self.isPlaying {
+                        self.isPlaying = false
+                    }
+                    self.wasPlayingBeforeWaiting = false
                 }
             }
         }

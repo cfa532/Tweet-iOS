@@ -364,6 +364,11 @@ struct MediaBrowserView: View {
             }
             .statusBar(hidden: true)
             .onTapGesture {
+                // Video pages already get tap-to-reveal via SimplerAVPlayerViewController's own
+                // gesture recognizer, which is configured to coexist with AVKit's native controls.
+                // This screen-covering gesture must not also fire there — its default
+                // cancelsTouchesInView swallows taps meant for AVKit's native pause button.
+                guard currentIndex < attachments.count, !isVideoAttachment(attachments[currentIndex]) else { return }
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showControls = true
                 }
