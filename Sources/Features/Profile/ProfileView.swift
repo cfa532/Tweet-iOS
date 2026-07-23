@@ -266,7 +266,7 @@ struct ProfileView: View {
                         }
                     },
                     onProfileRefresh: {
-                        await refreshProfileData(resyncIfNeeded: true)
+                        await resyncProfileDataForPull()
                     },
                     onScroll: { offset, delta in
                         handleScroll(offset: offset, delta: delta)
@@ -761,10 +761,10 @@ struct ProfileView: View {
                 profileTweetsRefreshToken += 1
             }
         }
-        await refreshProfileData(resyncIfNeeded: false)
+        await refreshProfileData()
     }
 
-    private func refreshProfileData(resyncIfNeeded: Bool) async {
+    private func refreshProfileData() async {
         var refreshedProfileUser: User?
         let profileUserId = user.mid
         let cachedRoute = user.baseUrl?.absoluteString ?? ""
@@ -799,51 +799,49 @@ struct ProfileView: View {
             print("DEBUG: [ProfileView] Failed to fetch user \(profileUserId): \(error)")
         }
 
-        guard let refreshedProfileUser else {
-            print("DEBUG: [ProfileView] Skipping pinned tweet refresh/resync because user fetch failed for \(profileUserId)")
+        guard refreshedProfileUser != nil else {
+            print("DEBUG: [ProfileView] Skipping pinned tweet refresh because user fetch failed for \(profileUserId)")
             return
         }
         
         await refreshPinnedTweets()
+    }
 
-        guard resyncIfNeeded else {
+    /// Explicit recovery for profile pull-to-refresh. The backend executes this
+    /// on the current access node and synchronizes the User plus its direct Tweet
+    /// references from the home host before returning fresh data.
+    private func resyncProfileDataForPull() async {
+        let profileUserId = user.mid
+        let hproseInstance = hproseInstance
+
+        let routeIsReady = await hproseInstance.validateAndRepairProfileRoute(for: user)
+        guard routeIsReady, !Task.isCancelled else {
+            print("DEBUG: [ProfileView] Skipping profile resync because no healthy route is available for \(profileUserId)")
             return
         }
-        
-        guard shouldResyncProfileUser(refreshedProfileUser) else {
-            print("DEBUG: [ProfileView] Skipping resync for \(profileUserId): current read node is already root host")
-            return
-        }
 
-        // Resync only when reading from an access node that is not the user's root/writable host.
         do {
-            guard !Task.isCancelled else { return }
             let resyncResult = try await Task.detached(priority: .utility) {
                 try await hproseInstance.resyncUser(userId: profileUserId)
             }.value
             print("DEBUG: [ProfileView] Successfully resynced user \(profileUserId) on server with \(resyncResult.tweets.count) tweets")
-            
-            TweetCacheManager.shared.saveUser(resyncResult.user)
-            print("DEBUG: [ProfileView] Saved resynced user to cache")
 
             await MainActor.run {
                 resyncedTweets = resyncResult.tweets
                 resyncedTweetsToken += 1
             }
+
+            // Pinned tweets are a separate list read; run it only after the
+            // access node has received the user's current data.
+            await refreshPinnedTweets()
+        } catch is CancellationError {
+            print("DEBUG: [ProfileView] Profile resync cancelled for \(profileUserId)")
         } catch {
             print("DEBUG: [ProfileView] Failed to resync user \(profileUserId): \(error)")
+            // Keep pull-to-refresh useful if synchronization is temporarily
+            // unavailable. This fallback performs the previous ordinary read.
+            await refreshProfileData()
         }
-    }
-
-    private func shouldResyncProfileUser(_ user: User) -> Bool {
-        guard let hostIds = user.hostIds,
-              let rootHostId = hostIds.first,
-              !rootHostId.isEmpty else {
-            return false
-        }
-
-        let currentReadHostId = hostIds.count > 1 ? hostIds[1] : rootHostId
-        return currentReadHostId != rootHostId
     }
     
     private func refreshPinnedTweets() async {

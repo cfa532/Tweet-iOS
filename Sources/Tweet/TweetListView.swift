@@ -470,7 +470,8 @@ struct TweetListView: View {
     }
 
     // MARK: - Initialization
-    let onRefreshExtra: (() async -> Void)?  // Optional extra refresh callback
+    /// Optional preparation that must finish before pull-to-refresh reads page 0.
+    let onRefreshExtra: (() async -> Void)?
     
     init(
         title: String,
@@ -568,7 +569,6 @@ struct TweetListView: View {
             loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
             onRefresh: {
                 await refreshTweetsFromUserPull()
-                await onRefreshExtra?()
             },
             onScroll: onScroll,
             onScrollStateChange: { offset, isAtTop, isInteracting in
@@ -1122,6 +1122,11 @@ struct TweetListView: View {
         didConfirmEmptyFromServer = false
         setPaginationState(.canLoadMore, reason: "refreshTweetsFromUserPull")
         currentPage = 0
+
+        // Mark the list as refreshing before profile recovery mutates its User
+        // or Tweets. This prevents layout-driven pagination from starting while
+        // resync_user is updating the access node.
+        await onRefreshExtra?()
 
         do {
             let cachedTweets = try await tweetFetcher(0, pageSize, true)

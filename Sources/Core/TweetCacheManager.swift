@@ -28,6 +28,13 @@ final class TweetCacheManager: @unchecked Sendable {
     private let accessTimesLock = NSLock()
     private let accessTimesKey = "TweetAccessTimes"
 
+    // saveUser persists on the Core Data queue. Keep the accepted write time in
+    // memory as well so a burst of callers cannot observe the old Core Data
+    // timestamp and start another user refresh while that save is still queued.
+    private let userCacheLifetime: TimeInterval = 30 * 60
+    private var userCacheWriteTimes: [String: Date] = [:]
+    private let userCacheWriteTimesLock = NSLock()
+
     private func lockedAccessTime(for id: String) -> Date? {
         accessTimesLock.lock(); defer { accessTimesLock.unlock() }
         return tweetAccessTimes[id]
@@ -55,6 +62,26 @@ final class TweetCacheManager: @unchecked Sendable {
     private func lockedSetAccessTimes(_ times: [String: Date]) {
         accessTimesLock.lock(); defer { accessTimesLock.unlock() }
         tweetAccessTimes = times
+    }
+
+    private func lockedUserCacheWriteTime(for id: String) -> Date? {
+        userCacheWriteTimesLock.lock(); defer { userCacheWriteTimesLock.unlock() }
+        return userCacheWriteTimes[id]
+    }
+
+    private func lockedSetUserCacheWriteTime(_ date: Date, for id: String) {
+        userCacheWriteTimesLock.lock(); defer { userCacheWriteTimesLock.unlock() }
+        userCacheWriteTimes[id] = date
+    }
+
+    private func lockedRemoveUserCacheWriteTime(for id: String) {
+        userCacheWriteTimesLock.lock(); defer { userCacheWriteTimesLock.unlock() }
+        userCacheWriteTimes.removeValue(forKey: id)
+    }
+
+    private func lockedClearUserCacheWriteTimes() {
+        userCacheWriteTimesLock.lock(); defer { userCacheWriteTimesLock.unlock() }
+        userCacheWriteTimes.removeAll()
     }
 
     private init() {
@@ -970,12 +997,19 @@ extension TweetCacheManager {
     /// Internal method used by User.hasExpired computed property
     /// Checks if a user's cache has expired (30 minutes)
     func hasExpired(mid: String) async -> Bool {
+        if let writeTime = lockedUserCacheWriteTime(for: mid) {
+            if Date().timeIntervalSince(writeTime) < userCacheLifetime {
+                return false
+            }
+            lockedRemoveUserCacheWriteTime(for: mid)
+        }
+
         return await withCheckedContinuation { continuation in
             context.perform {
                 let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
                 request.predicate = NSPredicate(format: "mid == %@", mid)
                 if let cdUser = try? self.context.fetch(request).first {
-                    let hasExpired = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -1800 // 30 minutes
+                    let hasExpired = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -self.userCacheLifetime
                     continuation.resume(returning: hasExpired)
                 } else {
                     // If no cached user found, hasExpired is true
@@ -993,13 +1027,16 @@ extension TweetCacheManager {
             return
         }
 
+        let cacheWriteTime = Date()
+        lockedSetUserCacheWriteTime(cacheWriteTime, for: record.mid)
+
         // Use async perform to avoid blocking the main thread
         context.perform {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             request.predicate = NSPredicate(format: "mid == %@", record.mid)
             let cdUser = (try? self.context.fetch(request).first) ?? CDUser(context: self.context)
             cdUser.mid = record.mid
-            cdUser.timeCached = Date()
+            cdUser.timeCached = cacheWriteTime
 
             var recordToSave = record
             if User.sanitizedAvatarId(record.avatar) == nil,
@@ -1027,6 +1064,7 @@ extension TweetCacheManager {
     }
 
     func deleteUser(mid: String) {
+        lockedRemoveUserCacheWriteTime(for: mid)
         context.performAndWait {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             request.predicate = NSPredicate(format: "mid == %@", mid)
@@ -1038,6 +1076,7 @@ extension TweetCacheManager {
     }
 
     func clearAllUsers() {
+        lockedClearUserCacheWriteTimes()
         context.performAndWait {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             if let allUsers = try? context.fetch(request) {

@@ -103,6 +103,10 @@ class TweetTableViewController: UITableViewController {
     private var bottomPullThreshold: CGFloat = 50
     // Trigger load-more when this many regular rows remain below the viewport (= 1 page).
     private let loadMoreTriggerRows = 10
+    // Match Android's profile opening policy: page beyond page 0 only when fewer
+    // than five regular tweets are available to render. User-driven scrolling
+    // continues to use the normal one-page runway below.
+    private let minimumProfileTweetsForInitialFill = 5
     private var autoLoadMoreCountDuringCurrentScrollGesture: Int = 0
     private let maxAutoLoadMorePerScrollGesture: Int = 2
     
@@ -1910,6 +1914,15 @@ class TweetTableViewController: UITableViewController {
         guard hasMoreTweets, !isLoadingMore else { return }
         guard tableView.window != nil, tableView.numberOfRows(inSection: 0) > 0 else { return }
         guard let lastVisibleRow = tableView.indexPathsForVisibleRows?.last?.row else { return }
+
+        // Loading-state and row-update callbacks are layout-driven, not evidence
+        // that the user approached the bottom. A full first profile page already
+        // has enough content; do not turn initial layout into page-1 prefetching.
+        if feedIdentifier.hasPrefix("profile_"),
+           !countsTowardScrollGestureLimit,
+           tweets.count >= minimumProfileTweetsForInitialFill {
+            return
+        }
 
         let totalRows = pinnedTweets.count + tweets.count
         let remainingRows = max(0, totalRows - 1 - lastVisibleRow)
