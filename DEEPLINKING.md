@@ -171,6 +171,16 @@ Keep all required SHA-256 fingerprints in the Worker:
 - Google Play App Signing key
 - local upload key used by release sideloads
 
+The release entry must include both relations:
+
+```text
+delegate_permission/common.handle_all_urls
+delegate_permission/common.get_login_creds
+```
+
+`common.get_login_creds` is required for Google Play credential sharing on
+`dtweet.com`.
+
 Do not include `us.fireshare.tweet.debug` in the public `dtweet.com`
 `assetlinks.json`. Android may choose the debug app for production links if the
 debug package is verified for the same host. Debug builds should use a separate
@@ -306,7 +316,7 @@ Sources/Core/HproseInstance.swift
 2. Serve the iOS and Android association files from the Worker over HTTPS with
    no redirect.
 3. Add `applinks:dtweet.com` to the iOS entitlements.
-4. Configure Android release intent filters for `dtweet.com` and keep
+4. Configure Android release intent filters for `dtweet.com` only and keep
    `assetlinks.json` in sync with release signing certificates only.
 5. Build TweetWeb so `dist/index.html` uses bare local asset names.
 6. Keep TweetWeb gateway detection limited to the exact dtweet host allowlist.
@@ -377,6 +387,10 @@ Check:
 - The Android manifest has the matching App Link intent filter.
 - `https://dtweet.com/.well-known/assetlinks.json` returns JSON with no
   redirect.
+
+Do not keep old app-link hosts such as `fireshare.uk` in the Android manifest.
+They create extra Play Console warnings and can make link ownership harder to
+reason about.
 
 ### Android opens the debug app instead of the release app
 

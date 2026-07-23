@@ -728,6 +728,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
 
+        // Refresh the backend-controlled upgrade/share configuration on every real
+        // foreground return. Keep this off the recovery path so it never delays UI.
+        Task.detached(priority: .background) {
+            await HproseInstance.shared.checkAndUpdateDomain()
+        }
+
         guard let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date else {
             if didLaunchInBackground {
                 print("⚠️ [AppDelegate] Background-launched app entered foreground without timestamp - running foreground recovery")

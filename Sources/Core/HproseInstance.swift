@@ -233,7 +233,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     let clientPool = HproseClientPool()
     
     private var lastInitializationAddresses: String?
-    private var lastLoggedUpgradeDomain: String?
+    @MainActor private var lastLoggedUpgradeDomain: String?
     
     // MARK: - Helper Methods
     
@@ -8669,7 +8669,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
     
     /// Check for app upgrades and update domain in preferences
-    private func checkAndUpdateDomain() async {
+    func checkAndUpdateDomain() async {
         
         let entry = "check_upgrade"
         let params: [String: Any] = [
@@ -8707,13 +8707,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return
         }
         
-        if lastLoggedUpgradeDomain != domain {
-            hproseDebug("[checkAndUpdateDomain] Received domain: \(domain)")
-            lastLoggedUpgradeDomain = domain
-        }
-        
-        // Update domain to share and save to preferences
+        // Keep the log deduplication and published domain update together so startup
+        // and foreground checks can safely overlap.
         await MainActor.run {
+            if lastLoggedUpgradeDomain != domain {
+                hproseDebug("[checkAndUpdateDomain] Received domain: \(domain)")
+                lastLoggedUpgradeDomain = domain
+            }
             _domainToShare = "http://" + domain
         }
     }
