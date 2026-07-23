@@ -4,6 +4,9 @@ import UIKit
 
 final class TweetCacheManager: @unchecked Sendable {
     static let shared = TweetCacheManager()
+    private static let savedListOrderBaseTime = Date(timeIntervalSince1970: 4_102_444_800) // 2100-01-01
+    private static let savedListOrderStep: TimeInterval = 0.001
+
     static func mainFeedCacheKey(appUserId: String) -> String {
         "main_feed_\(appUserId)"
     }
@@ -14,6 +17,20 @@ final class TweetCacheManager: @unchecked Sendable {
 
     static func favoriteCacheKey(userId: String) -> String {
         "\(UserContentType.FAVORITES.rawValue)_\(userId)"
+    }
+
+    static func savedListCacheTime(page: UInt, index: Int, pageSize: UInt) -> Date {
+        let globalIndex = Int(page * pageSize) + index
+        return savedListOrderBaseTime.addingTimeInterval(-TimeInterval(globalIndex) * savedListOrderStep)
+    }
+
+    private static func savedListPageTimeBounds(page: UInt, pageSize: UInt) -> (upper: Date, lower: Date) {
+        let startIndex = Int(page * pageSize)
+        let endIndex = startIndex + Int(pageSize)
+        return (
+            savedListOrderBaseTime.addingTimeInterval(-TimeInterval(startIndex) * savedListOrderStep),
+            savedListOrderBaseTime.addingTimeInterval(-TimeInterval(endIndex) * savedListOrderStep)
+        )
     }
 
     private let coreDataManager = CoreDataManager.shared
@@ -397,15 +414,20 @@ extension TweetCacheManager {
                 // For main feed/list views: load from the explicit list cache key, no authorId filtering.
                 let shouldFilterByAuthorId = isProfileView
 
-                // Always load from the requested cache key. For profile views this equals authorId.
-                request.predicate = NSPredicate(format: "uid == %@", userId)
-
                 // For bookmarks and favorites, sort by timeCached (when bookmarked/favorited)
                 // For other types, sort by timestamp (tweet creation time)
                 let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
                 if isBookmarkOrFavorite {
+                    let bounds = Self.savedListPageTimeBounds(page: page, pageSize: pageSize)
+                    request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                        NSPredicate(format: "uid == %@", userId),
+                        NSPredicate(format: "timeCached <= %@", bounds.upper as NSDate),
+                        NSPredicate(format: "timeCached > %@", bounds.lower as NSDate)
+                    ])
                     request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
                 } else {
+                    // For profile views this cache key equals the author's ID.
+                    request.predicate = NSPredicate(format: "uid == %@", userId)
                     request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
                 }
 
@@ -454,19 +476,9 @@ extension TweetCacheManager {
                 }
 
                 request.fetchLimit = pageSizeInt
-                request.fetchOffset = startSlot
+                request.fetchOffset = isBookmarkOrFavorite ? 0 : startSlot
 
                 if let cdTweets = try? readContext.fetch(request) {
-                    if isBookmarkOrFavorite,
-                       let firstCachedAt = cdTweets.first?.timeCached,
-                       firstCachedAt < Date(timeIntervalSince1970: 4_102_358_400) {
-                        // Old bookmark/favorite cache used wall-clock write time for order.
-                        // That makes later-fetched pages outrank page 0 on first paint, so
-                        // skip it once and let the server response rewrite stable ranks.
-                        continuation.resume(returning: [])
-                        return
-                    }
-
                     var tweets: [CachedTweetPayload?] = []
                     for cdTweet in cdTweets {
                         switch self.cachedTweetListSlot(
@@ -792,20 +804,46 @@ extension TweetCacheManager {
 
     /// Remove one tweet's membership from one cached list while preserving copies
     /// used by other feeds, profiles, or saved lists.
-    func deleteTweet(mid: String, from cacheKey: String) {
-        context.perform {
+    func deleteTweet(mid: String, from cacheKey: String) async {
+        let context = self.context
+        await context.perform {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@ AND uid == %@", mid, cacheKey)
 
-            guard let cachedTweets = try? self.context.fetch(request), !cachedTweets.isEmpty else {
+            guard let cachedTweets = try? context.fetch(request), !cachedTweets.isEmpty else {
                 return
             }
 
             for cachedTweet in cachedTweets {
-                self.context.delete(cachedTweet)
+                context.delete(cachedTweet)
             }
-            try? self.context.save()
+            try? context.save()
             print("DEBUG: [TweetCacheManager] Removed tweet \(mid) from cache list \(cacheKey)")
+        }
+    }
+
+    /// Remove only one ranked page from a bookmark/favorite cache. A successful
+    /// server response repopulates that range, while later cached pages and copies
+    /// in other feeds remain intact.
+    func clearSavedListCachePage(cacheKey: String, page: UInt, pageSize: UInt) async {
+        let bounds = Self.savedListPageTimeBounds(page: page, pageSize: pageSize)
+        let context = self.context
+        await context.perform {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "uid == %@", cacheKey),
+                NSPredicate(format: "timeCached <= %@", bounds.upper as NSDate),
+                NSPredicate(format: "timeCached > %@", bounds.lower as NSDate)
+            ])
+
+            guard let cachedTweets = try? context.fetch(request), !cachedTweets.isEmpty else {
+                return
+            }
+            for cachedTweet in cachedTweets {
+                context.delete(cachedTweet)
+            }
+            try? context.save()
+            print("DEBUG: [TweetCacheManager] Cleared saved-list cache page \(page) from \(cacheKey)")
         }
     }
     

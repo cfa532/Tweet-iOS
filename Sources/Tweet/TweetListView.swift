@@ -1543,9 +1543,10 @@ struct TweetListView: View {
                 reason: "updateTweetsWithServerData BRANCH2 partial-page page=\(page) responseCount=\(tweetsFromServer.count) validCount=\(validServerTweets.count)"
             )
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), PARTIAL PAGE - no more tweets")
-            if page == 0 && (tweets.isEmpty || emptyStateText != nil) {
+            if page == 0 && (preserveOrder || tweets.isEmpty || emptyStateText != nil) {
                 // Server confirmed an empty first page. Profile lists opt into
                 // clearing stale cached rows so the empty state can be shown.
+                // Saved lists are also authoritative on a successful empty response.
                 tweets = []
                 scheduleMemoryMaintenance()
                 isLoading = false
@@ -1563,6 +1564,12 @@ struct TweetListView: View {
         } else {
             // Full page (all nils) means server had enough entries, continue to next page
             // Example: Page has 10 deleted bookmarks (all nils) - more entries might exist
+            if page == 0 && preserveOrder {
+                // The cached first page is entirely stale. Remove it while the
+                // pagination loop searches later server pages for renderable rows.
+                tweets = []
+                scheduleMemoryMaintenance()
+            }
             currentPage = max(currentPage, page)
             if shouldUpdateBottomPaginationState(role: role) {
                 setPaginationState(.canLoadMore, reason: "updateTweetsWithServerData BRANCH3 full-page-all-nil page=\(page)")

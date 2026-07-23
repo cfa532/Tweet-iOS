@@ -3240,7 +3240,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // The rank must include the page offset; using Date() per page lets later-fetched
         // pages outrank page 0 on the next cached first paint.
         let isBookmarkOrFavorite = type == .BOOKMARKS || type == .FAVORITES
-        let bookmarkOrderBaseTime = Date(timeIntervalSince1970: 4_102_444_800) // 2100-01-01
+        let savedListCacheKey = type == .BOOKMARKS
+            ? TweetCacheManager.bookmarkCacheKey(userId: snap.mid)
+            : TweetCacheManager.favoriteCacheKey(userId: snap.mid)
+        if isBookmarkOrFavorite {
+            // The response is authoritative for this ranked page. Clear only that
+            // page before repopulating it so nil/deleted rows cannot survive in
+            // cache or pull records from the next page into the first paint.
+            await TweetCacheManager.shared.clearSavedListCachePage(
+                cacheKey: savedListCacheKey,
+                page: pageNumber,
+                pageSize: pageSize
+            )
+        }
         var scheduledBackgroundAuthorFetches = Set<String>()
         func scheduleBackgroundAuthorFetch(authorId: String) {
             guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
@@ -3308,14 +3320,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed.
                     // Use format: "bookmark_list_userId" or "favorite_list_userId".
                     // saveTweet will automatically mark media as permanent based on the prefix
-                    let cacheKey = type == .BOOKMARKS
-                        ? TweetCacheManager.bookmarkCacheKey(userId: snap.mid)
-                        : TweetCacheManager.favoriteCacheKey(userId: snap.mid)
-                    
                     let timeCached: Date?
                     if isBookmarkOrFavorite {
-                        let globalIndex = Int(pageNumber * pageSize) + index
-                        timeCached = bookmarkOrderBaseTime.addingTimeInterval(-TimeInterval(globalIndex) * 0.001)
+                        timeCached = TweetCacheManager.savedListCacheTime(
+                            page: pageNumber,
+                            index: index,
+                            pageSize: pageSize
+                        )
                     } else {
                         // For other types, use current time
                         timeCached = nil
@@ -3323,7 +3334,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     
                     // Reduced logging to prevent console buffer overflow
                     await MainActor.run {
-                        TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey, timeCached: timeCached)
+                        TweetCacheManager.shared.saveTweet(tweet, userId: savedListCacheKey, timeCached: timeCached)
                     }
 
                     tweetsWithAuthors.append(tweet)
@@ -3530,7 +3541,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         tweetId: String,
         list: SavedTweetList,
         appUserId: String
-    ) {
+    ) async {
         let cacheKey: String
         switch list {
         case .favorites:
@@ -3538,7 +3549,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         case .bookmarks:
             cacheKey = TweetCacheManager.bookmarkCacheKey(userId: appUserId)
         }
-        TweetCacheManager.shared.deleteTweet(mid: tweetId, from: cacheKey)
+        await TweetCacheManager.shared.deleteTweet(mid: tweetId, from: cacheKey)
     }
 
     func toggleFavorite(_ tweet: Tweet, isFavorite: Bool) async throws -> (Tweet?, User?) {
@@ -3594,7 +3605,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
 
             if !isFavorite {
-                finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
+                await finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
             }
             return (updatedTweet, updatedUser)
         } catch {
@@ -3603,7 +3614,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             do {
                 hproseWarning("WARN: [toggleFavorite] Author mutation failed; removing \(tweetMid) directly from app user favorites: \(error)")
                 let updatedUser = try await removeSavedTweetFromAppUser(tweetId: tweetMid, list: .favorites)
-                finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
+                await finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
                 return (nil, updatedUser)
             } catch {
                 await MainActor.run {
@@ -3671,7 +3682,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
 
             if !isBookmarked {
-                finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
+                await finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
             }
             return (updatedTweet, updatedUser)
         } catch {
@@ -3680,7 +3691,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             do {
                 hproseWarning("WARN: [toggleBookmark] Author mutation failed; removing \(tweetMid) directly from app user bookmarks: \(error)")
                 let updatedUser = try await removeSavedTweetFromAppUser(tweetId: tweetMid, list: .bookmarks)
-                finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
+                await finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
                 return (nil, updatedUser)
             } catch {
                 await MainActor.run {
