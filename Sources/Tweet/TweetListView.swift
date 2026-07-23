@@ -154,6 +154,7 @@ struct TweetListView: View {
     @State private var isLoadingMore: Bool = false
     @State private var paginationState: TweetPaginationState = .canLoadMore
     @State private var currentPage: UInt = 0
+    @State private var initialCacheLoadComplete = false
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
@@ -175,6 +176,7 @@ struct TweetListView: View {
     @State private var didConfirmEmptyFromServer: Bool = false
     @State private var pendingProfileNewTweets: [Tweet] = []
     @State private var showProfileNewTweetsBanner = false
+    @State private var optimisticSavedListStates: [String: Bool] = [:]
     private let cleanupInterval: TimeInterval = 10.0  // Cleanup every 10 seconds max
 
     /// Per-feed video coordinator — main feed uses .shared, other feeds get independent instances
@@ -232,7 +234,30 @@ struct TweetListView: View {
     }
 
     private func visibleTweetsExcludingDeleted(_ candidateTweets: [Tweet]) -> [Tweet] {
-        candidateTweets.filter { !TweetDeletionRegistry.shared.isDeleted($0.mid) }
+        candidateTweets.filter {
+            !TweetDeletionRegistry.shared.isDeleted($0.mid)
+                && optimisticSavedListStates[$0.mid] != false
+        }
+    }
+
+    /// A stale page-0 response must not overwrite a locally added saved item
+    /// while its mutation is still propagating from the writable node.
+    private func applyingOptimisticSavedListAdditions(
+        to candidateTweets: [Tweet],
+        page: UInt
+    ) -> [Tweet] {
+        guard page == 0,
+              feedIdentifier.hasPrefix("favorites_") || feedIdentifier.hasPrefix("bookmarks_") else {
+            return candidateTweets
+        }
+
+        var result = candidateTweets
+        for (tweetId, isSaved) in optimisticSavedListStates where isSaved {
+            guard let optimisticTweet = tweets.first(where: { $0.mid == tweetId }) else { continue }
+            result.removeAll { $0.mid == tweetId }
+            result.insert(optimisticTweet, at: 0)
+        }
+        return result
     }
 
     private func applyPaginatedTweets(_ paginatedTweets: [Tweet], page: UInt) {
@@ -545,6 +570,30 @@ struct TweetListView: View {
                 key: "tweetId",
                 shouldAccept: { _ in true },
                 action: { _ in }
+            ),
+            TweetListNotification(
+                name: .favoriteRemoved,
+                key: "tweet",
+                shouldAccept: { _ in true },
+                action: { _ in }
+            ),
+            TweetListNotification(
+                name: .favoriteAdded,
+                key: "tweet",
+                shouldAccept: { _ in true },
+                action: { _ in }
+            ),
+            TweetListNotification(
+                name: .bookmarkRemoved,
+                key: "tweet",
+                shouldAccept: { _ in true },
+                action: { _ in }
+            ),
+            TweetListNotification(
+                name: .bookmarkAdded,
+                key: "tweet",
+                shouldAccept: { _ in true },
+                action: { _ in }
             )
         ]
     }
@@ -688,6 +737,14 @@ struct TweetListView: View {
                     didConfirmEmptyFromServer = false
                 }
             }
+            .task(id: initialCacheLoadComplete) {
+                guard initialCacheLoadComplete, !initialLoadComplete else { return }
+
+                // Starting this from a separate SwiftUI task creates a render boundary
+                // after performInitialLoad assigns cached rows. The server refresh stays
+                // silent when cache exists and owns the loading state after a cache miss.
+                await loadFromServer(page: 0, pageSize: pageSize, role: .refresh) { _ in }
+            }
         }  // Close GeometryReader
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
             Task {
@@ -813,7 +870,40 @@ struct TweetListView: View {
                     let tweetIdPayload = notif.userInfo?[notification.key] as? String
                     MainActor.assumeIsolated {
                         if let tweet = tweetPayload, notification.shouldAccept(tweet) {
-                            if name == .newTweetCreated, shouldUseProfileNewTweetsBanner {
+                            let appUserId = hproseInstance.appUser.mid
+                            let isOptimistic = notif.userInfo?["optimistic"] as? Bool == true
+                            let isRollback = notif.userInfo?["rollback"] as? Bool == true
+                            if name == .favoriteRemoved, feedIdentifier == "favorites_\(appUserId)" {
+                                if isRollback {
+                                    optimisticSavedListStates.removeValue(forKey: tweet.mid)
+                                } else if isOptimistic {
+                                    optimisticSavedListStates[tweet.mid] = false
+                                }
+                                tweetsBinding.wrappedValue.removeAll { $0.mid == tweet.mid }
+                            } else if name == .favoriteAdded, feedIdentifier == "favorites_\(appUserId)" {
+                                if isRollback {
+                                    optimisticSavedListStates.removeValue(forKey: tweet.mid)
+                                } else if isOptimistic {
+                                    optimisticSavedListStates[tweet.mid] = true
+                                }
+                                tweetsBinding.wrappedValue.removeAll { $0.mid == tweet.mid }
+                                tweetsBinding.wrappedValue.insert(tweet, at: 0)
+                            } else if name == .bookmarkRemoved, feedIdentifier == "bookmarks_\(appUserId)" {
+                                if isRollback {
+                                    optimisticSavedListStates.removeValue(forKey: tweet.mid)
+                                } else if isOptimistic {
+                                    optimisticSavedListStates[tweet.mid] = false
+                                }
+                                tweetsBinding.wrappedValue.removeAll { $0.mid == tweet.mid }
+                            } else if name == .bookmarkAdded, feedIdentifier == "bookmarks_\(appUserId)" {
+                                if isRollback {
+                                    optimisticSavedListStates.removeValue(forKey: tweet.mid)
+                                } else if isOptimistic {
+                                    optimisticSavedListStates[tweet.mid] = true
+                                }
+                                tweetsBinding.wrappedValue.removeAll { $0.mid == tweet.mid }
+                                tweetsBinding.wrappedValue.insert(tweet, at: 0)
+                            } else if name == .newTweetCreated, shouldUseProfileNewTweetsBanner {
                                 let stagingResult = stageProfileNewTweetsBehindBannerIfNeeded([tweet], reason: "newTweetCreated notification")
                                 if !stagingResult.deferredTweetIds.contains(tweet.mid) {
                                     notification.action(tweet)
@@ -1009,7 +1099,10 @@ struct TweetListView: View {
             // Android: if the requested cached page has anything renderable, show it
             // immediately and let server refresh / scroll pagination handle the rest.
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
-            let validPage = visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 })
+            let validPage = applyingOptimisticSavedListAdditions(
+                to: visibleTweetsExcludingDeleted(tweetsFromCache.compactMap { $0 }),
+                page: page
+            )
             let resumeSnapshot = pendingBackgroundResumeSnapshotForInitialLoad()
 
             if let resumeSnapshot,
@@ -1074,15 +1167,9 @@ struct TweetListView: View {
             return
         }
 
-        // CRITICAL: Let UI render cached tweets BEFORE fetching from server
-        // If we await server fetch in same function, SwiftUI batches updates and only renders once
-        // By launching server fetch in a detached task, cached tweets render immediately
-        // and the blocking backend path cannot inherit SwiftUI's main actor.
-        Task.detached(priority: .utility) {
-            // Step 2: Load from server to get the most up-to-date data (in background)
-            // Additional pages are loaded automatically when user scrolls near the bottom
-            await loadFromServer(page: page, pageSize: pageSize, role: .refresh) { _ in }
-        }
+        // Step 2 runs from the task keyed by this state. SwiftUI must observe this
+        // transition before starting that task, so cached rows get a render pass first.
+        initialCacheLoadComplete = true
     }
     
 
@@ -1366,6 +1453,10 @@ struct TweetListView: View {
         pageSize: UInt,
         role: TweetServerLoadRole
     ) {
+        let validServerTweets = applyingOptimisticSavedListAdditions(
+            to: validServerTweets,
+            page: page
+        )
         let renderableServerTweets: [Tweet]
         if page == 0 {
             renderableServerTweets = stageProfileNewTweetsBehindBannerIfNeeded(

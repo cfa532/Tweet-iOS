@@ -349,6 +349,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
         let originalFavoriteCount = tweet.favoriteCount ?? 0
         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
+        let originalAppUserFavoriteTweets = hproseInstance.appUser.favoriteTweets
         let originalFavorites = tweet.favorites
 
         // Optimistic update
@@ -357,6 +358,19 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         tweet.favorites = newFavorites
         tweet.favoriteCount = originalFavoriteCount + (wasFavorite ? -1 : 1)
         hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
+        if wasFavorite {
+            hproseInstance.appUser.favoriteTweets?.removeAll { $0 == tweet.mid }
+        } else {
+            var favoriteTweets = hproseInstance.appUser.favoriteTweets ?? []
+            favoriteTweets.removeAll { $0 == tweet.mid }
+            favoriteTweets.insert(tweet.mid, at: 0)
+            hproseInstance.appUser.favoriteTweets = favoriteTweets
+        }
+        NotificationCenter.default.post(
+            name: wasFavorite ? .favoriteRemoved : .favoriteAdded,
+            object: nil,
+            userInfo: ["tweet": tweet, "optimistic": true]
+        )
 
         Task {
             do {
@@ -376,9 +390,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                         tweet.favorites = updatedTweet.favorites
                         tweet.favoriteCount = updatedTweet.favoriteCount
                     }
-                    let notificationName: Notification.Name = wasFavorite ? .favoriteRemoved : .favoriteAdded
-                    NotificationCenter.default.post(name: notificationName, object: nil,
-                                                     userInfo: ["tweet": updatedTweet])
                 }
             } catch {
                 print("DEBUG: [handleLike] toggleFavorite failed: \(error)")
@@ -386,6 +397,12 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                     tweet.favorites = originalFavorites
                     tweet.favoriteCount = originalFavoriteCount
                     hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
+                    hproseInstance.appUser.favoriteTweets = originalAppUserFavoriteTweets
+                    NotificationCenter.default.post(
+                        name: wasFavorite ? .favoriteAdded : .favoriteRemoved,
+                        object: nil,
+                        userInfo: ["tweet": tweet, "rollback": true]
+                    )
                     let msg = wasFavorite
                         ? NSLocalizedString("Failed to remove favorite. Please try again.", comment: "")
                         : NSLocalizedString("Failed to add favorite. Please try again.", comment: "")
@@ -407,6 +424,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
         let originalBookmarkCount = tweet.bookmarkCount ?? 0
         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
+        let originalAppUserBookmarkedTweets = hproseInstance.appUser.bookmarkedTweets
         let originalFavorites = tweet.favorites
 
         // Optimistic update
@@ -415,6 +433,19 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         tweet.favorites = newFavorites
         tweet.bookmarkCount = originalBookmarkCount + (wasBookmarked ? -1 : 1)
         hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount + (wasBookmarked ? -1 : 1)
+        if wasBookmarked {
+            hproseInstance.appUser.bookmarkedTweets?.removeAll { $0 == tweet.mid }
+        } else {
+            var bookmarkedTweets = hproseInstance.appUser.bookmarkedTweets ?? []
+            bookmarkedTweets.removeAll { $0 == tweet.mid }
+            bookmarkedTweets.insert(tweet.mid, at: 0)
+            hproseInstance.appUser.bookmarkedTweets = bookmarkedTweets
+        }
+        NotificationCenter.default.post(
+            name: wasBookmarked ? .bookmarkRemoved : .bookmarkAdded,
+            object: nil,
+            userInfo: ["tweet": tweet, "optimistic": true]
+        )
 
         Task {
             do {
@@ -434,9 +465,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                         tweet.favorites = updatedTweet.favorites
                         tweet.bookmarkCount = updatedTweet.bookmarkCount
                     }
-                    let notificationName: Notification.Name = wasBookmarked ? .bookmarkRemoved : .bookmarkAdded
-                    NotificationCenter.default.post(name: notificationName, object: nil,
-                                                     userInfo: ["tweet": updatedTweet])
                 }
             } catch {
                 print("DEBUG: [handleBookmark] toggleBookmark failed: \(error)")
@@ -444,6 +472,12 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                     tweet.favorites = originalFavorites
                     tweet.bookmarkCount = originalBookmarkCount
                     hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
+                    hproseInstance.appUser.bookmarkedTweets = originalAppUserBookmarkedTweets
+                    NotificationCenter.default.post(
+                        name: wasBookmarked ? .bookmarkAdded : .bookmarkRemoved,
+                        object: nil,
+                        userInfo: ["tweet": tweet, "rollback": true]
+                    )
                     let msg = wasBookmarked
                         ? NSLocalizedString("Failed to remove bookmark. Please try again.", comment: "")
                         : NSLocalizedString("Failed to add bookmark. Please try again.", comment: "")

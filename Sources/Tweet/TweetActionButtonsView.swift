@@ -314,6 +314,7 @@ struct TweetActionButtonsView: View {
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
                         let originalFavoriteCount = tweet.favoriteCount ?? 0
                         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
+                        let originalAppUserFavoriteTweets = hproseInstance.appUser.favoriteTweets
                         let originalFavorites = tweet.favorites // Save original favorites array
                         
                         // Optimistic UI update - only after debounce check passes
@@ -325,6 +326,19 @@ struct TweetActionButtonsView: View {
                             tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
                             // Update appUser favorite count immediately
                             hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
+                            if wasFavorite {
+                                hproseInstance.appUser.favoriteTweets?.removeAll { $0 == tweet.mid }
+                            } else {
+                                var favoriteTweets = hproseInstance.appUser.favoriteTweets ?? []
+                                favoriteTweets.removeAll { $0 == tweet.mid }
+                                favoriteTweets.insert(tweet.mid, at: 0)
+                                hproseInstance.appUser.favoriteTweets = favoriteTweets
+                            }
+                            NotificationCenter.default.post(
+                                name: wasFavorite ? .favoriteRemoved : .favoriteAdded,
+                                object: nil,
+                                userInfo: ["tweet": tweet, "optimistic": true]
+                            )
                         }
                         
                         do {
@@ -349,21 +363,18 @@ struct TweetActionButtonsView: View {
                                 }
                             }
                             
-                            // Post notification for favorite list updates
-                            if let updatedTweet = updatedTweet {
-                                let notificationName: Notification.Name = wasFavorite ? .favoriteRemoved : .favoriteAdded
-                                NotificationCenter.default.post(
-                                    name: notificationName,
-                                    object: nil,
-                                    userInfo: ["tweet": updatedTweet]
-                                )
-                            }
                         } catch {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
                                 self.tweet.favorites = originalFavorites
                                 self.tweet.favoriteCount = originalFavoriteCount
                                 hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
+                                hproseInstance.appUser.favoriteTweets = originalAppUserFavoriteTweets
+                                NotificationCenter.default.post(
+                                    name: wasFavorite ? .favoriteAdded : .favoriteRemoved,
+                                    object: nil,
+                                    userInfo: ["tweet": tweet, "rollback": true]
+                                )
                             }
                             
                             // Show error toast
@@ -409,6 +420,7 @@ struct TweetActionButtonsView: View {
                         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
                         let originalBookmarkCount = tweet.bookmarkCount ?? 0
                         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
+                        let originalAppUserBookmarkedTweets = hproseInstance.appUser.bookmarkedTweets
                         let originalFavorites = tweet.favorites // Save original favorites array
                         
                         // Optimistic UI update - only after debounce check passes
@@ -420,6 +432,19 @@ struct TweetActionButtonsView: View {
                             self.tweet.bookmarkCount = (self.tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)
                             // Update appUser bookmark count immediately
                             hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount + (wasBookmarked ? -1 : 1)
+                            if wasBookmarked {
+                                hproseInstance.appUser.bookmarkedTweets?.removeAll { $0 == tweet.mid }
+                            } else {
+                                var bookmarkedTweets = hproseInstance.appUser.bookmarkedTweets ?? []
+                                bookmarkedTweets.removeAll { $0 == tweet.mid }
+                                bookmarkedTweets.insert(tweet.mid, at: 0)
+                                hproseInstance.appUser.bookmarkedTweets = bookmarkedTweets
+                            }
+                            NotificationCenter.default.post(
+                                name: wasBookmarked ? .bookmarkRemoved : .bookmarkAdded,
+                                object: nil,
+                                userInfo: ["tweet": tweet, "optimistic": true]
+                            )
                         }
                         
                         do {
@@ -444,21 +469,18 @@ struct TweetActionButtonsView: View {
                                 }
                             }
                             
-                            // Post notification for bookmark list updates
-                            if let updatedTweet = updatedTweet {
-                                let notificationName: Notification.Name = wasBookmarked ? .bookmarkRemoved : .bookmarkAdded
-                                NotificationCenter.default.post(
-                                    name: notificationName,
-                                    object: nil,
-                                    userInfo: ["tweet": updatedTweet]
-                                )
-                            }
                         } catch {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
                                 self.tweet.favorites = originalFavorites
                                 self.tweet.bookmarkCount = originalBookmarkCount
                                 hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
+                                hproseInstance.appUser.bookmarkedTweets = originalAppUserBookmarkedTweets
+                                NotificationCenter.default.post(
+                                    name: wasBookmarked ? .bookmarkAdded : .bookmarkRemoved,
+                                    object: nil,
+                                    userInfo: ["tweet": tweet, "rollback": true]
+                                )
                             }
                             
                             // Show error toast

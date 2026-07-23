@@ -3421,110 +3421,278 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /*
      Return an updated tweet object after toggling favorite status of the tweet by appUser.
      */
-    func toggleFavorite(_ tweet: Tweet, isFavorite: Bool) async throws -> (Tweet?, User?) {
-        // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
-        // Phase A (demotion prep): snapshot @MainActor Tweet + appUser reads.
-        let author = await MainActor.run { tweet.author }
-        guard let author else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author not available", comment: "Writable client error")])
-        }
-        let (tweetMid, tweetAuthorId, appUserMid, appHostId) = await MainActor.run {
-            (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
-        }
-        _ = try await author.resolveWritableUrl()
-        guard let client = await author.writableClient(timeout: 60) else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        let entry = "toggle_favorite"
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "appuserid": appUserMid,
-            "tweetid": tweetMid,
-            "authorid": tweetAuthorId,
-            "userhostid": appHostId as Any,
-            "isfavorite": isFavorite
-        ]
-        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-        // Hprose syncInvoke returns the error object (not throws) on failure
-        if let error = rawResponse as? NSError {
-            throw error
-        }
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        guard let response = unwrappedResponse as? [String: Any] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+    private enum SavedTweetList {
+        case favorites
+        case bookmarks
+
+        var fallbackEntry: String {
+            switch self {
+            case .favorites:
+                return "toggle_favorite_by_user"
+            case .bookmarks:
+                return "toggle_bookmark_by_user"
+            }
         }
 
-        // unwrapV2Response already threw for success=false
-        var updatedUser: User?
-        var updatedTweet: Tweet?
-
-        // Parse updated user
-        if let userDict = response["user"] as? [String: Any] {
-            updatedUser = try await mergeUserFromDict(userDict)
+        var desiredStateParameter: String {
+            switch self {
+            case .favorites:
+                return "isfavorite"
+            case .bookmarks:
+                return "isbookmarked"
+            }
         }
-
-        // Parse updated tweet
-        if let tweetDict = response["tweet"] as? [String: Any] {
-            let ut = try await mergeTweetFromDict(tweetDict)
-            updatedTweet = ut
-        }
-
-        return (updatedTweet, updatedUser)
     }
 
-    func toggleBookmark(_ tweet: Tweet, isBookmarked: Bool) async throws -> (Tweet?, User?) {
-        // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
-        // Phase A (demotion prep): snapshot @MainActor Tweet + appUser reads.
-        let author = await MainActor.run { tweet.author }
-        guard let author else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author not available", comment: "Writable client error")])
+    @MainActor
+    private func stageLocalSavedTweetRemoval(
+        tweetId: String,
+        list: SavedTweetList
+    ) -> Bool {
+        switch list {
+        case .favorites:
+            let containedTweet = appUser.favoriteTweets?.contains(tweetId) == true
+            appUser.favoriteTweets?.removeAll { $0 == tweetId }
+            return containedTweet
+        case .bookmarks:
+            let containedTweet = appUser.bookmarkedTweets?.contains(tweetId) == true
+            appUser.bookmarkedTweets?.removeAll { $0 == tweetId }
+            return containedTweet
         }
-        let (tweetMid, tweetAuthorId, appUserMid, appHostId) = await MainActor.run {
-            (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
+    }
+
+    @MainActor
+    private func restoreLocalSavedTweetRemoval(
+        tweetId: String,
+        list: SavedTweetList,
+        wasListed: Bool
+    ) {
+        guard wasListed else { return }
+
+        switch list {
+        case .favorites:
+            if appUser.favoriteTweets == nil {
+                appUser.favoriteTweets = []
+            }
+            if appUser.favoriteTweets?.contains(tweetId) == false {
+                appUser.favoriteTweets?.append(tweetId)
+            }
+        case .bookmarks:
+            if appUser.bookmarkedTweets == nil {
+                appUser.bookmarkedTweets = []
+            }
+            if appUser.bookmarkedTweets?.contains(tweetId) == false {
+                appUser.bookmarkedTweets?.append(tweetId)
+            }
         }
-        _ = try await author.resolveWritableUrl()
-        guard let client = await author.writableClient(timeout: 60) else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        let entry = "toggle_bookmark"
-        let params = [
+    }
+
+    private func removeSavedTweetFromAppUser(
+        tweetId: String,
+        list: SavedTweetList
+    ) async throws -> User {
+        let appUserInstance = await MainActor.run { self.appUser }
+        let appUserMid = await MainActor.run { appUserInstance.mid }
+        let writableUrl = try await appUserInstance.resolveWritableUrl()
+        let client = clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 60)
+        let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "userid": appUserMid,
-            "tweetid": tweetMid,
-            "authorid": tweetAuthorId,
-            "userhostid": appHostId as Any,
-            "isbookmarked": isBookmarked
+            "tweetid": tweetId,
+            list.desiredStateParameter: false,
+            "skipcontentsync": true
         ]
-        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-        // Hprose syncInvoke returns the error object (not throws) on failure
+
+        let rawResponse = await invokeRunMApp(
+            using: client,
+            entry: list.fallbackEntry,
+            params: params
+        )
         if let error = rawResponse as? NSError {
             throw error
         }
+
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        guard let response = unwrappedResponse as? [String: Any] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+        guard let userDict = Self.asStringKeyedDictionary(unwrappedResponse) else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")]
+            )
         }
 
-        // unwrapV2Response already threw for success=false
-        var updatedUser: User?
-        var updatedTweet: Tweet?
+        return try await mergeUserFromDict(userDict)
+    }
 
-        // Parse updated user
-        if let userDict = response["user"] as? [String: Any] {
-            updatedUser = try await mergeUserFromDict(userDict)
+    private func finishSavedTweetRemoval(
+        tweetId: String,
+        list: SavedTweetList,
+        appUserId: String
+    ) {
+        let cacheKey: String
+        switch list {
+        case .favorites:
+            cacheKey = TweetCacheManager.favoriteCacheKey(userId: appUserId)
+        case .bookmarks:
+            cacheKey = TweetCacheManager.bookmarkCacheKey(userId: appUserId)
         }
+        TweetCacheManager.shared.deleteTweet(mid: tweetId, from: cacheKey)
+    }
 
-        // Parse updated tweet
-        if let tweetDict = response["tweet"] as? [String: Any] {
-            let ut = try await mergeTweetFromDict(tweetDict)
-            updatedTweet = ut
+    func toggleFavorite(_ tweet: Tweet, isFavorite: Bool) async throws -> (Tweet?, User?) {
+        // Normal mutations go to the author's writable node. Removal can fall
+        // back to the app user's writable node when the author route is gone.
+        let (tweetMid, tweetAuthorId, appUserMid, appHostId) = await MainActor.run {
+            (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
         }
+        let wasListed = isFavorite
+            ? false
+            : await MainActor.run {
+                stageLocalSavedTweetRemoval(tweetId: tweetMid, list: .favorites)
+            }
 
-        return (updatedTweet, updatedUser)
+        do {
+            let author = await MainActor.run { tweet.author }
+            guard let author else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author not available", comment: "Writable client error")])
+            }
+            _ = try await author.resolveWritableUrl()
+            guard let client = await author.writableClient(timeout: 60) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            }
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "version": "v2",
+                "appuserid": appUserMid,
+                "tweetid": tweetMid,
+                "authorid": tweetAuthorId,
+                "userhostid": appHostId as Any,
+                "isfavorite": isFavorite
+            ]
+            let rawResponse = await invokeRunMApp(using: client, entry: "toggle_favorite", params: params)
+            // Hprose syncInvoke returns the error object (not throws) on failure
+            if let error = rawResponse as? NSError {
+                throw error
+            }
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            guard let response = unwrappedResponse as? [String: Any] else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+            }
+
+            // unwrapV2Response already threw for success=false
+            var updatedUser: User?
+            var updatedTweet: Tweet?
+
+            if let userDict = response["user"] as? [String: Any] {
+                updatedUser = try await mergeUserFromDict(userDict)
+            }
+            if let tweetDict = response["tweet"] as? [String: Any] {
+                updatedTweet = try await mergeTweetFromDict(tweetDict)
+            }
+
+            if !isFavorite {
+                finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
+            }
+            return (updatedTweet, updatedUser)
+        } catch {
+            guard !isFavorite else { throw error }
+
+            do {
+                hproseWarning("WARN: [toggleFavorite] Author mutation failed; removing \(tweetMid) directly from app user favorites: \(error)")
+                let updatedUser = try await removeSavedTweetFromAppUser(tweetId: tweetMid, list: .favorites)
+                finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
+                return (nil, updatedUser)
+            } catch {
+                await MainActor.run {
+                    restoreLocalSavedTweetRemoval(
+                        tweetId: tweetMid,
+                        list: .favorites,
+                        wasListed: wasListed
+                    )
+                }
+                throw error
+            }
+        }
+    }
+
+    func toggleBookmark(_ tweet: Tweet, isBookmarked: Bool) async throws -> (Tweet?, User?) {
+        // Normal mutations go to the author's writable node. Removal can fall
+        // back to the app user's writable node when the author route is gone.
+        let (tweetMid, tweetAuthorId, appUserMid, appHostId) = await MainActor.run {
+            (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
+        }
+        let wasListed = isBookmarked
+            ? false
+            : await MainActor.run {
+                stageLocalSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks)
+            }
+
+        do {
+            let author = await MainActor.run { tweet.author }
+            guard let author else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author not available", comment: "Writable client error")])
+            }
+            _ = try await author.resolveWritableUrl()
+            guard let client = await author.writableClient(timeout: 60) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            }
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "version": "v2",
+                "userid": appUserMid,
+                "tweetid": tweetMid,
+                "authorid": tweetAuthorId,
+                "userhostid": appHostId as Any,
+                "isbookmarked": isBookmarked
+            ]
+            let rawResponse = await invokeRunMApp(using: client, entry: "toggle_bookmark", params: params)
+            // Hprose syncInvoke returns the error object (not throws) on failure
+            if let error = rawResponse as? NSError {
+                throw error
+            }
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            guard let response = unwrappedResponse as? [String: Any] else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+            }
+
+            // unwrapV2Response already threw for success=false
+            var updatedUser: User?
+            var updatedTweet: Tweet?
+
+            if let userDict = response["user"] as? [String: Any] {
+                updatedUser = try await mergeUserFromDict(userDict)
+            }
+            if let tweetDict = response["tweet"] as? [String: Any] {
+                updatedTweet = try await mergeTweetFromDict(tweetDict)
+            }
+
+            if !isBookmarked {
+                finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
+            }
+            return (updatedTweet, updatedUser)
+        } catch {
+            guard !isBookmarked else { throw error }
+
+            do {
+                hproseWarning("WARN: [toggleBookmark] Author mutation failed; removing \(tweetMid) directly from app user bookmarks: \(error)")
+                let updatedUser = try await removeSavedTweetFromAppUser(tweetId: tweetMid, list: .bookmarks)
+                finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
+                return (nil, updatedUser)
+            } catch {
+                await MainActor.run {
+                    restoreLocalSavedTweetRemoval(
+                        tweetId: tweetMid,
+                        list: .bookmarks,
+                        wasListed: wasListed
+                    )
+                }
+                throw error
+            }
+        }
     }
 
     func retweet(_ tweet: Tweet) async throws -> Tweet? {

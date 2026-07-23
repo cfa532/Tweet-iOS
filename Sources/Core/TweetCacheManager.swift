@@ -789,6 +789,25 @@ extension TweetCacheManager {
             }
         }
     }
+
+    /// Remove one tweet's membership from one cached list while preserving copies
+    /// used by other feeds, profiles, or saved lists.
+    func deleteTweet(mid: String, from cacheKey: String) {
+        context.perform {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "tid == %@ AND uid == %@", mid, cacheKey)
+
+            guard let cachedTweets = try? self.context.fetch(request), !cachedTweets.isEmpty else {
+                return
+            }
+
+            for cachedTweet in cachedTweets {
+                self.context.delete(cachedTweet)
+            }
+            try? self.context.save()
+            print("DEBUG: [TweetCacheManager] Removed tweet \(mid) from cache list \(cacheKey)")
+        }
+    }
     
     /// Delete all tweets from a specific user from a specific cache (e.g., when unfollowing)
     func deleteTweetsFromUser(userId: String, cacheKey: String) {
