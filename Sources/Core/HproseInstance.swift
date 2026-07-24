@@ -3024,6 +3024,68 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         return sorted.compactMap { $0["field"] as? String }
     }
+
+    /// Removes a row that has just crossed the permanent reliability blacklist
+    /// threshold. The backend rechecks the relationship timestamp on hostIds[0]
+    /// so a relationship added after this failure streak began is never removed.
+    func removePermanentlyBlacklistedUser(
+        _ blacklistedUserId: MimeiId,
+        from relationship: UserContentType,
+        owner: User,
+        failureStartedAt: TimeInterval
+    ) async throws -> (removed: Bool, reason: String?) {
+        let relationshipName: String
+        switch relationship {
+        case .FOLLOWER:
+            relationshipName = "followers"
+        case .FOLLOWING:
+            relationshipName = "followings"
+        default:
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Unsupported relationship cleanup type"]
+            )
+        }
+
+        let ownerRecord = await MainActor.run { UserRecord(user: owner) }
+        guard let ownerHostId = ownerRecord.hostIds?.first, !ownerHostId.isEmpty else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Profile owner has no writable host"]
+            )
+        }
+
+        let writableUrl = try await owner.resolveWritableUrl()
+        let client = clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 30)
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "userid": ownerRecord.mid,
+            "otherid": blacklistedUserId,
+            "relationship": relationshipName,
+            "userid_hostid": ownerHostId,
+            "failurestartedat": Int64(failureStartedAt * 1_000),
+            "failurecount": 14
+        ]
+        let rawResponse = await invokeRunMApp(
+            using: client,
+            entry: "remove_blacklisted_relationship",
+            params: params
+        )
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        guard let response = unwrappedResponse as? [String: Any],
+              let removed = response["removed"] as? Bool else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid relationship cleanup response"]
+            )
+        }
+        return (removed, response["reason"] as? String)
+    }
     
     /**
      * Get a list of users that the given user is following, sorted by timestamp when followed.

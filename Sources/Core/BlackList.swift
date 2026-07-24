@@ -32,6 +32,10 @@ final class BlackList: @unchecked Sendable {
     
     /// Resources that are permanently blacklisted
     private var blacklist: Set<MimeiId> = []
+    /// Failure-streak starts retained for relationship cleanup and race checks.
+    /// This is separate from candidates because promotion removes the candidate
+    /// before a follower/following screen can observe it.
+    private var permanentFailureStarts: [MimeiId: TimeInterval] = [:]
 
     private let sessionBlockFailureCount = 2
     /// How long a 2-strike session block lasts before the resource is retried.
@@ -44,6 +48,8 @@ final class BlackList: @unchecked Sendable {
     private var sessionBlockedResources: [MimeiId: Date] = [:]
     private var lastFailureRecordedAt: [MimeiId: TimeInterval] = [:]
     private let failureDedupWindow: TimeInterval = 20
+    private let permanentFailureCount = 14
+    private let permanentFailureAge: TimeInterval = 7 * 24 * 60 * 60
 
     // MARK: - Public Methods
 
@@ -81,13 +87,17 @@ final class BlackList: @unchecked Sendable {
         }
     }
     
-    /// Record a failed access to a resource
-    func recordFailure(_ mimeiId: MimeiId) {
+    /// Records a failed access. Returns the uninterrupted streak's start time
+    /// only when this call newly promotes the resource to the permanent list.
+    @discardableResult
+    func recordFailure(_ mimeiId: MimeiId) -> TimeInterval? {
         queue.sync(flags: .barrier) {
+            guard !blacklist.contains(mimeiId) else { return nil }
+
             let now = Date().timeIntervalSince1970
             if let lastFailure = lastFailureRecordedAt[mimeiId],
                now - lastFailure < failureDedupWindow {
-                return
+                return nil
             }
             lastFailureRecordedAt[mimeiId] = now
 
@@ -114,6 +124,8 @@ final class BlackList: @unchecked Sendable {
                 // Check if it should be moved to blacklist (14+ failures over 1+ week)
                 if shouldMoveToBlacklist(newEntry) {
                     moveToBlacklist(mimeiId)
+                    saveToStorageLocked()
+                    return newEntry.firstFailureTimestamp
                 }
             } else {
                 // Create new candidate entry
@@ -127,6 +139,7 @@ final class BlackList: @unchecked Sendable {
             }
             
             saveToStorageLocked()
+            return nil
         }
     }
     
@@ -154,24 +167,45 @@ final class BlackList: @unchecked Sendable {
             (candidates: candidates.count, blacklisted: blacklist.count)
         }
     }
+
+    func permanentFailureStartedAt(_ mimeiId: MimeiId) -> TimeInterval? {
+        queue.sync {
+            permanentFailureStarts[mimeiId]
+        }
+    }
+
+    /// A relationship newer than the failure streak proves that the server row
+    /// is not the stale row this blacklist decision was based on.
+    func restoreAfterNewerRelationship(_ mimeiId: MimeiId) {
+        queue.sync(flags: .barrier) {
+            blacklist.remove(mimeiId)
+            candidates.removeValue(forKey: mimeiId)
+            permanentFailureStarts.removeValue(forKey: mimeiId)
+            sessionFailureCounts.removeValue(forKey: mimeiId)
+            sessionBlockedResources.removeValue(forKey: mimeiId)
+            lastFailureRecordedAt.removeValue(forKey: mimeiId)
+            saveToStorageLocked()
+        }
+    }
     
     // MARK: - Private Methods
     
     /// Check if a candidate should be moved to blacklist
     private func shouldMoveToBlacklist(_ entry: CandidateEntry) -> Bool {
-        let oneWeekAgo = Date().timeIntervalSince1970 - (7 * 24 * 60 * 60)
-        
-        // Move to blacklist if:
-        // 1. More than 1 week old AND
-        // 2. 14 or more failures
-        return entry.firstFailureTimestamp < oneWeekAgo && entry.failureCount >= 14
+        let failureAge = Date().timeIntervalSince1970 - entry.firstFailureTimestamp
+        return failureAge >= permanentFailureAge &&
+            entry.failureCount >= permanentFailureCount
     }
     
     /// Move a resource from candidates to blacklist (permanent - never tried again)
     private func moveToBlacklist(_ mimeiId: MimeiId) {
+        if let failureStartedAt = candidates[mimeiId]?.firstFailureTimestamp {
+            permanentFailureStarts[mimeiId] = failureStartedAt
+        }
         candidates.removeValue(forKey: mimeiId)
         sessionFailureCounts.removeValue(forKey: mimeiId)
         sessionBlockedResources.removeValue(forKey: mimeiId)
+        lastFailureRecordedAt.removeValue(forKey: mimeiId)
         blacklist.insert(mimeiId)
         print("[BlackList] Permanently blacklisted \(mimeiId) - will never be tried again")
     }
@@ -222,6 +256,13 @@ final class BlackList: @unchecked Sendable {
                 print("[BlackList] Loaded \(candidates.count) candidates from iCloud (local missing)")
             }
         }
+
+        if let cleanupData = localStore.data(forKey: "BlackList.permanentFailureStarts"),
+           let cleanupEntries = try? JSONDecoder().decode([String: TimeInterval].self, from: cleanupData) {
+            queue.sync(flags: .barrier) {
+                permanentFailureStarts = cleanupEntries
+            }
+        }
     }
     
     /// Save blacklist data to UserDefaults first, then mirror to iCloud as backup.
@@ -247,15 +288,18 @@ final class BlackList: @unchecked Sendable {
     private func saveToStorageLocked() {
         let blacklistArray = Array(blacklist).map { $0 }
         let candidatesArray = Array(candidates.values)
+        let cleanupEntries = permanentFailureStarts
 
         DispatchQueue.main.async {
             guard let blacklistData = try? JSONEncoder().encode(blacklistArray),
-                  let candidatesData = try? JSONEncoder().encode(candidatesArray) else {
+                  let candidatesData = try? JSONEncoder().encode(candidatesArray),
+                  let cleanupData = try? JSONEncoder().encode(cleanupEntries) else {
                 print("[BlackList] Failed to encode data for storage")
                 return
             }
             UserDefaults.standard.set(blacklistData, forKey: "BlackList.blacklist")
             UserDefaults.standard.set(candidatesData, forKey: "BlackList.candidates")
+            UserDefaults.standard.set(cleanupData, forKey: "BlackList.permanentFailureStarts")
         }
     }
 }

@@ -78,6 +78,7 @@ struct UserRowView: View {
     let onShowLogin: (() -> Void)?
     let onTap: ((User) -> Void)?
     let onLoadFailed: ((String) -> Void)?
+    let onPermanentlyBlacklisted: ((String, TimeInterval) -> Void)?
     @ObservedObject private var user: User
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
@@ -99,7 +100,8 @@ struct UserRowView: View {
         onFollowToggle: ((User) async -> Void)? = nil,
         onShowLogin: (() -> Void)? = nil,
         onTap: ((User) -> Void)? = nil,
-        onLoadFailed: ((String) -> Void)? = nil
+        onLoadFailed: ((String) -> Void)? = nil,
+        onPermanentlyBlacklisted: ((String, TimeInterval) -> Void)? = nil
     ) {
         self.userId = userId
         self.cancellationToken = cancellationToken
@@ -107,6 +109,7 @@ struct UserRowView: View {
         self.onShowLogin = onShowLogin
         self.onTap = onTap
         self.onLoadFailed = onLoadFailed
+        self.onPermanentlyBlacklisted = onPermanentlyBlacklisted
         self._currentCancellationToken = State(initialValue: cancellationToken)
         // Initialize ObservedObject with singleton instance
         self._user = ObservedObject(wrappedValue: User.getInstance(mid: userId))
@@ -454,13 +457,18 @@ struct UserRowView: View {
 
     private func hideAndBlacklistUser(taskCancellationToken: UUID, reason: String) async {
         userRowLogger.error("Dismissing user row \(userId, privacy: .public): \(reason, privacy: .public)")
-        BlackList.shared.recordFailure(userId)
+        let permanentFailureStartedAt =
+            BlackList.shared.recordFailure(userId) ??
+            BlackList.shared.permanentFailureStartedAt(userId)
 
         await MainActor.run {
             guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
             self.loadFailed = true
             self.isLoading = false
             self.onLoadFailed?(userId)
+            if let permanentFailureStartedAt {
+                self.onPermanentlyBlacklisted?(userId, permanentFailureStartedAt)
+            }
         }
     }
 

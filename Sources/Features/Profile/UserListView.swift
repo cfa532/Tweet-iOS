@@ -19,6 +19,7 @@ struct UserListView: View {
     let onFollowToggle: ((User) async -> Void)?
     let onShowLogin: (() -> Void)?
     let onUserTap: ((User) -> Void)?
+    let onPermanentlyBlacklisted: ((String, TimeInterval) -> Void)?
 
     @State private var allUserIds: [String] = []
     @State private var displayedUserIds: [String] = []
@@ -51,7 +52,8 @@ struct UserListView: View {
         navigationPath: Binding<NavigationPath>,
         onFollowToggle: ((User) async -> Void)? = nil,
         onShowLogin: (() -> Void)? = nil,
-        onUserTap: ((User) -> Void)? = nil
+        onUserTap: ((User) -> Void)? = nil,
+        onPermanentlyBlacklisted: ((String, TimeInterval) -> Void)? = nil
     ) {
         self.title = title
         self.userId = userId
@@ -61,6 +63,7 @@ struct UserListView: View {
         self.onFollowToggle = onFollowToggle
         self.onShowLogin = onShowLogin
         self.onUserTap = onUserTap
+        self.onPermanentlyBlacklisted = onPermanentlyBlacklisted
     }
 
     // MARK: - Body
@@ -95,7 +98,8 @@ struct UserListView: View {
                             allUserIds.removeAll { $0 == failedUserId }
                             nextDisplayIndex = min(nextDisplayIndex, displayedUserIds.count)
                             Task { await loadNextUserToFillGap() }
-                        }
+                        },
+                        onPermanentlyBlacklisted: onPermanentlyBlacklisted
                     )
                     .id(rowUserId)
                 }
@@ -283,16 +287,25 @@ struct UserListView: View {
             Set(hproseInstance.appUser.userBlackList ?? [])
         }
         var seenUserIds = existingUserIds
+        var filteredUserIds: [String] = []
 
-        return userIds.compactMap { userId in
+        for userId in userIds {
             guard !userId.isEmpty,
                   userId != Constants.GUEST_ID,
                   !sociallyBlockedUserIds.contains(userId),
-                  !BlackList.shared.isBlacklisted(userId),
-                  !seenUserIds.contains(userId) else { return nil }
+                  !seenUserIds.contains(userId) else { continue }
+
+            if BlackList.shared.isBlacklisted(userId) {
+                if let failureStartedAt = BlackList.shared.permanentFailureStartedAt(userId) {
+                    onPermanentlyBlacklisted?(userId, failureStartedAt)
+                }
+                continue
+            }
+
             seenUserIds.insert(userId)
-            return userId
+            filteredUserIds.append(userId)
         }
+        return filteredUserIds
     }
 
     private func loadNextUserToFillGap() async {

@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+import OSLog
+
+private let homeViewLogger = Logger(subsystem: "com.zz", category: "HomeView")
 
 struct ScrollOffsetKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
@@ -357,7 +360,42 @@ struct UserListDestinationView: View {
                     await handleToggleFollowing(for: user)
                 }
             },
-            onShowLogin: onShowLogin
+            onShowLogin: onShowLogin,
+            onPermanentlyBlacklisted: { blacklistedUserId, failureStartedAt in
+                let relationship: UserContentType =
+                    destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                let targetUser = User.getInstance(mid: destination.userId)
+
+                Task {
+                    do {
+                        let result = try await hproseInstance.removePermanentlyBlacklistedUser(
+                            blacklistedUserId,
+                            from: relationship,
+                            owner: targetUser,
+                            failureStartedAt: failureStartedAt
+                        )
+
+                        if result.reason == "relationship_is_newer" {
+                            BlackList.shared.restoreAfterNewerRelationship(blacklistedUserId)
+                            return
+                        }
+                        guard result.removed else { return }
+
+                        await MainActor.run {
+                            if destination.listType == .FOLLOWER {
+                                targetUser.fansList?.removeAll { $0 == blacklistedUserId }
+                            } else {
+                                targetUser.followingList?.removeAll { $0 == blacklistedUserId }
+                            }
+                            TweetCacheManager.shared.saveUser(targetUser)
+                        }
+                    } catch {
+                        homeViewLogger.error(
+                            "Failed to remove permanently blacklisted relationship: \(error.localizedDescription, privacy: .public)"
+                        )
+                    }
+                }
+            }
         )
     }
     
