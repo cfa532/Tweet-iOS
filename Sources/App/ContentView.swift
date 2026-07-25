@@ -308,6 +308,7 @@ struct ContentView: View {
             }
             checkForPendingUpload()
             setupNotificationObservers()
+            handlePendingDeeplinks()
         }
         .onDisappear {
             cleanupNotificationObservers()
@@ -685,6 +686,7 @@ struct ContentView: View {
                     print("[ContentView] ✅ Received deeplink notification")
                     if let url {
                         print("[ContentView] URL from notification: \(url.absoluteString)")
+                        DeeplinkDelivery.shared.markHandled(url)
                         self.handleDeeplink(url)
                     } else {
                         print("[ContentView] ⚠️ No URL found in notification userInfo")
@@ -858,6 +860,16 @@ struct ContentView: View {
     }
     
     // MARK: - Deeplink Handling
+
+    private func handlePendingDeeplinks() {
+        let urls = DeeplinkDelivery.shared.consumePendingURLs()
+        guard !urls.isEmpty else { return }
+
+        print("[ContentView] Handling \(urls.count) pending deeplink(s)")
+        for url in urls {
+            handleDeeplink(url)
+        }
+    }
     
     private func handleDeeplink(_ url: URL) {
         print("[ContentView] Handling deeplink: \(url.absoluteString)")

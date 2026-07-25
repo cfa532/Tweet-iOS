@@ -1,6 +1,60 @@
 import Foundation
 import SwiftUI
 
+/// Delivers deeplinks to ContentView without losing cold-start URLs posted before the view exists.
+final class DeeplinkDelivery: @unchecked Sendable {
+    static let shared = DeeplinkDelivery()
+
+    private let lock = NSLock()
+    private var pendingURLStrings: [String] = []
+
+    private init() {}
+
+    func deliver(_ url: URL, delay: TimeInterval = 0) {
+        enqueue(url)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.isPending(url) else { return }
+            NotificationCenter.default.post(
+                name: .deeplinkReceived,
+                object: nil,
+                userInfo: ["url": url]
+            )
+        }
+    }
+
+    func consumePendingURLs() -> [URL] {
+        lock.lock()
+        let urlStrings = pendingURLStrings
+        pendingURLStrings.removeAll()
+        lock.unlock()
+
+        return urlStrings.compactMap { URL(string: $0) }
+    }
+
+    func markHandled(_ url: URL) {
+        lock.lock()
+        pendingURLStrings.removeAll { $0 == url.absoluteString }
+        lock.unlock()
+    }
+
+    private func enqueue(_ url: URL) {
+        lock.lock()
+        let urlString = url.absoluteString
+        if !pendingURLStrings.contains(urlString) {
+            pendingURLStrings.append(urlString)
+        }
+        lock.unlock()
+    }
+
+    private func isPending(_ url: URL) -> Bool {
+        lock.lock()
+        let result = pendingURLStrings.contains(url.absoluteString)
+        lock.unlock()
+        return result
+    }
+}
+
 /// Manages deeplink parsing and navigation
 @MainActor
 class DeeplinkManager: ObservableObject {

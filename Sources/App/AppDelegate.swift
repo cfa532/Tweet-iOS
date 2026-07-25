@@ -270,13 +270,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Handle URL if app was launched from a deeplink
         if let url = launchOptions?[.url] as? URL {
             print("[AppDelegate] App launched from URL: \(url.absoluteString)")
-            // Delay posting notification to ensure ContentView is ready
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                NotificationCenter.default.post(
-                    name: .deeplinkReceived,
-                    object: nil,
-                    userInfo: ["url": url]
-                )
+            DeeplinkDelivery.shared.deliver(url, delay: 0.5)
+        }
+
+        if let userActivityDictionary = launchOptions?[.userActivityDictionary] as? [AnyHashable: Any] {
+            for value in userActivityDictionary.values {
+                guard let userActivity = value as? NSUserActivity,
+                      userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+                      let url = userActivity.webpageURL else {
+                    continue
+                }
+
+                print("[AppDelegate] App launched from Universal Link: \(url.absoluteString)")
+                DeeplinkDelivery.shared.deliver(url, delay: 0.5)
             }
         }
         
@@ -1263,17 +1269,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] ✅ Received deeplink URL (app running): \(url.absoluteString)")
         print("[AppDelegate] URL scheme: \(url.scheme ?? "nil"), host: \(url.host ?? "nil"), path: \(url.path)")
         
-        // Post notification with URL for ContentView to handle
-        // Use async dispatch to ensure ContentView is ready
-        DispatchQueue.main.async {
-            print("[AppDelegate] Posting deeplink notification...")
-            NotificationCenter.default.post(
-                name: .deeplinkReceived,
-                object: nil,
-                userInfo: ["url": url]
-            )
-            print("[AppDelegate] Deeplink notification posted")
-        }
+        DeeplinkDelivery.shared.deliver(url)
         
         return true
     }
@@ -1284,11 +1280,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
            let url = userActivity.webpageURL {
             print("[AppDelegate] Received Universal Link: \(url.absoluteString)")
             
-            NotificationCenter.default.post(
-                name: .deeplinkReceived,
-                object: nil,
-                userInfo: ["url": url]
-            )
+            DeeplinkDelivery.shared.deliver(url)
             
             return true
         }

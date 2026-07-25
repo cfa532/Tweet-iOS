@@ -178,12 +178,7 @@ struct TweetApp: App {
                 print("[TweetApp] ✅ SwiftUI onOpenURL received: \(url.absoluteString)")
                 print("[TweetApp] URL scheme: \(url.scheme ?? "nil"), host: \(url.host ?? "nil"), path: \(url.path)")
                 
-                // Post notification for ContentView to handle
-                NotificationCenter.default.post(
-                    name: .deeplinkReceived,
-                    object: nil,
-                    userInfo: ["url": url]
-                )
+                DeeplinkDelivery.shared.deliver(url)
             }
         }
     }
