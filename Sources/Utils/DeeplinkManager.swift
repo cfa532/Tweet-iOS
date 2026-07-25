@@ -144,46 +144,64 @@ class DeeplinkManager: ObservableObject {
         
         // If not in cache and we have authorId, fetch from server
         if !authorId.isEmpty {
-            print("[DeeplinkManager] Fetching tweet from server...")
+            // Universal links can arrive while provider/bootstrap state is still
+            // settling. Keep the normal read path, then explicit deeplink recovery,
+            // but give transient startup failures a short bounded retry window.
+            let retryDelays: [UInt64] = [
+                0,
+                300_000_000,
+                1_000_000_000,
+                2_000_000_000
+            ]
 
-            // Try getTweet first (faster, uses current provider). It throws when the
-            // author's node can't be resolved — don't let that skip the refreshTweet
-            // fallback, which can still sync via the app user's own node.
-            do {
-                if let tweet = try await hproseInstance.getTweet(tweetId: tweetId, authorId: authorId) {
-                    print("[DeeplinkManager] ✅ Successfully fetched tweet from server")
+            for (attemptIndex, delay) in retryDelays.enumerated() {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+
+                if Task.isCancelled {
+                    return
+                }
+
+                print("[DeeplinkManager] Fetching tweet from server (attempt \(attemptIndex + 1)/\(retryDelays.count))...")
+
+                if let tweet = await fetchDeeplinkTweet(tweetId: tweetId, authorId: authorId, hproseInstance: hproseInstance) {
+                    print("[DeeplinkManager] ✅ Successfully fetched tweet for deeplink")
                     await MainActor.run {
                         navigationPath.wrappedValue.append(tweet)
                     }
                     return
                 }
-            } catch {
-                print("[DeeplinkManager] ⚠️ getTweet failed (\(error)), trying refreshTweet...")
             }
 
-            do {
-                // refreshTweet syncs from the author's host and falls back to the
-                // app user's node when the author's baseUrl is unknown
-                print("[DeeplinkManager] Trying refreshTweet...")
-                if let tweet = try await hproseInstance.refreshTweet(tweetId: tweetId, authorId: authorId) {
-                    print("[DeeplinkManager] ✅ Successfully fetched tweet with refreshTweet")
-                    await MainActor.run {
-                        navigationPath.wrappedValue.append(tweet)
-                    }
-                    return
-                }
-
-                // Both methods failed
-                print("[DeeplinkManager] ⚠️ Tweet not found on server")
-                await showTweetNotFoundError()
-
-            } catch {
-                print("[DeeplinkManager] ❌ Error fetching tweet: \(error)")
-                await showTweetNotFoundError()
-            }
+            print("[DeeplinkManager] ⚠️ Tweet not found on server after deeplink retries")
+            await showTweetNotFoundError()
         } else {
             print("[DeeplinkManager] ⚠️ Cannot fetch tweet: missing authorId")
             await showTweetNotFoundError()
+        }
+    }
+
+    /// Fetch tweet data for deeplink navigation using normal read first, then explicit recovery.
+    private func fetchDeeplinkTweet(tweetId: String, authorId: String, hproseInstance: HproseInstance) async -> Tweet? {
+        // Try getTweet first (faster, uses current provider). It throws when the
+        // author's node can't be resolved — don't let that skip the refreshTweet
+        // fallback, which can still sync via the app user's own node.
+        do {
+            if let tweet = try await hproseInstance.getTweet(tweetId: tweetId, authorId: authorId) {
+                return tweet
+            }
+        } catch {
+            print("[DeeplinkManager] ⚠️ getTweet failed (\(error)), trying refreshTweet...")
+        }
+
+        do {
+            // refreshTweet syncs from the author's host and falls back to the
+            // app user's node when the author's baseUrl is unknown.
+            return try await hproseInstance.refreshTweet(tweetId: tweetId, authorId: authorId)
+        } catch {
+            print("[DeeplinkManager] ❌ refreshTweet failed: \(error)")
+            return nil
         }
     }
     
@@ -214,4 +232,3 @@ class DeeplinkManager: ObservableObject {
         }
     }
 }
-
