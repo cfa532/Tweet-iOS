@@ -123,11 +123,18 @@ struct ProfileView: View {
         mainContentView
             .onAppear {
                 // Keep the hosted SwiftUI profile header in sync with the app user's follow list.
-                setFollowingState((hproseInstance.appUser.followingList)?.contains(user.mid) ?? false)
+                // Guest followings are content seeds, not authenticated relationships.
+                setFollowingState(
+                    !hproseInstance.appUser.isGuest
+                        && ((hproseInstance.appUser.followingList)?.contains(user.mid) ?? false)
+                )
             }
             .onReceive(hproseInstance.appUser.$followingList) { newList in
                 // followingList may load asynchronously after onAppear; keep button state in sync
-                setFollowingState(newList?.contains(user.mid) ?? false)
+                setFollowingState(
+                    !hproseInstance.appUser.isGuest
+                        && (newList?.contains(user.mid) ?? false)
+                )
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)

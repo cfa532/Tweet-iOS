@@ -868,11 +868,11 @@ struct TweetListView: View {
                 for notification in notificationHandlers where notification.name == name {
                     let tweetPayload = notif.userInfo?[notification.key] as? Tweet
                     let tweetIdPayload = notif.userInfo?[notification.key] as? String
+                    let isOptimistic = notif.userInfo?["optimistic"] as? Bool == true
+                    let isRollback = notif.userInfo?["rollback"] as? Bool == true
                     MainActor.assumeIsolated {
                         if let tweet = tweetPayload, notification.shouldAccept(tweet) {
                             let appUserId = hproseInstance.appUser.mid
-                            let isOptimistic = notif.userInfo?["optimistic"] as? Bool == true
-                            let isRollback = notif.userInfo?["rollback"] as? Bool == true
                             if name == .favoriteRemoved, feedIdentifier == "favorites_\(appUserId)" {
                                 if isRollback {
                                     optimisticSavedListStates.removeValue(forKey: tweet.mid)
