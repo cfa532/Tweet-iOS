@@ -26,6 +26,9 @@ struct ContentView: View {
     @State private var showLoginSheet = false
     @State private var notificationObservers: [NSObjectProtocol] = []
     @State private var didClearStartupNewTweetsBanner = false
+    @State private var isHandlingDeeplink = false
+    @State private var deeplinkNavigationTask: Task<Void, Never>?
+    @State private var deeplinkNavigationID = UUID()
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -664,6 +667,7 @@ struct ContentView: View {
             ) { _ in
                 MainActor.assumeIsolated {
                     guard self.hproseInstance.appUser.isGuest else { return }
+                    guard !self.isHandlingDeeplink else { return }
                     guard self.navigationPath.isEmpty else { return }
                     guard let alphaId = Gadget.getAlphaIds().first else { return }
                     let alphaUser = User.getInstance(mid: alphaId)
@@ -686,7 +690,10 @@ struct ContentView: View {
                     print("[ContentView] ✅ Received deeplink notification")
                     if let url {
                         print("[ContentView] URL from notification: \(url.absoluteString)")
-                        DeeplinkDelivery.shared.markHandled(url)
+                        guard DeeplinkDelivery.shared.startHandling(url) else {
+                            print("[ContentView] Skipping duplicate/in-flight deeplink notification: \(url.absoluteString)")
+                            return
+                        }
                         self.handleDeeplink(url)
                     } else {
                         print("[ContentView] ⚠️ No URL found in notification userInfo")
@@ -876,30 +883,38 @@ struct ContentView: View {
         
         // Parse the URL
         let deeplinkType = DeeplinkManager.shared.parseURL(url)
-        
-        // Switch to home tab if needed (for navigation)
-        // Use a small delay to ensure tab switch completes before navigation
-        if selectedTab != 0 {
+        guard case .unknown = deeplinkType else {
+            isHandlingDeeplink = true
             selectedTab = 0
-            // Wait a bit for tab switch animation
-            Task {
-                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
-                await DeeplinkManager.shared.handleDeeplink(
+
+            deeplinkNavigationTask?.cancel()
+            let navigationID = UUID()
+            deeplinkNavigationID = navigationID
+            deeplinkNavigationTask = Task { @MainActor in
+                defer {
+                    if deeplinkNavigationID == navigationID {
+                        isHandlingDeeplink = false
+                        deeplinkNavigationTask = nil
+                    }
+                }
+
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else {
+                    DeeplinkDelivery.shared.finishHandling(url, succeeded: true)
+                    return
+                }
+                let succeeded = await DeeplinkManager.shared.handleDeeplink(
                     deeplinkType,
                     navigationPath: $navigationPath,
                     hproseInstance: hproseInstance
                 )
+                DeeplinkDelivery.shared.finishHandling(url, succeeded: succeeded)
             }
-        } else {
-            // Already on home tab, navigate immediately
-            Task {
-                await DeeplinkManager.shared.handleDeeplink(
-                    deeplinkType,
-                    navigationPath: $navigationPath,
-                    hproseInstance: hproseInstance
-                )
-            }
+            return
         }
+
+        print("[ContentView] Ignoring unknown deeplink: \(url.absoluteString)")
+        DeeplinkDelivery.shared.finishHandling(url, succeeded: true)
     }
 }
 
