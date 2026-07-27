@@ -461,8 +461,8 @@ class TweetBodyUIView: UIView {
                 // Give media-only feed items a little more breathing room below the header.
                 contentStack.setCustomSpacing(6, after: contentLabel)
             } else {
-                // Keep the text-to-media gap compact in feed cells.
-                contentStack.setCustomSpacing(6, after: contentLabel)
+                // Give tweet text a little more breathing room before its media.
+                contentStack.setCustomSpacing(8, after: contentLabel)
             }
         } else {
             mediaContainerView.isHidden = true
