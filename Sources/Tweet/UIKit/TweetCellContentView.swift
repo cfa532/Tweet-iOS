@@ -185,7 +185,7 @@ class TweetCellContentView: UIView {
         contentColumn.addArrangedSubview(embeddedTweetWrapper)
         contentColumn.addArrangedSubview(actionBar)
 
-        contentColumn.setCustomSpacing(0, after: headerView)  // Space between header and body content
+        contentColumn.setCustomSpacing(2, after: headerView)  // 2pt here + bodyView's 2pt top inset
         contentColumn.setCustomSpacing(12, after: bodyView)
         contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
 

@@ -457,11 +457,7 @@ class TweetBodyUIView: UIView {
             // Adjust spacing based on whether there's text/audio above media
             if hasAudio {
                 contentStack.setCustomSpacing(8, after: audioContainerView)
-            } else if contentLabel.isHidden {
-                // Give media-only feed items a little more breathing room below the header.
-                contentStack.setCustomSpacing(6, after: contentLabel)
             } else {
-                // Give tweet text a little more breathing room before its media.
                 contentStack.setCustomSpacing(8, after: contentLabel)
             }
         } else {

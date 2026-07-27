@@ -2653,6 +2653,7 @@ class TweetTableViewController: UITableViewController {
     ) -> CGFloat {
         var height: CGFloat = isPureRetweet ? 26 : 16
         height += ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
+        height += 2 // contentColumn spacing after header
 
         var bodyHeight: CGFloat = 2
         var hasTextContent = false
@@ -2676,7 +2677,7 @@ class TweetTableViewController: UITableViewController {
         var hasCaptionLabel = false
         if !mediaAttachments.isEmpty {
             let mediaGridWidth = max(10, contentWidth - 2)
-            bodyHeight += hasTextContent ? 8 : 4
+            bodyHeight += 8
             bodyHeight += MediaGridViewModel.calculateHeight(for: mediaAttachments, gridWidth: mediaGridWidth)
             if mediaAttachments.count == 1 {
                 let att = mediaAttachments[0]
@@ -2721,7 +2722,7 @@ class TweetTableViewController: UITableViewController {
                 let embeddedMedia = embeddedTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
                 if !embeddedMedia.isEmpty {
                     let embeddedMediaGridWidth = max(10, contentWidth - 14)
-                    embeddedBodyH += hasEmbeddedText ? 8 : 4
+                    embeddedBodyH += 8
                     embeddedBodyH += MediaGridViewModel.calculateHeight(for: embeddedMedia, gridWidth: embeddedMediaGridWidth)
                 }
                 // Embedded header: single-line estimate (24pt).
@@ -2783,8 +2784,8 @@ class TweetTableViewController: UITableViewController {
         // Uses .preferredFont(.headline) which varies with Dynamic Type.
         let headerHeight = ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
         height += headerHeight
+        height += 2 // contentColumn spacing after header
 
-        // spacing after header: 0
         // Body: text + media
         // TweetBodyUIView layout: contentStack.top = bodyView.top + 2 (always)
         // contentLabel → media: customSpacing = 8 when text visible
@@ -2839,11 +2840,7 @@ class TweetTableViewController: UITableViewController {
                 for: mediaAttachments,
                 gridWidth: mediaGridWidth
             )
-            if hasTextContent {
-                bodyHeight += 8 // customSpacing(after: contentLabel) when text visible
-            } else {
-                bodyHeight += 4 // customSpacing(after: hidden contentLabel) for media-only tweets
-            }
+            bodyHeight += 8 // spacing above media
             bodyHeight += mediaHeight
 
             // Video caption for single-video tweets
@@ -2958,11 +2955,7 @@ class TweetTableViewController: UITableViewController {
 
                 if !embeddedMedia.isEmpty {
                     let embeddedMediaGridWidth = max(10, contentWidth - 14)
-                    if hasEmbeddedText {
-                        embeddedBodyH += 8 // customSpacing(after: contentLabel) when text+media both present
-                    } else {
-                        embeddedBodyH += 4 // media-only embedded body keeps the same top media gap
-                    }
+                    embeddedBodyH += 8 // spacing above media
                     embeddedBodyH += MediaGridViewModel.calculateHeight(
                         for: embeddedMedia,
                         gridWidth: embeddedMediaGridWidth
