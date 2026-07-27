@@ -122,6 +122,7 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showLoginSheet) {
                 LoginView()
+                    .environmentObject(hproseInstance)
             }
             .navigationTitle(NSLocalizedString("Settings", comment: "Settings screen title"))
             .navigationBarItems(trailing: Button(NSLocalizedString("Done", comment: "Done button")) {
