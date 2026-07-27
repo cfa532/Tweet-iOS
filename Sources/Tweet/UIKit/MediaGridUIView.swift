@@ -76,7 +76,15 @@ class MediaGridUIView: UIView {
         parentViewController: UIViewController
     ) {
         let isSameGrid = currentTweetId == tweet.mid &&
-            self.attachments.map(\.mid) == attachments.map(\.mid)
+            self.attachments.elementsEqual(attachments) { current, updated in
+                current.mid == updated.mid &&
+                    current.type.rawValue == updated.type.rawValue &&
+                    current.size == updated.size &&
+                    current.fileName == updated.fileName &&
+                    current.timestamp == updated.timestamp &&
+                    current.aspectRatio == updated.aspectRatio &&
+                    current.url == updated.url
+            }
         if isSameGrid {
             self.isEmbedded = isEmbedded
             self.cellTweetId = cellTweetId

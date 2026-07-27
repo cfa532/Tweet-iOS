@@ -23,6 +23,38 @@ private let _tweetBodyURLDetector: NSDataDetector? = try? NSDataDetector(
 )
 
 class TweetBodyUIView: UIView {
+    private struct AttachmentRenderSignature: Equatable {
+        let mid: String
+        let type: String
+        let size: Int64?
+        let fileName: String?
+        let timestamp: Date
+        let aspectRatio: Float?
+        let url: String?
+
+        init(_ attachment: MimeiFileType) {
+            mid = attachment.mid
+            type = attachment.type.rawValue
+            size = attachment.size
+            fileName = attachment.fileName
+            timestamp = attachment.timestamp
+            aspectRatio = attachment.aspectRatio
+            url = attachment.url
+        }
+    }
+
+    private struct BodyRenderSignature: Equatable {
+        let content: String?
+        let title: String?
+        let attachments: [AttachmentRenderSignature]?
+
+        @MainActor
+        init(_ tweet: Tweet) {
+            content = tweet.content
+            title = tweet.title
+            attachments = tweet.attachments?.map(AttachmentRenderSignature.init)
+        }
+    }
 
     // Internal stack view to manage all content
     private let contentStack: UIStackView = {
@@ -91,6 +123,7 @@ class TweetBodyUIView: UIView {
     private weak var parentViewController: UIViewController?
     private weak var contentLabelTapGesture: UITapGestureRecognizer?
     private var contentCancellable: AnyCancellable?
+    private var bodyRenderSignature: BodyRenderSignature?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -302,14 +335,26 @@ class TweetBodyUIView: UIView {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
                 guard let self else { return }
-                // If content changed remotely/local-edit, collapse and redraw immediately.
-                self.isExpanded = false
-                self.contentLabel.numberOfLines = Self.maxContentLines
-                self.contentLabel.lineBreakMode = .byTruncatingTail
-                self.renderTextContent(tweet: tweet, isEmbedded: self.currentIsEmbedded)
-                self.setNeedsLayout()
-                self.superview?.setNeedsLayout()
-                self.onContentExpanded?()
+                // Published properties notify before mutation. Re-check on the
+                // next run-loop turn so attachment and content changes are final.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          self.observedTweet === tweet,
+                          self.bodyRenderSignature != BodyRenderSignature(tweet),
+                          let parentViewController = self.parentViewController else {
+                        return
+                    }
+
+                    self.configure(
+                        tweet: tweet,
+                        isEmbedded: self.currentIsEmbedded,
+                        cellTweetId: self.currentCellTweetId,
+                        parentViewController: parentViewController
+                    )
+                    self.setNeedsLayout()
+                    self.superview?.setNeedsLayout()
+                    self.onContentExpanded?()
+                }
             }
     }
 
@@ -319,18 +364,21 @@ class TweetBodyUIView: UIView {
                    parentViewController: UIViewController) {
         self.parentViewController = parentViewController
         bindTweetContentUpdates(tweet)
+        let newBodyRenderSignature = BodyRenderSignature(tweet)
 
         // Pure retweets render the original tweet's media inside the retweet cell.
         // The media owner tweet can be unchanged while the visible cell context changes,
         // so include cellTweetId/isEmbedded in the reuse guard to keep video identifiers fresh.
         if currentTweetId == tweet.mid,
            currentCellTweetId == cellTweetId,
-           currentIsEmbedded == isEmbedded {
+           currentIsEmbedded == isEmbedded,
+           bodyRenderSignature == newBodyRenderSignature {
             return
         }
         currentTweetId = tweet.mid
         currentCellTweetId = cellTweetId
         currentIsEmbedded = isEmbedded
+        bodyRenderSignature = newBodyRenderSignature
 
         // Reset expansion state for new tweet
         isExpanded = false
@@ -457,8 +505,12 @@ class TweetBodyUIView: UIView {
     }
 
     func prepareForReuse() {
+        contentCancellable?.cancel()
+        contentCancellable = nil
+        observedTweet = nil
         currentTweetId = nil
         currentCellTweetId = nil
+        bodyRenderSignature = nil
         contentLabel.attributedText = nil
         contentLabel.numberOfLines = Self.maxContentLines
         contentLabel.lineBreakMode = .byTruncatingTail
