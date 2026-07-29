@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var notificationObservers: [NSObjectProtocol] = []
     @State private var didClearStartupNewTweetsBanner = false
     @State private var isHandlingDeeplink = false
+    @State private var isHomeNavigationReady = false
     @State private var deeplinkNavigationTask: Task<Void, Never>?
     @State private var deeplinkNavigationID = UUID()
     
@@ -57,6 +58,12 @@ struct ContentView: View {
                                 }
                             }
                         )
+                    }
+                    .onAppear {
+                        isHomeNavigationReady = true
+                    }
+                    .onDisappear {
+                        isHomeNavigationReady = false
                     }
                 } else if selectedTab == 1 {
                     NavigationStack(path: $chatNavigationPath) {
@@ -215,6 +222,12 @@ struct ContentView: View {
             .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: isNavigationVisible)
             .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: shouldHideHeight)
         }
+
+        if isHandlingDeeplink {
+            DeeplinkLoadingPlaceholderView()
+                .ignoresSafeArea()
+                .zIndex(3000)
+        }
         }
         .overlay(alignment: .top) {
             if shouldShowMainFeedNewTweetsBanner {
@@ -323,7 +336,10 @@ struct ContentView: View {
     // MARK: - Notification Observer Management
 
     private var shouldShowMainFeedNewTweetsBanner: Bool {
-        !hproseInstance.appUser.isGuest && selectedTab == 0 && navigationPath.isEmpty
+        !isHandlingDeeplink
+            && !hproseInstance.appUser.isGuest
+            && selectedTab == 0
+            && navigationPath.isEmpty
     }
 
     private func openMainFeedAndShowNewTweets() {
@@ -702,31 +718,7 @@ struct ContentView: View {
             }
         )
         
-        // 11. Deeplink tweet not found
-        notificationObservers.append(
-            NotificationCenter.default.addObserver(
-                forName: .deeplinkTweetNotFound,
-                object: nil,
-                queue: .main
-            ) { notification in
-                let message = notification.userInfo?["message"] as? String
-                MainActor.assumeIsolated {
-                    if let message {
-                    self.toastMessage = message
-                    self.toastType = .error
-                    self.showToast = true
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        MainActor.assumeIsolated {
-                            withAnimation { self.showToast = false }
-                        }
-                    }
-                    }
-                }
-            }
-        )
-        
-        // 12. After successful login, return to the main (home) screen
+        // 11. After successful login, return to the main (home) screen
         notificationObservers.append(
             NotificationCenter.default.addObserver(
                 forName: .userDidLogin,
@@ -891,30 +883,97 @@ struct ContentView: View {
             let navigationID = UUID()
             deeplinkNavigationID = navigationID
             deeplinkNavigationTask = Task { @MainActor in
-                defer {
-                    if deeplinkNavigationID == navigationID {
-                        isHandlingDeeplink = false
-                        deeplinkNavigationTask = nil
-                    }
-                }
-
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                guard !Task.isCancelled else {
+                guard await waitForDeeplinkNavigationReadiness() else {
                     DeeplinkDelivery.shared.finishHandling(url, succeeded: true)
                     return
                 }
+
                 let succeeded = await DeeplinkManager.shared.handleDeeplink(
                     deeplinkType,
                     navigationPath: $navigationPath,
                     hproseInstance: hproseInstance
                 )
-                DeeplinkDelivery.shared.finishHandling(url, succeeded: succeeded)
+                guard !Task.isCancelled else {
+                    DeeplinkDelivery.shared.finishHandling(url, succeeded: true)
+                    return
+                }
+
+                let completion = DeeplinkDelivery.shared.finishHandling(url, succeeded: succeeded)
+                guard deeplinkNavigationID == navigationID else { return }
+
+                deeplinkNavigationTask = nil
+                switch completion {
+                case .succeeded:
+                    print("[ContentView] ✅ Deeplink destination replaced the loading placeholder")
+                    isHandlingDeeplink = false
+                case .retryScheduled:
+                    print("[ContentView] Deeplink resolution failed; keeping placeholder for the single retry")
+                    // Keep the placeholder visible while cold-start recovery retries.
+                    break
+                case .failed:
+                    print("[ContentView] ❌ Deeplink resolution failed after the retry")
+                    isHandlingDeeplink = false
+                    showDeeplinkFailureToast()
+                }
             }
             return
         }
 
         print("[ContentView] Ignoring unknown deeplink: \(url.absoluteString)")
         DeeplinkDelivery.shared.finishHandling(url, succeeded: true)
+        showDeeplinkFailureToast()
+    }
+
+    private func waitForDeeplinkNavigationReadiness() async -> Bool {
+        // A universal link can arrive during willEnterForeground, before SwiftUI has
+        // remounted the Home NavigationStack. Installing a cached destination in that
+        // window can leave the path populated without presenting its destination.
+        while UIApplication.shared.applicationState != .active || !isHomeNavigationReady {
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return false
+            }
+        }
+
+        // Give the newly mounted stack one update cycle to bind to navigationPath.
+        await Task.yield()
+        return !Task.isCancelled
+    }
+
+    private func showDeeplinkFailureToast() {
+        toastMessage = NSLocalizedString(
+            "Couldn’t open this link. The content may be unavailable, or there may be a connection problem.",
+            comment: "Deeplink loading failure"
+        )
+        toastType = .error
+        showToast = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            withAnimation { showToast = false }
+        }
+    }
+}
+
+@available(iOS 17.0, *)
+private struct DeeplinkLoadingPlaceholderView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+                .tint(XTheme.accentColor)
+
+            Text(NSLocalizedString("Opening link…", comment: "Deeplink loading title"))
+                .font(.headline)
+                .foregroundColor(XTheme.textColor)
+
+            Text(NSLocalizedString("This may take a moment.", comment: "Deeplink loading subtitle"))
+                .font(.subheadline)
+                .foregroundColor(XTheme.secondaryTextColor)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(XTheme.backgroundColor)
+        .accessibilityElement(children: .combine)
     }
 }
 

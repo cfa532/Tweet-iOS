@@ -95,8 +95,6 @@ extension Notification.Name {
     static let showBarsAfterScrollEnd = Notification.Name("ShowBarsAfterScrollEnd")
     /// Posted when a deeplink URL is received
     static let deeplinkReceived = Notification.Name("DeeplinkReceived")
-    /// Posted when a deeplink tweet is not found
-    static let deeplinkTweetNotFound = Notification.Name("DeeplinkTweetNotFound")
     
     // MARK: - System Errors
     static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")

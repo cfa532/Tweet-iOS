@@ -991,6 +991,7 @@ struct TweetDetailView: View {
     @State private var hasServedCachedCommentsForCurrentParentTweet = false
     @State private var currentCommentsParentTweetId = ""
     @State private var initialLoadParentTweetId = ""
+    @State private var selectedEmbeddedTweetForNavigation: Tweet?
     @State private var selectedCommentUserForNavigation: User?
     @State private var commentProfileNavigationPath = NavigationPath()
 
@@ -1183,6 +1184,15 @@ struct TweetDetailView: View {
         }
         .sheet(item: $menuShareItems) { data in
             ShareSheetView(items: data.items)
+        }
+        .navigationDestination(item: $selectedEmbeddedTweetForNavigation) { embeddedTweet in
+            if embeddedTweet.originalTweetId != nil,
+               (embeddedTweet.content?.isEmpty ?? true),
+               (embeddedTweet.attachments?.isEmpty ?? true) {
+                CommentDetailViewWithParent(comment: embeddedTweet)
+            } else {
+                TweetDetailView(tweet: embeddedTweet)
+            }
         }
         .navigationDestination(item: $selectedCommentUserForNavigation) { user in
             ProfileView(
@@ -1518,7 +1528,7 @@ struct TweetDetailView: View {
                         EmbeddedTweetView(
                             tweet: orig,
                             isPinned: false,
-                            onTap: nil, // NavigationLink to quoted tweet detail
+                            onTap: { selectedEmbeddedTweetForNavigation = $0 },
                             isEmbedded: true
                         )
                     }

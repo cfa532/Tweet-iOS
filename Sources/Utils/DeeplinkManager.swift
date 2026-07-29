@@ -5,13 +5,19 @@ import SwiftUI
 final class DeeplinkDelivery: @unchecked Sendable {
     static let shared = DeeplinkDelivery()
 
+    enum Completion {
+        case succeeded
+        case retryScheduled
+        case failed
+    }
+
     private let lock = NSLock()
     private var pendingURLStrings: [String] = []
     private var inFlightURLStrings: Set<String> = []
     private var recentlyHandledURLStrings: [String: Date] = [:]
     private var failedOpenCounts: [String: Int] = [:]
     private let duplicateSuppressionInterval: TimeInterval = 3
-    private let maxFailedOpenRetries = 2
+    private let maxFailedOpenRetries = 1
 
     private init() {}
 
@@ -55,7 +61,8 @@ final class DeeplinkDelivery: @unchecked Sendable {
         return true
     }
 
-    func finishHandling(_ url: URL, succeeded: Bool) {
+    @discardableResult
+    func finishHandling(_ url: URL, succeeded: Bool) -> Completion {
         let shouldRetry: Bool
         lock.lock()
         pruneRecentlyHandledURLs()
@@ -73,7 +80,7 @@ final class DeeplinkDelivery: @unchecked Sendable {
                 recentlyHandledURLStrings[urlString] = Date()
                 lock.unlock()
                 print("[DeeplinkDelivery] Deeplink failed after retries; giving up: \(url.absoluteString)")
-                return
+                return .failed
             }
 
             pendingURLStrings.append(urlString)
@@ -86,7 +93,10 @@ final class DeeplinkDelivery: @unchecked Sendable {
         if shouldRetry {
             print("[DeeplinkDelivery] Deeplink did not open; retrying shortly: \(url.absoluteString)")
             schedulePendingDelivery(url, delay: 2)
+            return .retryScheduled
         }
+
+        return succeeded ? .succeeded : .failed
     }
 
     private func enqueue(_ url: URL) -> Bool {
@@ -272,8 +282,7 @@ class DeeplinkManager: ObservableObject {
         // First try to fetch from cache
         if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
             print("[DeeplinkManager] ✅ Found tweet in cache")
-            await replaceNavigationPath(with: cachedTweet, navigationPath: navigationPath)
-            return true
+            return await replaceNavigationPath(with: cachedTweet, navigationPath: navigationPath)
         }
         
         // If not in cache and we have authorId, fetch from server
@@ -301,17 +310,14 @@ class DeeplinkManager: ObservableObject {
 
                 if let tweet = await fetchDeeplinkTweet(tweetId: tweetId, authorId: authorId, hproseInstance: hproseInstance) {
                     print("[DeeplinkManager] ✅ Successfully fetched tweet for deeplink")
-                    await replaceNavigationPath(with: tweet, navigationPath: navigationPath)
-                    return true
+                    return await replaceNavigationPath(with: tweet, navigationPath: navigationPath)
                 }
             }
 
             print("[DeeplinkManager] ⚠️ Tweet not found on server after deeplink retries")
-            await showTweetNotFoundError()
             return false
         } else {
             print("[DeeplinkManager] ⚠️ Cannot fetch tweet: missing authorId")
-            await showTweetNotFoundError()
             return false
         }
     }
@@ -339,17 +345,6 @@ class DeeplinkManager: ObservableObject {
         }
     }
     
-    /// Show error notification when tweet is not found
-    private func showTweetNotFoundError() async {
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .deeplinkTweetNotFound,
-                object: nil,
-                userInfo: ["message": NSLocalizedString("Tweet not found. It may have been deleted or the link is invalid.", comment: "Deeplink tweet not found error")]
-            )
-        }
-    }
-    
     /// Navigate to a user profile
     private func navigateToUser(userId: String, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
         print("[DeeplinkManager] Navigating to user: \(userId)")
@@ -357,8 +352,7 @@ class DeeplinkManager: ObservableObject {
         do {
             if let user = try await hproseInstance.fetchUser(userId) {
                 print("[DeeplinkManager] Successfully fetched user")
-                await replaceNavigationPath(with: user, navigationPath: navigationPath)
-                return true
+                return await replaceNavigationPath(with: user, navigationPath: navigationPath)
             } else {
                 print("[DeeplinkManager] User not found")
                 return false
@@ -369,11 +363,32 @@ class DeeplinkManager: ObservableObject {
         }
     }
 
-    private func replaceNavigationPath<T: Hashable>(with value: T, navigationPath: Binding<NavigationPath>) async {
-        await MainActor.run {
-            var newPath = NavigationPath()
-            newPath.append(value)
+    private func replaceNavigationPath<T: Hashable>(with value: T, navigationPath: Binding<NavigationPath>) async -> Bool {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+
+        if !navigationPath.wrappedValue.isEmpty {
+            // SwiftUI can retain a same-depth destination when a path changes directly
+            // from one Tweet/User value to another. Commit the removal first; the
+            // full-screen deeplink placeholder hides both non-animated mutations.
+            withTransaction(transaction) {
+                navigationPath.wrappedValue = NavigationPath()
+            }
+
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return false
+            }
+        }
+
+        guard !Task.isCancelled else { return false }
+
+        var newPath = NavigationPath()
+        newPath.append(value)
+        withTransaction(transaction) {
             navigationPath.wrappedValue = newPath
         }
+        return true
     }
 }
