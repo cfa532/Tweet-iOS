@@ -707,58 +707,25 @@ class TweetBodyUIView: UIView {
             return makeFullContentAttributedString(content: content)
         }
 
-        // UILabel says truncation is needed — use TextKit to find the truncation point
-        let textStorage = NSTextStorage(string: content, attributes: textAttributes)
-        let textContainer = NSTextContainer(size: CGSize(width: availableWidth, height: .greatestFiniteMagnitude))
-        textContainer.lineFragmentPadding = 0
-        let layoutManager = NSLayoutManager()
-        layoutManager.addTextContainer(textContainer)
-        textStorage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: textContainer)
-
-        // Collect glyph ranges per line
-        var lineGlyphRanges: [NSRange] = []
-        var glyphIndex = 0
-        while glyphIndex < layoutManager.numberOfGlyphs {
-            var lineRange = NSRange()
-            layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineRange)
-            lineGlyphRanges.append(lineRange)
-            glyphIndex = NSMaxRange(lineRange)
-        }
-
-        // Edge case: UILabel says truncation needed but NSLayoutManager disagrees.
-        // Return plain text — UILabel will naturally truncate via numberOfLines=7.
-        guard lineGlyphRanges.count > maxLines else {
-            return makeFullContentAttributedString(content: content)
-        }
-
-        // Text is truncated — find character range visible in maxLines
-        let lastLineGlyphRange = lineGlyphRanges[maxLines - 1]
-        let lastLineCharRange = layoutManager.characterRange(forGlyphRange: lastLineGlyphRange, actualGlyphRange: nil)
-        let lastLineStart = lastLineCharRange.location
-
-        // Measure localized "More..." suffix width to know how much room to reserve
+        // Use the same UILabel renderer for the cutoff as for display. This avoids
+        // renderer-specific branches and guarantees that the suffix fits in maxLines.
         let moreString = " " + NSLocalizedString("More...", comment: "")
-        let moreWidth = NSAttributedString(string: moreString, attributes: [.font: font]).size().width
-        let targetWidth = availableWidth - moreWidth - 2 // 2px safety margin
-
-        // Binary search for the longest substring that fits within targetWidth
-        var lo = lastLineStart
-        var hi = NSMaxRange(lastLineCharRange)
+        let characterBoundaries = Array(content.indices) + [content.endIndex]
+        var lo = 0
+        var hi = characterBoundaries.count - 1
+        checkLabel.numberOfLines = 0
         while lo < hi {
             let mid = lo + (hi - lo + 1) / 2
-            let lastLineText = (content as NSString).substring(with: NSRange(location: lastLineStart, length: mid - lastLineStart))
-            let lineWidth = NSAttributedString(string: lastLineText, attributes: [.font: font]).size().width
-            if lineWidth <= targetWidth {
+            let candidate = String(content[..<characterBoundaries[mid]]) + moreString
+            checkLabel.attributedText = NSAttributedString(string: candidate, attributes: textAttributes)
+            if checkLabel.sizeThatFits(fitSize).height <= clampedHeight + 1 {
                 lo = mid
             } else {
                 hi = mid - 1
             }
         }
-        let trimEnd = lo
 
-        // Build body text: everything up to trimEnd, strip trailing whitespace
-        var bodyText = (content as NSString).substring(to: trimEnd)
+        var bodyText = String(content[..<characterBoundaries[lo]])
         while bodyText.hasSuffix(" ") || bodyText.hasSuffix("\n") || bodyText.hasSuffix("\r") {
             bodyText = String(bodyText.dropLast())
         }
