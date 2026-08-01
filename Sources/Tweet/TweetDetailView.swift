@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import Combine
 import UIKit
 
 @MainActor
@@ -765,15 +766,27 @@ private struct DetailSingletonVideoPlayerView: View {
                 && !didThisVideoFailToLoad)
     }
 
+    private var requiresLayerBackedPlaybackSurface: Bool {
+#if targetEnvironment(macCatalyst)
+        true
+#else
+        ProcessInfo.processInfo.isiOSAppOnMac
+#endif
+    }
+
     var body: some View {
         ZStack {
             Color.black
 
             if isThisVideoLoaded, let player = manager.currentPlayer {
-                DetailAVPlayerView(
-                    player: player
-                )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Group {
+                    if requiresLayerBackedPlaybackSurface {
+                        DetailLayerVideoPlayerView(player: player)
+                    } else {
+                        DetailAVPlayerView(player: player)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if shouldShowPlaceholder {
@@ -854,6 +867,114 @@ private struct DetailSingletonVideoPlayerView: View {
 
 }
 
+// MARK: - Layer-backed detail player for iPad apps running on Mac
+
+/// AVPlayerViewController installs a UITransitionView for its native controls. The
+/// iPad-on-Mac runtime can recursively invalidate that view's dynamic corner layout
+/// guides when a LazyVStack hands the singleton player between cells. A plain
+/// AVPlayerLayer has no transition controller or dynamic layout guides.
+@MainActor
+private struct DetailLayerVideoPlayerView: View {
+    let player: AVPlayer
+
+    @ObservedObject private var manager = DetailVideoManager.shared
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 1
+    @State private var isSeeking = false
+    @State private var shouldResumeAfterSeek = false
+
+    private let playbackClock = Timer.publish(
+        every: 0.25,
+        on: .main,
+        in: .common
+    ).autoconnect()
+
+    var body: some View {
+        ZStack {
+            LightweightVideoPlayer(player: player)
+
+            VStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        manager.togglePlayback()
+                    } label: {
+                        Image(systemName: manager.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white)
+                    .accessibilityLabel(manager.isPlaying ? "Pause video" : "Play video")
+
+                    Slider(
+                        value: Binding(
+                            get: { currentTime },
+                            set: { currentTime = $0 }
+                        ),
+                        in: 0...max(duration, 1),
+                        onEditingChanged: handleSeeking
+                    )
+                    .tint(.white)
+
+                    Text("\(formattedTime(currentTime)) / \(formattedTime(duration))")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                        .frame(width: 92, alignment: .trailing)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.black.opacity(0.65))
+            }
+        }
+        .onAppear {
+            refreshPlaybackTime()
+        }
+        .onReceive(playbackClock) { _ in
+            refreshPlaybackTime()
+        }
+    }
+
+    private func refreshPlaybackTime() {
+        guard !isSeeking else { return }
+
+        let playerTime = player.currentTime().seconds
+        if playerTime.isFinite {
+            currentTime = max(0, playerTime)
+        }
+
+        if let itemDuration = player.currentItem?.duration.seconds,
+           itemDuration.isFinite,
+           itemDuration > 0 {
+            duration = itemDuration
+        }
+    }
+
+    private func handleSeeking(_ editing: Bool) {
+        if editing {
+            isSeeking = true
+            shouldResumeAfterSeek = manager.isPlaying
+            player.pause()
+            return
+        }
+
+        let target = CMTime(seconds: currentTime, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        isSeeking = false
+
+        if shouldResumeAfterSeek {
+            player.play()
+        }
+        shouldResumeAfterSeek = false
+    }
+
+    private func formattedTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let totalSeconds = Int(seconds)
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}
+
 // MARK: - Detail AVPlayerViewController Wrapper
 
 private struct DetailAVPlayerView: UIViewControllerRepresentable {
@@ -926,6 +1047,10 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
+        // Inline autoplay pauses frequently and does not expose frame-analysis actions.
+        // Avoid starting Visual Look Up work that would immediately be cancelled by the
+        // next cell handoff on platforms where the native controller remains in use.
+        vc.allowsVideoFrameAnalysis = false
         vc.player = player
         vc.showsPlaybackControls = true
         vc.videoGravity = .resizeAspect
@@ -967,6 +1092,7 @@ struct TweetDetailView: View {
     @ObservedObject var tweet: Tweet
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
+    @State private var mediaContainerWidth: CGFloat = 0
     @State private var showLoginSheet = false
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -1377,7 +1503,6 @@ struct TweetDetailView: View {
                 let mediaAttachments = attachments.filter { isMediaType($0.type) }
 
                 if !audioAttachments.isEmpty || !mediaAttachments.isEmpty {
-                    let cellWidth = UIScreen.main.bounds.width
                     LazyVStack(spacing: 1) {
                         if !audioAttachments.isEmpty {
                             CompactAudioPlaylistPlayer(
@@ -1388,48 +1513,62 @@ struct TweetDetailView: View {
                             .padding(.vertical, 8)
                         }
 
-                        ForEach(mediaAttachments.indices, id: \.self) { idx in
-                            let attachment = mediaAttachments[idx]
-                            let origIdx = attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? idx
-                            let ar = CGFloat(aspectRatio(for: attachment, at: idx))
-                            let cellHeight = cellWidth / ar
+                        if mediaContainerWidth > 0 {
+                            ForEach(mediaAttachments.indices, id: \.self) { idx in
+                                let attachment = mediaAttachments[idx]
+                                let origIdx = attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? idx
+                                let ar = CGFloat(aspectRatio(for: attachment, at: idx))
+                                let cellHeight = mediaContainerWidth / ar
 
-                            Group {
-                                if attachment.type == .video || attachment.type == .hls_video {
-                                    if let baseUrl = displayTweet.author?.baseUrl,
-                                       let url = attachment.getUrl(baseUrl) {
-                                        DetailSingletonVideoPlayerView(
-                                            url: url,
-                                            mid: attachment.mid,
-                                            mediaType: attachment.type,
-                                            aspectRatio: attachment.aspectRatio,
-                                            shouldLoad: attachment.mid == firstMainTweetVideoToAutoplay?.mid
-                                        )
-                                        .trackAttachmentVideoVisibility(
+                                Group {
+                                    if attachment.type == .video || attachment.type == .hls_video {
+                                        if let baseUrl = displayTweet.author?.baseUrl,
+                                           let url = attachment.getUrl(baseUrl) {
+                                            DetailSingletonVideoPlayerView(
+                                                url: url,
+                                                mid: attachment.mid,
+                                                mediaType: attachment.type,
+                                                aspectRatio: attachment.aspectRatio,
+                                                shouldLoad: attachment.mid == firstMainTweetVideoToAutoplay?.mid
+                                            )
+                                            .trackAttachmentVideoVisibility(
+                                                attachmentIndex: origIdx,
+                                                videoMid: attachment.mid,
+                                                coordinator: commentsVideoCoordinator,
+                                                scrollCoordinateSpace: "commentsScroll"
+                                            )
+                                        }
+                                    } else {
+                                        DetailMediaCell(
+                                            parentTweet: displayTweet,
                                             attachmentIndex: origIdx,
-                                            videoMid: attachment.mid,
-                                            coordinator: commentsVideoCoordinator,
-                                            scrollCoordinateSpace: "commentsScroll"
+                                            aspectRatio: Float(ar),
+                                            shouldLoadVideo: false,
+                                            showMuteButton: false
                                         )
-                                    }
-                                } else {
-                                    DetailMediaCell(
-                                        parentTweet: displayTweet,
-                                        attachmentIndex: origIdx,
-                                        aspectRatio: Float(ar),
-                                        shouldLoadVideo: false,
-                                        showMuteButton: false
-                                    )
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        selectedMediaIndex = origIdx
-                                        showBrowser = true
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            selectedMediaIndex = origIdx
+                                            showBrowser = true
+                                        }
                                     }
                                 }
+                                // Keep the player on a stable explicit frame. In particular,
+                                // AVPlayerViewController's dynamic layout guides can form an
+                                // invalidation loop with a responsive aspect-ratio wrapper on
+                                // the iPad-on-Mac runtime while a LazyVStack recycles the cell.
+                                .frame(width: mediaContainerWidth, height: cellHeight)
+                                .background(Color.black)
                             }
-                            .frame(width: cellWidth, height: cellHeight)
-                            .background(Color.black)
                         }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.width
+                    } action: { newWidth in
+                        guard newWidth > 0,
+                              abs(newWidth - mediaContainerWidth) > 0.5 else { return }
+                        mediaContainerWidth = newWidth
                     }
                 }
             }
