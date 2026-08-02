@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVKit
+import Combine
 import Photos
 import UIKit
 
@@ -359,20 +360,28 @@ struct MediaBrowserView: View {
         }
         
         var body: some View {
-            ZStack {
-                // Fade the shared backdrop as the current media is pulled down so
-                // the presenting screen is already visible when dismissal begins.
-                Color.black.opacity(dismissBackdropOpacity)
-                    .ignoresSafeArea(.all, edges: .all)
-                
-                currentContentLayer
+            GeometryReader { geometry in
+                ZStack {
+                    // Fade the shared backdrop as the current media is pulled down so
+                    // the presenting screen is already visible when dismissal begins.
+                    Color.black.opacity(dismissBackdropOpacity)
+                        .ignoresSafeArea(.all, edges: .all)
+
+                    // Full-screen covers in the iPad-on-Mac runtime can propose a size
+                    // larger than their app window to UIKit-backed descendants. Pin the
+                    // pager to the actual presentation geometry so media cannot escape it.
+                    currentContentLayer
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
             }
             .statusBar(hidden: true)
             .onTapGesture {
-                // Video pages already get tap-to-reveal via SimplerAVPlayerViewController's own
-                // gesture recognizer, which is configured to coexist with AVKit's native controls.
-                // This screen-covering gesture must not also fire there — its default
-                // cancelsTouchesInView swallows taps meant for AVKit's native pause button.
+                // Video pages own tap-to-reveal through their native or layer-backed
+                // playback surface. This screen-covering gesture must not also fire
+                // there because it can swallow taps meant for playback controls.
                 guard currentIndex < attachments.count, !isVideoAttachment(attachments[currentIndex]) else { return }
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showControls = true
@@ -1221,6 +1230,14 @@ struct SingletonVideoPlayerView: View {
         manager.loadFailedVideoMid == mid
     }
 
+    private var requiresLayerBackedPlaybackSurface: Bool {
+#if targetEnvironment(macCatalyst)
+        true
+#else
+        ProcessInfo.processInfo.isiOSAppOnMac
+#endif
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -1233,15 +1250,25 @@ struct SingletonVideoPlayerView: View {
                         layerReadyForDisplay: layerReadyForCurrentVideo,
                         player: player
                     )
-                    // Use AVPlayerViewController in fullscreen so native playback
-                    // controls are available when the video is tapped.
-                    SimplerAVPlayerViewController(
-                        player: player,
-                        mid: mid,
-                        onUserInteraction: onUserInteraction
-                    )
+                    Group {
+                        if requiresLayerBackedPlaybackSurface {
+                            BrowserLayerVideoPlayerView(
+                                player: player,
+                                mid: mid,
+                                onUserInteraction: onUserInteraction
+                            )
+                        } else {
+                            // Keep native playback controls on iPhone and iPad.
+                            SimplerAVPlayerViewController(
+                                player: player,
+                                mid: mid,
+                                onUserInteraction: onUserInteraction
+                            )
+                        }
+                    }
                     .id(fullscreenSurfaceID(mid: mid, item: currentItem))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
                     .onAppear {
                         DispatchQueue.main.async {
                             readyForDisplayMid = mid
@@ -1373,6 +1400,125 @@ struct SingletonVideoPlayerView: View {
         return thumbnailForCurrentMid
             ?? SharedAssetCache.shared.cachedThumbnail(for: mid)
             ?? manager.transitionPoster(for: mid)
+    }
+}
+
+// MARK: - Layer-backed browser player for iPad apps running on Mac
+
+/// AVPlayerViewController may promote its transition surface to the Mac display's
+/// dimensions even though SwiftUI presented MediaBrowserView inside an app window.
+/// AVPlayerLayer stays bound to the measured browser frame and preserves aspect fit.
+@MainActor
+private struct BrowserLayerVideoPlayerView: View {
+    let player: AVPlayer
+    let mid: String
+    let onUserInteraction: () -> Void
+
+    @ObservedObject private var manager = FullScreenVideoManager.shared
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 1
+    @State private var isSeeking = false
+    @State private var shouldResumeAfterSeek = false
+
+    private let playbackClock = Timer.publish(
+        every: 0.25,
+        on: .main,
+        in: .common
+    ).autoconnect()
+
+    var body: some View {
+        ZStack {
+            LightweightVideoPlayer(player: player)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onUserInteraction)
+
+            VStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        if manager.isPlaying {
+                            manager.pause()
+                        } else {
+                            manager.play()
+                        }
+                        onUserInteraction()
+                    } label: {
+                        Image(systemName: manager.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white)
+                    .accessibilityLabel(manager.isPlaying ? "Pause video" : "Play video")
+
+                    Slider(
+                        value: Binding(
+                            get: { currentTime },
+                            set: { currentTime = $0 }
+                        ),
+                        in: 0...max(duration, 1),
+                        onEditingChanged: handleSeeking
+                    )
+                    .tint(.white)
+
+                    Text("\(formattedTime(currentTime)) / \(formattedTime(duration))")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                        .frame(width: 92, alignment: .trailing)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.black.opacity(0.65))
+            }
+        }
+        .onAppear {
+            refreshPlaybackTime()
+            manager.markPlaybackSurfaceReady(player: player, mid: mid)
+        }
+        .onReceive(playbackClock) { _ in
+            refreshPlaybackTime()
+        }
+    }
+
+    private func refreshPlaybackTime() {
+        guard !isSeeking else { return }
+
+        let playerTime = player.currentTime().seconds
+        if playerTime.isFinite {
+            currentTime = max(0, playerTime)
+        }
+
+        if let itemDuration = player.currentItem?.duration.seconds,
+           itemDuration.isFinite,
+           itemDuration > 0 {
+            duration = itemDuration
+        }
+    }
+
+    private func handleSeeking(_ editing: Bool) {
+        if editing {
+            isSeeking = true
+            shouldResumeAfterSeek = manager.isPlaying
+            manager.pause()
+            onUserInteraction()
+            return
+        }
+
+        let target = CMTime(seconds: currentTime, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        isSeeking = false
+
+        if shouldResumeAfterSeek {
+            manager.play()
+        }
+        shouldResumeAfterSeek = false
+        onUserInteraction()
+    }
+
+    private func formattedTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let totalSeconds = Int(seconds)
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 }
 
