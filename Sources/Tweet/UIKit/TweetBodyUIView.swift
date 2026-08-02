@@ -663,6 +663,28 @@ class TweetBodyUIView: UIView {
     nonisolated static let contentFont = UIFont.systemFont(ofSize: 16)
     nonisolated static let maxContentLines = 7
 
+    /// Text beyond this point can never be useful for the seven-line feed preview. Keeping
+    /// truncation layout bounded prevents unusually large remote content from making CoreText
+    /// shape the entire string synchronously on the main thread. The limit is deliberately much
+    /// larger than the visible preview on supported device widths.
+    nonisolated private static let maxTruncationLayoutUTF16Length = 4_096
+
+    /// Bounds work by UTF-16 code units rather than grapheme count so a single adversarially large
+    /// composed character cannot bypass the limit. A split encoding sequence is repaired with the
+    /// Unicode replacement character; the eventual seven-line cutoff is far before this boundary.
+    nonisolated private static func contentForTruncationLayout(_ content: String) -> (text: String, wasCapped: Bool) {
+        let utf16 = content.utf16
+        guard let limit = utf16.index(
+            utf16.startIndex,
+            offsetBy: maxTruncationLayoutUTF16Length,
+            limitedBy: utf16.endIndex
+        ), limit != utf16.endIndex else {
+            return (content, false)
+        }
+
+        return (String(decoding: utf16[..<limit], as: Unicode.UTF16.self), true)
+    }
+
     /// Shared UILabel for truncation detection — matches UILabel's TextKit2 rendering.
     /// NSLayoutManager (TextKit1) and UILabel (TextKit2) can disagree on line breaking,
     /// so we trust UILabel since that's what actually renders the text in cells.
@@ -687,20 +709,20 @@ class TweetBodyUIView: UIView {
             .paragraphStyle: paragraphStyle
         ]
 
-        // Use UILabel to detect whether text actually exceeds maxLines.
-        // NSLayoutManager (TextKit1) and UILabel (TextKit2) can disagree on line breaking,
-        // so we trust UILabel since that's what renders the text.
+        // Use UILabel to detect whether text exceeds maxLines. Probe only one line beyond the
+        // preview instead of laying out the complete string with numberOfLines == 0.
         let checkLabel = truncationCheckLabel
-        let attrText = NSAttributedString(string: content, attributes: textAttributes)
+        let layoutContent = contentForTruncationLayout(content)
+        let attrText = NSAttributedString(string: layoutContent.text, attributes: textAttributes)
         checkLabel.attributedText = attrText
         let fitSize = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
 
-        checkLabel.numberOfLines = 0
-        let fullHeight = checkLabel.sizeThatFits(fitSize).height
+        checkLabel.numberOfLines = maxLines + 1
+        let overflowProbeHeight = checkLabel.sizeThatFits(fitSize).height
         checkLabel.numberOfLines = maxLines
         let clampedHeight = checkLabel.sizeThatFits(fitSize).height
 
-        let needsTruncation = fullHeight > clampedHeight + 1 // 1pt tolerance
+        let needsTruncation = layoutContent.wasCapped || overflowProbeHeight > clampedHeight + 1
 
         // No truncation needed — return plain text
         guard needsTruncation else {
@@ -710,13 +732,13 @@ class TweetBodyUIView: UIView {
         // Use the same UILabel renderer for the cutoff as for display. This avoids
         // renderer-specific branches and guarantees that the suffix fits in maxLines.
         let moreString = " " + NSLocalizedString("More...", comment: "")
-        let characterBoundaries = Array(content.indices) + [content.endIndex]
+        let characterBoundaries = Array(layoutContent.text.indices) + [layoutContent.text.endIndex]
         var lo = 0
         var hi = characterBoundaries.count - 1
-        checkLabel.numberOfLines = 0
+        checkLabel.numberOfLines = maxLines + 1
         while lo < hi {
             let mid = lo + (hi - lo + 1) / 2
-            let candidate = String(content[..<characterBoundaries[mid]]) + moreString
+            let candidate = String(layoutContent.text[..<characterBoundaries[mid]]) + moreString
             checkLabel.attributedText = NSAttributedString(string: candidate, attributes: textAttributes)
             if checkLabel.sizeThatFits(fitSize).height <= clampedHeight + 1 {
                 lo = mid
@@ -725,7 +747,7 @@ class TweetBodyUIView: UIView {
             }
         }
 
-        var bodyText = String(content[..<characterBoundaries[lo]])
+        var bodyText = String(layoutContent.text[..<characterBoundaries[lo]])
         while bodyText.hasSuffix(" ") || bodyText.hasSuffix("\n") || bodyText.hasSuffix("\r") {
             bodyText = String(bodyText.dropLast())
         }
@@ -775,6 +797,7 @@ class TweetBodyUIView: UIView {
     nonisolated static func makeContentAttributedStringBackground(content: String, availableWidth: CGFloat) -> NSAttributedString {
         let font = contentFont
         let maxLines = maxContentLines
+        let layoutContent = contentForTruncationLayout(content)
 
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 3
@@ -786,11 +809,13 @@ class TweetBodyUIView: UIView {
             .paragraphStyle: paragraphStyle
         ]
 
-        let attrText = NSAttributedString(string: content, attributes: textAttributes)
+        let attrText = NSAttributedString(string: layoutContent.text, attributes: textAttributes)
 
         let textStorage = NSTextStorage(attributedString: attrText)
         let textContainer = NSTextContainer(size: CGSize(width: availableWidth, height: .greatestFiniteMagnitude))
         textContainer.lineFragmentPadding = 0
+        textContainer.maximumNumberOfLines = maxLines + 1
+        textContainer.lineBreakMode = .byWordWrapping
         let layoutManager = NSLayoutManager()
         layoutManager.addTextContainer(textContainer)
         textStorage.addLayoutManager(layoutManager)
@@ -803,13 +828,18 @@ class TweetBodyUIView: UIView {
             layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineRange)
             lineGlyphRanges.append(lineRange)
             glyphIndex = NSMaxRange(lineRange)
+            if lineGlyphRanges.count > maxLines { break }
         }
 
-        guard lineGlyphRanges.count > maxLines else {
+        guard layoutContent.wasCapped || lineGlyphRanges.count > maxLines else {
             return makeFullContentAttributedString(content: content)
         }
 
-        let lastLineGlyphRange = lineGlyphRanges[maxLines - 1]
+        guard !lineGlyphRanges.isEmpty else {
+            return makeFullContentAttributedString(content: layoutContent.text)
+        }
+
+        let lastLineGlyphRange = lineGlyphRanges[min(maxLines - 1, lineGlyphRanges.count - 1)]
         let lastLineCharRange = layoutManager.characterRange(forGlyphRange: lastLineGlyphRange, actualGlyphRange: nil)
         let lastLineStart = lastLineCharRange.location
 
@@ -821,13 +851,13 @@ class TweetBodyUIView: UIView {
         var hi = NSMaxRange(lastLineCharRange)
         while lo < hi {
             let mid = lo + (hi - lo + 1) / 2
-            let lastLineText = (content as NSString).substring(with: NSRange(location: lastLineStart, length: mid - lastLineStart))
+            let lastLineText = (layoutContent.text as NSString).substring(with: NSRange(location: lastLineStart, length: mid - lastLineStart))
             let lineWidth = NSAttributedString(string: lastLineText, attributes: [.font: font]).size().width
             if lineWidth <= targetWidth { lo = mid } else { hi = mid - 1 }
         }
         let trimEnd = lo
 
-        var bodyText = (content as NSString).substring(to: trimEnd)
+        var bodyText = (layoutContent.text as NSString).substring(to: trimEnd)
         while bodyText.hasSuffix(" ") || bodyText.hasSuffix("\n") || bodyText.hasSuffix("\r") {
             bodyText = String(bodyText.dropLast())
         }
