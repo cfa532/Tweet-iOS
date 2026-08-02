@@ -429,7 +429,8 @@ struct DetailMediaCell: View {
                         mid: attachment.mid,
                         mediaType: attachment.type,
                         aspectRatio: attachment.aspectRatio,
-                        shouldLoad: shouldLoadVideo
+                        shouldLoad: shouldLoadVideo,
+                        shouldMountNativePlaybackSurface: true
                     )
                 case .audio:
                     // Show audio player with SimpleAudioPlayer
@@ -709,6 +710,9 @@ private struct DetailSingletonVideoPlayerView: View {
     /// Retained for call-site compatibility but no longer used for autoplay.
     /// Playback is driven by CommentsVideoPlaybackCoordinator notifications via DetailVideoManager.
     let shouldLoad: Bool
+    /// Defers only the heavyweight native controller while a detail push is animating.
+    /// Player loading and handoff continue immediately behind the cached thumbnail.
+    let shouldMountNativePlaybackSurface: Bool
 
     @ObservedObject private var manager = DetailVideoManager.shared
     @State private var handoffThumbnail: UIImage?
@@ -757,7 +761,8 @@ private struct DetailSingletonVideoPlayerView: View {
     }
 
     private var shouldShowPlaceholder: Bool {
-        didThisVideoFailToLoad
+        isNativePlaybackSurfaceDeferred
+            || didThisVideoFailToLoad
             || !isThisVideoLoaded
             || isThisVideoPreparing
             || (manager.currentVideoMid == mid
@@ -774,6 +779,10 @@ private struct DetailSingletonVideoPlayerView: View {
 #endif
     }
 
+    private var isNativePlaybackSurfaceDeferred: Bool {
+        !requiresLayerBackedPlaybackSurface && !shouldMountNativePlaybackSurface
+    }
+
     var body: some View {
         ZStack {
             Color.black
@@ -782,7 +791,7 @@ private struct DetailSingletonVideoPlayerView: View {
                 Group {
                     if requiresLayerBackedPlaybackSurface {
                         DetailLayerVideoPlayerView(player: player)
-                    } else {
+                    } else if shouldMountNativePlaybackSurface {
                         DetailAVPlayerView(player: player)
                     }
                 }
@@ -1093,6 +1102,7 @@ struct TweetDetailView: View {
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var mediaContainerWidth: CGFloat = 0
+    @State private var shouldMountNativePlaybackSurface = false
     @State private var showLoginSheet = false
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -1371,6 +1381,15 @@ struct TweetDetailView: View {
                 commentsVideoCoordinator.refreshVisiblePlaybackAfterForeground(reason: "didBecomeActive")
             }
         }
+        // AVPlayerViewController creates its complete controls/KVO/PiP hierarchy synchronously.
+        // Keep that work out of the navigation transaction while player borrowing and loading
+        // continue immediately behind the cached handoff thumbnail.
+        .task(id: tweet.mid) {
+            shouldMountNativePlaybackSurface = false
+            try? await Task.sleep(for: .milliseconds(380))
+            guard !Task.isCancelled else { return }
+            shouldMountNativePlaybackSurface = true
+        }
         // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
         // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
         .task(id: tweet.originalTweetId) {
@@ -1453,7 +1472,10 @@ struct TweetDetailView: View {
         .onChange(of: displayTweet.mid) { _, _ in
             configureCommentCacheContextIfNeeded()
         }
-            .onDisappear {
+        .onDisappear {
+            // Ensure a retained detail view cannot remount the native controller synchronously
+            // when it reappears after a nested push. Its task will enable the surface again.
+            shouldMountNativePlaybackSurface = false
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
 
@@ -1529,7 +1551,8 @@ struct TweetDetailView: View {
                                                 mid: attachment.mid,
                                                 mediaType: attachment.type,
                                                 aspectRatio: attachment.aspectRatio,
-                                                shouldLoad: attachment.mid == firstMainTweetVideoToAutoplay?.mid
+                                                shouldLoad: attachment.mid == firstMainTweetVideoToAutoplay?.mid,
+                                                shouldMountNativePlaybackSurface: shouldMountNativePlaybackSurface
                                             )
                                             .trackAttachmentVideoVisibility(
                                                 attachmentIndex: origIdx,
