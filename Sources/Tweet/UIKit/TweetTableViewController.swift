@@ -3255,12 +3255,10 @@ class TweetTableViewController: UITableViewController {
             pendingBarsShowAfterScroll = false
             onScroll?(currentOffset, delta)
         } else {
-            // Scrolling up → show the bars at scroll STOP, not mid-gesture. Setting
-            // isNavigationVisible triggers a full SwiftUI layout pass (measured ~230ms)
-            // that blocks the main thread while the deceleration animation is running:
-            // the content freezes, then leaps hundreds of points on the next frame —
-            // the "hang + jump when scrolling up". Deferring the same work to the stop
-            // makes it invisible; viewDidLayoutSubviews still compensates the frame shift.
+            // Scrolling up → latch the request and reveal the bars on finger lift, so
+            // they are up for the whole coast. Showing them from here would re-toggle
+            // isNavigationVisible repeatedly across a single gesture, each toggle
+            // re-running the header layout and restarting the offset compensation.
             pendingBarsShowAfterScroll = true
         }
 
@@ -3303,20 +3301,29 @@ class TweetTableViewController: UITableViewController {
         isUserDragging = false
         isDecelerating = decelerate
 
+        // Reveal the bars as soon as the finger lifts, so they are already on screen
+        // while the list coasts. Waiting for the scroll to fully stop left them hidden
+        // for the whole inertial phase.
+        showPendingBarsAfterScrollIfNeeded()
+
         // CRITICAL: Save scroll position immediately when user stops dragging
         // (if not decelerating, scroll has stopped - save now to survive app termination)
         if !decelerate {
             videoCoordinator.currentScrollVelocityY = 0
             performPendingHeightRelayout()
-            showPendingBarsAfterScrollIfNeeded()
             saveScrollPositionIfNeeded()
             runScrollStopPreloadWhenIdle()
         }
         notifyScrollStateChanged(scrollView)
     }
 
-    /// Bars-show requested during an upward gesture, deferred to scroll stop (the
-    /// SwiftUI layout pass it triggers is too expensive to run mid-deceleration).
+    /// Set while an upward drag is in progress; consumed when the finger lifts.
+    ///
+    /// Finger lift is a single, well-defined moment: the bars come in as inertia starts
+    /// and stay up for the coast, and the anchored compensation in viewDidLayoutSubviews
+    /// keeps the content pinned while they do. Firing this repeatedly from
+    /// scrollViewDidScroll instead would re-toggle isNavigationVisible several times per
+    /// gesture, restarting that compensation each time.
     private var pendingBarsShowAfterScroll = false
 
     private func showPendingBarsAfterScrollIfNeeded() {
