@@ -26,7 +26,7 @@ final class MainThreadStallSampler: @unchecked Sendable {
     private var mainThreadPort: thread_t = 0
     private var lastHeartbeat = CFAbsoluteTimeGetCurrent()
     private let heartbeatLock = NSLock()
-    private var didReportCurrentStall = false
+    private var lastReportedStallSeconds: CFTimeInterval = 0
     private var mainRunLoopIsIdle = false
     private var started = false
     private var thresholdSeconds: CFTimeInterval = 0.12
@@ -67,7 +67,7 @@ final class MainThreadStallSampler: @unchecked Sendable {
     private func beat(isGoingIdle: Bool) {
         heartbeatLock.lock()
         lastHeartbeat = CFAbsoluteTimeGetCurrent()
-        didReportCurrentStall = false
+        lastReportedStallSeconds = 0
         mainRunLoopIsIdle = isGoingIdle
         heartbeatLock.unlock()
     }
@@ -75,11 +75,16 @@ final class MainThreadStallSampler: @unchecked Sendable {
     private func checkForStall() {
         heartbeatLock.lock()
         let elapsed = CFAbsoluteTimeGetCurrent() - lastHeartbeat
-        let alreadyReported = didReportCurrentStall
         let isIdle = mainRunLoopIsIdle
-        let shouldReport = elapsed > thresholdSeconds && !alreadyReported && !isIdle
+        // Re-sample as a stall drags on, at roughly doubling intervals (~0.12s, 0.25s,
+        // 0.5s, 1s, 2s...). A single sample at the moment the threshold trips only shows
+        // where a long hang STARTED; for a multi-second freeze the later samples are what
+        // reveal where it actually spends its time.
+        let shouldReport = !isIdle
+            && elapsed > thresholdSeconds
+            && (lastReportedStallSeconds == 0 || elapsed > lastReportedStallSeconds * 2)
         if shouldReport {
-            didReportCurrentStall = true
+            lastReportedStallSeconds = elapsed
         }
         heartbeatLock.unlock()
 
