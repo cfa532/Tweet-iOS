@@ -9,8 +9,8 @@ struct TabButton: View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isSelected ? XTheme.textColor : XTheme.secondaryTextColor)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.secondary)
                 Rectangle()
                     .fill(isSelected ? XTheme.accentColor : Color.clear)
                     .frame(width: 56, height: 4)

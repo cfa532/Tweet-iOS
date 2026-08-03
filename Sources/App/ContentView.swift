@@ -190,7 +190,7 @@ struct ContentView: View {
                 }) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 24))
-                        .foregroundColor(XTheme.accentColor)
+                        .foregroundColor(XTheme.secondaryTextColor)
                 }
                 .frame(maxWidth: .infinity)
                 
