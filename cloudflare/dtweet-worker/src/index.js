@@ -3,9 +3,10 @@
  *
  * - /.well-known/apple-app-site-association  -> iOS Universal Links
  * - /.well-known/assetlinks.json             -> Android App Links
- * - everything else                          -> reverse-proxied to the nginx
- *   origin serving TweetWeb, so users without the app see the real web page.
+ * - browser navigations                      -> redirected to the HTTP
+ *   TweetWeb host, so users without the app see the real web page.
  *   (/user/* and /profile/* are rewritten to TweetWeb's /author/* route.)
+ * - non-navigation requests                  -> reverse-proxied to Leither
  *
  * Users WITH the app never reach this worker for /tweet/* links: the OS
  * verifies the well-known files and opens the app directly.
@@ -31,6 +32,7 @@ const APP_STORE_ID = "6751131431";
 // at the server; nginx's dtweet.com.conf (*.dtweet.com) proxies to Leither :8080
 // preserving the Host header, so Leither domain routing can take over later.
 const ORIGIN = "http://dl.dtweet.com";
+const BROWSER_FALLBACK_ORIGIN = "http://t1.www333.store";
 const STATIC_ASSETS = new Set([
   "/index_entry.js",
   "/hprose.js",
@@ -82,7 +84,7 @@ export default {
       return json(assetLinks());
     }
 
-    return proxyToTweetWeb(request, url, env);
+    return proxyToTweetWeb(request, url);
   },
 };
 
@@ -131,15 +133,15 @@ function isHtmlNavigation(request) {
     (request.headers.get("accept") || "").includes("text/html");
 }
 
-async function proxyToTweetWeb(request, url, env) {
+async function proxyToTweetWeb(request, url) {
   // App deep-link paths use /user|/profile; TweetWeb's route is /author
   const path = url.pathname.replace(/^\/(user|profile)(\/|$)/, "/author$2");
 
-  // Keep the fallback on HTTPS. dl.dtweet.com proxies the HTTP-only Leither
-  // origin, including /webapi/, without exposing mixed content to browsers.
-  // App users never get here — the OS opens the app before any HTTP happens.
+  // App users never get here: iOS and Android claim supported dtweet.com links
+  // before browser navigation. Browser fallback uses a separate HTTP host so
+  // TweetWeb can contact HTTP/ws:// Leither providers without mixed content.
   if (isHtmlNavigation(request)) {
-    return env.ASSETS.fetch(request);
+    return Response.redirect(BROWSER_FALLBACK_ORIGIN + path + url.search, 302);
   }
 
   // Non-navigation requests (e.g. stray /webapi/ RPC posts): proxy to Leither.
