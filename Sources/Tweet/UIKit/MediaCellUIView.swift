@@ -906,8 +906,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         guard isVideoAttachment,
               player != nil else { return false }
 
-        return preserveFrameToCache(skipImageView: true, allowCachedFallback: false)
-            || preserveFrameToCache(useVideoOutput: false, skipImageView: true, allowCachedFallback: false)
+        // async: this runs from onReadyForDisplay, so the player layer is already
+        // showing the frame — nothing needs the capture on screen this instant, only
+        // the cache does. The sync path is a CoreImage/Metal readback, and the
+        // .videoThumbnailCached observer re-runs the transition when it lands.
+        return preserveFrameToCache(async: true, skipImageView: true, allowCachedFallback: false)
     }
 
     private var shouldShowBackgroundRecoverySpinner: Bool {
@@ -3407,7 +3410,11 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
-            captureLastFrameIfPossible(reason: "coordinatorPause")
+            // async: the paused AVPlayerLayer keeps showing its last rendered frame, so
+            // nothing on screen needs this capture right now — only the thumbnail cache
+            // does. Capturing synchronously here is a CoreImage/Metal readback (~120ms)
+            // and this fires mid-scroll every time the coordinator changes primary.
+            captureLastFrameIfPossible(reason: "coordinatorPause", async: true)
             refreshVisualStateAfterCoordinatorStopped()
             // Volume fade-out then pause
             UIView.animate(withDuration: 0.2, animations: {
@@ -3440,7 +3447,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
-            captureLastFrameIfPossible(reason: "coordinatorStop")
+            captureLastFrameIfPossible(reason: "coordinatorStop", async: true)
 
             if !isActuallyPlayerReady(player) && videoCellState == .playerLoading {
                 if !isVisible {
@@ -3496,7 +3503,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
-            captureLastFrameIfPossible(reason: "stopAllVideos")
+            captureLastFrameIfPossible(reason: "stopAllVideos", async: true)
             // When video finished naturally, keep AVPlayerLayer showing the last
             // rendered frame — don't reveal the lower-res imageView thumbnail.
             if videoCellState == .playing && !isHandlingFinishEvent {

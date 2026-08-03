@@ -2581,9 +2581,7 @@ class SharedAssetCache: ObservableObject {
     ) async -> Bool {
         for _ in 0..<attempts {
             if Task.isCancelled { return false }
-            if let image = copyPreloadFrame(from: output, player: player),
-               !VideoFrameExtractor.isMostlyBlack(image),
-               !VideoFrameExtractor.isMostlyWhite(image) {
+            if let image = await copyPreloadFrame(from: output, player: player) {
                 storeCachedThumbnail(image, for: mediaID, source: "preload-decoded")
                 return true
             }
@@ -2592,7 +2590,15 @@ class SharedAssetCache: ObservableObject {
         return false
     }
 
-    private func copyPreloadFrame(from output: AVPlayerItemVideoOutput, player: AVPlayer) -> UIImage? {
+    /// Copies a decoded frame and converts it to a UIImage **off** the main actor.
+    ///
+    /// SharedAssetCache is @MainActor, so this whole conversion — CIContext.createCGImage,
+    /// a GPU readback — used to run on the main thread, and captureDecodedPreloadFrame
+    /// calls it up to 20 times per preload. That showed up in main-thread stall samples
+    /// as a >120ms block during scrolling. Only the candidate timestamps are computed on
+    /// the actor; the pixel-buffer copy, downscale, and the blank-frame rejection all run
+    /// in the detached task, so the main thread never touches a frame.
+    private func copyPreloadFrame(from output: AVPlayerItemVideoOutput, player: AVPlayer) async -> UIImage? {
         let current = player.currentTime()
         let hostTime = output.itemTime(forHostTime: CACurrentMediaTime())
         var candidates: [CMTime] = []
@@ -2607,17 +2613,25 @@ class SharedAssetCache: ObservableObject {
         if hostTime.isValid {
             candidates.append(hostTime)
         }
+        guard !candidates.isEmpty else { return nil }
 
-        var displayTime = CMTime.zero
-        for time in candidates {
-            guard time.isValid,
-                  let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime),
-                  let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 480) else {
-                continue
+        return await Task.detached(priority: .utility) {
+            var displayTime = CMTime.zero
+            for time in candidates {
+                guard time.isValid,
+                      let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime),
+                      let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 480) else {
+                    continue
+                }
+                // Reject blank frames here too — the luminance check decodes the image,
+                // which is exactly the work being kept off the main thread.
+                if VideoFrameExtractor.isMostlyBlack(image) || VideoFrameExtractor.isMostlyWhite(image) {
+                    continue
+                }
+                return image
             }
-            return image
-        }
-        return nil
+            return nil
+        }.value
     }
 
     private func readyAssetIfAvailable(from player: AVPlayer) -> AVAsset? {

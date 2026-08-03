@@ -2854,25 +2854,33 @@ class TweetTableViewController: UITableViewController {
 
         if let content = displayTweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             hasTextContent = true
-            // Build (or retrieve cached) attributed string — single typesetting pass
-            let attrString: NSAttributedString
-            if let cached = displayTweet.cachedContentAttributedString,
-               displayTweet.cachedContentWidth == contentWidth {
-                attrString = cached
-            } else {
-                attrString = TweetBodyUIView.makeContentAttributedString(
-                    content: content, availableWidth: contentWidth
-                )
-                displayTweet.cachedContentAttributedString = attrString
-                displayTweet.cachedContentWidth = contentWidth
-            }
-            // Use shared UILabel for exact height matching (avoids boundingRect vs UILabel diffs).
-            // Cache the sizeThatFits result so repeated willDisplay / heightForRowAt calls skip
-            // the TextKit layout pass for already-measured tweets.
+            // The attributed string is ONLY an input to the sizeThatFits pass below, so
+            // build it only when that pass actually has to run. TweetHeightPrewarmer
+            // publishes cachedMeasuredTextHeight from a background thread but
+            // deliberately does not publish the attributed string (it avoids sending it
+            // across the actor boundary), so building it up front meant every prewarmed
+            // tweet re-ran CoreText typesetting on the main thread and then threw the
+            // result away — expensive enough with CJK content to stall the scroll when
+            // a paginated page was inserted.
             let measuredTextHeight: CGFloat
             if displayTweet.cachedMeasuredTextWidth == contentWidth && displayTweet.cachedMeasuredTextHeight >= 0 {
                 measuredTextHeight = displayTweet.cachedMeasuredTextHeight
             } else {
+                // Build (or retrieve cached) attributed string — single typesetting pass
+                let attrString: NSAttributedString
+                if let cached = displayTweet.cachedContentAttributedString,
+                   displayTweet.cachedContentWidth == contentWidth {
+                    attrString = cached
+                } else {
+                    attrString = TweetBodyUIView.makeContentAttributedString(
+                        content: content, availableWidth: contentWidth
+                    )
+                    displayTweet.cachedContentAttributedString = attrString
+                    displayTweet.cachedContentWidth = contentWidth
+                }
+                // Use shared UILabel for exact height matching (avoids boundingRect vs UILabel diffs).
+                // Cache the sizeThatFits result so repeated willDisplay / heightForRowAt calls skip
+                // the TextKit layout pass for already-measured tweets.
                 Self.measurementLabel.attributedText = attrString
                 measuredTextHeight = Self.measurementLabel.sizeThatFits(CGSize(width: contentWidth, height: .greatestFiniteMagnitude)).height
                 displayTweet.cachedMeasuredTextHeight = measuredTextHeight
@@ -2924,22 +2932,23 @@ class TweetTableViewController: UITableViewController {
                     // bodyView spans full EmbeddedTweetUIView contentStack width (NOT beside avatar).
                     // Embedded wrapper extends 4pt left, then embedded content adds 8pt side insets.
                     let embeddedWidth = contentWidth - 12
-                    // Build (or retrieve cached) attributed string for embedded tweet
-                    let attrString: NSAttributedString
-                    if let cached = embeddedTweet.cachedContentAttributedString,
-                       embeddedTweet.cachedContentWidth == embeddedWidth {
-                        attrString = cached
-                    } else {
-                        attrString = TweetBodyUIView.makeContentAttributedString(
-                            content: embeddedTweet.content!, availableWidth: embeddedWidth
-                        )
-                        embeddedTweet.cachedContentAttributedString = attrString
-                        embeddedTweet.cachedContentWidth = embeddedWidth
-                    }
+                    // Same as above: only typeset when the measured height isn't already known.
                     let embeddedTextHeight: CGFloat
                     if embeddedTweet.cachedMeasuredTextWidth == embeddedWidth && embeddedTweet.cachedMeasuredTextHeight >= 0 {
                         embeddedTextHeight = embeddedTweet.cachedMeasuredTextHeight
                     } else {
+                        // Build (or retrieve cached) attributed string for embedded tweet
+                        let attrString: NSAttributedString
+                        if let cached = embeddedTweet.cachedContentAttributedString,
+                           embeddedTweet.cachedContentWidth == embeddedWidth {
+                            attrString = cached
+                        } else {
+                            attrString = TweetBodyUIView.makeContentAttributedString(
+                                content: embeddedTweet.content!, availableWidth: embeddedWidth
+                            )
+                            embeddedTweet.cachedContentAttributedString = attrString
+                            embeddedTweet.cachedContentWidth = embeddedWidth
+                        }
                         Self.measurementLabel.attributedText = attrString
                         embeddedTextHeight = Self.measurementLabel.sizeThatFits(CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude)).height
                         embeddedTweet.cachedMeasuredTextHeight = embeddedTextHeight
