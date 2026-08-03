@@ -17,10 +17,10 @@ The goal is:
 
 | URL | Role | Expected behavior |
 |---|---|---|
-| `dtweet.com` | Public deep-link and web fallback host | iOS/Android verify it as an app-link domain. Browsers receive the TweetWeb app from the Cloudflare Worker. |
+| `dtweet.com` | Public deep-link wrapper | iOS/Android verify it as an app-link domain. Browser navigations are redirected by the Worker to `http://t1.www333.store` with the same route and query. |
 | `www.dtweet.com` | Alias | Redirects permanently to `dtweet.com`. |
 | `dl.dtweet.com` | Public gateway alias | Served by the same Cloudflare Worker and static assets. Kept only for compatibility; new shared links should not need it. |
-| `t1.fireshare.us`, `t1.www333.store`, other Leither domains | Legacy web app hosts | Must keep using normal Leither route discovery. Do not force these through the dtweet gateway behavior. |
+| `t1.fireshare.us`, `t1.www333.store`, other Leither domains | Legacy web app hosts | `t1.www333.store` is the current browser fallback target. These hosts keep normal Leither route discovery and must not be forced through dtweet gateway behavior. |
 | check_upgrade domain | Backend-controlled share domain | Used by some existing share paths and user settings. Independent of `dtweet.com`. |
 | provider IP entry URL | Direct node fallback | `http://{providerIP}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}`. Works without DNS. |
 
@@ -45,14 +45,16 @@ case. The Worker only needs to serve valid association files over HTTPS.
 ### App not installed, or desktop browser
 
 1. The browser opens `dtweet.com`.
-2. The Cloudflare Worker serves the TweetWeb bundle from its static assets.
-3. TweetWeb runs on the public gateway host and sends API/media requests through
-   the same public origin when needed.
-4. Private routes, including Tailscale `100.64.0.0/10` addresses, are filtered
-   out for the public gateway so browsers do not hit Private Network Access
-   blocks.
+2. After the association-file checks, the Cloudflare Worker returns a temporary
+   redirect to the same path and query on `http://t1.www333.store`.
+3. Chrome may try HTTPS first; because that host does not provide a valid HTTPS
+   page, normal browser fallback settles on HTTP. Safari opens the HTTP target
+   directly.
+4. TweetWeb runs as a normal Leither-hosted app and uses HTTP/`ws://` provider
+   routes without HTTPS mixed-content blocking.
 
-This is why `dtweet.com` can be a browser URL without requiring Tailscale.
+The Worker-owned redirect avoids both the `dl.dtweet.com` HTTPS mixed-content
+failure and an HTTPS-to-HTTP redirect loop.
 
 ### Existing Leither domains
 
@@ -86,8 +88,9 @@ The Worker has three jobs:
    `/.well-known/apple-app-site-association`
 2. Serve Android App Links association:
    `/.well-known/assetlinks.json`
-3. Serve the browser fallback app for `dtweet.com`, `www.dtweet.com`, and
-   `dl.dtweet.com`.
+3. Redirect browser navigations on `dtweet.com` to
+   `http://t1.www333.store`, while keeping `dl.dtweet.com` as a legacy asset and
+   origin route.
 
 The Worker routes are configured in:
 
@@ -115,9 +118,14 @@ not_found_handling = "single-page-application"
 run_worker_first = true
 ```
 
-Do not make `dtweet.com` browser navigation redirect to `dl.dtweet.com` as a
-required step. The compatible setup is for `dtweet.com` itself to be
-browser-openable while `dl.dtweet.com` remains only an alias.
+Do not make `dtweet.com` browser navigation redirect to `dl.dtweet.com`. Chrome
+upgrades that host to HTTPS, which blocks Leither's HTTP provider requests as
+mixed content. The Worker must redirect browser navigations to
+`http://t1.www333.store`; `dl.dtweet.com` remains only a legacy route.
+
+The `dtweet.com` zone's old single Redirect Rule named
+`Browser fallback to dl.dtweet.com` must remain disabled. Zone redirect rules
+run before Workers and otherwise bypass the association-aware routing code.
 
 ## Association files
 
@@ -204,6 +212,10 @@ Required behavior:
   the current page host is one of those gateway hosts.
 - Legacy hosts such as `t1.fireshare.us` and `t1.www333.store` must return
   false from `isPublicWebGatewayHost()`.
+
+Redirecting browsers to `t1.www333.store` does not change that classification:
+after the redirect it is still a legacy Leither host and must retain normal
+provider-route behavior.
 
 The connection and store layers depend on that distinction:
 
@@ -319,16 +331,18 @@ Sources/Core/HproseInstance.swift
 4. Configure Android release intent filters for `dtweet.com` only and keep
    `assetlinks.json` in sync with release signing certificates only.
 5. Build TweetWeb so `dist/index.html` uses bare local asset names.
-6. Keep TweetWeb gateway detection limited to the exact dtweet host allowlist.
-7. Publish/deploy the Worker and Leither app using the owner's normal release
+6. Keep TweetWeb gateway detection limited to the exact dtweet host allowlist;
+   `t1.www333.store` remains a legacy host.
+7. Keep the old `Browser fallback to dl.dtweet.com` zone Redirect Rule disabled.
+8. Publish/deploy the Worker and Leither app using the owner's normal release
    process.
-8. Verify these cases after publishing:
+9. Verify these cases after publishing:
    - `https://dtweet.com/.well-known/apple-app-site-association` returns JSON.
    - `https://dtweet.com/.well-known/assetlinks.json` returns JSON.
    - `http://dtweet.com/tweet/{mid}/{authorId}` opens the app on a device with
      the app installed.
-   - `https://dtweet.com/tweet/{mid}/{authorId}` renders TweetWeb in a desktop
-     browser.
+   - `https://dtweet.com/tweet/{mid}/{authorId}` redirects a desktop browser to
+     the same route on `http://t1.www333.store` and renders TweetWeb.
    - `http://t1.fireshare.us/` still renders the legacy Leither web app.
    - `http://t1.www333.store/` still renders the legacy Leither web app.
 
