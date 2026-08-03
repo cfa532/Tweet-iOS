@@ -276,6 +276,9 @@ class TweetTableViewController: UITableViewController {
     /// `heightForRowAt` returns `automaticDimension` for these so the table re-measures
     /// the cell at full expanded height instead of using the cached truncated height.
     private var expandedTweetIds = Set<String>()
+    /// Tweet the user expanded while a scroll gesture was still active; its row is
+    /// anchored when the deferred relayout finally runs.
+    private var pendingExpansionAnchorTweetId: String?
     private var embeddedTweetPrefetchInFlight = Set<String>()
 
     // (Text height pre-warming is handled globally by TweetHeightPrewarmer.shared)
@@ -2509,8 +2512,9 @@ class TweetTableViewController: UITableViewController {
 
             if self.isScrollInteractionActive {
                 self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
+                self.pendingExpansionAnchorTweetId = tweet.mid
             } else {
-                self.performPendingHeightRelayout(include: tweet.mid)
+                self.performPendingHeightRelayout(include: tweet.mid, anchorTweetId: tweet.mid)
             }
         }
 
@@ -3410,10 +3414,14 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    private func performPendingHeightRelayout(include tweetId: String? = nil) {
+    /// `anchorTweetId` pins that row's own top across the reflow. Pass it for a
+    /// user-initiated expansion so the text grows downward from where it was tapped.
+    private func performPendingHeightRelayout(include tweetId: String? = nil, anchorTweetId: String? = nil) {
         if let tweetId {
             pendingHeightRelayoutTweetIds.insert(tweetId)
         }
+        let requestedAnchorTweetId = anchorTweetId ?? pendingExpansionAnchorTweetId
+        pendingExpansionAnchorTweetId = nil
         guard !pendingHeightRelayoutTweetIds.isEmpty else { return }
         guard isTableVisibleForMutation else { return }
 
@@ -3493,11 +3501,21 @@ class TweetTableViewController: UITableViewController {
         // absorb. Falls back to the first visible row if every visible row is changing.
         var anchorIndexPath: IndexPath?
         var anchorOffset: CGFloat = 0
+        // A user-initiated expansion overrides that choice and anchors the tapped row's
+        // OWN top, so the text grows downward from where it sits. The "stable" rule picks
+        // the first visible row that isn't changing — which, for the topmost row, is the
+        // row BELOW it. Pinning that one keeps it in place and forces the expanding row
+        // to grow upward, pushing its top off under the header. Anchoring the expanding
+        // row is equally correct for rows further down: everything above it is unaffected
+        // either way, so its top staying put is exactly the desired result.
+        let expansionAnchor: IndexPath? = requestedAnchorTweetId
+            .flatMap { rowForTweetId($0) }
+            .flatMap { $0 < tableView.numberOfRows(inSection: 0) ? IndexPath(row: $0, section: 0) : nil }
         let stableAnchor = visibleIndexPaths.first { indexPath in
             guard let tweet = tweetForRow(indexPath.row) else { return false }
             return !changedTweetIds.contains(tweet.mid)
         }
-        if let chosen = stableAnchor ?? visibleIndexPaths.first {
+        if let chosen = expansionAnchor ?? stableAnchor ?? visibleIndexPaths.first {
             let cellTop = tableView.rectForRow(at: chosen).origin.y
             anchorOffset = tableView.contentOffset.y - cellTop
             anchorIndexPath = chosen
