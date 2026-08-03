@@ -1,9 +1,8 @@
 import UIKit
-import SwiftUI
 import BackgroundTasks
 import UserNotifications
 import AVFoundation
-import ffmpegkit
+import Darwin
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
@@ -12,36 +11,237 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// to recover/play while this is in-flight causes "zombie" players (nil currentItem / NaN time).
     static var isVideoInfrastructureReady = true
     
-    // Loading overlay window for server restart
-    private var loadingWindow: UIWindow?
-    
     // Track if app has finished launching to distinguish startup from background recovery
     private var hasFinishedLaunching = false
+    private var didLaunchInBackground = false
+    private var hasEnteredBackgroundInCurrentProcess = false
     
     // Track ongoing infrastructure restart to prevent overlapping restarts
     private var infrastructureRestartTask: Task<Void, Never>?
+    private var isRecoveringVideoInfrastructure = false
     private var isRestartingInfrastructure = false
 
     private var backgroundCleanupTask: UIBackgroundTaskIdentifier = .invalid
+    private var pendingBackgroundCleanupWorkItem: DispatchWorkItem?
     /// True once background memory release has actually run.
     /// When false on foreground return, players and server are still intact → fast path.
     private(set) static var didPerformAggressiveCleanup = false
+    private let shortBackgroundVideoGracePeriod: TimeInterval = 10
     
     private enum BackgroundMessageCheck {
         static let identifier = "com.example.ZZ.messageCheck"
         static let interval: TimeInterval = 15 * 60
     }
+
+    private enum BackgroundMainFeedCheck {
+        static let identifier = "com.example.ZZ.mainFeedCheck"
+        static let interval: TimeInterval = 5 * 60
+    }
+
+    private static let logFileName = "app.log"
+    private static let legacyLogFileNames = ["app-debug.log"]
+    nonisolated private static let logRetentionInterval: TimeInterval = 72 * 60 * 60
+    private static var consoleMirror: ConsoleMirror?
+
+    private final class ConsoleMirror {
+        private let logURL: URL
+        private var logFile: FileHandle?
+        private var logCreatedAt: Date?
+        private let originalStdout: Int32
+        private let originalStderr: Int32
+        private let queue = DispatchQueue(label: "app.console.mirror")
+        private var stdoutSource: DispatchSourceRead?
+        private var stderrSource: DispatchSourceRead?
+
+        init?(logURL: URL) {
+            guard let openedLog = Self.openLogFile(at: logURL) else { return nil }
+
+            let originalStdout = dup(STDOUT_FILENO)
+            let originalStderr = dup(STDERR_FILENO)
+            guard originalStdout >= 0, originalStderr >= 0 else {
+                if originalStdout >= 0 { close(originalStdout) }
+                if originalStderr >= 0 { close(originalStderr) }
+                openedLog.fileHandle.closeFile()
+                return nil
+            }
+
+            var stdoutPipe = [Int32](repeating: -1, count: 2)
+            var stderrPipe = [Int32](repeating: -1, count: 2)
+            guard pipe(&stdoutPipe) == 0, pipe(&stderrPipe) == 0 else {
+                Self.closePipe(stdoutPipe)
+                Self.closePipe(stderrPipe)
+                close(originalStdout)
+                close(originalStderr)
+                openedLog.fileHandle.closeFile()
+                return nil
+            }
+
+            fflush(stdout)
+            fflush(stderr)
+
+            let stdoutRedirected = dup2(stdoutPipe[1], STDOUT_FILENO)
+            let stderrRedirected = dup2(stderrPipe[1], STDERR_FILENO)
+            guard stdoutRedirected >= 0, stderrRedirected >= 0 else {
+                dup2(originalStdout, STDOUT_FILENO)
+                dup2(originalStderr, STDERR_FILENO)
+                Self.closePipe(stdoutPipe)
+                Self.closePipe(stderrPipe)
+                close(originalStdout)
+                close(originalStderr)
+                openedLog.fileHandle.closeFile()
+                return nil
+            }
+
+            close(stdoutPipe[1])
+            close(stderrPipe[1])
+            setvbuf(stdout, nil, _IONBF, 0)
+            setvbuf(stderr, nil, _IONBF, 0)
+
+            self.logURL = logURL
+            self.logFile = openedLog.fileHandle
+            self.logCreatedAt = openedLog.createdAt
+            self.originalStdout = originalStdout
+            self.originalStderr = originalStderr
+            self.stdoutSource = makeSource(readFileDescriptor: stdoutPipe[0], originalFileDescriptor: originalStdout)
+            self.stderrSource = makeSource(readFileDescriptor: stderrPipe[0], originalFileDescriptor: originalStderr)
+        }
+
+        deinit {
+            stdoutSource?.cancel()
+            stderrSource?.cancel()
+            close(originalStdout)
+            close(originalStderr)
+            logFile?.closeFile()
+        }
+
+        private static func openLogFile(at logURL: URL) -> (fileHandle: FileHandle, createdAt: Date)? {
+            let fileManager = FileManager.default
+            if !fileManager.fileExists(atPath: logURL.path) {
+                fileManager.createFile(atPath: logURL.path, contents: nil)
+            }
+
+            guard let logFile = try? FileHandle(forWritingTo: logURL) else { return nil }
+            logFile.seekToEndOfFile()
+
+            let attributes = try? fileManager.attributesOfItem(atPath: logURL.path)
+            let createdAt = attributes?[.creationDate] as? Date
+                ?? attributes?[.modificationDate] as? Date
+                ?? Date()
+            return (logFile, createdAt)
+        }
+
+        private static func closePipe(_ pipeFileDescriptors: [Int32]) {
+            for fileDescriptor in pipeFileDescriptors where fileDescriptor >= 0 {
+                close(fileDescriptor)
+            }
+        }
+
+        private func makeSource(readFileDescriptor: Int32, originalFileDescriptor: Int32) -> DispatchSourceRead {
+            let source = DispatchSource.makeReadSource(fileDescriptor: readFileDescriptor, queue: queue)
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                let availableBytes = max(1, min(Int(source.data), 8 * 1024))
+                var buffer = [UInt8](repeating: 0, count: availableBytes)
+                let byteCount = Darwin.read(readFileDescriptor, &buffer, buffer.count)
+
+                guard byteCount > 0 else {
+                    source.cancel()
+                    return
+                }
+
+                buffer.withUnsafeBytes { rawBuffer in
+                    guard let baseAddress = rawBuffer.baseAddress else { return }
+                    Self.writeAll(to: originalFileDescriptor, bytes: baseAddress, count: byteCount)
+                }
+                writeToLogFile(Data(buffer.prefix(byteCount)))
+            }
+            source.setCancelHandler {
+                close(readFileDescriptor)
+            }
+            source.resume()
+            return source
+        }
+
+        private func writeToLogFile(_ data: Data) {
+            rotateLogFileIfNeeded()
+            logFile?.write(data)
+        }
+
+        private func rotateLogFileIfNeeded() {
+            guard let createdAt = logCreatedAt,
+                  Date().timeIntervalSince(createdAt) >= AppDelegate.logRetentionInterval else {
+                return
+            }
+
+            logFile?.closeFile()
+            logFile = nil
+            try? FileManager.default.removeItem(at: logURL)
+
+            guard let openedLog = Self.openLogFile(at: logURL) else { return }
+            logFile = openedLog.fileHandle
+            logCreatedAt = openedLog.createdAt
+
+            if let marker = "\n--- App log file rotated: \(Date()) ---\n".data(using: .utf8) {
+                logFile?.write(marker)
+            }
+        }
+
+        private static func writeAll(to fileDescriptor: Int32, bytes: UnsafeRawPointer, count: Int) {
+            var remainingByteCount = count
+            var cursor = bytes.assumingMemoryBound(to: UInt8.self)
+
+            while remainingByteCount > 0 {
+                let writtenByteCount = Darwin.write(fileDescriptor, cursor, remainingByteCount)
+                guard writtenByteCount > 0 else { break }
+                remainingByteCount -= writtenByteCount
+                cursor = cursor.advanced(by: writtenByteCount)
+            }
+        }
+    }
     
+    /// Mirror stdout/stderr (all `print()`/`NSLog`) to Documents so troubleshooting
+    /// logs survive app suspension and process relaunches.
+    private static func redirectConsoleToLogFile() {
+        // Disabled: do not create or mirror console output to log files on the iOS device.
+//        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+//        deleteExpiredLogFiles(in: docs)
+//        let logURL = docs.appendingPathComponent(logFileName)
+//        consoleMirror = ConsoleMirror(logURL: logURL)
+//        print("\n--- App log session started: \(Date()) pid=\(ProcessInfo.processInfo.processIdentifier) ---")
+//        print("📂 [LOG] Console output mirrored to \(logURL.path)")
+    }
+
+    private static func deleteExpiredLogFiles(in directory: URL) {
+        for fileName in [logFileName] + legacyLogFileNames {
+            let logURL = directory.appendingPathComponent(fileName)
+            guard shouldDeleteLogFile(at: logURL) else { continue }
+            try? FileManager.default.removeItem(at: logURL)
+        }
+    }
+
+    private static func shouldDeleteLogFile(at logURL: URL, now: Date = Date()) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+              let createdAt = attributes[.creationDate] as? Date
+                ?? attributes[.modificationDate] as? Date else {
+            return false
+        }
+
+        return now.timeIntervalSince(createdAt) >= logRetentionInterval
+    }
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-        // Configure FFmpegKit to suppress verbose logs (only show errors)
-        // AV_LOG_ERROR = 16 - only show fatal errors, suppress INFO/WARNING/DEBUG
-        FFmpegKitConfig.setLogLevel(16)
-        
         // Lock app to portrait orientation by default
         AppDelegate.lockOrientation(.portrait)
-        
+
+        // Mirror all print()/NSLog output to Documents so overnight troubleshooting
+        // logs survive app backgrounding and relaunches.
+        Self.redirectConsoleToLogFile()
+
         // Register background tasks before application finishes launching
         registerBackgroundTasks()
+        // A pending request can survive process termination. Cancel it before
+        // the cold-start main feed can issue update_following_tweets.
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundMainFeedCheck.identifier)
         
         // Setup app lifecycle notifications
         setupAppLifecycleNotifications()
@@ -58,20 +258,31 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ = SimpleVideoPlayerStateHelper.shared
         print("[AppDelegate] SimpleVideoPlayerStateHelper initialized for detail view video state")
         
-        // Start LocalHTTPServer early to ensure it's ready before videos load
-        LocalHTTPServer.shared.start()
-        print("[AppDelegate] LocalHTTPServer started on app launch")
+        // Start LocalHTTPServer early so it's usually ready before videos load.
+        // Async on purpose: the old start() blocked launch up to 2s on a DispatchGroup.
+        // If a video wins the race, SharedAssetCache.ensureReadyForPlaybackAsync()
+        // health-checks and restarts the proxy before creating the player.
+        Task(priority: .userInitiated) {
+            await LocalHTTPServer.shared.startAndWaitAsync()
+            print("[AppDelegate] LocalHTTPServer started on app launch")
+        }
         
         // Handle URL if app was launched from a deeplink
         if let url = launchOptions?[.url] as? URL {
             print("[AppDelegate] App launched from URL: \(url.absoluteString)")
-            // Delay posting notification to ensure ContentView is ready
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                NotificationCenter.default.post(
-                    name: .deeplinkReceived,
-                    object: nil,
-                    userInfo: ["url": url]
-                )
+            DeeplinkDelivery.shared.deliver(url, delay: 0.5)
+        }
+
+        if let userActivityDictionary = launchOptions?[.userActivityDictionary] as? [AnyHashable: Any] {
+            for value in userActivityDictionary.values {
+                guard let userActivity = value as? NSUserActivity,
+                      userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+                      let url = userActivity.webpageURL else {
+                    continue
+                }
+
+                print("[AppDelegate] App launched from Universal Link: \(url.absoluteString)")
+                DeeplinkDelivery.shared.deliver(url, delay: 0.5)
             }
         }
         
@@ -90,11 +301,21 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] 🚀 Scheduling initial background message check on app launch")
         Task { @MainActor in
             self.scheduleNextMessageCheck()
+            self.scheduleNextMainFeedCheck()
         }
         
-        // CRITICAL: Clear any stale background timestamp from previous session
-        // This ensures we can distinguish app startup from returning from background
-        UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
+        let launchedForBackgroundWork = Self.hasBackgroundLaunchOption(launchOptions)
+        didLaunchInBackground = application.applicationState == .background && launchedForBackgroundWork
+        if didLaunchInBackground {
+            print("[AppDelegate] App launched in background - preserving background timestamp for foreground recovery")
+        } else {
+            if application.applicationState == .background {
+                print("[AppDelegate] Launch state was background without a background launch option - treating as normal startup")
+            }
+            // Clear stale timestamps from previous sessions so a normal startup is not
+            // misclassified as a long foreground recovery.
+            UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
+        }
         
         // Mark that app has finished launching
         hasFinishedLaunching = true
@@ -104,6 +325,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         return AppDelegate.orientationLock
+    }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        BackgroundResumeStateStore.shared.clear(reason: "application will terminate")
     }
     
     static func lockOrientation(_ orientation: UIInterfaceOrientationMask) {
@@ -128,9 +353,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         .rootViewController?
                         .setNeedsUpdateOfSupportedInterfaceOrientations()
 
-                    windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: preferredOrientation)) { error in
-                        print("DEBUG: [AppDelegate] Orientation geometry update failed: \(error.localizedDescription)")
-                    }
+                    windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: preferredOrientation))
                 }
         }
     }
@@ -139,9 +362,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     private func registerBackgroundTasks() {
         // Register background task for checking new messages every 15 minutes
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMessageCheck.identifier, using: nil) { task in
+        // using: .main is required — these closures call @MainActor AppDelegate methods,
+        // so Swift 6 isolation checks trap if BGTaskScheduler runs them on its own queue.
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMessageCheck.identifier, using: .main) { task in
             print("[AppDelegate] 🎯 Background task triggered: \(task.identifier)")
             self.handleMessageCheckBackgroundTask(task: task as! BGAppRefreshTask)
+        }
+
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundMainFeedCheck.identifier, using: .main) { task in
+            print("[AppDelegate] 🎯 Background task triggered: \(task.identifier)")
+            self.handleMainFeedCheckBackgroundTask(task: task as! BGAppRefreshTask)
         }
 
         print("[AppDelegate] 📋 Background tasks registered")
@@ -152,6 +382,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         // Schedule the next background task
         Task { @MainActor in
+            self.noteBackgroundLaunchIfNeeded()
             self.scheduleNextMessageCheck()
         }
 
@@ -172,6 +403,43 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("[AppDelegate] ✅ Background message check completed successfully")
         }
     }
+
+    private func handleMainFeedCheckBackgroundTask(task: BGAppRefreshTask) {
+        print("[AppDelegate] 🔄 Background main feed check task STARTED")
+
+        Task { @MainActor in
+            self.noteBackgroundLaunchIfNeeded()
+            self.scheduleNextMainFeedCheck()
+        }
+
+        let checkTask = Task {
+            if #available(iOS 16.0, *) {
+                await FollowingsTweetViewModel.shared.performBackgroundFeedCheck()
+            }
+            task.setTaskCompleted(success: true)
+            print("[AppDelegate] ✅ Background main feed check completed")
+        }
+
+        task.expirationHandler = {
+            print("[AppDelegate] ⏰ Background main feed check task EXPIRED")
+            checkTask.cancel()
+            task.setTaskCompleted(success: false)
+        }
+    }
+
+    @MainActor
+    private func noteBackgroundLaunchIfNeeded() {
+        didLaunchInBackground = didLaunchInBackground || UIApplication.shared.applicationState == .background
+    }
+
+    private static func hasBackgroundLaunchOption(_ launchOptions: [UIApplication.LaunchOptionsKey : Any]?) -> Bool {
+        guard let launchOptions else { return false }
+
+        return launchOptions[.remoteNotification] != nil ||
+            launchOptions[.location] != nil ||
+            launchOptions[.bluetoothCentrals] != nil ||
+            launchOptions[.bluetoothPeripherals] != nil
+    }
     
     @MainActor
     private func scheduleNextMessageCheck() {
@@ -191,23 +459,49 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             logMessageCheckSchedulingFailure(error)
         }
     }
+
+    @MainActor
+    private func scheduleNextMainFeedCheck() {
+        // Cancellation must be issued even when Background App Refresh is
+        // unavailable so a stale request cannot race a foreground opening call.
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundMainFeedCheck.identifier)
+
+        guard UIApplication.shared.backgroundRefreshStatus == .available else {
+            print("[AppDelegate] ℹ️ Background main feed check not scheduled; Background App Refresh is \(backgroundRefreshStatusDescription())")
+            return
+        }
+
+        let request = BGAppRefreshTaskRequest(identifier: BackgroundMainFeedCheck.identifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: BackgroundMainFeedCheck.interval)
+
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            print("[AppDelegate] 📅 Next background main feed check scheduled for \(request.earliestBeginDate ?? Date())")
+        } catch {
+            logBackgroundTaskSchedulingFailure(error, taskDescription: "main feed check")
+        }
+    }
     
     private func logMessageCheckSchedulingFailure(_ error: Error) {
+        logBackgroundTaskSchedulingFailure(error, taskDescription: "message check")
+    }
+
+    private func logBackgroundTaskSchedulingFailure(_ error: Error, taskDescription: String) {
         let nsError = error as NSError
         guard nsError.domain == "BGTaskSchedulerErrorDomain" else {
-            print("[AppDelegate] ❌ Failed to schedule background message check: \(error)")
+            print("[AppDelegate] ❌ Failed to schedule background \(taskDescription): \(error)")
             return
         }
 
         switch nsError.code {
         case 1:
-            print("[AppDelegate] ℹ️ Background message check not scheduled because BGTaskScheduler is unavailable in this environment")
+            print("[AppDelegate] ℹ️ Background \(taskDescription) not scheduled because BGTaskScheduler is unavailable in this environment")
         case 2:
-            print("[AppDelegate] ⚠️ Background message check not scheduled because too many background task requests are pending")
+            print("[AppDelegate] ⚠️ Background \(taskDescription) not scheduled because too many background task requests are pending")
         case 3:
-            print("[AppDelegate] ❌ Background message check is not permitted; verify BGTaskSchedulerPermittedIdentifiers and UIBackgroundModes in Info.plist")
+            print("[AppDelegate] ❌ Background \(taskDescription) is not permitted; verify BGTaskSchedulerPermittedIdentifiers and UIBackgroundModes in Info.plist")
         default:
-            print("[AppDelegate] ❌ Failed to schedule background message check: \(error)")
+            print("[AppDelegate] ❌ Failed to schedule background \(taskDescription): \(error)")
         }
     }
     
@@ -262,10 +556,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppWillResignActive() {
         print("[AppDelegate] App will resign active - storing timestamp for screen lock detection")
         
-        // Cancel any ongoing infrastructure restart task
+        // Cancel any ongoing infrastructure restart task.
+        // Do NOT write isRestartingInfrastructure here — it is also written from inside
+        // Task.detached bodies (background threads), making that a data race.  The task
+        // cancellation is sufficient; the flag resets itself via the task's own error path.
         infrastructureRestartTask?.cancel()
         infrastructureRestartTask = nil
-        isRestartingInfrastructure = false
         
         // Store timestamp when app loses focus (screen lock or background)
         // This helps distinguish between screen lock and background scenarios
@@ -279,7 +575,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// **Screen Lock Recovery:**
     /// - Long screen lock (>5 min): Full server restart
     ///   - Clears video players
-    ///   - Shows loading overlay during restart
     ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     /// - Short screen lock (<5 min): Lightweight refresh
     ///   - Keeps players intact when possible
@@ -307,11 +602,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 let timeInactive = Date().timeIntervalSince(resignActiveDate)
                 print("[AppDelegate] Screen lock recovery detected - inactive for \(Int(timeInactive))s")
                 
-                AppDelegate.isVideoInfrastructureReady = false
-                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                    let kind = timeInactive > 300 ? "long" : "short"
-                    await self.recoverVideoInfrastructureAfterForeground(reason: "\(kind) screen lock \(Int(timeInactive))s")
-                }
+                let kind = timeInactive > 300 ? "long" : "short"
+                scheduleVideoInfrastructureRecovery(reason: "\(kind) screen lock \(Int(timeInactive))s")
             }
         }
         
@@ -328,44 +620,65 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     @objc private func handleAppDidEnterBackground() {
         print("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
+        hasEnteredBackgroundInCurrentProcess = true
 
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
 
-        // Note: TweetTableViewController's background handler shows cached thumbnails
-        // on visible video cells before this runs, preventing black player layers.
+        // Short backgrounds keep video infrastructure alive so existing players can resume.
+        // If the app stays backgrounded past the grace window, the delayed cleanup below
+        // tears down players and stops the local proxy to release memory.
         AppDelegate.didPerformAggressiveCleanup = false
-        AppDelegate.isVideoInfrastructureReady = false
+        AppDelegate.isVideoInfrastructureReady = true
 
         if backgroundCleanupTask == .invalid {
             backgroundCleanupTask = UIApplication.shared.beginBackgroundTask(withName: "BackgroundMemoryRelease") { [weak self] in
                 print("⚠️ [AppDelegate] Background memory release time expired")
-                self?.endBackgroundCleanupTask()
+                DispatchQueue.main.async {
+                    self?.performBackgroundMemoryReleaseIfStillBackground(reason: "background task expiration")
+                }
             }
         }
 
-        // Run on the next main turn so view controllers can prepare the app-switcher snapshot first.
-        DispatchQueue.main.async { [weak self] in
-            guard UIApplication.shared.applicationState == .background else {
-                print("⚡ [AppDelegate] Background memory release skipped; app returned before cleanup")
-                AppDelegate.isVideoInfrastructureReady = true
-                self?.endBackgroundCleanupTask()
-                return
-            }
-
-            print("🔥 [AppDelegate] Performing immediate background memory release")
-            MemoryCapManager.shared.performBackgroundMemoryRelease()
-            AppDelegate.didPerformAggressiveCleanup = true
-
-            print("[AppDelegate] 🚀 Performing IMMEDIATE background message check after cleanup")
-            self?.performImmediateBackgroundCheck()
-
-            self?.endBackgroundCleanupTask()
-            print("✅ [AppDelegate] Background memory release complete")
+        pendingBackgroundCleanupWorkItem?.cancel()
+        let cleanupWorkItem = DispatchWorkItem { [weak self] in
+            self?.performBackgroundMemoryReleaseIfStillBackground(reason: "grace period elapsed")
         }
+        pendingBackgroundCleanupWorkItem = cleanupWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + shortBackgroundVideoGracePeriod, execute: cleanupWorkItem)
+    }
+
+    @MainActor
+    private func performBackgroundMemoryReleaseIfStillBackground(reason: String) {
+        guard pendingBackgroundCleanupWorkItem?.isCancelled != true else { return }
+        pendingBackgroundCleanupWorkItem = nil
+
+        guard UIApplication.shared.applicationState == .background else {
+            print("⚡ [AppDelegate] Background memory release skipped; app returned before cleanup")
+            endBackgroundCleanupTask()
+            return
+        }
+
+        print("🔥 [AppDelegate] Performing background memory release after \(reason)")
+        AppDelegate.isVideoInfrastructureReady = false
+        NotificationCenter.default.post(
+            name: .prepareVisibleVideosForBackground,
+            object: nil,
+            userInfo: ["aggressive": true]
+        )
+        MemoryCapManager.shared.performBackgroundMemoryRelease()
+        AppDelegate.didPerformAggressiveCleanup = true
+
+        print("[AppDelegate] 📅 Scheduling background message check after cleanup")
+        scheduleNextMessageCheck()
+
+        endBackgroundCleanupTask()
+        print("✅ [AppDelegate] Background memory release complete")
     }
 
     private func endBackgroundCleanupTask() {
+        pendingBackgroundCleanupWorkItem?.cancel()
+        pendingBackgroundCleanupWorkItem = nil
         if backgroundCleanupTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundCleanupTask)
             backgroundCleanupTask = .invalid
@@ -384,7 +697,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// **Video Infrastructure Recovery:**
     /// - Long background (>5 min): Full server restart required
     ///   - Clears all video players to release old URLs
-    ///   - Shows loading overlay during restart
     ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     /// - Short background (<5 min): Lightweight recovery
     ///   - Clears players for predictable clean state
@@ -411,11 +723,43 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         endBackgroundCleanupTask()
 
-        guard let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date else {
-            print("🚀 [AppDelegate] No background timestamp - skipping foreground recovery during startup")
+        guard hasEnteredBackgroundInCurrentProcess else {
+            // New process after iOS killed/suspended the old app instance: treat it as
+            // a normal launch. Runtime-only player/proxy state is already gone.
+            UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
+            didLaunchInBackground = false
+            AppDelegate.didPerformAggressiveCleanup = false
             AppDelegate.isVideoInfrastructureReady = true
+            print("🚀 [AppDelegate] Foreground in fresh process - using normal startup path")
             return
         }
+
+        // Refresh the backend-controlled upgrade/share configuration on every real
+        // foreground return. Keep this off the recovery path so it never delays UI.
+        Task.detached(priority: .background) {
+            await HproseInstance.shared.checkAndUpdateDomain()
+        }
+
+        guard let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date else {
+            if didLaunchInBackground {
+                print("⚠️ [AppDelegate] Background-launched app entered foreground without timestamp - running foreground recovery")
+                didLaunchInBackground = false
+                scheduleMainFeedCheckAfterForegroundReturn()
+                scheduleVideoInfrastructureRecovery(reason: "foreground after background launch without timestamp")
+                Task {
+                    print("[AppDelegate] 📬 Checking for new messages on foreground return")
+                    await checkMessagesForBadgeOnly()
+                }
+            } else {
+                print("🚀 [AppDelegate] No background timestamp - skipping foreground recovery during startup")
+                AppDelegate.isVideoInfrastructureReady = true
+            }
+            return
+        }
+        didLaunchInBackground = false
+        UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
+
+        scheduleMainFeedCheckAfterForegroundReturn()
 
         // FAST PATH: background memory release didn't run — server & players are intact
         // Safety: if process was suspended before cleanup could fire AND we were
@@ -423,12 +767,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         if !AppDelegate.didPerformAggressiveCleanup {
             let timeInBackground = Int(Date().timeIntervalSince(backgroundDate))
 
+            if TimeInterval(timeInBackground) < shortBackgroundVideoGracePeriod {
+                print("⚡ [AppDelegate] Short background fast resume (\(timeInBackground)s) — keeping existing video players and proxy")
+                AppDelegate.isVideoInfrastructureReady = true
+
+                Task {
+                    print("[AppDelegate] 📬 Checking for new messages on foreground return")
+                    await checkMessagesForBadgeOnly()
+                }
+                Task.detached(priority: .background) { [weak self] in
+                    await self?.refreshAppUserIP()
+                }
+                return
+            }
+
             if timeInBackground < 300 {
                 print("⚡ [AppDelegate] Fast recovery (\(timeInBackground)s) — checking proxy health")
-                AppDelegate.isVideoInfrastructureReady = false
-                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                    await self.recoverVideoInfrastructureAfterForeground(reason: "fast foreground \(timeInBackground)s")
-                }
+                scheduleVideoInfrastructureRecovery(reason: "fast foreground \(timeInBackground)s")
 
                 // Refresh IP and check messages in background (non-blocking)
                 Task {
@@ -456,24 +811,48 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
         if timeInBackground > 300 {  // 5 minutes
             print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - checking proxy health")
-            AppDelegate.isVideoInfrastructureReady = false
-            infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                await self.recoverVideoInfrastructureAfterForeground(reason: "long foreground \(Int(timeInBackground))s")
-            }
+            scheduleVideoInfrastructureRecovery(reason: "long foreground \(Int(timeInBackground))s")
         } else {
             // SHORT background (<5min) but aggressive cleanup happened
             print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - recovery after aggressive cleanup")
 
-            AppDelegate.isVideoInfrastructureReady = false
-            infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                await self.recoverVideoInfrastructureAfterForeground(reason: "short foreground after cleanup \(Int(timeInBackground))s")
-            }
+            scheduleVideoInfrastructureRecovery(reason: "short foreground after cleanup \(Int(timeInBackground))s")
         }
 
         // Check for new messages when returning to foreground (only updates badge, no notifications)
         Task {
             print("[AppDelegate] 📬 Checking for new messages on foreground return")
             await checkMessagesForBadgeOnly()
+        }
+    }
+
+    private func scheduleMainFeedCheckAfterForegroundReturn() {
+        Task { @MainActor in
+            // Keep cancellation/resubmission and the new session in one ordered
+            // task so update_following_tweets cannot start first.
+            self.scheduleNextMainFeedCheck()
+
+            if #available(iOS 16.0, *) {
+                await FollowingsTweetViewModel.shared.performForegroundFeedRefresh()
+            }
+        }
+        print("[AppDelegate] Scheduled foreground main feed get_tweet_feed check")
+    }
+
+    private func scheduleVideoInfrastructureRecovery(reason: String) {
+        guard !isRecoveringVideoInfrastructure else {
+            print("[AppDelegate] Video infrastructure recovery already in progress; skipping \(reason)")
+            return
+        }
+
+        isRecoveringVideoInfrastructure = true
+        AppDelegate.isVideoInfrastructureReady = false
+        infrastructureRestartTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            await self.recoverVideoInfrastructureAfterForeground(reason: reason)
+            await MainActor.run {
+                self.isRecoveringVideoInfrastructure = false
+            }
         }
     }
     
@@ -532,23 +911,32 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func recoverVideoInfrastructureAfterForeground(reason: String) async {
         guard !Task.isCancelled else { return }
 
-        let isProxyHealthy = await LocalHTTPServer.shared.isHealthyAsync()
+        let forceRestart = shouldForceVideoInfrastructureRestart(reason: reason)
+        if forceRestart {
+            print("🔄 [AppDelegate] Forcing video infrastructure restart after \(reason)")
+        }
+
+        let isProxyHealthy = forceRestart ? false : await LocalHTTPServer.shared.isHealthyAsync()
         if isProxyHealthy {
-            if shouldRefreshAppUserBeforeForegroundVideoReload(reason: reason) {
-                print("[AppDelegate] 🔄 Refreshing appUser IP before foreground video reload...")
-                await refreshAppUserIP()
-                print("[AppDelegate] ✅ AppUser IP refresh complete")
-            }
             await MainActor.run {
                 AppDelegate.isVideoInfrastructureReady = true
                 SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                 print("✅ [AppDelegate] Proxy health OK after \(reason) - posted reloadVisibleVideosOnly")
             }
+            // Refresh the upstream IP for IPFS cache misses AFTER the proxy is up and video
+            // has resumed. Previously this blocked reloadVisibleVideosOnly behind a
+            // failing/retrying fetchUser (~2s) before playback could restart. Non-fatal.
+            if shouldRefreshAppUserBeforeForegroundVideoReload(reason: reason) {
+                print("[AppDelegate] 🔄 Refreshing appUser IP after foreground video reload...")
+                await refreshAppUserIP()
+                print("[AppDelegate] ✅ AppUser IP refresh complete")
+            }
             return
         }
 
-        guard !isRestartingInfrastructure else {
+        let alreadyRestarting = await MainActor.run { isRestartingInfrastructure }
+        guard !alreadyRestarting else {
             print("[AppDelegate] Proxy health failed after \(reason), but infrastructure restart is already in progress")
             return
         }
@@ -556,17 +944,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("⚠️ [AppDelegate] Proxy health failed after \(reason) - restarting video infrastructure")
         await MainActor.run {
             AppDelegate.isVideoInfrastructureReady = false
-            showLoadingOverlay()
         }
 
-        print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
-        await refreshAppUserIP()
-        print("[AppDelegate] ✅ AppUser IP refresh complete")
-
+        // Restart the proxy FIRST so cached HLS serves immediately and video can resume.
+        // The appUser IP refresh is only needed for IPFS cache misses (lazy upstream URL
+        // resolution), so it runs AFTER the restart instead of before. Previously a
+        // failing/retrying fetchUser blocked the restart + reload for ~2s.
         let didRestart = await restartVideoInfrastructureAsync()
 
         await MainActor.run {
-            hideLoadingOverlay()
             AppDelegate.isVideoInfrastructureReady = didRestart
             if didRestart {
                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
@@ -575,6 +961,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 print("❌ [AppDelegate] Proxy restart failed after \(reason) - visible videos will wait for next retry")
             }
         }
+
+        print("[AppDelegate] 🔄 Refreshing appUser IP after video recovery...")
+        await refreshAppUserIP()
+        print("[AppDelegate] ✅ AppUser IP refresh complete")
+    }
+
+    private func shouldForceVideoInfrastructureRestart(reason: String) -> Bool {
+        reason.hasPrefix("long foreground")
+            || reason.hasPrefix("long screen lock")
+            || reason.hasPrefix("foreground after background launch")
     }
 
     private func shouldRefreshAppUserBeforeForegroundVideoReload(reason: String) -> Bool {
@@ -585,56 +981,36 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         !reason.hasPrefix("fast foreground")
     }
     
-    /// Synchronous restart (for cases where blocking is acceptable)
-    private func restartVideoInfrastructure() {
-        print("[AppDelegate] Restarting video infrastructure after long background")
-        
-        // CRITICAL: Clear ALL video players FIRST to release their URLs
-        // This prevents players from trying to use old port numbers after server restart
-        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-        
-        // DON'T clear VideoStateCache - it stores playback position/state
-        // Preserving it allows videos to resume from where they left off after reload
-        
-        // Stop the server completely and wait for cleanup
-        LocalHTTPServer.shared.stop()
-        Thread.sleep(forTimeInterval: 0.5) // BLOCKING sleep - ensure port is released
-        
-        // Restart the server SYNCHRONOUSLY - wait until ready
-        LocalHTTPServer.shared.startAndWait()
-        
-        print("[AppDelegate] Video infrastructure restart complete")
-    }
-    
     /// Async restart (non-blocking - allows UI to remain interactive)
     private func restartVideoInfrastructureAsync() async -> Bool {
         // Check if already cancelled
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled before starting")
-            isRestartingInfrastructure = false
+            await MainActor.run { isRestartingInfrastructure = false }
             return false
         }
-        
-        // Mark as restarting
-        isRestartingInfrastructure = true
-        
+
+        // isRestartingInfrastructure is always written via MainActor.run to avoid a data race
+        // with handleAppWillResignActive which runs on the main thread.
+        await MainActor.run { isRestartingInfrastructure = true }
+
         print("[AppDelegate] Restarting video infrastructure asynchronously (non-blocking)")
         let startTime = Date()
-        
-        // CRITICAL: Clear ALL video players FIRST to release their URLs (async for speed)
-        // Run clearing in parallel with server operations
+
+        // Run player cleanup in parallel with server operations. Snapshot resume
+        // metadata before detaching items so recovery can continue playback.
         let clearTask = Task.detached(priority: .userInitiated) { @MainActor in
+            // Long hibernation can skip the didEnterBackground cleanup turn. Drop
+            // any surviving cached AVPlayers here while keeping resume metadata.
+            VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
             SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
         }
-        
-        // DON'T clear VideoStateCache - it stores playback position/state
-        // Preserving it allows videos to resume from where they left off after reload
-        
+
         // Check if cancelled
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled before proxy restart")
             await clearTask.value
-            isRestartingInfrastructure = false
+            await MainActor.run { isRestartingInfrastructure = false }
             return false
         }
 
@@ -646,47 +1022,32 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 didRestartProxy = await LocalHTTPServer.shared.forceRestartAndWaitAsync()
             }
         }
-        
+
         // Check if cancelled
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled after proxy restart")
             await clearTask.value
-            isRestartingInfrastructure = false
+            await MainActor.run { isRestartingInfrastructure = false }
             return false
         }
-        
+
         // Wait for player clearing to complete (runs in parallel)
         await clearTask.value
-        
+
         // Check if cancelled before restarting
         guard !Task.isCancelled else {
             print("[AppDelegate] Infrastructure restart cancelled before restart")
-            isRestartingInfrastructure = false
+            await MainActor.run { isRestartingInfrastructure = false }
             return false
         }
-        
+
         let elapsed = Date().timeIntervalSince(startTime)
         print("[AppDelegate] Video infrastructure restart complete (async) in \(String(format: "%.2f", elapsed))s")
-        
-        // Mark as complete
-        isRestartingInfrastructure = false
-        infrastructureRestartTask = nil
+
+        await MainActor.run { isRestartingInfrastructure = false }
         return didRestartProxy
     }
     
-    private func performImmediateBackgroundCheck() {
-        print("[AppDelegate] ⚡ Performing immediate background message check")
-        Task {
-            await ChatSessionManager.shared.checkBackendForNewMessages()
-            print("[AppDelegate] ✅ Immediate background message check completed")
-
-            // Also schedule the regular background task for future checks
-            await MainActor.run {
-                self.scheduleNextMessageCheck()
-            }
-        }
-    }
-
     /// Setup message checking when app is initialized
     private func setupMessageCheckOnInitialization() {
         // Listen for app user ready notification
@@ -696,8 +1057,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             // Check for new messages after app is initialized (only updates badge, no notifications)
-            Task {
-                print("[AppDelegate] 📬 Checking for new messages after app initialization")
+            Task(priority: .background) {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                print("[AppDelegate] 📬 Checking for new messages after startup settle")
                 await self?.checkMessagesForBadgeOnly()
             }
         }
@@ -712,8 +1074,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             // Fetch and set app URLs after appUser is initialized
-            Task {
-                print("[AppDelegate] 🔧 AppUser initialized - fetching app URLs")
+            Task(priority: .background) {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                print("[AppDelegate] 🔧 AppUser initialized - fetching app URLs after startup settle")
                 await self?.fetchAndSetAppUrls()
             }
         }
@@ -757,42 +1120,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("[AppDelegate] Notification permission granted: \(granted)")
         } catch {
             print("[AppDelegate] Error requesting notification permission: \(error)")
-        }
-    }
-    
-    // MARK: - Loading Overlay
-    
-    private func showLoadingOverlay() {
-        guard loadingWindow == nil else { return }
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
-            return
-        }
-        
-        // Create loading view
-        let loadingView = LoadingOverlayView()
-        let hostingController = UIHostingController(rootView: loadingView)
-        hostingController.view.backgroundColor = .clear
-        hostingController.view.isUserInteractionEnabled = false
-        
-        // Create a non-key, pass-through status window. Foreground video recovery
-        // can take a few seconds after a long background stay, but the feed should
-        // remain scrollable/tappable while that work completes.
-        let window = PassthroughLoadingWindow(windowScene: windowScene)
-        window.rootViewController = hostingController
-        window.windowLevel = .alert + 1
-        window.backgroundColor = .clear
-        window.isUserInteractionEnabled = false
-        window.isHidden = false
-        
-        loadingWindow = window
-    }
-    
-    private func hideLoadingOverlay() {
-        UIView.animate(withDuration: 0.2, animations: {
-            self.loadingWindow?.alpha = 0
-        }) { _ in
-            self.loadingWindow?.isHidden = true
-            self.loadingWindow = nil
         }
     }
     
@@ -942,17 +1269,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] ✅ Received deeplink URL (app running): \(url.absoluteString)")
         print("[AppDelegate] URL scheme: \(url.scheme ?? "nil"), host: \(url.host ?? "nil"), path: \(url.path)")
         
-        // Post notification with URL for ContentView to handle
-        // Use async dispatch to ensure ContentView is ready
-        DispatchQueue.main.async {
-            print("[AppDelegate] Posting deeplink notification...")
-            NotificationCenter.default.post(
-                name: .deeplinkReceived,
-                object: nil,
-                userInfo: ["url": url]
-            )
-            print("[AppDelegate] Deeplink notification posted")
-        }
+        DeeplinkDelivery.shared.deliver(url)
         
         return true
     }
@@ -963,11 +1280,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
            let url = userActivity.webpageURL {
             print("[AppDelegate] Received Universal Link: \(url.absoluteString)")
             
-            NotificationCenter.default.post(
-                name: .deeplinkReceived,
-                object: nil,
-                userInfo: ["url": url]
-            )
+            DeeplinkDelivery.shared.deliver(url)
             
             return true
         }
@@ -975,29 +1288,3 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         return false
     }
 }
-
-// MARK: - Loading Overlay View
-
-private final class PassthroughLoadingWindow: UIWindow {
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        false
-    }
-}
-
-private struct LoadingOverlayView: View {
-    var body: some View {
-        ZStack {
-            Color.clear
-                .edgesIgnoringSafeArea(.all)
-            
-            // Visual recovery status only. Touches pass through the overlay window.
-            ProgressView()
-                .scaleEffect(1.5)
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                .padding(18)
-                .background(Color.black.opacity(0.35))
-                .clipShape(Circle())
-        }
-        .allowsHitTesting(false)
-    }
-} 

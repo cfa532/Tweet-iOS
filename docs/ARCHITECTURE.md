@@ -82,6 +82,37 @@ Mechanism:
 Why this matters:
 - Scroll smoothness remains stable even with mixed text/media content and frequent list updates.
 
+### 2.1) Tweet Cache Key Design
+
+**Key files:** `Sources/Core/TweetCacheManager.swift`, `Sources/Features/Home/FollowingsTweetView.swift`, `Sources/Features/Profile/ProfileTweetsSection.swift`, `Sources/Features/Home/HomeViewModel.swift`
+
+Design idea:
+- Cache keys describe the list being cached, not only the tweet itself.
+- One physical device can be used by multiple signed-in users, so list caches must not bleed across accounts.
+- The same tweet may belong to several cached lists at once: main feed, author profile, bookmarks, favorites, search/detail lookup support.
+
+Cache-key contract:
+
+| List/cache surface | Cache key |
+| --- | --- |
+| Main feed for signed-in user | `main_feed_<appUserId>` |
+| User profile timeline | `<profileUserMid>` |
+| Bookmark list | `bookmark_list_<userId>` |
+| Favorite list | `favorite_list_<userId>` |
+| Original/embedded tweet lookup | tweet saved under its author's `<authorId>` |
+
+Mechanism:
+- `TweetCacheManager.saveTweet(_:userId:)` stores list membership by `(tweetId, cacheKey)`.
+- Saving a tweet into one list must not move it out of another list.
+- When the same tweet exists in multiple list caches, the encoded tweet payload is refreshed across all cached copies while each row keeps its own `uid` cache key.
+- Direct tweet lookup by `tweetId` searches across cache keys and prefers the most recently cached copy.
+- Main-feed reads include a temporary legacy fallback to the old `appUserId` key so existing installs can still show older cache rows until they are rewritten under `main_feed_<appUserId>`.
+
+Why this matters:
+- User A and User B can log in on the same device without sharing or overwriting main-feed cache rows.
+- Main feed cache can no longer "steal" a tweet from profile cache by rewriting the row's cache key.
+- Profile reopen can render newly fetched tweets from cache instead of refetching them only because another list saved the same tweet later.
+
 ### 3) Video Playback Architecture
 
 **Key files:** `Sources/Core/VideoPlaybackCoordinator.swift`, `Sources/Core/SharedAssetCache.swift`, `Sources/Core/VideoLoadingManager.swift`, `Sources/CachingPlayerItem/LocalHTTPServer.swift`, `Sources/CachingPlayerItem/NodeConnectionPool.swift`

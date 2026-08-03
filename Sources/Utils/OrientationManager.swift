@@ -1,7 +1,8 @@
 import UIKit
 import SwiftUI
 
-class OrientationManager: ObservableObject {
+@MainActor
+final class OrientationManager: ObservableObject {
     static let shared = OrientationManager()
     
     @Published var isLocked = false

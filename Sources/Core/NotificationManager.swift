@@ -1,11 +1,12 @@
 import UIKit
 import UserNotifications
 
-class NotificationManager: NSObject {
+final class NotificationManager: NSObject, @unchecked Sendable {
     static let shared = NotificationManager()
     
     // Private property to track badge count since UNUserNotificationCenter doesn't provide a way to read it
     private var currentBadgeCount: Int = 0
+    private let badgeLock = NSLock()
     
     private override init() {
         super.init()
@@ -83,7 +84,7 @@ class NotificationManager: NSObject {
     func updateBadgeCount(_ count: Int) {
         DispatchQueue.main.async {
             // Update internal counter
-            self.currentBadgeCount = count
+            self.setCurrentBadgeCount(count)
             
             // If count is more than 9, set to -1 to show "N" (iOS default behavior)
             let badgeNumber = count > 9 ? -1 : count
@@ -112,7 +113,15 @@ class NotificationManager: NSObject {
     }
     
     private func getCurrentBadgeCount() -> Int {
+        badgeLock.lock()
+        defer { badgeLock.unlock() }
         return currentBadgeCount
+    }
+
+    private func setCurrentBadgeCount(_ count: Int) {
+        badgeLock.lock()
+        currentBadgeCount = count
+        badgeLock.unlock()
     }
     
     // MARK: - Notification Actions

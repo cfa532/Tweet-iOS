@@ -176,7 +176,16 @@ final class VideoSurfaceHandoffRegistry {
 @MainActor
 class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
-    
+
+    /// Dedicated serial queue for the progressive-cache disk scan in preloadPoster
+    /// (progressiveCacheFileForThumbnailIfAvailable reads up to 4MB per call). Using a
+    /// real background queue instead of Task.detached keeps this blocking file I/O off
+    /// Swift's shared cooperative thread pool, which other structured-concurrency work
+    /// in the app also draws from — piling several of these onto that pool during a fast
+    /// scroll (several videos entering range per tick) delayed their completions until
+    /// they all landed back on the main actor in a burst, which read as a jump.
+    private static let posterDiskCheckQueue = DispatchQueue(label: "com.tweet.posterDiskCheck", qos: .utility)
+
     // CRITICAL: Track visible videos to prevent their players from being removed.
     // Count by media ID because the same video can be visible in more than one cell.
     private var visibleVideoMidCounts: [String: Int] = [:]
@@ -252,10 +261,14 @@ class SharedAssetCache: ObservableObject {
     private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // mediaID -> Delegate
     private var cachingPlayerItems: [String: CachingPlayerItem] = [:] // mediaID -> CachingPlayerItem
     private var resourceLoaderDelegates: [String: ResourceLoaderDelegate] = [:] // mediaID -> ResourceLoaderDelegate
-    private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
+    private var loadingTasks: [String: Task<Void, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var preloadedThumbnailMids: Set<String> = []
+    private var decodedPreloadThumbnailMids: Set<String> = []
     private var backgroundPosterMids: Set<String> = []
+    /// MediaIDs whose cached thumbnail has already passed the black/white quality check.
+    /// Avoids re-running CIFilter GPU renders on every cachedThumbnail() read.
+    private var validatedThumbnailMids: Set<String> = []
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
 
     private enum VideoLoadKind: Hashable {
@@ -334,14 +347,16 @@ class SharedAssetCache: ObservableObject {
     }
 
     private func cancelPlayerCreationTasks(for mediaID: String) {
-        if let task = inFlightPlayerCreations.removeValue(forKey: mediaID) {
-            task.cancel()
+        if let tasks = activeCreationTasks.removeValue(forKey: mediaID) {
+            for task in tasks.values {
+                task.cancel()
+            }
             finishVideoLoad(mediaID: mediaID, kind: .player)
         }
-        if let task = activeCreationTasks.removeValue(forKey: mediaID) {
-            task.cancel()
-            finishVideoLoad(mediaID: mediaID, kind: .player)
-        }
+    }
+
+    private func cancelProxyDownloadsForReleasedPreload(mediaID: String) {
+        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
     }
 
     /// Cancel transient load work for a media item without evicting a finished cached player.
@@ -350,7 +365,6 @@ class SharedAssetCache: ObservableObject {
     @MainActor func cancelTransientLoading(for mediaID: String, stopDownloads: Bool = true) {
         cancelAssetLoadTask(for: mediaID)
         cancelPreloadTaskEntry(for: mediaID)
-        cancelPlayerCreationTasks(for: mediaID)
 
         if let cachingPlayerItem = cachingPlayerItems[mediaID] {
             cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
@@ -358,21 +372,22 @@ class SharedAssetCache: ObservableObject {
         }
 
         if stopDownloads {
-            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+            cancelProxyDownloadsForReleasedPreload(mediaID: mediaID)
         }
     }
     
-    // MARK: - Player Creation Deduplication
-    private var activeCreationTasks: [String: Task<AVPlayer, Error>] = [:] // mediaID -> creation task (for cancellation)
-    private var inFlightPlayerCreations: [String: Task<AVPlayer, Error>] = [:] // mediaID -> dedup: covers queued + in-flight
+    // MARK: - Player Creation Tracking
+    private var activeCreationTasks: [String: [UUID: Task<AVPlayer, Error>]] = [:] // mediaID -> independent creation tasks
     
     // MARK: - Cache Persistence
     private let cacheMetadataKey = "SharedAssetCache_Metadata"
     private var hlsExtensions: [String: String] = [:] // mediaID -> "master.m3u8" or "playlist.m3u8"
     
     // MARK: - Background Cleanup
-    private var cleanupTimer: Timer?
-    private var memoryMonitorTimer: Timer?
+    // nonisolated(unsafe) so deinit can invalidate them without MainActor.assumeIsolated
+    // (deinit runs on whatever thread drops the last reference; assumeIsolated there traps).
+    private nonisolated(unsafe) var cleanupTimer: Timer?
+    private nonisolated(unsafe) var memoryMonitorTimer: Timer?
     
     private func startBackgroundCleanup() {
         // BALANCED CLEANUP: 10s interval - frequent enough to prevent memory buildup but not disruptive
@@ -652,18 +667,15 @@ class SharedAssetCache: ObservableObject {
             // Cancel preload tasks
             cancelPreloadTaskEntry(for: mediaID)
 
-            // Cancel in-flight player creation dedup task
-            cancelPlayerCreationTasks(for: mediaID)
-
             // Stop network usage for CachingPlayerItem if it exists
             if let cachingPlayerItem = cachingPlayerItems[mediaID] {
                 cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                 cachingPlayerItem.asset.cancelLoading()
             }
 
-            // Cancel active LocalHTTPServer downloads (progressive streams + HLS segments)
-            // Without this, URLSession downloads persist independently of Task cancellation
-            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+            // Cancel HLS segment work only. Progressive proxy downloads are allowed
+            // to keep filling the partial MP4 cache after a cell scrolls away.
+            cancelProxyDownloadsForReleasedPreload(mediaID: mediaID)
         }
     }
     
@@ -715,9 +727,12 @@ class SharedAssetCache: ObservableObject {
         // Check if there's already a loading task
         if let existingTask = loadingTasks[cacheKey] {
             do {
-                let asset = try await existingTask.value
+                try await existingTask.value
                 cacheTimestamps[cacheKey] = Date() // Update access time
-                return asset
+                if let asset = assetCache[cacheKey] {
+                    return asset
+                }
+                throw NSError(domain: "SharedAssetCache", code: -2, userInfo: [NSLocalizedDescriptionKey: "Asset load completed without cached asset"])
             } catch {
                 loadingTasks.removeValue(forKey: cacheKey)
                 // Fall through to create new task
@@ -727,11 +742,9 @@ class SharedAssetCache: ObservableObject {
         beginVideoLoad(mediaID: cacheKey, kind: .asset)
         
         // Create new loading task
-        let task = Task<AVAsset, Error> {
+        let task = Task { @MainActor in
             defer {
-                Task { @MainActor in
-                    self.finishVideoLoad(mediaID: cacheKey, kind: .asset)
-                }
+                self.finishVideoLoad(mediaID: cacheKey, kind: .asset)
             }
 
             // Check cancellation before starting
@@ -752,7 +765,7 @@ class SharedAssetCache: ObservableObject {
                 try Task.checkCancellation()
 
                 // Resolve HLS URL, using persisted extension when available
-                let cachedFilename = await MainActor.run { self.hlsExtensions[mediaID] }
+                let cachedFilename = self.hlsExtensions[mediaID]
                 let resolvedURL: URL
                 let resolvedFilename: String?
                 if let cachedFilename {
@@ -777,14 +790,12 @@ class SharedAssetCache: ObservableObject {
                 try Task.checkCancellation()
 
                 // Store caching player item to prevent deallocation
-                await MainActor.run {
-                    // Check cancellation on main actor
-                    guard !Task.isCancelled else { return }
-                    self.cachingPlayerItems[mediaID] = cachingPlayerItem
-                    // Persist the resolved extension alongside the cached asset
-                    if let filename = resolvedFilename {
-                        self.hlsExtensions[mediaID] = filename
-                    }
+                // Check cancellation on main actor
+                guard !Task.isCancelled else { return }
+                self.cachingPlayerItems[mediaID] = cachingPlayerItem
+                // Persist the resolved extension alongside the cached asset
+                if let filename = resolvedFilename {
+                    self.hlsExtensions[mediaID] = filename
                 }
             } else {
                 // Check cancellation before progressive video setup
@@ -811,37 +822,35 @@ class SharedAssetCache: ObservableObject {
             try Task.checkCancellation()
             
             // Cache the asset
-            await MainActor.run {
-                // Check cancellation on main actor - don't cache if cancelled
-                guard !Task.isCancelled else {
-                    // Clean up task tracking if cancelled
-                    self.loadingTasks.removeValue(forKey: cacheKey)
-                    return
-                }
-                
-                self.assetCache[cacheKey] = asset
-                self.cacheTimestamps[cacheKey] = Date()
+            // Check cancellation on main actor - don't cache if cancelled
+            guard !Task.isCancelled else {
+                // Clean up task tracking if cancelled
                 self.loadingTasks.removeValue(forKey: cacheKey)
-
-                // Reset network failure counter on successful load
-                self.consecutiveNetworkFailures = 0
-
-                // Save cache metadata to persist across app restarts
-                self.saveCacheMetadata()
-
+                return
             }
-            
-            return asset
+
+            self.assetCache[cacheKey] = asset
+            self.cacheTimestamps[cacheKey] = Date()
+            self.loadingTasks.removeValue(forKey: cacheKey)
+
+            // Reset network failure counter on successful load
+            self.consecutiveNetworkFailures = 0
+
+            // Save cache metadata to persist across app restarts
+            self.saveCacheMetadata()
         }
         
         // Store the task
         loadingTasks[cacheKey] = task
         
         do {
-            let asset = try await task.value
+            try await task.value
             // ✅ CRITICAL MEMORY FIX: Remove completed task to prevent memory leak
             loadingTasks.removeValue(forKey: cacheKey)
-            return asset
+            if let asset = assetCache[cacheKey] {
+                return asset
+            }
+            throw NSError(domain: "SharedAssetCache", code: -2, userInfo: [NSLocalizedDescriptionKey: "Asset load completed without cached asset"])
         } catch {
             // ✅ CRITICAL MEMORY FIX: Remove failed task to prevent memory leak
             loadingTasks.removeValue(forKey: cacheKey)
@@ -989,7 +998,7 @@ class SharedAssetCache: ObservableObject {
         protected.formUnion(protectedPreloadMids)
         protected.formUnion(preloadTasks.keys)
         // Protect players still being created — evicting mid-flight causes stuck spinner
-        protected.formUnion(inFlightPlayerCreations.keys)
+        protected.formUnion(activeCreationTasks.keys)
         return protected
     }
 
@@ -1040,8 +1049,8 @@ class SharedAssetCache: ObservableObject {
         resourceLoaderDelegates.removeValue(forKey: mediaID)
 
         releasePlayer(player)
-        if !hasCompleteProgressiveCache {
-            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        if isHLS {
+            LocalHTTPServer.shared.cancelHLSSegmentDownloads(for: mediaID)
         }
 
         let kind = isHLS ? "HLS" : "progressive"
@@ -1049,59 +1058,61 @@ class SharedAssetCache: ObservableObject {
         print("🔮 [PLAYER PRELOAD] Released \(kind) preload for \(shortMID(mediaID)) (\(reason)) - \(cacheNote)")
     }
 
+    @MainActor
+    private func discardCachedPreloadPlayerAfterWarm(for mediaID: String, player: AVPlayer) {
+        guard playerCache[mediaID] === player,
+              !visibleVideoMids.contains(mediaID) else { return }
+
+        playerCache.removeValue(forKey: mediaID)
+        cacheTimestamps.removeValue(forKey: mediaID)
+        preloadedPlayerMids.remove(mediaID)
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+        cachingPlayerItems.removeValue(forKey: mediaID)
+        cachingPlayerDelegates.removeValue(forKey: mediaID)
+        resourceLoaderDelegates.removeValue(forKey: mediaID)
+        releasePlayer(player)
+
+        NotificationCenter.default.post(
+            name: .videoPlayerItemReplaced,
+            object: nil,
+            userInfo: ["mediaID": mediaID, "released": true]
+        )
+        print("🔮 [PLAYER PRELOAD] Discarded warmed feed player for \(shortMID(mediaID)); disk/proxy cache preserved")
+    }
+
+    @MainActor
+    private func discardCachedPreloadPlayerIfUnused(for mediaID: String, player: AVPlayer) {
+        guard !visibleVideoMids.contains(mediaID) else { return }
+        discardCachedPreloadPlayerAfterWarm(for: mediaID, player: player)
+    }
+
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
     /// Called by VideoPlaybackCoordinator when the directional preload set changes and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
+        let isVisible = visibleVideoMids.contains(mediaID)
         protectPreloadedPlayerBriefly(mediaID)
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerMids.remove(mediaID)
 
+        if isVisible {
+            if let item = playerCache[mediaID]?.currentItem {
+                item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            }
+            LocalHTTPServer.shared.resumeVisibleDownloads(for: mediaID)
+            return
+        }
+
         cancelPreloadTaskEntry(for: mediaID)
         cancelAssetLoadTask(for: mediaID)
-        cancelPlayerCreationTasks(for: mediaID)
         if let cachingPlayerItem = cachingPlayerItems[mediaID] {
             cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             cachingPlayerItem.asset.cancelLoading()
         }
-        // Stop any active HLS segment downloads for this preloaded player.
-        // Task cancellation alone doesn't stop already-running AVPlayer segment requests
-        // since AVPlayer makes them independently via the local HTTP proxy.
-        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        // Stop active local-proxy downloads for this preloaded player. Task cancellation
+        // alone doesn't stop already-running AVPlayer/proxy requests.
+        cancelProxyDownloadsForReleasedPreload(mediaID: mediaID)
         // Don't release cached player — LRU handles eviction
-    }
-
-    /// Stop all directional preload work that is no longer on screen.
-    /// Unlike `cancelPreloadTask(for:)`, this does not give completed preload players
-    /// a grace window; a fresh scroll means the old directional target is stale.
-    @discardableResult
-    @MainActor func cancelDirectionalPreloadsForScrollStart(except keepMids: Set<String>) -> Int {
-        let stalePreloadMids = Set(preloadTasks.keys)
-            .union(protectedPreloadMids)
-            .union(preloadedPlayerMids)
-            .union(preloadedPlayerGraceExpirations.keys)
-            .subtracting(keepMids)
-
-        guard !stalePreloadMids.isEmpty else { return 0 }
-
-        for mediaID in stalePreloadMids {
-            protectedPreloadMids.remove(mediaID)
-            preloadedPlayerMids.remove(mediaID)
-            preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-
-            cancelPreloadTaskEntry(for: mediaID)
-            cancelAssetLoadTask(for: mediaID)
-            cancelPlayerCreationTasks(for: mediaID)
-
-            if let cachingPlayerItem = cachingPlayerItems[mediaID] {
-                cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-                cachingPlayerItem.asset.cancelLoading()
-            }
-
-            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
-        }
-
-        print("🎬 [SharedAssetCache] Scroll start cancelled \(stalePreloadMids.count) previous preload(s)")
-        return stalePreloadMids.count
     }
 
     /// A focused video surface owns the user's active video. Stop preload work,
@@ -1123,7 +1134,7 @@ class SharedAssetCache: ObservableObject {
             protectedPreloadMids.remove(mediaID)
             preloadedPlayerMids.remove(mediaID)
             preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+            cancelProxyDownloadsForReleasedPreload(mediaID: mediaID)
         }
 
         var releasedPlayers = 0
@@ -1159,6 +1170,7 @@ class SharedAssetCache: ObservableObject {
     /// load with the local proxy priority.
     @MainActor func prepareUncachedFocusedLoad(for mediaID: String, owner: String) {
         var cancelledWork = 0
+        let hadHLSProxyItem = cachingPlayerItems[mediaID] != nil
 
         if loadingTasks[mediaID] != nil {
             cancelAssetLoadTask(for: mediaID)
@@ -1166,10 +1178,6 @@ class SharedAssetCache: ObservableObject {
         }
         if preloadTasks[mediaID] != nil {
             cancelPreloadTaskEntry(for: mediaID)
-            cancelledWork += 1
-        }
-        if inFlightPlayerCreations[mediaID] != nil || activeCreationTasks[mediaID] != nil {
-            cancelPlayerCreationTasks(for: mediaID)
             cancelledWork += 1
         }
         if let item = cachingPlayerItems.removeValue(forKey: mediaID) {
@@ -1181,7 +1189,9 @@ class SharedAssetCache: ObservableObject {
         preloadedPlayerMids.remove(mediaID)
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        if hadHLSProxyItem {
+            LocalHTTPServer.shared.cancelHLSSegmentDownloads(for: mediaID)
+        }
 
         if cancelledWork > 0 {
             print("🎬 [SharedAssetCache] Prepared uncached \(owner) load for \(shortMID(mediaID)): cancelled \(cancelledWork) stale feed/preload work item(s)")
@@ -1196,8 +1206,14 @@ class SharedAssetCache: ObservableObject {
     /// MEMORY FIX: Immediately release player and all video data when video goes out of sight
     /// This is called when MediaCell disappears to free memory immediately (not wait for 30-60s timer)
     @MainActor func releasePlayerImmediately(for mediaID: String) {
+        releaseCachedPlayer(for: mediaID, force: false)
+    }
+
+    /// Release one cached inline player by media ID. Feed and chat inline videos share
+    /// this cache; callers should force only for explicit recovery or URL changes.
+    @MainActor func releaseCachedPlayer(for mediaID: String, force: Bool = false) {
         // Don't release visible or near-visible videos while in foreground
-        guard !foregroundProtectedMids.contains(mediaID) else {
+        guard force || !foregroundProtectedMids.contains(mediaID) else {
             print("⚠️ [IMMEDIATE RELEASE] Refusing to release protected video \(mediaID)")
             return
         }
@@ -1315,6 +1331,15 @@ class SharedAssetCache: ObservableObject {
     @MainActor func clearPlayerForMediaID(_ mediaID: String, deleteDiskCache: Bool = true) {
         var releasedPlayer: AVPlayer?
 
+        // Cancel same-media async work before releasing the player so no stale
+        // loader/preload task keeps the wedged item alive during recovery.
+        cancelAssetLoadTask(for: mediaID)
+        cancelPreloadTaskEntry(for: mediaID)
+        cancelPlayerCreationTasks(for: mediaID)
+        preloadedPlayerMids.remove(mediaID)
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
+
         // CRITICAL: Properly release player to free memory (not just pause!)
         if let player = playerCache.removeValue(forKey: mediaID) {
             releasedPlayer = player
@@ -1337,11 +1362,6 @@ class SharedAssetCache: ObservableObject {
             // completed playlist/segment files instead of treating the video as cold.
             diskCacheStatus.removeValue(forKey: mediaID)
         }
-
-        // Cancel any pending loading tasks
-        cancelAssetLoadTask(for: mediaID)
-        cancelPreloadTaskEntry(for: mediaID)
-        cancelPlayerCreationTasks(for: mediaID)
 
         if deleteDiskCache {
             // Cancel active LocalHTTPServer downloads BEFORE deleting disk cache.
@@ -1377,6 +1397,7 @@ class SharedAssetCache: ObservableObject {
     /// Get cached player or create new one. Bandwidth is managed by NodeConnectionPool in
     /// LocalHTTPServer — no slot throttling needed here.
     func getOrCreatePlayer(for url: URL, mediaID explicitMediaID: String? = nil, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
+        print("🎥 [getOrCreatePlayer] REACHED for \(shortMID(explicitMediaID ?? "?"))")
         guard let mediaID = explicitMediaID ?? extractMediaID(from: url) else {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL"])
         }
@@ -1392,56 +1413,52 @@ class SharedAssetCache: ObservableObject {
         // CRITICAL: Cache key must ALWAYS be the mediaID (video attachment mid).
         let cacheKey = mediaID
 
-        // Try to get cached player first
-        if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
-            if cachedPlayer.currentItem == nil {
-                // Player shell — reload item
-                do {
-                    let playerItem = try await getOrCreatePlayerItem(for: url, mediaID: mediaID, mediaType: mediaType)
-                    await MainActor.run {
-                        cachedPlayer.replaceCurrentItem(with: playerItem)
-                        NotificationCenter.default.post(
-                            name: .videoPlayerItemReplaced,
-                            object: nil,
-                            userInfo: ["mediaID": mediaID]
-                        )
+        let canReuseCachedPlayer = mediaType == .hls_video || url.absoluteString.hasSuffix(".m3u8")
+        if canReuseCachedPlayer {
+            // HLS players use CachingPlayerItem and can be shared by mediaID. Progressive
+            // feed players must stay independent; the persistent cache is the local proxy.
+            if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
+                if cachedPlayer.currentItem == nil {
+                    // Player shell — reload item
+                    do {
+                        let playerItem = try await getOrCreatePlayerItem(for: url, mediaID: mediaID, mediaType: mediaType)
+                        await MainActor.run {
+                            cachedPlayer.replaceCurrentItem(with: playerItem)
+                            NotificationCenter.default.post(
+                                name: .videoPlayerItemReplaced,
+                                object: nil,
+                                userInfo: ["mediaID": mediaID]
+                            )
+                        }
+                        return cachedPlayer
+                    } catch {
+                        await MainActor.run { _ = playerCache.removeValue(forKey: cacheKey) }
                     }
+                } else {
                     return cachedPlayer
-                } catch {
-                    await MainActor.run { _ = playerCache.removeValue(forKey: cacheKey) }
                 }
-            } else {
-                return cachedPlayer
             }
-        }
-
-        // Deduplicate: join an existing in-flight creation for the same mediaID.
-        if let existingTask = inFlightPlayerCreations[mediaID] {
-            print("♻️ [SharedAssetCache] Joining in-flight creation for \(shortMID(mediaID))")
-            return try await existingTask.value
         }
 
         // Create immediately — NodeConnectionPool in LocalHTTPServer manages bandwidth.
+        let creationID = UUID()
         let creationTask = Task<AVPlayer, Error> {
-            let task = Task<AVPlayer, Error> { try await self.createPlayerNow(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType) }
-            await MainActor.run { self.activeCreationTasks[mediaID] = task }
-            do {
-                let player = try await task.value
-                await MainActor.run { _ = self.activeCreationTasks.removeValue(forKey: mediaID) }
-                return player
-            } catch {
-                await MainActor.run { _ = self.activeCreationTasks.removeValue(forKey: mediaID) }
-                throw error
-            }
+            try await self.createPlayerNow(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType)
         }
-        inFlightPlayerCreations[mediaID] = creationTask
+        activeCreationTasks[mediaID, default: [:]][creationID] = creationTask
 
         do {
             let player = try await creationTask.value
-            inFlightPlayerCreations.removeValue(forKey: mediaID)
+            activeCreationTasks[mediaID]?.removeValue(forKey: creationID)
+            if activeCreationTasks[mediaID]?.isEmpty == true {
+                activeCreationTasks.removeValue(forKey: mediaID)
+            }
             return player
         } catch {
-            inFlightPlayerCreations.removeValue(forKey: mediaID)
+            activeCreationTasks[mediaID]?.removeValue(forKey: creationID)
+            if activeCreationTasks[mediaID]?.isEmpty == true {
+                activeCreationTasks.removeValue(forKey: mediaID)
+            }
             throw error
         }
     }
@@ -1451,13 +1468,15 @@ class SharedAssetCache: ObservableObject {
         // Bail early if this creation was cancelled (e.g. by makeRoomForPlayers)
         try Task.checkCancellation()
 
-        // Re-check cache: another creation may have completed while this was queued
-        // (e.g. visible cell finished while preload was pending in the queue)
-        if let cachedPlayer = await MainActor.run(body: { self.getCachedPlayer(for: mediaID) }),
-           cachedPlayer.currentItem != nil {
-            let shortId = shortMID(mediaID)
-            print("♻️ [SharedAssetCache] Skipping duplicate creation for \(shortId) — already cached")
-            return cachedPlayer
+        let canReuseCachedPlayer = mediaType == .hls_video || url.absoluteString.hasSuffix(".m3u8")
+        if canReuseCachedPlayer {
+            // Re-check cache: another HLS creation may have completed while this was queued.
+            if let cachedPlayer = await MainActor.run(body: { self.getCachedPlayer(for: mediaID) }),
+               cachedPlayer.currentItem != nil {
+                let shortId = shortMID(mediaID)
+                print("♻️ [SharedAssetCache] Skipping duplicate creation for \(shortId) — already cached")
+                return cachedPlayer
+            }
         }
 
         // Clean up cache BEFORE creating new player — evict to make room for incoming player
@@ -1621,11 +1640,6 @@ class SharedAssetCache: ObservableObject {
         // waitingToPlayAtSpecifiedRate transitions.
         player.automaticallyWaitsToMinimizeStalling = true
 
-        // Cache the player
-        await MainActor.run {
-            cachePlayer(player, for: mediaID)
-        }
-        
         return player
     }
     
@@ -1754,8 +1768,8 @@ class SharedAssetCache: ObservableObject {
                 }
             }
             
-            // Check Core Data cache (synchronous but reliable)
-            if let tweet = TweetCacheManager.shared.fetchTweetSync(mid: tweetId) {
+            // Check Core Data cache (async so the fetch+decode stays off the main actor)
+            if let tweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
                 let authorId = !tweet.authorId.isEmpty ? tweet.authorId : tweet.author?.mid
                 if let authorId = authorId, !authorId.isEmpty {
                     print("✅ [AUTHOR SEARCH] Found author from Core Data: \(authorId)")
@@ -1927,65 +1941,57 @@ class SharedAssetCache: ObservableObject {
     
     /// Check if we have cached HLS playlist locally (to avoid network requests for cached videos)
     private func checkCachedHLSPlaylist(for mediaID: String, baseURL: URL) async -> URL? {
-        // Get the cache directory for this media
+        // Run all disk I/O off @MainActor so we don't block the main thread.
+        // Task.detached creates a real suspension point: @MainActor is released while
+        // the cooperative pool thread scans the cache directory and reads playlist files.
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-        
-        // Check if cache directory exists
-        guard FileManager.default.fileExists(atPath: mediaCacheDir.path) else {
-            return nil
-        }
-        
-        // Look for cached playlist files in order of preference
-        // Playlists may be in subdirectories like /720p, /480p, etc.
-        let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "playlist.m3u8", "_playlist.m3u8"]
-        
-        // Search recursively for playlists in subdirectories
-        guard let enumerator = FileManager.default.enumerator(
-            at: mediaCacheDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-        
-        // Collect all valid playlists found
-        var foundPlaylists: [(url: URL, name: String)] = []
-        
-        while let fileURL = enumerator.nextObject() as? URL {
-            let fileName = fileURL.lastPathComponent
-            
-            if possiblePlaylistNames.contains(fileName) {
-                // Validate that the cached playlist is not empty and contains valid content
-                if let data = try? Data(contentsOf: fileURL),
-                   let playlistString = String(data: data, encoding: .utf8) {
-                    
-                    // More lenient validation - just check for #EXTM3U header
-                    // Don't require .ts or .m3u8 in content since some playlists might use different formats
-                    if playlistString.contains("#EXTM3U") {
+        let mediaCacheDirPath = cacheDir.appendingPathComponent(mediaID).path
+        let baseURLAbsoluteString = baseURL.absoluteString
+        let shortId = shortMID(mediaID)
+
+        return await Task.detached(priority: .userInitiated) {
+            let mediaCacheDir = URL(fileURLWithPath: mediaCacheDirPath)
+
+            guard FileManager.default.fileExists(atPath: mediaCacheDirPath) else {
+                return nil
+            }
+
+            let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "playlist.m3u8", "_playlist.m3u8"]
+
+            guard let enumerator = FileManager.default.enumerator(
+                at: mediaCacheDir,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return nil
+            }
+
+            var foundPlaylists: [(url: URL, name: String)] = []
+
+            while let fileURL = enumerator.nextObject() as? URL {
+                let fileName = fileURL.lastPathComponent
+                if possiblePlaylistNames.contains(fileName) {
+                    if let data = try? Data(contentsOf: fileURL),
+                       let playlistString = String(data: data, encoding: .utf8),
+                       playlistString.contains("#EXTM3U") {
                         foundPlaylists.append((url: fileURL, name: fileName))
                     }
                 }
             }
-        }
-        
-        // Return the highest priority playlist found
-        for playlistName in possiblePlaylistNames {
-            if let found = foundPlaylists.first(where: { $0.name == playlistName }) {
-                // Remove underscore prefix from filename only (e.g., _master.m3u8 -> master.m3u8)
-                let cachedFileName = found.url.lastPathComponent
-                let fileName = cachedFileName.hasPrefix("_") ? String(cachedFileName.dropFirst()) : cachedFileName
 
-                // baseURL already contains the full path including mediaID (e.g., http://.../ipfs/QmHash)
-                // We just need to append the filename directly
-                let reconstructedURL = baseURL.appendingPathComponent(fileName)
-                print("🏁 [HLS PLAYLIST CACHE] \(shortMID(mediaID)) using cached \(fileName)")
-
-                return reconstructedURL
+            for playlistName in possiblePlaylistNames {
+                if let found = foundPlaylists.first(where: { $0.name == playlistName }) {
+                    let cachedFileName = found.url.lastPathComponent
+                    let fileName = cachedFileName.hasPrefix("_") ? String(cachedFileName.dropFirst()) : cachedFileName
+                    guard let baseURL = URL(string: baseURLAbsoluteString) else { return nil }
+                    let reconstructedURL = baseURL.appendingPathComponent(fileName)
+                    print("🏁 [HLS PLAYLIST CACHE] \(shortId) using cached \(fileName)")
+                    return reconstructedURL
+                }
             }
-        }
-        
-        return nil
+
+            return nil
+        }.value
     }
     
     /// Resolve HLS URL by racing the common playlist targets.
@@ -2106,12 +2112,10 @@ class SharedAssetCache: ObservableObject {
             task.cancel()
         }
         preloadTasks.removeAll()
-        for task in inFlightPlayerCreations.values {
-            task.cancel()
-        }
-        inFlightPlayerCreations.removeAll()
-        for task in activeCreationTasks.values {
-            task.cancel()
+        for tasks in activeCreationTasks.values {
+            for task in tasks.values {
+                task.cancel()
+            }
         }
         activeCreationTasks.removeAll()
         finishAllVideoLoads()
@@ -2229,15 +2233,84 @@ class SharedAssetCache: ObservableObject {
 
         preloadTasks[cacheKey] = task
     }
+
+    /// Preload only enough media state to produce a poster frame.
+    /// This intentionally avoids creating/warming an AVPlayer so near-viewport work
+    /// cannot compete with scrolling or foreground gestures. When allowNetwork is false,
+    /// only already safe cached state is used; no asset load task is joined or started.
+    func preloadPoster(for url: URL, mediaID explicitMediaID: String? = nil, tweetId: String? = nil, mediaType: MediaType? = nil, allowNetwork: Bool = true) {
+        guard let mediaID = explicitMediaID ?? extractMediaID(from: url) else { return }
+        let cacheKey = mediaID
+
+        guard cachedThumbnail(for: mediaID) == nil else { return }
+        guard preloadTasks[cacheKey] == nil else { return }
+
+        // progressiveCacheFileForThumbnailIfAvailable scans up to 4MB of disk looking for
+        // the moov atom (progressiveCacheHasMoovInPrefix). This function runs on every
+        // throttled scroll-visibility tick for the next few videos in the scroll direction;
+        // doing that scan synchronously on the main actor blocked scroll handling, visible
+        // as periodic "stop, move a bit, stop" hitches while non-primary videos scrolled by.
+        // Run it on a dedicated serial queue (reusing preloadTasks to dedup repeat scans of
+        // the same not-yet-cached video) — everything else here stays on this MainActor.
+        let task = Task {
+            defer { preloadTasks.removeValue(forKey: cacheKey) }
+
+            let cachedFileURL = await withCheckedContinuation { continuation in
+                Self.posterDiskCheckQueue.async {
+                    let result = LocalHTTPServer.shared.progressiveCacheFileForThumbnailIfAvailable(for: mediaID)
+                    continuation.resume(returning: result)
+                }
+            }
+
+            guard !Task.isCancelled, cachedThumbnail(for: mediaID) == nil else { return }
+
+            if let cachedFileURL {
+                generateThumbnail(from: AVURLAsset(url: cachedFileURL), for: mediaID)
+                return
+            }
+
+            guard allowNetwork else { return }
+
+            if let cachedAsset = assetCache[cacheKey] {
+                generateThumbnail(from: cachedAsset, for: mediaID)
+                return
+            }
+
+            if let loadingTask = loadingTasks[cacheKey] {
+                do {
+                    try await loadingTask.value
+                    guard !Task.isCancelled,
+                          let asset = assetCache[cacheKey],
+                          cachedThumbnail(for: mediaID) == nil else { return }
+                    generateThumbnail(from: asset, for: mediaID)
+                } catch {
+                    // Poster preload failure is non-critical; visible playback can still load normally.
+                }
+                return
+            }
+
+            do {
+                let asset = try await getAsset(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType)
+                guard !Task.isCancelled,
+                      cachedThumbnail(for: mediaID) == nil else { return }
+                generateThumbnail(from: asset, for: mediaID)
+            } catch {
+                // Poster preload failure is non-critical; visible playback can still load normally.
+            }
+        }
+
+        preloadTasks[cacheKey] = task
+    }
     
     /// Preload player (not just asset) for upcoming video in scroll direction.
     /// Creates an AVPlayer, warms a small initial buffer, and decodes a non-black
     /// poster frame so the cell has content before it becomes visible.
     func preloadPlayer(for url: URL, mediaID explicitMediaID: String? = nil, tweetId: String? = nil, mediaType: MediaType? = nil) {
         guard let mediaID = explicitMediaID ?? extractMediaID(from: url) else { return }
+        let isHLSVideo = mediaType == .hls_video || url.absoluteString.hasSuffix(".m3u8")
 
         // Skip if player already cached
-        if let player = playerCache[mediaID] {
+        if isHLSVideo, let player = playerCache[mediaID] {
             if shouldReleaseUnreadyHLSPreload(player, mediaType: mediaType) {
                 releaseUnreadyPreloadedPlayer(
                     for: mediaID,
@@ -2247,8 +2320,7 @@ class SharedAssetCache: ObservableObject {
                 )
                 if playerCache[mediaID] != nil { return }
             } else {
-                preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-                preloadedPlayerMids.insert(mediaID)
+                discardCachedPreloadPlayerIfUnused(for: mediaID, player: player)
                 NotificationCenter.default.post(
                     name: .videoPlayerPreloaded,
                     object: self,
@@ -2279,31 +2351,47 @@ class SharedAssetCache: ObservableObject {
                 let didWarm = await warmPreloadedPlayer(player, mediaID: mediaID, mediaType: mediaType)
                 guard didWarm else {
                     await MainActor.run {
-                        self.releaseUnreadyPreloadedPlayer(
-                            for: mediaID,
-                            player: player,
-                            mediaType: mediaType,
-                            reason: Task.isCancelled ? "cancelled before warm" : "not warm enough"
-                        )
+                        if isHLSVideo {
+                            self.releaseUnreadyPreloadedPlayer(
+                                for: mediaID,
+                                player: player,
+                                mediaType: mediaType,
+                                reason: Task.isCancelled ? "cancelled before warm" : "not warm enough"
+                            )
+                        } else {
+                            self.releasePlayer(player)
+                        }
                     }
                     return
                 }
 
-                if cachedThumbnail(for: mediaID) == nil,
-                   let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID) {
-                    if await generateDecodedPreloadFrame(from: player, for: mediaID) == false,
-                       cachedThumbnail(for: mediaID) == nil {
+                let needsDecodedFrame = cachedThumbnail(for: mediaID) == nil ||
+                    (preloadedThumbnailMids.contains(mediaID) && !decodedPreloadThumbnailMids.contains(mediaID))
+                if needsDecodedFrame {
+                    let decoded = await generateDecodedPreloadFrame(
+                        from: player,
+                        for: mediaID,
+                        allowReplacingPreloadThumbnail: true
+                    )
+                    if !decoded,
+                       cachedThumbnail(for: mediaID) == nil,
+                       let readyAsset = readyAssetIfAvailable(from: player) {
                         generateThumbnail(from: readyAsset, for: mediaID)
                     }
                 }
 
                 await MainActor.run {
-                    if !self.visibleVideoMids.contains(mediaID), player.rate == 0 {
+                    if isHLSVideo {
+                        if !self.visibleVideoMids.contains(mediaID), player.rate == 0 {
+                            player.pause()
+                            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                        }
+                        self.discardCachedPreloadPlayerAfterWarm(for: mediaID, player: player)
+                    } else {
                         player.pause()
                         player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                        self.releasePlayer(player)
                     }
-                    self.preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
-                    self.preloadedPlayerMids.insert(mediaID)
                     NotificationCenter.default.post(
                         name: .videoPlayerPreloaded,
                         object: self,
@@ -2334,12 +2422,19 @@ class SharedAssetCache: ObservableObject {
 
         let task = Task {
             defer { preloadTasks.removeValue(forKey: mediaID) }
-            guard cachedThumbnail(for: mediaID) == nil else { return }
+            let needsDecodedFrame = cachedThumbnail(for: mediaID) == nil ||
+                (preloadedThumbnailMids.contains(mediaID) && !decodedPreloadThumbnailMids.contains(mediaID))
+            guard needsDecodedFrame else { return }
 
-            if let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID),
-               cachedThumbnail(for: mediaID) == nil {
-                if await generateDecodedPreloadFrame(from: player, for: mediaID) == false,
-                   cachedThumbnail(for: mediaID) == nil {
+            if cachedThumbnail(for: mediaID) == nil || preloadedThumbnailMids.contains(mediaID) {
+                let decoded = await generateDecodedPreloadFrame(
+                    from: player,
+                    for: mediaID,
+                    allowReplacingPreloadThumbnail: true
+                )
+                if !decoded,
+                   cachedThumbnail(for: mediaID) == nil,
+                   let readyAsset = readyAssetIfAvailable(from: player) {
                     generateThumbnail(from: readyAsset, for: mediaID)
                 }
             }
@@ -2395,9 +2490,20 @@ class SharedAssetCache: ObservableObject {
     /// AVAssetImageGenerator is unreliable for some local-HLS/proxy assets until
     /// playback has decoded media, so this path prerolls the muted off-screen player
     /// and grabs a pixel buffer before the cell scrolls into view.
-    private func generateDecodedPreloadFrame(from player: AVPlayer, for mediaID: String) async -> Bool {
-        guard cachedThumbnail(for: mediaID) == nil,
-              let item = player.currentItem else { return cachedThumbnail(for: mediaID) != nil }
+    private func generateDecodedPreloadFrame(
+        from player: AVPlayer,
+        for mediaID: String,
+        allowReplacingPreloadThumbnail: Bool = false
+    ) async -> Bool {
+        let existingThumbnail = cachedThumbnail(for: mediaID)
+        if existingThumbnail != nil {
+            guard allowReplacingPreloadThumbnail,
+                  preloadedThumbnailMids.contains(mediaID),
+                  !decodedPreloadThumbnailMids.contains(mediaID) else {
+                return true
+            }
+        }
+        guard let item = player.currentItem else { return existingThumbnail != nil }
 
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
@@ -2419,31 +2525,46 @@ class SharedAssetCache: ObservableObject {
             }
         }
 
-        if item.status != .readyToPlay {
-            guard await waitForPreloadReadyAsset(player, mediaID: mediaID) != nil else { return false }
-        }
-
         let currentSeconds = player.currentTime().seconds
         if !currentSeconds.isFinite || currentSeconds < 0.05 {
             _ = await seek(player, to: .zero)
         }
 
-        if !wasPlaying {
-            _ = await preroll(player, atRate: 0.1)
-        }
+        let capturedAfterPreroll = await captureDecodedPreloadFrame(
+            from: output,
+            player: player,
+            mediaID: mediaID,
+            attempts: 20
+        )
+        if capturedAfterPreroll { return true }
 
-        for _ in 0..<20 {
-            if Task.isCancelled { return false }
-            if let image = copyPreloadFrame(from: output, player: player),
-                !VideoFrameExtractor.isMostlyBlack(image),
-               !VideoFrameExtractor.isMostlyWhite(image) {
-                storeCachedThumbnail(image, for: mediaID, source: "preload")
-                if !wasPlaying {
+        if !wasPlaying {
+            if item.status == .readyToPlay {
+                _ = await preroll(player, atRate: 0.1)
+                let capturedAfterPrerollTick = await captureDecodedPreloadFrame(
+                    from: output,
+                    player: player,
+                    mediaID: mediaID,
+                    attempts: 12
+                )
+                if capturedAfterPrerollTick {
                     player.pause()
+                    return true
                 }
-                return true
             }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+
+            // Some local/progressive assets do not produce a pixel buffer from
+            // preroll alone. Brief muted playback gives AVPlayerItemVideoOutput
+            // a real decode tick while still keeping preload lightweight.
+            player.playImmediately(atRate: 0.1)
+            let capturedAfterDecodeTick = await captureDecodedPreloadFrame(
+                from: output,
+                player: player,
+                mediaID: mediaID,
+                attempts: 15
+            )
+            player.pause()
+            if capturedAfterDecodeTick { return true }
         }
 
         if !wasPlaying {
@@ -2452,7 +2573,32 @@ class SharedAssetCache: ObservableObject {
         return false
     }
 
-    private func copyPreloadFrame(from output: AVPlayerItemVideoOutput, player: AVPlayer) -> UIImage? {
+    private func captureDecodedPreloadFrame(
+        from output: AVPlayerItemVideoOutput,
+        player: AVPlayer,
+        mediaID: String,
+        attempts: Int
+    ) async -> Bool {
+        for _ in 0..<attempts {
+            if Task.isCancelled { return false }
+            if let image = await copyPreloadFrame(from: output, player: player) {
+                storeCachedThumbnail(image, for: mediaID, source: "preload-decoded")
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    /// Copies a decoded frame and converts it to a UIImage **off** the main actor.
+    ///
+    /// SharedAssetCache is @MainActor, so this whole conversion — CIContext.createCGImage,
+    /// a GPU readback — used to run on the main thread, and captureDecodedPreloadFrame
+    /// calls it up to 20 times per preload. That showed up in main-thread stall samples
+    /// as a >120ms block during scrolling. Only the candidate timestamps are computed on
+    /// the actor; the pixel-buffer copy, downscale, and the blank-frame rejection all run
+    /// in the detached task, so the main thread never touches a frame.
+    private func copyPreloadFrame(from output: AVPlayerItemVideoOutput, player: AVPlayer) async -> UIImage? {
         let current = player.currentTime()
         let hostTime = output.itemTime(forHostTime: CACurrentMediaTime())
         var candidates: [CMTime] = []
@@ -2467,17 +2613,31 @@ class SharedAssetCache: ObservableObject {
         if hostTime.isValid {
             candidates.append(hostTime)
         }
+        guard !candidates.isEmpty else { return nil }
 
-        var displayTime = CMTime.zero
-        for time in candidates {
-            guard time.isValid,
-                  let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime),
-                  let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 480) else {
-                continue
+        return await Task.detached(priority: .utility) {
+            var displayTime = CMTime.zero
+            for time in candidates {
+                guard time.isValid,
+                      let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime),
+                      let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 480) else {
+                    continue
+                }
+                // Reject blank frames here too — the luminance check decodes the image,
+                // which is exactly the work being kept off the main thread.
+                if VideoFrameExtractor.isMostlyBlack(image) || VideoFrameExtractor.isMostlyWhite(image) {
+                    continue
+                }
+                return image
             }
-            return image
-        }
-        return nil
+            return nil
+        }.value
+    }
+
+    private func readyAssetIfAvailable(from player: AVPlayer) -> AVAsset? {
+        guard let item = player.currentItem,
+              item.status == .readyToPlay else { return nil }
+        return item.asset
     }
 
     private func seek(_ player: AVPlayer, to time: CMTime) async -> Bool {
@@ -2502,11 +2662,14 @@ class SharedAssetCache: ObservableObject {
         for _ in 0..<80 {
             if Task.isCancelled { return nil }
 
-            let state = await MainActor.run { () -> (asset: AVAsset?, failed: Bool) in
-                guard let item = player.currentItem else { return (nil, true) }
-                if item.status == .readyToPlay { return (item.asset, false) }
-                if item.status == .failed { return (nil, true) }
-                return (nil, false)
+            guard let item = player.currentItem else { return nil }
+            let state: (asset: AVAsset?, failed: Bool)
+            if item.status == .readyToPlay {
+                state = (item.asset, false)
+            } else if item.status == .failed {
+                state = (nil, true)
+            } else {
+                state = (nil, false)
             }
 
             if let asset = state.asset { return asset }
@@ -2560,19 +2723,24 @@ class SharedAssetCache: ObservableObject {
 
     /// Read a cached thumbnail for mediaID. Filters/clears dark frames so callers
     /// never treat black snapshots as valid poster images.
+    /// Uses validatedThumbnailMids to skip the GPU-backed CIFilter check on repeat reads.
     func cachedThumbnail(for mediaID: String) -> UIImage? {
         guard let image = VideoLastFrameCache.shared.image(for: mediaID) else { return nil }
+        if validatedThumbnailMids.contains(mediaID) { return image }
         if VideoFrameExtractor.isMostlyBlack(image) || VideoFrameExtractor.isMostlyWhite(image) {
             VideoLastFrameCache.shared.clear(for: mediaID)
             preloadedThumbnailMids.remove(mediaID)
+            decodedPreloadThumbnailMids.remove(mediaID)
             return nil
         }
+        validatedThumbnailMids.insert(mediaID)
         return image
     }
 
     func hasPreloadedThumbnail(for mediaID: String) -> Bool {
         guard cachedThumbnail(for: mediaID) != nil else {
             preloadedThumbnailMids.remove(mediaID)
+            decodedPreloadThumbnailMids.remove(mediaID)
             return false
         }
         return preloadedThumbnailMids.contains(mediaID)
@@ -2617,10 +2785,17 @@ class SharedAssetCache: ObservableObject {
         guard !VideoFrameExtractor.isMostlyBlack(image),
               !VideoFrameExtractor.isMostlyWhite(image) else { return }
         VideoLastFrameCache.shared.set(image, for: mediaID)
-        if source == "preload" {
+        validatedThumbnailMids.insert(mediaID)
+        if source == "preload" || source == "preload-decoded" {
             preloadedThumbnailMids.insert(mediaID)
+            if source == "preload-decoded" {
+                decodedPreloadThumbnailMids.insert(mediaID)
+            } else {
+                decodedPreloadThumbnailMids.remove(mediaID)
+            }
         } else {
             preloadedThumbnailMids.remove(mediaID)
+            decodedPreloadThumbnailMids.remove(mediaID)
         }
         NotificationCenter.default.post(
             name: .videoThumbnailCached,
@@ -2629,6 +2804,8 @@ class SharedAssetCache: ObservableObject {
         )
         if source == "preload" {
             print("🖼️ [PLAYER PRELOAD] Generated thumbnail for \(mediaID)")
+        } else if source == "preload-decoded" {
+            print("🖼️ [PLAYER PRELOAD] Generated decoded thumbnail for \(mediaID)")
         }
     }
 
@@ -2867,9 +3044,11 @@ class SharedAssetCache: ObservableObject {
 
         // 2. Cancel all active creation tasks
         var cancelledActive = 0
-        for (_, task) in activeCreationTasks {
-            task.cancel()
-            cancelledActive += 1
+        for tasks in activeCreationTasks.values {
+            for task in tasks.values {
+                task.cancel()
+                cancelledActive += 1
+            }
         }
 
         print("🔄 [SharedAssetCache] releaseAllFeedPlayers: released \(releasedCount) cached (was \(previousVisible) visible, \(previousPreloaded) preloaded), cancelled \(cancelledActive) active")
@@ -3097,41 +3276,14 @@ class SharedAssetCache: ObservableObject {
     }
     
     deinit {
-        // Invalidate timers
+        // No MainActor.assumeIsolated here: deinit runs on whatever thread drops the
+        // last reference, and assumeIsolated off-main traps (the build-117 crash class).
+        // Only thread-safe teardown belongs in deinit: timers (which hold weak self and
+        // would otherwise keep firing via the run loop) and observer removal. The
+        // @MainActor task/player/cache collections are released by ARC with the object;
+        // explicit teardown for them lives in clearAllCaches()/background-release paths.
         cleanupTimer?.invalidate()
-        cleanupTimer = nil
         memoryMonitorTimer?.invalidate()
-        memoryMonitorTimer = nil
-        
-        for task in loadingTasks.values {
-            task.cancel()
-        }
-        loadingTasks.removeAll()
-        for task in preloadTasks.values {
-            task.cancel()
-        }
-        preloadTasks.removeAll()
-        for task in inFlightPlayerCreations.values {
-            task.cancel()
-        }
-        inFlightPlayerCreations.removeAll()
-        for task in activeCreationTasks.values {
-            task.cancel()
-        }
-        activeCreationTasks.removeAll()
-        activeVideoLoadTickets.removeAll()
-        
-        // Pause and clean up all cached players
-        for (_, player) in playerCache {
-            player.pause()
-        }
-        playerCache.removeAll()
-        
-        // Clear all caches
-        assetCache.removeAll()
-        cacheTimestamps.removeAll()
-        
-        // Remove NotificationCenter observers
         NotificationCenter.default.removeObserver(self)
     }
     
@@ -3207,13 +3359,17 @@ class SharedAssetCache: ObservableObject {
             visibleMidsForPosters.insert(fullscreenMid)
         }
 
+        // Last-frame placeholders are full 720p UIImages (up to 48 ≈ tens of MB) and
+        // NSCache does not shrink in the background on its own. Keep only the frames
+        // for currently visible/fullscreen videos (flicker-free resume) and drop the rest.
+        VideoLastFrameCache.shared.keepOnly(visibleMidsForPosters)
+
         var mediaIDsToCancel = Set<String>()
         mediaIDsToCancel.formUnion(playerCache.keys)
         mediaIDsToCancel.formUnion(assetCache.keys)
         mediaIDsToCancel.formUnion(cachingPlayerItems.keys)
         mediaIDsToCancel.formUnion(loadingTasks.keys)
         mediaIDsToCancel.formUnion(preloadTasks.keys)
-        mediaIDsToCancel.formUnion(inFlightPlayerCreations.keys)
         mediaIDsToCancel.formUnion(activeCreationTasks.keys)
         mediaIDsToCancel.formUnion(visibleVideoMids)
         mediaIDsToCancel.formUnion(preloadedPlayerMids)
@@ -3252,6 +3408,8 @@ class SharedAssetCache: ObservableObject {
         protectedPreloadMids.removeAll()
         preloadedPlayerGraceExpirations.removeAll()
         preloadedThumbnailMids.formIntersection(visibleMidsForPosters)
+        decodedPreloadThumbnailMids.formIntersection(visibleMidsForPosters)
+        validatedThumbnailMids.formIntersection(visibleMidsForPosters)
         backgroundPosterMids.removeAll()
 
         print("🌙 [SharedAssetCache] Background release: \(playerCount) players released, \(assetCount) assets cleared, \(mediaIDsToCancel.count) media downloads cancelled, \(visibleMidsForPosters.count) visible poster(s) kept")

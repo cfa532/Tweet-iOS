@@ -1,15 +1,17 @@
 import SwiftUI
 
+final class ProfileHeaderState: ObservableObject {
+    @Published var isFollowing: Bool = false
+}
+
 @available(iOS 16.0, *)
 struct ProfileHeaderView: View {
     @ObservedObject var user: User
+    @ObservedObject var headerState: ProfileHeaderState
     let isCurrentUser: Bool
-    let isFollowing: Bool
     let onEditTap: () -> Void
     let onFollowToggle: () -> Void
     let onAvatarTap: () -> Void
-    @EnvironmentObject private var hproseInstance: HproseInstance
-    
     private func formatRegistrationDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMMM yyyy"
@@ -53,10 +55,9 @@ struct ProfileHeaderView: View {
                             .fill(Color(.systemGray6))
                     )
                     .foregroundColor(.primary)
-                } else if !hproseInstance.appUser.isGuest {
-                    // Only show follow/unfollow button if app user is not a guest
+                } else {
                     DebounceButton(
-                        isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"),
+                        headerState.isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"),
                         cooldownDuration: 0.5,
                         enableHaptic: false
                     ) {
@@ -66,7 +67,7 @@ struct ProfileHeaderView: View {
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 20)
-                            .fill(isFollowing ? Color(.systemRed) : Color(.systemBlue))
+                            .fill(headerState.isFollowing ? Color(.systemRed) : Color(.systemBlue))
                     )
                     .foregroundColor(.white)
                 }
@@ -77,6 +78,7 @@ struct ProfileHeaderView: View {
                     .foregroundColor(.themeText)
                     .lineLimit(3)
                     .truncationMode(.tail)
+                    .padding(.leading, 8)
             }
         }
         .padding(.top)

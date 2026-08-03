@@ -250,6 +250,7 @@ struct TweetSearchResultRow: View {
     }
 }
 
+@MainActor
 class SearchViewModel: ObservableObject {
     static let shared = SearchViewModel()
 

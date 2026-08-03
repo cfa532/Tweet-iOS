@@ -9,14 +9,16 @@ import SwiftUI
 import AVKit
 
 // Navigation wrapper to pass both comment and parent tweet
-struct CommentNavigation: Hashable {
+struct CommentNavigation: @MainActor Hashable {
     let comment: Tweet
     let parentTweet: Tweet
     
+    @MainActor
     static func == (lhs: CommentNavigation, rhs: CommentNavigation) -> Bool {
         lhs.comment.mid == rhs.comment.mid && lhs.parentTweet.mid == rhs.parentTweet.mid
     }
     
+    @MainActor
     func hash(into hasher: inout Hasher) {
         hasher.combine(comment.mid)
         hasher.combine(parentTweet.mid)
@@ -69,7 +71,11 @@ struct CommentDetailViewWithParent: View {
         }
         
         do {
-            let parent = try await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+            let parent = try await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId,
+                bypassCache: true
+            )
             await MainActor.run {
                 self.parentTweet = parent
                 self.isLoading = false
@@ -92,6 +98,7 @@ struct CommentDetailView: View {
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
     @State private var replies: [Tweet] = []
+    @State private var repliesRefreshToken = 0
     
     // Reply editor states
     @State private var showReplyEditor = true
@@ -133,6 +140,9 @@ struct CommentDetailView: View {
                     repliesListView
                 }
             }
+            .refreshable {
+                await refreshCommentAndReplies()
+            }
             .background(Color(.systemBackground))
             
             // ReplyEditor as a component at the bottom
@@ -172,20 +182,18 @@ struct CommentDetailView: View {
             
             // Activate detail video manager
             DetailVideoManager.shared.activateForDetail()
+            DetailVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
         }
         .onDisappear {
-            // Mark detail view as inactive
-            NavigationStateManager.shared.setDetailViewActive(false)
-            
-            // Deactivate detail video manager
-            DetailVideoManager.shared.deactivate()
+            // Keep feed autoplay suppressed until the outgoing player's fade and
+            // handoff are complete.
+            DetailVideoManager.shared.deactivate(audioFadeDuration: 0.35) {
+                NavigationStateManager.shared.setDetailViewActive(false)
+            }
         }
         .task {
-            // Refresh comment after a short delay
-            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-            await refreshComment()
+            await syncComment()
         }
-
     }
     
     private var mediaSection: some View {
@@ -286,7 +294,7 @@ struct CommentDetailView: View {
             title: "Replies",
             comments: $replies,
             commentFetcher: { page, size in
-                let (fetched, _) = try await hproseInstance.fetchComments(
+                let fetched = try await hproseInstance.fetchComments(
                     comment,
                     pageNumber: page,
                     pageSize: size
@@ -328,6 +336,7 @@ struct CommentDetailView: View {
                 )
             ],
             isEmbedded: true, // Embedded in CommentDetailView's ScrollView, avoid nested scrolling
+            externalRefreshToken: repliesRefreshToken,
             rowView: { reply in
                 CommentItemView(
                     parentTweet: comment,
@@ -341,14 +350,35 @@ struct CommentDetailView: View {
         .padding(.leading, -8)
         .padding(.trailing, 4)
     }
-    
-    private func refreshComment() async {
-        do {
-            if let refreshedComment = try await hproseInstance.getTweet(tweetId: comment.mid, authorId: comment.authorId) {
-                try comment.update(from: refreshedComment)
-            }
-        } catch {
-            print("Failed to refresh comment: \(error)")
+
+    // A comment is itself a tweet on the backend, so opening its detail view needs the
+    // same fromDetailView DHT provider sync/registration that TweetDetailView triggers for
+    // top-level tweets. bypassCache is required for fromDetailView to actually reach the
+    // server — comment is already populated from the feed, so a cache hit would otherwise
+    // short-circuit before the sync ever runs.
+    private func syncComment() async {
+        if let refreshed = try? await hproseInstance.getTweet(
+            tweetId: comment.mid, authorId: comment.authorId, bypassCache: true, fromDetailView: true
+        ) {
+            try? comment.update(from: refreshed)
+        }
+    }
+
+    private func refreshCommentAndReplies() async {
+        if let refreshed = try? await hproseInstance.refreshTweet(
+            tweetId: comment.mid,
+            authorId: comment.authorId
+        ) {
+            try? comment.update(from: refreshed)
+        }
+
+        if let refreshedReplies = try? await hproseInstance.fetchComments(
+            comment,
+            pageNumber: 0,
+            pageSize: 10
+        ) {
+            replies = refreshedReplies.compactMap { $0 }
+            repliesRefreshToken += 1
         }
     }
 }

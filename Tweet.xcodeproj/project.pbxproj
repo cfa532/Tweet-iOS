@@ -25,6 +25,7 @@
 		4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D72DD5CA640051A92D /* HproseInstance.swift */; };
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
 		4608E2DB2DD5CA640051A92D /* VideoConversionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */; };
+		4610F2A12F57C8B200C0DE01 /* HproseTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4610F2A02F57C8B200C0DE01 /* HproseTransport.swift */; };
 		4612ED1C2E924A18005D5B8B /* URLExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED192E924A18005D5B8B /* URLExtension.swift */; };
 		4612ED1D2E924A18005D5B8B /* CachingPlayerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED142E924A18005D5B8B /* CachingPlayerItem.swift */; };
 		4612ED1E2E924A18005D5B8B /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED132E924A18005D5B8B /* AppLogger.swift */; };
@@ -44,7 +45,6 @@
 		461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438222E403E98002D1B22 /* ChatMessageView.swift */; };
 		462826222EAD92A9000E891A /* CircularImageCropper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 462826212EAD92A9000E891A /* CircularImageCropper.swift */; };
 		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
-		46349FAD2F23491E00CBDE7D /* SharedVideoPlayerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46349FAC2F23491E00CBDE7D /* SharedVideoPlayerManager.swift */; };
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
@@ -92,6 +92,8 @@
 		46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34AC62E8E8A0100C83177 /* InfoPlist.strings */; };
 		46A73E3C2F04C76D001310E5 /* NodePool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A73E3B2F04C76D001310E5 /* NodePool.swift */; };
 		46A8F6842E52BDDC0050F4A0 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A8F6832E52BDDC0050F4A0 /* ProfileEditView.swift */; };
+		46AA00012F5B000100000001 /* Records.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AA00002F5B000100000001 /* Records.swift */; };
+		46AA00032F5B000100000001 /* ModelStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AA00022F5B000100000001 /* ModelStores.swift */; };
 		46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */; };
 		46B03D852E486D3B000E08DF /* MuteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D842E486D36000E08DF /* MuteState.swift */; };
 		46B03D872E48866C000E08DF /* ReplyEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D862E48866C000E08DF /* ReplyEditorView.swift */; };
@@ -109,6 +111,7 @@
 		46B95F4E2E0F98CE00D81590 /* ThemeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */; };
 		46B95F502E1269F500D81590 /* IdentifiablePhotosPickerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */; };
 		46D9079A2F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */; };
+		46D9079C2F5C00010020F8AA /* CommentListUIKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D9079B2F5C00010020F8AA /* CommentListUIKitView.swift */; };
 		46DEEPLINK2E00000000000001 /* DeeplinkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */; };
 		46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */; };
 		46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32A2DDA038E00AEF31F /* AppConfig.swift */; };
@@ -137,6 +140,7 @@
 		46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */; };
 		46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */; };
 		46F8A0D52E00413000ABCD02 /* AppNavigationDestinations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F8A0D42E00413000ABCD01 /* AppNavigationDestinations.swift */; };
+		4B229CA8F0F0DDD94DF93A16 /* TweetHeightPrewarmer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF31DB3B18D69C8F667A2422 /* TweetHeightPrewarmer.swift */; };
 		4BA4BBE5140F4B81A9A2E76D /* PendingUploadDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */; };
 		52BDEABE7ED042D98A4A6030 /* TweetTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */; };
 		690CDAA5E50B4C118321424B /* AvatarUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8847CCE1FD4E422DA4B12B94 /* AvatarUIView.swift */; };
@@ -174,11 +178,13 @@
 		460680EB2E165F8300D9D15A /* LocalizationHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationHelper.swift; sourceTree = "<group>"; };
 		460680ED2E1660C700D9D15A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		460680EF2E1660C700D9D15A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		460680F02E1660C700D9D15A /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		460680F12E1660C700D9D15A /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
 		460680F22E1660C700D9D15A /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		4608E2D72DD5CA640051A92D /* HproseInstance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseInstance.swift; sourceTree = "<group>"; };
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoConversionService.swift; sourceTree = "<group>"; };
+		4610F2A02F57C8B200C0DE01 /* HproseTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseTransport.swift; sourceTree = "<group>"; };
 		4612ED132E924A18005D5B8B /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
 		4612ED142E924A18005D5B8B /* CachingPlayerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachingPlayerItem.swift; sourceTree = "<group>"; };
 		4612ED152E924A18005D5B8B /* CachingPlayerItemConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachingPlayerItemConfiguration.swift; sourceTree = "<group>"; };
@@ -198,7 +204,6 @@
 		461438222E403E98002D1B22 /* ChatMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessageView.swift; sourceTree = "<group>"; };
 		462826212EAD92A9000E891A /* CircularImageCropper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularImageCropper.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
-		46349FAC2F23491E00CBDE7D /* SharedVideoPlayerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedVideoPlayerManager.swift; sourceTree = "<group>"; };
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
@@ -211,6 +216,7 @@
 		465553C92E55F6A900702AFF /* ReportTweetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportTweetView.swift; sourceTree = "<group>"; };
 		466E00932E7023460068D968 /* MemoryWarningManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryWarningManager.swift; sourceTree = "<group>"; };
 		46704DDD2DD72E58001D69B9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Tweet/Info.plist; sourceTree = "<group>"; };
+		46704DDE2DD72E58001D69BA /* Tweet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = Tweet.entitlements; path = Tweet/Tweet.entitlements; sourceTree = "<group>"; };
 		46704DE12DD8CEF7001D69B9 /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
 		4674940C2DF08B780082FAC6 /* FollowingsTweetViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingsTweetViewModel.swift; sourceTree = "<group>"; };
 		4674940E2DF2C4D00082FAC6 /* CommentListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentListView.swift; sourceTree = "<group>"; };
@@ -247,6 +253,8 @@
 		46A34ACE2E8E8A0100C83177 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = InfoPlist.strings; sourceTree = "<group>"; };
 		46A73E3B2F04C76D001310E5 /* NodePool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodePool.swift; sourceTree = "<group>"; };
 		46A8F6832E52BDDC0050F4A0 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
+		46AA00002F5B000100000001 /* Records.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Records.swift; sourceTree = "<group>"; };
+		46AA00022F5B000100000001 /* ModelStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelStores.swift; sourceTree = "<group>"; };
 		46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingletonVideoManagers.swift; sourceTree = "<group>"; };
 		46B03D842E486D36000E08DF /* MuteState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteState.swift; sourceTree = "<group>"; };
 		46B03D862E48866C000E08DF /* ReplyEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyEditorView.swift; sourceTree = "<group>"; };
@@ -264,6 +272,7 @@
 		46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentifiablePhotosPickerItem.swift; sourceTree = "<group>"; };
 		46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsVideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
+		46D9079B2F5C00010020F8AA /* CommentListUIKitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentListUIKitView.swift; sourceTree = "<group>"; };
 		46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeeplinkManager.swift; sourceTree = "<group>"; };
 		46E5B32A2DDA038E00AEF31F /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		46E5B3312DDA1AF500AEF31F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Tweet/Assets.xcassets; sourceTree = SOURCE_ROOT; };
@@ -308,6 +317,7 @@
 		A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
 		A65C2418C4764AC0AD757120 /* TweetCellContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetCellContentView.swift; sourceTree = "<group>"; };
 		AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UploadProgressManager.swift; sourceTree = "<group>"; };
+		CF31DB3B18D69C8F667A2422 /* TweetHeightPrewarmer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TweetHeightPrewarmer.swift; sourceTree = "<group>"; };
 		DF98BA9542DE4CC62FB1C080 /* DocumentPicker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DocumentPicker.swift; sourceTree = "<group>"; };
 		E2C260FE784A43EF9772A398 /* TweetTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetTableView.swift; sourceTree = "<group>"; };
 		F4578F4CC1DB4228954A2A9B /* TweetBodyUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetBodyUIView.swift; sourceTree = "<group>"; };
@@ -344,6 +354,7 @@
 				2BBC082D2DAEEBDF87B8798F /* Pods */,
 				46E5B3312DDA1AF500AEF31F /* Assets.xcassets */,
 				46704DDD2DD72E58001D69B9 /* Info.plist */,
+				46704DDE2DD72E58001D69BA /* Tweet.entitlements */,
 				15B15E6C0026656AE45C20D3 /* Frameworks */,
 			);
 			sourceTree = "<group>";
@@ -418,6 +429,7 @@
 				469A995E2DEF300900954049 /* TweetCacheManager.swift */,
 				469A994C2DEB31EF00954049 /* NotificationNames.swift */,
 				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
+				4610F2A02F57C8B200C0DE01 /* HproseTransport.swift */,
 				272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */,
 				4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */,
 				464EA34F2EEAE31800FC6AD1 /* PersistentVideoStateManager.swift */,
@@ -452,6 +464,8 @@
 				46704DE12DD8CEF7001D69B9 /* MediaType.swift */,
 				4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */,
 				4608E2D92DD5CD920051A92D /* User.swift */,
+				46AA00002F5B000100000001 /* Records.swift */,
+				46AA00022F5B000100000001 /* ModelStores.swift */,
 				46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */,
 			);
 			path = DataModels;
@@ -591,7 +605,6 @@
 		469A994E2DEBF89B00954049 /* MediaViews */ = {
 			isa = PBXGroup;
 			children = (
-				46349FAC2F23491E00CBDE7D /* SharedVideoPlayerManager.swift */,
 				9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */,
 				F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */,
 				468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */,
@@ -672,6 +685,7 @@
 				26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */,
 				7A8664A026114553AC588E7A /* TweetTableViewController.swift */,
 				E2C260FE784A43EF9772A398 /* TweetTableView.swift */,
+				46D9079B2F5C00010020F8AA /* CommentListUIKitView.swift */,
 				46B795852F21B0D70060DCB3 /* LightweightVideoPlayerView.swift */,
 				8847CCE1FD4E422DA4B12B94 /* AvatarUIView.swift */,
 				A172CBEA1C9C4682B758AE93 /* TweetHeaderUIView.swift */,
@@ -681,6 +695,7 @@
 				A65C2418C4764AC0AD757120 /* TweetCellContentView.swift */,
 				287E3F71119D457C80AEAA81 /* MediaCellUIView.swift */,
 				8C8AA408976B03795C73F218 /* MediaGridUIView.swift */,
+				CF31DB3B18D69C8F667A2422 /* TweetHeightPrewarmer.swift */,
 			);
 			path = UIKit;
 			sourceTree = "<group>";
@@ -716,7 +731,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1600;
-				LastUpgradeCheck = 1601;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 					1A1A1A1A1A1A1A1A1A1A1A0F = {
 						CreatedOnToolsVersion = 15.0;
@@ -849,6 +864,7 @@
 				46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */,
 				7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */,
 				46D9079A2F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift in Sources */,
+				46D9079C2F5C00010020F8AA /* CommentListUIKitView.swift in Sources */,
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */,
@@ -887,6 +903,7 @@
 				46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */,
 				4674940F2DF2C4D60082FAC6 /* CommentListView.swift in Sources */,
 				4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
+				4610F2A12F57C8B200C0DE01 /* HproseTransport.swift in Sources */,
 				87BA2CB8BF2E44C8861960D5 /* TweetUploadManager.swift in Sources */,
 				4608E2DB2DD5CA640051A92D /* VideoConversionService.swift in Sources */,
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
@@ -952,9 +969,10 @@
 				468CF2202E39C99200D49038 /* SearchScreen.swift in Sources */,
 				468CF2212E39C99200D49038 /* ChatListScreen.swift in Sources */,
 				468CF2222E39C99200D49038 /* ChatScreen.swift in Sources */,
-				46349FAD2F23491E00CBDE7D /* SharedVideoPlayerManager.swift in Sources */,
 				46E5B36D2DE3617400AEF31F /* AvatarFullScreenView.swift in Sources */,
 				469A99502DEBFBC100954049 /* Tweet.swift in Sources */,
+				46AA00012F5B000100000001 /* Records.swift in Sources */,
+				46AA00032F5B000100000001 /* ModelStores.swift in Sources */,
 				46B25DF12F35836100F0EE94 /* TweetHeightCache.swift in Sources */,
 				46E5B3512DDCA00000AEF31F /* Settings.swift in Sources */,
 				46E5B3672DE2DD2900AEF31F /* TweetListView.swift in Sources */,
@@ -970,6 +988,7 @@
 				3E4D4013E11E9E4BED23680D /* PDFPreviewView.swift in Sources */,
 				B3FB362ED05AE5169A33DE6D /* DocumentPicker.swift in Sources */,
 				9432536CBF9DB1A3ADCD2067 /* DocumentAttachmentsView.swift in Sources */,
+				4B229CA8F0F0DDD94DF93A16 /* TweetHeightPrewarmer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -979,6 +998,7 @@
 		460680F32E1660C700D9D15A /* Localizable.strings */ = {
 			isa = PBXVariantGroup;
 			children = (
+				460680F02E1660C700D9D15A /* en */,
 				460680F12E1660C700D9D15A /* ja */,
 				460680F22E1660C700D9D15A /* zh-Hans */,
 			);
@@ -1076,6 +1096,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -1136,6 +1157,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
@@ -1150,8 +1172,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Tweet/Tweet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 106;
+				CURRENT_PROJECT_VERSION = 136;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1174,27 +1197,11 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.1.3;
+				MARKETING_VERSION = 2.2.4;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
 					"\"CFNetwork\"",
-					"-framework",
-					"\"ffmpegkit\"",
-					"-framework",
-					"\"libavcodec\"",
-					"-framework",
-					"\"libavdevice\"",
-					"-framework",
-					"\"libavfilter\"",
-					"-framework",
-					"\"libavformat\"",
-					"-framework",
-					"\"libavutil\"",
-					"-framework",
-					"\"libswresample\"",
-					"-framework",
-					"\"libswscale\"",
 					"-framework",
 					"\"Security\"",
 					"-framework",
@@ -1212,7 +1219,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				jjjj = "";
 			};
@@ -1224,8 +1231,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Tweet/Tweet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 106;
+				CURRENT_PROJECT_VERSION = 136;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				DEVELOPMENT_TEAM = 96LBXG78A7;
 				ENABLE_PREVIEWS = YES;
@@ -1248,27 +1256,11 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.1.3;
+				MARKETING_VERSION = 2.2.4;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
 					"\"CFNetwork\"",
-					"-framework",
-					"\"ffmpegkit\"",
-					"-framework",
-					"\"libavcodec\"",
-					"-framework",
-					"\"libavdevice\"",
-					"-framework",
-					"\"libavfilter\"",
-					"-framework",
-					"\"libavformat\"",
-					"-framework",
-					"\"libavutil\"",
-					"-framework",
-					"\"libswresample\"",
-					"-framework",
-					"\"libswscale\"",
 					"-framework",
 					"\"Security\"",
 					"-framework",
@@ -1286,7 +1278,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				jjjj = "";
 			};

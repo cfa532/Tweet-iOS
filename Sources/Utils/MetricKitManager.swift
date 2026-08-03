@@ -3,7 +3,7 @@ import MetricKit
 import OSLog
 
 @available(iOS 13.0, *)
-class MetricKitManager: NSObject, MXMetricManagerSubscriber {
+final class MetricKitManager: NSObject, MXMetricManagerSubscriber, @unchecked Sendable {
     static let shared = MetricKitManager()
     private let logger = Logger(subsystem: "com.zz", category: "MetricKit")
     

@@ -24,13 +24,12 @@ struct ProfileView: View {
     @State private var chatNavigationPath = NavigationPath()
     @State private var showBlockUserMenu = false
     @State private var previousScrollOffset: CGFloat = 0
-    @State private var isLoading = false
     @State private var didLoad = false
     /// Bumped when stale-IP recovery changes this profile's read route so tweets reload without clearing cached content.
     @State private var profileTweetsRefreshToken = 0
-    @State private var profileHeaderRefreshToken = 0
     @State private var resyncedTweets: [Tweet] = []
     @State private var resyncedTweetsToken = 0
+    @StateObject private var profileHeaderState = ProfileHeaderState()
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
@@ -49,20 +48,24 @@ struct ProfileView: View {
     private var isAppUser: Bool {
         user.mid == hproseInstance.appUser.mid
     }
-    
-    @State private var isFollowing: Bool = false
 
+    private var blockUserDisplayName: String {
+        if let username = user.username?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !username.isEmpty {
+            return "@\(username)"
+        }
+        if let name = user.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty {
+            return name
+        }
+        return NSLocalizedString("this user", comment: "Fallback name in block confirmation")
+    }
+    
     // Scroll detection state
     @State private var isNavigationVisible = true
     
     var body: some View {
-        // The follow button reads `isFollowing` only inside the `header:` closure that
-        // is later executed by a UIHostingController inside TweetTableView. SwiftUI's
-        // @State dependency tracking does not see reads inside escaping closures, so
-        // without a synchronous read here `body` would not re-run when `isFollowing`
-        // flips and the header would render with a stale value.
-        _ = isFollowing
-        return contentWithNavigation
+        contentWithNavigation
             .sheet(isPresented: $showEditSheet, onDismiss: handleSheetDismiss) {
                 profileEditSheet
             }
@@ -90,17 +93,48 @@ struct ProfileView: View {
                     chatNavigationPath.removeLast(chatNavigationPath.count)
                 }
             }
+            .alert(
+                String(
+                    format: NSLocalizedString("Block %@?", comment: "Block user confirmation title"),
+                    blockUserDisplayName
+                ),
+                isPresented: $showBlockUserMenu
+            ) {
+                Button(NSLocalizedString("Block User", comment: "Block user confirmation action"), role: .destructive) {
+                    Task {
+                        await handleBlockUser()
+                    }
+                }
+                Button(NSLocalizedString("Cancel", comment: "Cancel block user confirmation"), role: .cancel) { }
+            } message: {
+                Text(
+                    String(
+                        format: NSLocalizedString(
+                            "This will remove %@ from your following list and hide their content.",
+                            comment: "Block user confirmation message"
+                        ),
+                        blockUserDisplayName
+                    )
+                )
+            }
     }
     
     private var contentWithNavigation: some View {
         mainContentView
             .onAppear {
-                // Calculate isFollowing by checking if the user's mid is in the app user's followingList
-                setFollowingState((hproseInstance.appUser.followingList)?.contains(user.mid) ?? false)
+                // Keep the hosted SwiftUI profile header in sync with the app user's follow list.
+                // Guest followings are content seeds, not authenticated relationships.
+                setFollowingState(
+                    !hproseInstance.appUser.isGuest
+                        && ((hproseInstance.appUser.followingList)?.contains(user.mid) ?? false)
+                )
             }
             .onReceive(hproseInstance.appUser.$followingList) { newList in
                 // followingList may load asynchronously after onAppear; keep button state in sync
-                setFollowingState(newList?.contains(user.mid) ?? false)
+                setFollowingState(
+                    !hproseInstance.appUser.isGuest
+                        && (newList?.contains(user.mid) ?? false)
+                )
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -109,25 +143,18 @@ struct ProfileView: View {
             }
             .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
             .task(id: user.mid) {
-                // Only fetch if this is the first load for this user
-                if !didLoad {
-                await refreshProfileData()
-                    didLoad = true
-                }
+                guard !didLoad else { return }
+                didLoad = true
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                await validateProfileRouteOnOpen()
             }
             .onChange(of: user.mid) { _, _ in
                 // Reset didLoad when user changes so the new user's data is fetched
                 didLoad = false
             }
             .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
-                if let _ = notification.userInfo?["tweetId"] as? String,
-                   let _ = notification.userInfo?["isPinned"] as? Bool {
-                    Task {
-                        // Add delay to allow server to update before refreshing
-                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                        await refreshPinnedTweets()
-                    }
-                }
+                handlePinStatusChanged(notification: notification)
             }
             .navigationDestination(item: $selectedUserForNavigation) { user in
                 userDestinationView(for: user)
@@ -158,24 +185,6 @@ struct ProfileView: View {
                 let animated = notification.userInfo?["animated"] as? Bool ?? false
                 postNavigationVisibilityNotification(isVisible: true, animated: animated)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .imageCached)) { notification in
-                guard isProfileAvatarCacheNotification(notification) else { return }
-                profileHeaderRefreshToken += 1
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in
-                guard (notification.userInfo?["userId"] as? String) == user.mid else { return }
-                profileHeaderRefreshToken += 1
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
-                guard (notification.userInfo?["userId"] as? String) == user.mid else { return }
-                profileHeaderRefreshToken += 1
-            }
-    }
-
-    private func isProfileAvatarCacheNotification(_ notification: Notification) -> Bool {
-        guard let avatar = user.avatar,
-              let avatarId = notification.userInfo?["avatarId"] as? String else { return false }
-        return avatarId == avatar || avatarId == "avatar_\(avatar)"
     }
     
     @ViewBuilder
@@ -263,22 +272,23 @@ struct ProfileView: View {
                             selectedUserForNavigation = tappedUser
                         }
                     },
-                    onPinnedTweetsRefresh: refreshPinnedTweets,
+                    onProfileRefresh: {
+                        await resyncProfileDataForPull()
+                    },
                     onScroll: { offset, delta in
                         handleScroll(offset: offset, delta: delta)
                     },
                     onShowLogin: onShowLogin,
                     onShowToast: onShowToast,
                     routeRefreshToken: profileTweetsRefreshToken,
-                    headerRefreshToken: profileHeaderRefreshToken,
                     resyncedTweets: resyncedTweets,
                     resyncedTweetsToken: resyncedTweetsToken,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
                                 user: user,
+                                headerState: profileHeaderState,
                                 isCurrentUser: isAppUser,
-                                isFollowing: isFollowing,
                                 onEditTap: {
                                     if hproseInstance.appUser.isGuest {
                                         onShowLogin?()
@@ -287,7 +297,11 @@ struct ProfileView: View {
                                     }
                                 },
                                 onFollowToggle: {
-                                    let optimisticFollowing = !isFollowing
+                                    guard !hproseInstance.appUser.isGuest else {
+                                        onShowLogin?()
+                                        return
+                                    }
+                                    let optimisticFollowing = !profileHeaderState.isFollowing
                                     setFollowingState(optimisticFollowing)
                                     Task {
                                         await handleToggleFollowing(for: user, optimisticFollowing: optimisticFollowing)
@@ -388,23 +402,23 @@ struct ProfileView: View {
                             .foregroundColor(XTheme.accentColor)
                     }
 
-                    if !hproseInstance.appUser.isGuest {
-                        Menu {
-                            Button(role: .destructive) {
-                                Task {
-                                    await handleBlockUser()
-                                }
-                            } label: {
-                                Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
+                    Menu {
+                        Button(role: .destructive) {
+                            guard !hproseInstance.appUser.isGuest else {
+                                onShowLogin?()
+                                return
                             }
+                            showBlockUserMenu = true
                         } label: {
-                            Image(systemName: "ellipsis")
-                                .rotationEffect(.degrees(90))
-                                .foregroundColor(XTheme.textColor)
-                                .font(.system(size: 16, weight: .medium))
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
+                            Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
                         }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .rotationEffect(.degrees(90))
+                            .foregroundColor(XTheme.textColor)
+                            .font(.system(size: 16, weight: .medium))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                 }
             }
@@ -434,18 +448,48 @@ struct ProfileView: View {
         // Set submission state
         isSubmittingProfile = true
         print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), domainToShare: \(domainToShare ?? "nil")")
-        
-        let success = try await hproseInstance.updateUserCore(
-            password: password,
-            alias: alias,
-            profile: profile,
-            hostId: hostId,
-            cloudDrivePort: cloudDrivePort,
-            domainToShare: domainToShare
-        )
+
+        let originalHostId = hproseInstance.appUser.hostIds?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let submittedHostId = hostId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hostIdChanged = submittedHostId.count == Constants.MIMEI_ID_LENGTH && submittedHostId != originalHostId
+
+        let success: Bool
+        do {
+            success = try await hproseInstance.updateUserCore(
+                password: password,
+                alias: alias,
+                profile: profile,
+                hostId: hostId,
+                cloudDrivePort: cloudDrivePort,
+                domainToShare: domainToShare
+            )
+        } catch {
+            if hostIdChanged && isTimeoutLikeError(error) {
+                print("DEBUG: Profile hostId update timed out after migration; logging out so user can verify result")
+                await completeHostIdMigration(
+                    message: NSLocalizedString("Host ID update timed out. Log in again to verify the result.", comment: "Host ID migration timeout message"),
+                    isError: true
+                )
+                throw NSError(
+                    domain: "ProfileHostIdMigration",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Host ID update timed out. Log in again to verify the result.", comment: "Host ID migration timeout message")]
+                )
+            }
+            isSubmittingProfile = false
+            throw error
+        }
         print("DEBUG: Profile update result: \(success)")
         
         if success {
+            if hostIdChanged {
+                await completeHostIdMigration(
+                    message: NSLocalizedString("Host ID updated. Please log in on the new host.", comment: "Host ID migration success message"),
+                    isError: false
+                )
+                return
+            }
+
             // Update local user data
             if let alias = alias, !alias.isEmpty {
                 hproseInstance.appUser.name = alias
@@ -486,6 +530,42 @@ struct ProfileView: View {
             isSubmittingProfile = false
             throw NSError(domain: "ProfileUpdate", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Profile update failed", comment: "Profile update error")])
         }
+    }
+
+    private func completeHostIdMigration(message: String, isError: Bool) async {
+        await hproseInstance.logout()
+        await MainActor.run {
+            isSubmittingProfile = false
+            showEditSheet = false
+            if let onShowToast {
+                onShowToast(message, isError)
+            } else {
+                showToastMessage(message, type: isError ? .warning : .success)
+            }
+            NotificationCenter.default.post(name: .userDidLogout, object: nil)
+            dismiss()
+        }
+    }
+
+    private func isTimeoutLikeError(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        var depth = 0
+
+        while let nsError = current, depth < 8 {
+            if nsError.code == NSURLErrorTimedOut {
+                return true
+            }
+
+            let description = nsError.localizedDescription.lowercased()
+            if description.contains("timed out") || description.contains("timeout") {
+                return true
+            }
+
+            current = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+
+        return false
     }
     
     // MARK: - Scroll Handling
@@ -599,9 +679,8 @@ struct ProfileView: View {
     }
 
     private func setFollowingState(_ newValue: Bool) {
-        guard isFollowing != newValue else { return }
-        isFollowing = newValue
-        profileHeaderRefreshToken += 1
+        guard profileHeaderState.isFollowing != newValue else { return }
+        profileHeaderState.isFollowing = newValue
     }
     
     private func handleToggleFollowing(for user: User, optimisticFollowing: Bool) async {
@@ -679,31 +758,37 @@ struct ProfileView: View {
         }
     }
     
-    private func refreshProfileData() async {
-        await MainActor.run {
-            isLoading = true
-        }
-        
-        defer {
-            Task { @MainActor in
-                isLoading = false
-                didLoad = true
+    private func validateProfileRouteOnOpen() async {
+        let routeBeforeValidation = user.baseUrl?.absoluteString
+        let routeIsReady = await hproseInstance.validateAndRepairProfileRoute(for: user)
+        guard routeIsReady, !Task.isCancelled else { return }
+
+        if user.baseUrl?.absoluteString != routeBeforeValidation {
+            await MainActor.run {
+                profileTweetsRefreshToken += 1
             }
         }
-        
-        var didFetchUser = false
+        await refreshProfileData()
+    }
+
+    private func refreshProfileData() async {
+        var refreshedProfileUser: User?
+        let profileUserId = user.mid
+        let cachedRoute = user.baseUrl?.absoluteString ?? ""
+        let hproseInstance = hproseInstance
 
         // Fetch fresh user data from server
         do {
-            let cachedRoute = user.baseUrl?.absoluteString ?? ""
-            let refreshedUser = try await hproseInstance.fetchUser(
-                user.mid,
-                baseUrl: cachedRoute,
-                forceRefresh: true,
-                refreshExpiredCacheInBackground: false
-            )
+            let refreshedUser = try await Task.detached(priority: .utility) {
+                try await hproseInstance.fetchUser(
+                    profileUserId,
+                    baseUrl: "",
+                    forceRefresh: true,
+                    refreshExpiredCacheInBackground: false
+                )
+            }.value
             if let userData = refreshedUser {
-                didFetchUser = true
+                refreshedProfileUser = userData
                 let refreshedRoute = userData.baseUrl?.absoluteString ?? ""
                 if refreshedRoute != cachedRoute {
                     await MainActor.run {
@@ -711,70 +796,71 @@ struct ProfileView: View {
                     }
                     print("DEBUG: [ProfileView] User route changed from \(cachedRoute.isEmpty ? "nil" : cachedRoute) to \(refreshedRoute.isEmpty ? "nil" : refreshedRoute); reloading profile tweets")
                 }
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                if let jsonData = try? encoder.encode(userData),
-                   let jsonString = String(data: jsonData, encoding: .utf8) {
-                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server\n\(jsonString)")
-                } else {
-                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - \(userData)")
-                }
+                print("DEBUG: [ProfileView] Successfully fetched user \(profileUserId) from server - username: \(userData.username ?? "nil"), baseUrl: \(userData.baseUrl?.absoluteString ?? "nil"), tweetCount: \(userData.tweetCount ?? 0), followersCount: \(userData.followersCount ?? 0), followingCount: \(userData.followingCount ?? 0)")
                 TweetCacheManager.shared.saveUser(userData)
                 print("DEBUG: [ProfileView] Saved fetched user to cache")
             } else {
-                print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): server returned nil")
+                print("DEBUG: [ProfileView] Failed to fetch user \(profileUserId): server returned nil")
             }
         } catch {
-            print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
+            print("DEBUG: [ProfileView] Failed to fetch user \(profileUserId): \(error)")
         }
 
-        guard didFetchUser else {
-            print("DEBUG: [ProfileView] Skipping pinned tweet refresh/resync because user fetch failed for \(user.mid)")
+        guard refreshedProfileUser != nil else {
+            print("DEBUG: [ProfileView] Skipping pinned tweet refresh because user fetch failed for \(profileUserId)")
             return
         }
         
         await refreshPinnedTweets()
-        
-        // Resync user data on server in background each time the profile opens.
-        let userId = user.mid
-        Task {
-            do {
-                let resyncResult = try await hproseInstance.resyncUser(userId: userId)
-                print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server with \(resyncResult.tweets.count) tweets")
-                
-                TweetCacheManager.shared.saveUser(resyncResult.user)
-                print("DEBUG: [ProfileView] Saved resynced user to cache")
+    }
 
-                await MainActor.run {
-                    resyncedTweets = resyncResult.tweets
-                    resyncedTweetsToken += 1
-                }
-            } catch {
-                print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
+    /// Explicit recovery for profile pull-to-refresh. The backend executes this
+    /// on the current access node and synchronizes the User plus its direct Tweet
+    /// references from the home host before returning fresh data.
+    private func resyncProfileDataForPull() async {
+        let profileUserId = user.mid
+        let hproseInstance = hproseInstance
+
+        let routeIsReady = await hproseInstance.validateAndRepairProfileRoute(for: user)
+        guard routeIsReady, !Task.isCancelled else {
+            print("DEBUG: [ProfileView] Skipping profile resync because no healthy route is available for \(profileUserId)")
+            return
+        }
+
+        do {
+            let resyncResult = try await Task.detached(priority: .utility) {
+                try await hproseInstance.resyncUser(userId: profileUserId)
+            }.value
+            print("DEBUG: [ProfileView] Successfully resynced user \(profileUserId) on server with \(resyncResult.tweets.count) tweets")
+
+            await MainActor.run {
+                resyncedTweets = resyncResult.tweets
+                resyncedTweetsToken += 1
             }
+
+            // Pinned tweets are a separate list read; run it only after the
+            // access node has received the user's current data.
+            await refreshPinnedTweets()
+        } catch is CancellationError {
+            print("DEBUG: [ProfileView] Profile resync cancelled for \(profileUserId)")
+        } catch {
+            print("DEBUG: [ProfileView] Failed to resync user \(profileUserId): \(error)")
+            // Keep pull-to-refresh useful if synchronization is temporarily
+            // unavailable. This fallback performs the previous ordinary read.
+            await refreshProfileData()
         }
     }
     
     private func refreshPinnedTweets() async {
-        print("DEBUG: [ProfileView] Starting to refresh pinned tweets for user: \(user.mid)")
+        let profileUser = user
+        let hproseInstance = hproseInstance
+
+        print("DEBUG: [ProfileView] Starting to refresh pinned tweets for user: \(profileUser.mid)")
         do {
-            let pinnedTweetData = try await hproseInstance.getPinnedTweets(user: user)
-            print("DEBUG: [ProfileView] Got \(pinnedTweetData.count) pinned tweet data items from server")
+            let pinnedTweets = try await hproseInstance.getPinnedTweets(user: profileUser)
+            print("DEBUG: [ProfileView] Got \(pinnedTweets.count) pinned tweets from server")
             
-            var pinnedTweets: [Tweet] = []
-            var pinnedTweetIds: [String] = []
-            
-            // Extract tweets and IDs from the response
-            for (index, tweetData) in pinnedTweetData.enumerated() {
-                print("DEBUG: [ProfileView] Processing pinned tweet data item \(index): \(tweetData)")
-                if let tweet = tweetData["tweet"] as? Tweet {
-                    print("DEBUG: [ProfileView] Successfully extracted tweet: \(tweet.mid)")
-                    pinnedTweets.append(tweet)
-                    pinnedTweetIds.append(tweet.mid)
-                } else {
-                    print("DEBUG: [ProfileView] Failed to extract tweet from data item \(index)")
-                }
-            }
+            let pinnedTweetIds = pinnedTweets.map(\.mid)
             
             print("DEBUG: [ProfileView] Final pinned tweets count: \(pinnedTweets.count), IDs: \(pinnedTweetIds)")
             
@@ -785,6 +871,31 @@ struct ProfileView: View {
             }
         } catch {
             print("DEBUG: [ProfileView] Failed to refresh pinned tweets: \(error)")
+        }
+    }
+
+    private func handlePinStatusChanged(notification: Notification) {
+        guard let tweetId = notification.userInfo?["tweetId"] as? String,
+              let isPinned = notification.userInfo?["isPinned"] as? Bool else {
+            return
+        }
+
+        if isPinned {
+            guard let tweet = Tweet.getInstance(for: tweetId),
+                  tweet.authorId == user.mid else {
+                return
+            }
+            pinnedTweetIds.insert(tweetId)
+            if !pinnedTweets.contains(where: { $0.mid == tweetId }) {
+                pinnedTweets.insert(tweet, at: 0)
+            }
+        } else {
+            guard pinnedTweetIds.contains(tweetId)
+                    || Tweet.getInstance(for: tweetId)?.authorId == user.mid else {
+                return
+            }
+            pinnedTweetIds.remove(tweetId)
+            pinnedTweets.removeAll { $0.mid == tweetId }
         }
     }
     

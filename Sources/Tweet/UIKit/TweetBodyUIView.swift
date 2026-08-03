@@ -16,7 +16,45 @@ extension NSAttributedString.Key {
     static let tweetDetectedURL = NSAttributedString.Key("com.tweet.detectedURL")
 }
 
+// NSDataDetector is expensive to initialize (regex compilation, ~10–50ms).
+// Reuse one instance across all calls — enumerateMatches is thread-safe for read-only use.
+private let _tweetBodyURLDetector: NSDataDetector? = try? NSDataDetector(
+    types: NSTextCheckingResult.CheckingType.link.rawValue
+)
+
 class TweetBodyUIView: UIView {
+    private struct AttachmentRenderSignature: Equatable {
+        let mid: String
+        let type: String
+        let size: Int64?
+        let fileName: String?
+        let timestamp: Date
+        let aspectRatio: Float?
+        let url: String?
+
+        init(_ attachment: MimeiFileType) {
+            mid = attachment.mid
+            type = attachment.type.rawValue
+            size = attachment.size
+            fileName = attachment.fileName
+            timestamp = attachment.timestamp
+            aspectRatio = attachment.aspectRatio
+            url = attachment.url
+        }
+    }
+
+    private struct BodyRenderSignature: Equatable {
+        let content: String?
+        let title: String?
+        let attachments: [AttachmentRenderSignature]?
+
+        @MainActor
+        init(_ tweet: Tweet) {
+            content = tweet.content
+            title = tweet.title
+            attachments = tweet.attachments?.map(AttachmentRenderSignature.init)
+        }
+    }
 
     // Internal stack view to manage all content
     private let contentStack: UIStackView = {
@@ -58,15 +96,25 @@ class TweetBodyUIView: UIView {
     // Audio playlist hosting
     private var audioHostingController: UIHostingController<AnyView>?
     private let audioContainerView = UIView()
+    private var audioContainerHeightConstraint: NSLayoutConstraint!
 
     // Document attachments hosting (keeps SwiftUI, but reuses one host per cell)
     private var documentHostingController: UIHostingController<AnyView>?
     private let documentContainerView = UIView()
+    private var documentContainerHeightConstraint: NSLayoutConstraint!
 
     var onTweetBodyTap: (() -> Void)?
     var onContentExpanded: (() -> Void)?
+    /// The observed tweet changed after initial configuration and may need a new row height.
+    /// Kept separate from `onContentExpanded`, which represents a user tapping "More...".
+    var onContentDidChangeHeightAsync: (() -> Void)?
     /// Per-feed video coordinator (set by TweetCellContentView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
+    var cellHorizontalPadding: CGFloat = 16 {
+        didSet {
+            mediaGridView.cellHorizontalPadding = cellHorizontalPadding
+        }
+    }
     /// Whether the video caption label is currently visible (for single-video tweets with title)
     private(set) var isCaptionVisible: Bool = false
     /// Whether the content is truncated with a "More..." suffix
@@ -80,6 +128,7 @@ class TweetBodyUIView: UIView {
     private weak var parentViewController: UIViewController?
     private weak var contentLabelTapGesture: UITapGestureRecognizer?
     private var contentCancellable: AnyCancellable?
+    private var bodyRenderSignature: BodyRenderSignature?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -90,7 +139,10 @@ class TweetBodyUIView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    deinit {
+    // isolated deinit (SE-0371): the runtime hops to the main actor if the last
+    // reference is dropped off-main, instead of MainActor.assumeIsolated trapping
+    // (the build-117 crash class). Required — this body does UIKit work.
+    isolated deinit {
         if let hostingController = audioHostingController {
             hostingController.willMove(toParent: nil)
             hostingController.view.removeFromSuperview()
@@ -124,6 +176,9 @@ class TweetBodyUIView: UIView {
         contentStack.addArrangedSubview(mediaContainerView)
         contentStack.addArrangedSubview(captionLabel)
         contentStack.addArrangedSubview(documentContainerView)
+
+        audioContainerHeightConstraint = audioContainerView.heightAnchor.constraint(equalToConstant: 0)
+        documentContainerHeightConstraint = documentContainerView.heightAnchor.constraint(equalToConstant: 0)
 
         // Set initial spacing (will be adjusted per tweet)
         contentStack.setCustomSpacing(4, after: contentLabel)  // text → attachments gap
@@ -219,20 +274,36 @@ class TweetBodyUIView: UIView {
         onContentExpanded?()
     }
 
+    /// Row width used to derive text width, matching TweetTableViewController's
+    /// currentRowLayoutWidth (tableView.bounds.width). Falls back to UIScreen.main.bounds.width
+    /// only if never set. MUST use the same width source as calculateTweetHeight — if this ever
+    /// falls back to UIScreen.main.bounds.width while the deterministic height calculator uses
+    /// tableView.bounds.width (which can differ, e.g. on iPad/Slide Over/Catalyst), the two
+    /// text-attributed-string caches permanently invalidate each other: each write here
+    /// overwrites cachedContentWidth to this view's width, which the height calculator then
+    /// treats as a cache miss and overwrites back to its own width, forcing full CoreText/CJK
+    /// typesetting on every single cell configure AND every height calculation, forever.
+    var rowWidth: CGFloat?
+
     private func renderTextContent(tweet: Tweet, isEmbedded: Bool) {
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Compute available text width (must match deterministic height calculator)
-            let screenWidth = UIScreen.main.bounds.width
+            let screenWidth = rowWidth ?? UIScreen.main.bounds.width
+            let regularContentWidth = (
+                screenWidth
+                - cellHorizontalPadding
+                - 3 // mainStack leading
+                - 42 // avatar
+                - 4 // avatar/content spacing
+            )
             let textWidth: CGFloat
             if isEmbedded {
                 // bodyView is below headerRow (full contentStack width, NOT beside embedded avatar)
-                // screenWidth - cellPad(16) - mainLeading(3) - mainAvatar(42) - mainSpacing(4)
-                //             - embViewLeadingOffset(-4) - embContentStackPad(8+8)
-                // = screenWidth - 77
-                textWidth = screenWidth - 77
+                // regular content width + embedded wrapper extension (4)
+                // - embedded content stack padding (8 + 8)
+                textWidth = regularContentWidth + 4 - 16
             } else {
-                // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4)
-                textWidth = screenWidth - 65
+                textWidth = regularContentWidth
             }
             if let cached = tweet.cachedContentAttributedString,
                tweet.cachedContentWidth == textWidth {
@@ -272,14 +343,40 @@ class TweetBodyUIView: UIView {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
                 guard let self else { return }
-                // If content changed remotely/local-edit, collapse and redraw immediately.
-                self.isExpanded = false
-                self.contentLabel.numberOfLines = Self.maxContentLines
-                self.contentLabel.lineBreakMode = .byTruncatingTail
-                self.renderTextContent(tweet: tweet, isEmbedded: self.currentIsEmbedded)
-                self.setNeedsLayout()
-                self.superview?.setNeedsLayout()
-                self.onContentExpanded?()
+                // Published properties notify before mutation. Re-check on the
+                // next run-loop turn so attachment and content changes are final.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          self.observedTweet === tweet,
+                          let parentViewController = self.parentViewController else {
+                        return
+                    }
+
+                    let previousSignature = self.bodyRenderSignature
+                    let newSignature = BodyRenderSignature(tweet)
+                    guard previousSignature != newSignature else { return }
+
+                    if previousSignature?.content != newSignature.content {
+                        tweet.cachedContentAttributedString = nil
+                        tweet.cachedContentWidth = 0
+                        tweet.cachedMeasuredTextHeight = -1
+                        tweet.cachedMeasuredTextWidth = 0
+                        tweet.cachedHeight = nil
+                        tweet.cachedHeightWidth = 0
+                        TweetHeightCache.shared.removeHeight(for: tweet.mid)
+                        TweetHeightPrewarmer.shared.invalidate(tweetId: tweet.mid)
+                    }
+
+                    self.configure(
+                        tweet: tweet,
+                        isEmbedded: self.currentIsEmbedded,
+                        cellTweetId: self.currentCellTweetId,
+                        parentViewController: parentViewController
+                    )
+                    self.setNeedsLayout()
+                    self.superview?.setNeedsLayout()
+                    self.onContentDidChangeHeightAsync?()
+                }
             }
     }
 
@@ -289,18 +386,21 @@ class TweetBodyUIView: UIView {
                    parentViewController: UIViewController) {
         self.parentViewController = parentViewController
         bindTweetContentUpdates(tweet)
+        let newBodyRenderSignature = BodyRenderSignature(tweet)
 
         // Pure retweets render the original tweet's media inside the retweet cell.
         // The media owner tweet can be unchanged while the visible cell context changes,
         // so include cellTweetId/isEmbedded in the reuse guard to keep video identifiers fresh.
         if currentTweetId == tweet.mid,
            currentCellTweetId == cellTweetId,
-           currentIsEmbedded == isEmbedded {
+           currentIsEmbedded == isEmbedded,
+           bodyRenderSignature == newBodyRenderSignature {
             return
         }
         currentTweetId = tweet.mid
         currentCellTweetId = cellTweetId
         currentIsEmbedded = isEmbedded
+        bodyRenderSignature = newBodyRenderSignature
 
         // Reset expansion state for new tweet
         isExpanded = false
@@ -330,6 +430,8 @@ class TweetBodyUIView: UIView {
         // --- Audio playlist ---
         if hasAudio {
             audioContainerView.isHidden = false
+            audioContainerHeightConstraint.constant = Self.audioPlaylistHeight
+            audioContainerHeightConstraint.isActive = true
             let audioView = CompactAudioPlaylistPlayer(
                 parentTweet: tweet,
                 attachments: audioAttachments
@@ -342,6 +444,7 @@ class TweetBodyUIView: UIView {
             contentStack.setCustomSpacing(contentLabel.isHidden ? 4 : 8, after: contentLabel)
             contentStack.setCustomSpacing(hasMedia ? 8 : 0, after: audioContainerView)
         } else {
+            audioContainerHeightConstraint.isActive = false
             audioContainerView.isHidden = true
             audioHostingController?.rootView = AnyView(EmptyView())
             contentStack.setCustomSpacing(0, after: audioContainerView)
@@ -353,14 +456,16 @@ class TweetBodyUIView: UIView {
 
             // Configure pure UIKit media grid
             mediaGridView.videoCoordinator = videoCoordinator
-            mediaGridView.configure(
-                tweet: tweet,
-                attachments: mediaAttachments,
-                isEmbedded: isEmbedded,
-                cellTweetId: cellTweetId,
-                shouldLoadVideo: true,
-                parentViewController: parentViewController
-            )
+            StallLog.measure("mediaGridView.configure", "tweetId=\(tweet.mid) count=\(mediaAttachments.count)") {
+                mediaGridView.configure(
+                    tweet: tweet,
+                    attachments: mediaAttachments,
+                    isEmbedded: isEmbedded,
+                    cellTweetId: cellTweetId,
+                    shouldLoadVideo: true,
+                    parentViewController: parentViewController
+                )
+            }
 
             // Caption for single video
             let caption = singleVideoCaption(tweet: tweet, attachments: mediaAttachments, hasTextContent: !contentLabel.isHidden)
@@ -377,11 +482,7 @@ class TweetBodyUIView: UIView {
             // Adjust spacing based on whether there's text/audio above media
             if hasAudio {
                 contentStack.setCustomSpacing(8, after: audioContainerView)
-            } else if contentLabel.isHidden {
-                // No text: 4pt top padding before media
-                contentStack.setCustomSpacing(4, after: contentLabel)
             } else {
-                // Text present: 8pt gap
                 contentStack.setCustomSpacing(8, after: contentLabel)
             }
         } else {
@@ -398,6 +499,8 @@ class TweetBodyUIView: UIView {
         // --- Documents ---
         if hasDocuments {
             documentContainerView.isHidden = false
+            documentContainerHeightConstraint.constant = Self.documentAttachmentsHeight(for: documentAttachments)
+            documentContainerHeightConstraint.isActive = true
 
             // Reuse one hosting controller per cell instead of recreating it on every configure.
             let docView = DocumentAttachmentsView(
@@ -419,14 +522,19 @@ class TweetBodyUIView: UIView {
                 contentStack.setCustomSpacing(8, after: contentLabel)
             }
         } else {
+            documentContainerHeightConstraint.isActive = false
             documentContainerView.isHidden = true
             documentHostingController?.rootView = AnyView(EmptyView())
         }
     }
 
     func prepareForReuse() {
+        contentCancellable?.cancel()
+        contentCancellable = nil
+        observedTweet = nil
         currentTweetId = nil
         currentCellTweetId = nil
+        bodyRenderSignature = nil
         contentLabel.attributedText = nil
         contentLabel.numberOfLines = Self.maxContentLines
         contentLabel.lineBreakMode = .byTruncatingTail
@@ -438,9 +546,12 @@ class TweetBodyUIView: UIView {
         currentFullContent = nil
         onTweetBodyTap = nil
         onContentExpanded = nil
+        onContentDidChangeHeightAsync = nil
         mediaGridView.prepareForReuse()
+        audioContainerHeightConstraint.isActive = false
         audioContainerView.isHidden = true
         audioHostingController?.rootView = AnyView(EmptyView())
+        documentContainerHeightConstraint.isActive = false
         documentContainerView.isHidden = true
         documentHostingController?.rootView = AnyView(EmptyView())
 
@@ -577,10 +688,57 @@ class TweetBodyUIView: UIView {
         }
     }
 
+    /// Fixed feed height of CompactAudioPlaylistPlayer. Every constituent view has a fixed
+    /// height except the Dynamic Type caption line, which is included explicitly here.
+    static var audioPlaylistHeight: CGFloat {
+        ceil(16 + 40 + 8 + 48 + 8 + 8 + 5 + UIFont.preferredFont(forTextStyle: .caption1).lineHeight)
+    }
+
+    /// Fixed feed height of DocumentAttachmentsView(maxDocuments: 2). The hosting view is
+    /// constrained to this same value so the row calculator and renderer cannot disagree.
+    static func documentAttachmentsHeight(for documents: [MimeiFileType]) -> CGFloat {
+        let displayed = Array(documents.prefix(2))
+        let titleLineHeight = ceil(UIFont.systemFont(ofSize: 14).lineHeight)
+        let metadataLineHeight = ceil(UIFont.preferredFont(forTextStyle: .caption2).lineHeight)
+        let rowHeights = displayed.map { document -> CGFloat in
+            let textHeight = titleLineHeight + (document.size == nil ? 0 : 2 + metadataLineHeight)
+            return max(24, textHeight) + 8
+        }
+        let rowSpacing = CGFloat(max(0, displayed.count - 1)) * 2
+        let moreHeight: CGFloat = documents.count > 2
+            ? 2 + ceil(max(UIFont.systemFont(ofSize: 20, weight: .bold).lineHeight,
+                           UIFont.systemFont(ofSize: 13).lineHeight))
+            : 0
+        return 8 + rowHeights.reduce(0, +) + rowSpacing + moreHeight
+    }
+
     // MARK: - Truncation with "More>>" indicator
 
-    static let contentFont = UIFont.systemFont(ofSize: 16)
-    static let maxContentLines = 7
+    // nonisolated: constant values, safe to read from background threads.
+    nonisolated static let contentFont = UIFont.systemFont(ofSize: 16)
+    nonisolated static let maxContentLines = 7
+
+    /// Text beyond this point can never be useful for the seven-line feed preview. Keeping
+    /// truncation layout bounded prevents unusually large remote content from making CoreText
+    /// shape the entire string synchronously on the main thread. The limit is deliberately much
+    /// larger than the visible preview on supported device widths.
+    nonisolated private static let maxTruncationLayoutUTF16Length = 4_096
+
+    /// Bounds work by UTF-16 code units rather than grapheme count so a single adversarially large
+    /// composed character cannot bypass the limit. A split encoding sequence is repaired with the
+    /// Unicode replacement character; the eventual seven-line cutoff is far before this boundary.
+    nonisolated private static func contentForTruncationLayout(_ content: String) -> (text: String, wasCapped: Bool) {
+        let utf16 = content.utf16
+        guard let limit = utf16.index(
+            utf16.startIndex,
+            offsetBy: maxTruncationLayoutUTF16Length,
+            limitedBy: utf16.endIndex
+        ), limit != utf16.endIndex else {
+            return (content, false)
+        }
+
+        return (String(decoding: utf16[..<limit], as: Unicode.UTF16.self), true)
+    }
 
     /// Shared UILabel for truncation detection — matches UILabel's TextKit2 rendering.
     /// NSLayoutManager (TextKit1) and UILabel (TextKit2) can disagree on line breaking,
@@ -606,78 +764,45 @@ class TweetBodyUIView: UIView {
             .paragraphStyle: paragraphStyle
         ]
 
-        // Use UILabel to detect whether text actually exceeds maxLines.
-        // NSLayoutManager (TextKit1) and UILabel (TextKit2) can disagree on line breaking,
-        // so we trust UILabel since that's what renders the text.
+        // Use UILabel to detect whether text exceeds maxLines. Probe only one line beyond the
+        // preview instead of laying out the complete string with numberOfLines == 0.
         let checkLabel = truncationCheckLabel
-        let attrText = NSAttributedString(string: content, attributes: textAttributes)
+        let layoutContent = contentForTruncationLayout(content)
+        let attrText = NSAttributedString(string: layoutContent.text, attributes: textAttributes)
         checkLabel.attributedText = attrText
         let fitSize = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
 
-        checkLabel.numberOfLines = 0
-        let fullHeight = checkLabel.sizeThatFits(fitSize).height
+        checkLabel.numberOfLines = maxLines + 1
+        let overflowProbeHeight = checkLabel.sizeThatFits(fitSize).height
         checkLabel.numberOfLines = maxLines
         let clampedHeight = checkLabel.sizeThatFits(fitSize).height
 
-        let needsTruncation = fullHeight > clampedHeight + 1 // 1pt tolerance
+        let needsTruncation = layoutContent.wasCapped || overflowProbeHeight > clampedHeight + 1
 
         // No truncation needed — return plain text
         guard needsTruncation else {
             return makeFullContentAttributedString(content: content)
         }
 
-        // UILabel says truncation is needed — use TextKit to find the truncation point
-        let textStorage = NSTextStorage(string: content, attributes: textAttributes)
-        let textContainer = NSTextContainer(size: CGSize(width: availableWidth, height: .greatestFiniteMagnitude))
-        textContainer.lineFragmentPadding = 0
-        let layoutManager = NSLayoutManager()
-        layoutManager.addTextContainer(textContainer)
-        textStorage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: textContainer)
-
-        // Collect glyph ranges per line
-        var lineGlyphRanges: [NSRange] = []
-        var glyphIndex = 0
-        while glyphIndex < layoutManager.numberOfGlyphs {
-            var lineRange = NSRange()
-            layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineRange)
-            lineGlyphRanges.append(lineRange)
-            glyphIndex = NSMaxRange(lineRange)
-        }
-
-        // Edge case: UILabel says truncation needed but NSLayoutManager disagrees.
-        // Return plain text — UILabel will naturally truncate via numberOfLines=7.
-        guard lineGlyphRanges.count > maxLines else {
-            return makeFullContentAttributedString(content: content)
-        }
-
-        // Text is truncated — find character range visible in maxLines
-        let lastLineGlyphRange = lineGlyphRanges[maxLines - 1]
-        let lastLineCharRange = layoutManager.characterRange(forGlyphRange: lastLineGlyphRange, actualGlyphRange: nil)
-        let lastLineStart = lastLineCharRange.location
-
-        // Measure localized "More..." suffix width to know how much room to reserve
+        // Use the same UILabel renderer for the cutoff as for display. This avoids
+        // renderer-specific branches and guarantees that the suffix fits in maxLines.
         let moreString = " " + NSLocalizedString("More...", comment: "")
-        let moreWidth = NSAttributedString(string: moreString, attributes: [.font: font]).size().width
-        let targetWidth = availableWidth - moreWidth - 2 // 2px safety margin
-
-        // Binary search for the longest substring that fits within targetWidth
-        var lo = lastLineStart
-        var hi = NSMaxRange(lastLineCharRange)
+        let characterBoundaries = Array(layoutContent.text.indices) + [layoutContent.text.endIndex]
+        var lo = 0
+        var hi = characterBoundaries.count - 1
+        checkLabel.numberOfLines = maxLines + 1
         while lo < hi {
             let mid = lo + (hi - lo + 1) / 2
-            let lastLineText = (content as NSString).substring(with: NSRange(location: lastLineStart, length: mid - lastLineStart))
-            let lineWidth = NSAttributedString(string: lastLineText, attributes: [.font: font]).size().width
-            if lineWidth <= targetWidth {
+            let candidate = String(layoutContent.text[..<characterBoundaries[mid]]) + moreString
+            checkLabel.attributedText = NSAttributedString(string: candidate, attributes: textAttributes)
+            if checkLabel.sizeThatFits(fitSize).height <= clampedHeight + 1 {
                 lo = mid
             } else {
                 hi = mid - 1
             }
         }
-        let trimEnd = lo
 
-        // Build body text: everything up to trimEnd, strip trailing whitespace
-        var bodyText = (content as NSString).substring(to: trimEnd)
+        var bodyText = String(layoutContent.text[..<characterBoundaries[lo]])
         while bodyText.hasSuffix(" ") || bodyText.hasSuffix("\n") || bodyText.hasSuffix("\r") {
             bodyText = String(bodyText.dropLast())
         }
@@ -702,7 +827,7 @@ class TweetBodyUIView: UIView {
         return result
     }
 
-    static func makeFullContentAttributedString(content: String) -> NSAttributedString {
+    nonisolated static func makeFullContentAttributedString(content: String) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 3
         paragraphStyle.lineBreakMode = .byWordWrapping
@@ -713,6 +838,100 @@ class TweetBodyUIView: UIView {
             .paragraphStyle: paragraphStyle,
         ])
         applyDetectedLinks(to: result, in: NSRange(location: 0, length: result.length))
+        return result
+    }
+
+    /// Background-safe variant of makeContentAttributedString.
+    // nonisolated: does not touch UIKit main-thread state — NSLayoutManager/NSTextStorage
+    // are created fresh per call, contentFont/XTheme are thread-safe value types.
+    /// Replaces the shared UILabel (TextKit2, main-thread-only) with a fresh NSLayoutManager
+    /// (TextKit1) for truncation detection. All objects are created fresh — safe to call from
+    /// any thread concurrently. The "More..." insertion point may differ by ±1 character vs the
+    /// UILabel variant (TextKit1 vs TextKit2 line-break disagreement) — irrelevant for height,
+    /// and the attributed string is corrected by makeContentAttributedString on first cell display.
+    nonisolated static func makeContentAttributedStringBackground(content: String, availableWidth: CGFloat) -> NSAttributedString {
+        let font = contentFont
+        let maxLines = maxContentLines
+        let layoutContent = contentForTruncationLayout(content)
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 3
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        let textAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: XTheme.text,
+            .paragraphStyle: paragraphStyle
+        ]
+
+        let attrText = NSAttributedString(string: layoutContent.text, attributes: textAttributes)
+
+        let textStorage = NSTextStorage(attributedString: attrText)
+        let textContainer = NSTextContainer(size: CGSize(width: availableWidth, height: .greatestFiniteMagnitude))
+        textContainer.lineFragmentPadding = 0
+        textContainer.maximumNumberOfLines = maxLines + 1
+        textContainer.lineBreakMode = .byWordWrapping
+        let layoutManager = NSLayoutManager()
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        var lineGlyphRanges: [NSRange] = []
+        var glyphIndex = 0
+        while glyphIndex < layoutManager.numberOfGlyphs {
+            var lineRange = NSRange()
+            layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineRange)
+            lineGlyphRanges.append(lineRange)
+            glyphIndex = NSMaxRange(lineRange)
+            if lineGlyphRanges.count > maxLines { break }
+        }
+
+        guard layoutContent.wasCapped || lineGlyphRanges.count > maxLines else {
+            return makeFullContentAttributedString(content: content)
+        }
+
+        guard !lineGlyphRanges.isEmpty else {
+            return makeFullContentAttributedString(content: layoutContent.text)
+        }
+
+        let lastLineGlyphRange = lineGlyphRanges[min(maxLines - 1, lineGlyphRanges.count - 1)]
+        let lastLineCharRange = layoutManager.characterRange(forGlyphRange: lastLineGlyphRange, actualGlyphRange: nil)
+        let lastLineStart = lastLineCharRange.location
+
+        let moreString = " " + NSLocalizedString("More...", comment: "")
+        let moreWidth = NSAttributedString(string: moreString, attributes: [.font: font]).size().width
+        let targetWidth = availableWidth - moreWidth - 2
+
+        var lo = lastLineStart
+        var hi = NSMaxRange(lastLineCharRange)
+        while lo < hi {
+            let mid = lo + (hi - lo + 1) / 2
+            let lastLineText = (layoutContent.text as NSString).substring(with: NSRange(location: lastLineStart, length: mid - lastLineStart))
+            let lineWidth = NSAttributedString(string: lastLineText, attributes: [.font: font]).size().width
+            if lineWidth <= targetWidth { lo = mid } else { hi = mid - 1 }
+        }
+        let trimEnd = lo
+
+        var bodyText = (layoutContent.text as NSString).substring(to: trimEnd)
+        while bodyText.hasSuffix(" ") || bodyText.hasSuffix("\n") || bodyText.hasSuffix("\r") {
+            bodyText = String(bodyText.dropLast())
+        }
+
+        let bodyPs = NSMutableParagraphStyle()
+        bodyPs.lineSpacing = 3
+        bodyPs.lineBreakMode = .byWordWrapping
+
+        let result = NSMutableAttributedString(string: bodyText, attributes: [
+            .font: font,
+            .foregroundColor: XTheme.text,
+            .paragraphStyle: bodyPs
+        ])
+        result.append(NSAttributedString(string: moreString, attributes: [
+            .font: font,
+            .foregroundColor: XTheme.accent,
+            .moreLinkTap: true,
+        ]))
+        applyDetectedLinks(to: result, in: NSRange(location: 0, length: bodyText.utf16.count))
         return result
     }
 
@@ -747,11 +966,11 @@ class TweetBodyUIView: UIView {
         UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
-    private static func applyDetectedLinks(to attributedString: NSMutableAttributedString, in range: NSRange) {
+    private nonisolated static func applyDetectedLinks(to attributedString: NSMutableAttributedString, in range: NSRange) {
         guard range.location >= 0,
               range.length > 0,
               NSMaxRange(range) <= attributedString.length,
-              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+              let detector = _tweetBodyURLDetector else {
             return
         }
 

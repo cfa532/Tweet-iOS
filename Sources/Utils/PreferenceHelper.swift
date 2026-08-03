@@ -48,12 +48,14 @@ class PreferenceHelper {
     }
     
     // MARK: - User ID
+    @MainActor
     func getUserId() -> String? {
         return userDefaults.string(forKey: "userId")
     }
     
+    @MainActor
     func setUserId(_ id: String?) {
-        userDefaults.set(id, forKey: "userId")
+        userDefaults.set(id ?? Constants.GUEST_ID, forKey: "userId")
     }
     
     // MARK: - Tweet Feed Tab Index
@@ -83,6 +85,7 @@ class PreferenceHelper {
         return 8080 // Default port
     }
     
+    @MainActor
     func setLocalHTTPServerPort(_ port: UInt16) {
         userDefaults.set(Int(port), forKey: "localHTTPServerPort")
         print("DEBUG: [PreferenceHelper] Saved LocalHTTPServer port: \(port)")

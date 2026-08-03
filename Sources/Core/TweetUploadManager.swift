@@ -9,7 +9,6 @@
 import Foundation
 import AVFoundation
 import UIKit
-import ffmpegkit
 
 // MARK: - Video Conversion Status
 struct VideoConversionStatus {
@@ -19,8 +18,9 @@ struct VideoConversionStatus {
     let cid: String?
 }
 
-/// Manager class for handling all tweet and media uploads
-class TweetUploadManager {
+/// Main-actor upload coordinator for UI-owned tweet/user models and upload progress state.
+@MainActor
+final class TweetUploadManager {
     // Reference to parent HproseInstance for accessing shared properties
     weak var hproseInstance: HproseInstance?
     
@@ -69,7 +69,7 @@ class TweetUploadManager {
         fileName: String? = nil,
         referenceId: String? = nil,
         noResample: Bool = false,
-        progressCallback: ((String, Int) -> Void)? = nil
+        progressCallback: (@Sendable (String, Int) -> Void)? = nil
     ) async throws -> (MimeiFileType?, String?) {
         guard let hproseInstance = hproseInstance else {
             throw NSError(domain: "TweetUploadManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "HproseInstance not available"])
@@ -228,7 +228,7 @@ class TweetUploadManager {
                     }
                     
                     // Start background polling for video jobs (same as tweets)
-                    Task.detached(priority: .background) {
+                    Task(priority: .background) { @MainActor in
                         await self.pollVideoJobsAndSubmitComment(
                             comment: comment,
                             to: tweet,
@@ -265,7 +265,7 @@ class TweetUploadManager {
                 }
                 
                 // Submit comment in background (non-blocking)
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     guard let hproseInstance = self.hproseInstance else { return }
                     
                     print("📝 [Background Submit] Submitting comment with image attachments...")
@@ -480,7 +480,7 @@ extension TweetUploadManager {
                 await removePendingUpload()
                 
                 // Continue polling in background
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     await self.pollAllJobsAndSubmitTweet(
                         tweet: tweet,
                         itemData: itemData,
@@ -561,7 +561,7 @@ extension TweetUploadManager {
                 
                 // Start background polling for ALL jobs (non-blocking)
                 // If polling fails, it will show toast and won't save pending upload again
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     await self.pollAllJobsAndSubmitTweet(
                         tweet: tweet,
                         itemData: updatedItemData,
@@ -599,40 +599,28 @@ extension TweetUploadManager {
             await removePendingUpload()
             
             // Submit tweet in background (non-blocking)
-            Task.detached(priority: .background) {
+            Task(priority: .background) { @MainActor in
                 guard let hproseInstance = self.hproseInstance else { return }
                 
                 print("📝 [Background Submit] Submitting tweet with image attachments...")
                 
-                // Submit with retry — one retry, two total attempts
-                var submitRetryCount = 0
-                let maxRetries = 1
-                
-                while submitRetryCount <= maxRetries {
-                    do {
-                        if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
-                            // Success! (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
-                            await MainActor.run {
-                                NotificationCenter.default.post(
-                                    name: .newTweetCreated,
-                                    object: nil,
-                                    userInfo: ["tweet": uploadedTweet]
-                                )
-                            }
-                            print("✅ [Background Submit] Tweet posted successfully!")
-                            return
+                do {
+                    if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
+                        // Success! (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
+                        await MainActor.run {
+                            NotificationCenter.default.post(
+                                name: .newTweetCreated,
+                                object: nil,
+                                userInfo: ["tweet": uploadedTweet]
+                            )
                         }
-                    } catch {
-                        submitRetryCount += 1
-                        if submitRetryCount <= maxRetries {
-                            print("🔄 [Background Submit] Retry \(submitRetryCount)/\(maxRetries)...")
-                            try? await Task.sleep(nanoseconds: UInt64(submitRetryCount) * 2_000_000_000)
-                        } else {
-                            print("❌ [Background Submit] Max retries reached")
-                            await self.showFailureToast(message: NSLocalizedString("Failed to post tweet", comment: "Error"))
-                            return
-                        }
+                        print("✅ [Background Submit] Tweet posted successfully!")
+                    } else {
+                        throw NSError(domain: "TweetUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
                     }
+                } catch {
+                    print("❌ [Background Submit] Tweet submit failed without retry because add_tweet is non-idempotent: \(error)")
+                    await self.showFailureToast(message: NSLocalizedString("Failed to post tweet. Please refresh before retrying.", comment: "Error"))
                 }
             }
             
@@ -661,7 +649,7 @@ extension TweetUploadManager {
                 
                 await removePendingUpload()
             } else {
-                print("DEBUG: [Error handling] Scheduling background retry \(retryCount + 1)")
+                print("DEBUG: [Error handling] Scheduling retry \(retryCount + 1)")
                 
                 // Don't fail the progress UI on retry
                 await MainActor.run {
@@ -673,10 +661,8 @@ extension TweetUploadManager {
                 }
                 
                 let delay = UInt64(retryCount + 1) * 2_000_000_000
-                Task.detached(priority: .background) {
-                    try? await Task.sleep(nanoseconds: delay)
-                    await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
-                }
+                try? await Task.sleep(nanoseconds: delay)
+                await uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
             }
         }
     }
@@ -867,24 +853,9 @@ extension TweetUploadManager {
         } catch {
             print("❌ [Submit] Failed to post tweet (attempt \(retryCount + 1)): \(error)")
             
-            // One retry, two total attempts
-            let maxRetries = 1
-            if retryCount < maxRetries {
-                print("🔄 [Submit] Retrying tweet submission (\(retryCount + 1)/\(maxRetries))...")
-                let delay = UInt64(retryCount + 1) * 2_000_000_000 // 2s, 4s
-                try? await Task.sleep(nanoseconds: delay)
-                await submitTweetWithCompletedJobs(
-                    tweet: tweet,
-                    itemData: itemData,
-                    completedCIDs: completedCIDs,
-                    uploadedAttachments: uploadedAttachments,
-                    retryCount: retryCount + 1
-                )
-            } else {
-                print("❌ [Submit] Max retries reached, giving up")
-                await showFailureToast(message: NSLocalizedString("Failed to post tweet", comment: "Error"))
-                await removePendingUpload()
-            }
+            print("❌ [Submit] Not retrying tweet submission because add_tweet is non-idempotent")
+            await showFailureToast(message: NSLocalizedString("Failed to post tweet. Please refresh before retrying.", comment: "Error"))
+            await removePendingUpload()
         }
     }
     
@@ -1439,7 +1410,7 @@ extension TweetUploadManager {
                 }
                 
                 // Start background polling for video jobs
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     await self.pollVideoJobsAndSendChatMessage(
                         message: message,
                         itemData: updatedItemData,
@@ -1549,8 +1520,9 @@ extension TweetUploadManager {
                     // This allows ChatImageThumbnail to display from cache instead of downloading from server
                     // This is similar to how videos work - they cache locally via LocalHTTPServer
                     if isImage {
-                        // Cache the image immediately so it's available for display
-                        // Use Task to avoid blocking the upload flow
+                        // Cache the image immediately so it's available for display.
+                        // Task.detached: cacheImageData does UIImage(data:) + disk write —
+                        // keep that decode off the main actor.
                         Task.detached(priority: .userInitiated) {
                             ImageCacheManager.shared.cacheImageData(item.data, for: fileType)
                             print("💾 [Upload] Cached image locally for immediate display: \(fileType.mid)")
@@ -1586,8 +1558,8 @@ extension TweetUploadManager {
                     typeIdentifier: itemData.typeIdentifier,
                     fileName: itemData.fileName,
                     noResample: itemData.noResample,
-                    progressCallback: { message, progress in
-                        print("DEBUG: Upload progress for \(itemData.fileName): \(message) (\(progress)%)")
+                    progressCallback: { [fileName = itemData.fileName] message, progress in
+                        print("DEBUG: Upload progress for \(fileName): \(message) (\(progress)%)")
                     }
                 )
                 return result
@@ -1741,8 +1713,8 @@ extension TweetUploadManager {
                         typeIdentifier: item.typeIdentifier,
                         fileName: item.fileName,
                         noResample: item.noResample,
-                        progressCallback: { message, progress in
-                            print("DEBUG: Upload progress for \(item.fileName): \(message) (\(progress)%)")
+                        progressCallback: { [fileName = item.fileName] message, progress in
+                            print("DEBUG: Upload progress for \(fileName): \(message) (\(progress)%)")
                         }
                     )
                     if let fileType = result {

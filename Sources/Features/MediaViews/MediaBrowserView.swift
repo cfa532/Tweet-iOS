@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVKit
+import Combine
 import Photos
 import UIKit
 
@@ -34,8 +35,8 @@ struct MediaBrowserView: View {
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
-    @State private var isDismissingForBackground = false
     @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
+    @State private var focusedImageMid: String?
     private var attachments: [MimeiFileType] {
         // Audio is handled by the compact playlist player; the browser pages visual media only.
         let allAttachments = currentTweet.attachments ?? []
@@ -146,33 +147,50 @@ struct MediaBrowserView: View {
 
                 // Activate manager first to register lifecycle observers
                 FullScreenVideoManager.shared.activateForFullscreen()
-                FullScreenVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
+                FullScreenVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
                 setupFullScreenManager()
                 OverlayVisibilityCoordinator.shared.beginOverlayIfNeeded(id: "mediaBrowserView", source: "MediaBrowserView")
+                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+                updateFocusedImageLoad(for: currentIndex)
 
-                // NOTE: Don't broadcast stopAllVideos here. Fullscreen borrows the
-                // feed's shared player, so overlay coverage should transfer ownership
-                // without a pause/resume cycle.
+                // Fullscreen has its own autoplay list. Feed and inline players
+                // must stay stopped while fullscreen is active.
             }
             .onDisappear {
                 OrientationManager.shared.lockToPortrait()
 
-                // Fullscreen owns its own AVPlayer, so dismissal must pause that player.
-                // Feed/detail can reuse cached data and their saved position independently.
-                FullScreenVideoManager.shared.deactivate(transferPlaybackToUnderlyingSurface: false)
-                OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
+                let shouldTransferVideoPlayback = attachments.indices.contains(currentIndex)
+                    && (attachments[currentIndex].type == .video || attachments[currentIndex].type == .hls_video)
+                    && FullScreenVideoManager.shared.currentVideoMid == attachments[currentIndex].mid
+
+                FullScreenVideoManager.shared.deactivate(
+                    transferPlaybackToUnderlyingSurface: shouldTransferVideoPlayback,
+                    audioFadeDuration: 0.35
+                ) {
+                    OverlayVisibilityCoordinator.shared.endOverlay(
+                        id: "mediaBrowserView",
+                        source: "MediaBrowserView"
+                    )
+                }
                 
                 // CRITICAL: Clean up controls timer to prevent CPU cycles accumulation
                 controlsTimer?.invalidate()
                 controlsTimer = nil
+                clearFocusedImageLoad()
                 
                 // DON'T post reloadVisibleVideosOnly here
                 // MediaCell videos manage themselves via VideoPlaybackCoordinator
                 // Fullscreen manager is now inactive and won't interfere
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                dismissFullscreenForBackground()
+            .onChange(of: currentIndex) { _, newIndex in
+                updateFocusedImageLoad(for: newIndex)
+                guard attachments.indices.contains(newIndex) else { return }
+                let selectedAttachment = attachments[newIndex]
+                if selectedAttachment.type == .image {
+                    loadImageIfNeeded(for: selectedAttachment, at: newIndex)
+                }
             }
+            .presentationBackground(.clear)
     }
 
     private func dismissFullScreen() {
@@ -180,14 +198,6 @@ struct MediaBrowserView: View {
         dismiss()
     }
 
-    private func dismissFullscreenForBackground() {
-        guard !isDismissingForBackground else { return }
-        isDismissingForBackground = true
-        // Keep long-background recovery focused on feed/detail. Fullscreen will
-        // save position and release its player through the normal onDisappear path.
-        dismissFullScreen()
-    }
-    
     private func setupFullScreenManager() {
         // Set up navigation callback for auto-advance and swipe up
         FullScreenVideoManager.shared.onNavigateToNextVideo = { [self] nextTweet, videoIndex, nextSourceTweetId in
@@ -273,6 +283,41 @@ struct MediaBrowserView: View {
             dismissFullScreen()
         }
     }
+
+    private func updateFocusedImageLoad(for index: Int) {
+        guard attachments.indices.contains(index),
+              attachments[index].type == .image else {
+            cancelOriginalImageTasks(except: nil)
+            clearFocusedImageLoad()
+            return
+        }
+
+        let mid = attachments[index].mid
+        cancelOriginalImageTasks(except: index)
+        guard focusedImageMid != mid else { return }
+
+        clearFocusedImageLoad()
+        focusedImageMid = mid
+        GlobalImageLoadManager.shared.beginFocusedImageLoad(for: mid)
+        SharedAssetCache.shared.suspendFeedActivityForFocusedPlayback(
+            protecting: mid,
+            owner: "fullscreen image"
+        )
+    }
+
+    private func clearFocusedImageLoad() {
+        guard let focusedImageMid else { return }
+        GlobalImageLoadManager.shared.endFocusedImageLoad(for: focusedImageMid)
+        self.focusedImageMid = nil
+    }
+
+    private func cancelOriginalImageTasks(except protectedIndex: Int?) {
+        let indexesToCancel = originalImageTasks.keys.filter { $0 != protectedIndex }
+        for index in indexesToCancel {
+            originalImageTasks[index]?.cancel()
+            originalImageTasks.removeValue(forKey: index)
+        }
+    }
     
     // MARK: - MediaBrowserContentView
     private struct MediaBrowserContentView: View {
@@ -315,15 +360,29 @@ struct MediaBrowserView: View {
         }
         
         var body: some View {
-            ZStack {
-                // Background layer - stays in place (not affected by offset)
-                Color.black
-                    .ignoresSafeArea(.all, edges: .all)
-                
-                currentContentLayer
+            GeometryReader { geometry in
+                ZStack {
+                    // Fade the shared backdrop as the current media is pulled down so
+                    // the presenting screen is already visible when dismissal begins.
+                    Color.black.opacity(dismissBackdropOpacity)
+                        .ignoresSafeArea(.all, edges: .all)
+
+                    // Full-screen covers in the iPad-on-Mac runtime can propose a size
+                    // larger than their app window to UIKit-backed descendants. Pin the
+                    // pager to the actual presentation geometry so media cannot escape it.
+                    currentContentLayer
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
             }
             .statusBar(hidden: true)
             .onTapGesture {
+                // Video pages own tap-to-reveal through their native or layer-backed
+                // playback surface. This screen-covering gesture must not also fire
+                // there because it can swallow taps meant for playback controls.
+                guard currentIndex < attachments.count, !isVideoAttachment(attachments[currentIndex]) else { return }
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showControls = true
                 }
@@ -379,14 +438,14 @@ struct MediaBrowserView: View {
                                 pdfView(for: attachment, index: index)
                             }
                         }
-                        .background(Color.black)
+                        .background(Color.clear)
                         .offset(y: verticalOffset(for: index))
                         .scaleEffect(contentScale(for: index))
                         .animation(nil, value: dragOffset)
                         .tag(index)
                     }
                 }
-                .background(Color.black)
+                .background(Color.clear)
                 .tabViewStyle(.page)
                 .indexViewStyle(.page(backgroundDisplayMode: .always))
                 .transaction { txn in
@@ -394,7 +453,7 @@ struct MediaBrowserView: View {
                         txn.animation = nil
                     }
                 }
-                .simultaneousGesture(verticalVideoNavigationGesture)
+                .simultaneousGesture(verticalNavigationGesture(allowImageAttachments: false))
                 .onChange(of: currentIndex) { _, newIndex in
                     previousIndex = newIndex
                     cleanupNonVisibleImagesClosure(newIndex)
@@ -417,6 +476,13 @@ struct MediaBrowserView: View {
             guard index == currentIndex else { return 1.0 }
             let progress = min(abs(verticalOffset(for: index)), 520.0)
             return max(0.78, 1.0 - progress / 1300.0)
+        }
+
+        private var dismissBackdropOpacity: Double {
+            let downwardOffset = max(dragOffset.height, 0)
+            let fadeDistance = max(UIScreen.main.bounds.height * 0.35, 1)
+            let progress = min(downwardOffset / fadeDistance, 1)
+            return 1 - (0.2 * Double(progress))
         }
 
         private var controlsOverlay: some View {
@@ -445,6 +511,7 @@ struct MediaBrowserView: View {
                                 onShareVisibilityChange(isVisible)
                             }
                         )
+                        .environmentObject(HproseInstance.shared)
                         .environment(\.colorScheme, .dark)
                         .tint(.white)
                     }
@@ -454,9 +521,23 @@ struct MediaBrowserView: View {
             }
         }
 
-        private var verticalVideoNavigationGesture: some Gesture {
-            DragGesture(minimumDistance: 25)
+        private var currentAttachmentIsImage: Bool {
+            guard attachments.indices.contains(currentIndex) else { return false }
+            return isImageAttachment(attachments[currentIndex])
+        }
+
+        /// Swipes that start in the home-indicator zone are the system home/app-switcher
+        /// gesture, not video navigation. Advancing on them loads the next video while
+        /// the app is backgrounding.
+        private func isSystemEdgeSwipe(_ value: DragGesture.Value) -> Bool {
+            value.startLocation.y > UIScreen.main.bounds.height - 44
+        }
+
+        private func verticalNavigationGesture(allowImageAttachments: Bool) -> some Gesture {
+            DragGesture(minimumDistance: 25, coordinateSpace: .global)
                 .onChanged { value in
+                    guard !isSystemEdgeSwipe(value) else { return }
+                    guard allowImageAttachments || !currentAttachmentIsImage else { return }
                     guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else { return }
 
                     let vertical = abs(value.translation.height)
@@ -468,6 +549,13 @@ struct MediaBrowserView: View {
                     }
                 }
                 .onEnded { value in
+                    // If the app is resigning/backgrounding (home swipe took over),
+                    // never treat the gesture end as navigation.
+                    guard UIApplication.shared.applicationState == .active, !isSystemEdgeSwipe(value) else {
+                        resetDragOffset(animated: false)
+                        return
+                    }
+                    guard allowImageAttachments || !currentAttachmentIsImage else { return }
                     guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else {
                         resetDragOffset(animated: true)
                         return
@@ -520,16 +608,7 @@ struct MediaBrowserView: View {
             guard !isCompletingDismiss else { return }
             isCompletingDismiss = true
             isDragging = false
-
-            Task { @MainActor in
-                let slideDistance = UIScreen.main.bounds.height
-                withAnimation(.easeOut(duration: 0.16)) {
-                    dragOffset = CGSize(width: 0, height: slideDistance)
-                }
-
-                try? await Task.sleep(nanoseconds: 160_000_000)
-                dismiss()
-            }
+            dismiss()
         }
 
         private func pushToNextVideoInCurrentTweet(_ nextVideoIndex: Int) {
@@ -628,7 +707,7 @@ struct MediaBrowserView: View {
                 isCurrentIndex: index == currentIndex
             )
             .contentShape(Rectangle())
-            .simultaneousGesture(verticalVideoNavigationGesture)
+            .simultaneousGesture(verticalNavigationGesture(allowImageAttachments: true))
             .onAppear {
                 loadImageIfNeededClosure(attachment, index)
             }
@@ -698,11 +777,13 @@ struct MediaBrowserView: View {
         
         // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated properly
         controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            // Hide close button for ALL content types after 3 seconds
-            // but only if share sheet isn't visible anymore
-            if !isShareSheetVisible {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    showControls = false
+            MainActor.assumeIsolated {
+                // Hide close button for ALL content types after 3 seconds
+                // but only if share sheet isn't visible anymore
+                if !isShareSheetVisible {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showControls = false
+                    }
                 }
             }
         }
@@ -725,7 +806,9 @@ struct MediaBrowserView: View {
             // ✅ Load original image in background and replace compressed cache
             // This ensures fullscreen views use the highest quality image
             guard let url = attachment.getUrl(baseUrl) else { return }
-            startOriginalImageLoad(for: attachment, at: index, url: url)
+            if index == currentIndex {
+                startOriginalImageLoad(for: attachment, at: index, url: url)
+            }
             return
         }
         
@@ -750,7 +833,9 @@ struct MediaBrowserView: View {
                 
                 // ✅ Load original image in background and replace compressed cache
                 // This ensures fullscreen and detail views use the highest quality image
-                startOriginalImageLoad(for: attachment, at: index, url: url)
+                if index == currentIndex {
+                    startOriginalImageLoad(for: attachment, at: index, url: url)
+                }
             } else {
                 self.imageStates[index] = .error
             }
@@ -758,6 +843,7 @@ struct MediaBrowserView: View {
     }
 
     private func startOriginalImageLoad(for attachment: MimeiFileType, at index: Int, url: URL) {
+        guard index == currentIndex else { return }
         originalImageTasks[index]?.cancel()
         originalImageTasks[index] = Task {
             if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
@@ -937,25 +1023,21 @@ struct ImageViewWithPlaceholder: View {
             return
         }
         
-        // Request photo library permission and save
-        PHPhotoLibrary.requestAuthorization { status in
-            guard status == .authorized else {
-                DispatchQueue.main.async {
-                    self.showDownloadToast(message: NSLocalizedString("Photo library access denied", comment: "Photo library permission error"))
-                }
+        Task { @MainActor in
+            let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            guard status == .authorized || status == .limited else {
+                showDownloadToast(message: NSLocalizedString("Photo library access denied", comment: "Photo library permission error"))
                 return
             }
-            
-            PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
-            }) { success, error in
-                DispatchQueue.main.async {
-                    if success {
-                        self.showDownloadToast(message: NSLocalizedString("Image saved to Photos", comment: "Image save success"))
-                    } else {
-                        self.showDownloadToast(message: NSLocalizedString("Failed to save image", comment: "Image save error"))
-                    }
+
+            do {
+                let changes: @Sendable () -> Void = {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
                 }
+                try await PHPhotoLibrary.shared().performChanges(changes)
+                showDownloadToast(message: NSLocalizedString("Image saved to Photos", comment: "Image save success"))
+            } catch {
+                showDownloadToast(message: NSLocalizedString("Failed to save image", comment: "Image save error"))
             }
         }
     }
@@ -973,7 +1055,7 @@ struct ImageViewWithPlaceholder: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Color.black
+                Color.clear
                 
                 Group {
                     switch imageState {
@@ -1027,6 +1109,11 @@ struct ImageViewWithPlaceholder: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 15)
                         .onChanged { value in
+                            guard scale > 1.0 else {
+                                lastOffset = .zero
+                                return
+                            }
+
                             let delta = CGSize(
                                 width: value.translation.width - lastOffset.width,
                                 height: value.translation.height - lastOffset.height
@@ -1057,7 +1144,7 @@ struct ImageViewWithPlaceholder: View {
                         .onEnded { _ in
                             lastOffset = .zero
                         },
-                    including: scale > 1.0 ? .gesture : .subviews
+                    including: scale > 1.0 ? .gesture : .none
                 )
                 .onTapGesture(count: 2) {
                     withAnimation(.easeInOut(duration: 0.3)) {
@@ -1143,11 +1230,19 @@ struct SingletonVideoPlayerView: View {
         manager.loadFailedVideoMid == mid
     }
 
+    private var requiresLayerBackedPlaybackSurface: Bool {
+#if targetEnvironment(macCatalyst)
+        true
+#else
+        ProcessInfo.processInfo.isiOSAppOnMac
+#endif
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
-                if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
+                if let player = manager.singletonPlayer, manager.currentVideoMid == mid, let currentItem = player.currentItem {
                     let layerReadyForCurrentVideo = readyForDisplayMid == mid
                     let visualState = manager.visualState(
                         for: mid,
@@ -1155,23 +1250,30 @@ struct SingletonVideoPlayerView: View {
                         layerReadyForDisplay: layerReadyForCurrentVideo,
                         player: player
                     )
-                    // Show player
-                    FullscreenPlayerLayerView(
-                        player: player,
-                        mid: mid,
-                        onReadyForDisplay: {
-                            DispatchQueue.main.async {
-                                readyForDisplayMid = mid
-                            }
+                    Group {
+                        if requiresLayerBackedPlaybackSurface {
+                            BrowserLayerVideoPlayerView(
+                                player: player,
+                                mid: mid,
+                                onUserInteraction: onUserInteraction
+                            )
+                        } else {
+                            // Keep native playback controls on iPhone and iPad.
+                            SimplerAVPlayerViewController(
+                                player: player,
+                                mid: mid,
+                                onUserInteraction: onUserInteraction
+                            )
                         }
-                    )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                        .simultaneousGesture(
-                            TapGesture().onEnded {
-                                onUserInteraction()
-                            }
-                        )
+                    }
+                    .id(fullscreenSurfaceID(mid: mid, item: currentItem))
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+                    .onAppear {
+                        DispatchQueue.main.async {
+                            readyForDisplayMid = mid
+                        }
+                    }
 
                     if visualState.showsPoster {
                         posterImage
@@ -1227,6 +1329,10 @@ struct SingletonVideoPlayerView: View {
                 refreshHandoffThumbnail(for: mid)
             }
         }
+    }
+
+    private func fullscreenSurfaceID(mid: String, item: AVPlayerItem) -> String {
+        "\(mid)-\(ObjectIdentifier(item).hashValue)"
     }
 
     private func refreshHandoffThumbnail(for mediaID: String) {
@@ -1297,22 +1403,157 @@ struct SingletonVideoPlayerView: View {
     }
 }
 
+// MARK: - Layer-backed browser player for iPad apps running on Mac
+
+/// AVPlayerViewController may promote its transition surface to the Mac display's
+/// dimensions even though SwiftUI presented MediaBrowserView inside an app window.
+/// AVPlayerLayer stays bound to the measured browser frame and preserves aspect fit.
+@MainActor
+private struct BrowserLayerVideoPlayerView: View {
+    let player: AVPlayer
+    let mid: String
+    let onUserInteraction: () -> Void
+
+    @ObservedObject private var manager = FullScreenVideoManager.shared
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 1
+    @State private var isSeeking = false
+    @State private var shouldResumeAfterSeek = false
+
+    private let playbackClock = Timer.publish(
+        every: 0.25,
+        on: .main,
+        in: .common
+    ).autoconnect()
+
+    var body: some View {
+        ZStack {
+            LightweightVideoPlayer(player: player)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onUserInteraction)
+
+            VStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        if manager.isPlaying {
+                            manager.pause()
+                        } else {
+                            manager.play()
+                        }
+                        onUserInteraction()
+                    } label: {
+                        Image(systemName: manager.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white)
+                    .accessibilityLabel(manager.isPlaying ? "Pause video" : "Play video")
+
+                    Slider(
+                        value: Binding(
+                            get: { currentTime },
+                            set: { currentTime = $0 }
+                        ),
+                        in: 0...max(duration, 1),
+                        onEditingChanged: handleSeeking
+                    )
+                    .tint(.white)
+
+                    Text("\(formattedTime(currentTime)) / \(formattedTime(duration))")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                        .frame(width: 92, alignment: .trailing)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.black.opacity(0.65))
+            }
+        }
+        .onAppear {
+            refreshPlaybackTime()
+            manager.markPlaybackSurfaceReady(player: player, mid: mid)
+        }
+        .onReceive(playbackClock) { _ in
+            refreshPlaybackTime()
+        }
+    }
+
+    private func refreshPlaybackTime() {
+        guard !isSeeking else { return }
+
+        let playerTime = player.currentTime().seconds
+        if playerTime.isFinite {
+            currentTime = max(0, playerTime)
+        }
+
+        if let itemDuration = player.currentItem?.duration.seconds,
+           itemDuration.isFinite,
+           itemDuration > 0 {
+            duration = itemDuration
+        }
+    }
+
+    private func handleSeeking(_ editing: Bool) {
+        if editing {
+            isSeeking = true
+            shouldResumeAfterSeek = manager.isPlaying
+            manager.pause()
+            onUserInteraction()
+            return
+        }
+
+        let target = CMTime(seconds: currentTime, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        isSeeking = false
+
+        if shouldResumeAfterSeek {
+            manager.play()
+        }
+        shouldResumeAfterSeek = false
+        onUserInteraction()
+    }
+
+    private func formattedTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let totalSeconds = Int(seconds)
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}
+
 // MARK: - Simple AVPlayerViewController Wrapper
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     let player: AVPlayer
     let mid: String
+    let onUserInteraction: () -> Void
     
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onUserInteraction: onUserInteraction)
     }
     
-    class Coordinator: NSObject {
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var statusObserver: NSKeyValueObservation?
         var currentItemObserver: NSKeyValueObservation?
+        var onUserInteraction: () -> Void
+
+        init(onUserInteraction: @escaping () -> Void) {
+            self.onUserInteraction = onUserInteraction
+        }
         
         deinit {
             statusObserver?.invalidate()
             currentItemObserver?.invalidate()
+        }
+
+        @objc func handlePlayerTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            onUserInteraction()
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
         }
     }
 
@@ -1343,20 +1584,35 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
                 FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
             }
         }
+
+        // Let AVPlayerViewController keep its native tap handling while the app
+        // overlay is also revealed for fullscreen actions such as bookmarking.
+        let coordinator = context.coordinator
+        let tapRecognizer = UITapGestureRecognizer(
+            target: coordinator,
+            action: #selector(Coordinator.handlePlayerTap(_:))
+        )
+        tapRecognizer.cancelsTouchesInView = false
+        tapRecognizer.delaysTouchesBegan = false
+        tapRecognizer.delaysTouchesEnded = false
+        tapRecognizer.delegate = coordinator
+        controller.view.addGestureRecognizer(tapRecognizer)
         
         // Setup observer to auto-play when ready
-        setupPlayerItemObserver(player: player, context: context)
+        setupPlayerItemObserver(player: player, coordinator: coordinator)
         
         // Observe currentItem changes to set up observer for new items
-        context.coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
-            setupPlayerItemObserver(player: player, context: context)
+        coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
+            Task { @MainActor in
+                setupPlayerItemObserver(player: player, coordinator: coordinator)
+            }
         }
         
         return controller
     }
     
-    private func setupPlayerItemObserver(player: AVPlayer, context: Context) {
-        context.coordinator.statusObserver?.invalidate()
+    private func setupPlayerItemObserver(player: AVPlayer, coordinator: Coordinator) {
+        coordinator.statusObserver?.invalidate()
         
         // Don't auto-play here - let FullScreenVideoManager handle playback after restoring position
         // FullScreenVideoManager will check for saved state and seek/play accordingly
@@ -1364,13 +1620,16 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             if playerItem.status == .readyToPlay {
                 // FullScreenVideoManager will handle playback after checking for saved state
             } else {
-                context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
-                    if item.status == .readyToPlay {
-                        // FullScreenVideoManager will handle playback after checking for saved state
-                        context.coordinator.statusObserver?.invalidate()
-                        context.coordinator.statusObserver = nil
-                    } else if item.status == .failed {
-                        print("ERROR: [SingletonVideoPlayer] Player item failed")
+                coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { [weak coordinator] item, _ in
+                    let status = item.status
+                    Task { @MainActor in
+                        if status == .readyToPlay {
+                            // FullScreenVideoManager will handle playback after checking for saved state
+                            coordinator?.statusObserver?.invalidate()
+                            coordinator?.statusObserver = nil
+                        } else if status == .failed {
+                            print("ERROR: [SingletonVideoPlayer] Player item failed")
+                        }
                     }
                 }
             }
@@ -1378,6 +1637,8 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        context.coordinator.onUserInteraction = onUserInteraction
+
         if let controller = uiViewController as? SurfaceAwarePlayerViewController {
             controller.onSurfaceReady = {
                 Task { @MainActor in
@@ -1393,51 +1654,24 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             uiViewController.player = player
             
             // Setup observer for new player - don't auto-play, let FullScreenVideoManager handle it
-            context.coordinator.statusObserver?.invalidate()
+            let coordinator = context.coordinator
+            coordinator.statusObserver?.invalidate()
             if let playerItem = player.currentItem {
                 if playerItem.status == .readyToPlay {
                     // FullScreenVideoManager will handle playback after checking for saved state
                 } else {
-                    context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
-                        if item.status == .readyToPlay {
-                            // FullScreenVideoManager will handle playback after checking for saved state
-                            context.coordinator.statusObserver?.invalidate()
-                            context.coordinator.statusObserver = nil
+                    coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { [weak coordinator] item, _ in
+                        let status = item.status
+                        Task { @MainActor in
+                            if status == .readyToPlay {
+                                // FullScreenVideoManager will handle playback after checking for saved state
+                                coordinator?.statusObserver?.invalidate()
+                                coordinator?.statusObserver = nil
+                            }
                         }
                     }
                 }
             }
-        }
-    }
-}
-
-private struct FullscreenPlayerLayerView: UIViewRepresentable {
-    let player: AVPlayer
-    let mid: String
-    let onReadyForDisplay: () -> Void
-
-    func makeUIView(context: Context) -> LightweightVideoPlayerView {
-        let view = LightweightVideoPlayerView()
-        view.backgroundColor = .black
-        view.setVideoGravity(.resizeAspect)
-        view.onReadyForDisplay = onReadyForDisplay
-        view.setPlayer(player)
-        view.observeReadyForDisplay()
-        markSurfaceReady(for: player, mid: mid)
-        return view
-    }
-
-    func updateUIView(_ uiView: LightweightVideoPlayerView, context: Context) {
-        uiView.setVideoGravity(.resizeAspect)
-        uiView.onReadyForDisplay = onReadyForDisplay
-        uiView.setPlayer(player)
-        uiView.observeReadyForDisplay()
-        markSurfaceReady(for: player, mid: mid)
-    }
-
-    private func markSurfaceReady(for player: AVPlayer, mid: String) {
-        DispatchQueue.main.async {
-            FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
         }
     }
 }

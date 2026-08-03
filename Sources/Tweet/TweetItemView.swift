@@ -1,7 +1,7 @@
 import SwiftUI
 
 @available(iOS 16.0, *)
-struct TweetItemView: View, Equatable {
+struct TweetItemView: View, @MainActor Equatable {
     @ObservedObject var tweet: Tweet
     var isPinned: Bool = false
     var isInProfile: Bool = false
@@ -19,6 +19,7 @@ struct TweetItemView: View, Equatable {
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
     @State private var showBrowser = false
+    @State private var showLoginSheet = false
     @State private var selectedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
 
@@ -119,6 +120,9 @@ struct TweetItemView: View, Equatable {
                 cellTweetId: tweet.mid // Pass visible tweet ID for feed navigation
             )
         }
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
+        }
         .task {
             isVisible = true
             tweet.isVisible = true
@@ -138,19 +142,19 @@ struct TweetItemView: View, Equatable {
                         print("⚡ [RENDER] Tweet rendering with placeholder (no author), fetching in background")
                     }
                 }
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
             } else if tweet.author?.username == nil {
                 print("⚡ [RENDER] Tweet rendering with placeholder (no username), fetching in background")
                 // Author exists but has no username - render with placeholder and fetch in background
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
             } else if tweet.author?.baseUrl == nil {
                 print("⚡ [RENDER] Tweet rendering immediately (@\(tweet.author?.username ?? "?")) - fetching baseUrl in background")
                 // Author exists but no baseUrl (old cache data or new user) - resolve IP in background
-                Task.detached(priority: .background) {
+                Task(priority: .background) { @MainActor in
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
             } else {
@@ -327,7 +331,12 @@ struct TweetItemView: View, Equatable {
                         HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: originalTweet)
                             Spacer(minLength: 0)
-                            TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                            TweetMenu(
+                                tweet: tweet,
+                                isPinned: isPinned,
+                                showDeleteButton: showDeleteButton,
+                                onShowLogin: { showLoginSheet = true }
+                            )
                                 .padding(.trailing, -20)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -373,7 +382,12 @@ struct TweetItemView: View, Equatable {
                         HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: tweet)
                             Spacer(minLength: 0)
-                            TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                            TweetMenu(
+                                tweet: tweet,
+                                isPinned: isPinned,
+                                showDeleteButton: showDeleteButton,
+                                onShowLogin: { showLoginSheet = true }
+                            )
                                 .padding(.trailing, -20)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -439,7 +453,12 @@ struct TweetItemView: View, Equatable {
                     HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
                         Spacer(minLength: 0)
-                        TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                        TweetMenu(
+                            tweet: tweet,
+                            isPinned: isPinned,
+                            showDeleteButton: showDeleteButton,
+                            onShowLogin: { showLoginSheet = true }
+                        )
                             .padding(.trailing, -12)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -517,7 +536,12 @@ struct TweetItemView: View, Equatable {
                     HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
                         Spacer(minLength: 0)
-                        TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                        TweetMenu(
+                            tweet: tweet,
+                            isPinned: isPinned,
+                            showDeleteButton: showDeleteButton,
+                            onShowLogin: { showLoginSheet = true }
+                        )
                             .padding(.trailing, -20)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -572,7 +596,7 @@ struct TweetItemView: View, Equatable {
 
 // MARK: - Optimized Embedded Tweet View
 @available(iOS 16.0, *)
-struct EmbeddedTweetView: View, Equatable {
+struct EmbeddedTweetView: View, @MainActor Equatable {
     @ObservedObject var tweet: Tweet
     var isPinned: Bool = false
     var onTap: ((Tweet) -> Void)? = nil

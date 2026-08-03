@@ -66,7 +66,7 @@ struct ImageLoadRequest {
 
 // MARK: - Global Image Load Manager
 @MainActor
-class GlobalImageLoadManager: ObservableObject {
+final class GlobalImageLoadManager: ObservableObject {
     static let shared = GlobalImageLoadManager()
     
     // MARK: - Configuration
@@ -88,10 +88,17 @@ class GlobalImageLoadManager: ObservableObject {
     private var nonImageResponses: Set<String> = [] // Track requests that returned non-image content
     private var scheduledRetries: [String: DispatchWorkItem] = [:] // Track scheduled retries for cancellation
     private var permanentlyFailedRequests: Set<String> = [] // Track requests that have exhausted all retries
+    private var focusedImageMID: String?
     
     // MARK: - Memory Management
-    private var currentMemoryUsage: UInt64 = 0
-    private var maxMemoryUsage: UInt64 = 0
+    // Sampled off-main every ~2s by startMemorySampler(). isMemoryPressureHigh() reads these
+    // cached values instead of running two task_info syscalls per loadImage() call — that was
+    // the dominant per-request cost on the main actor during scroll.
+    private let memorySampleLock = NSLock()
+    private nonisolated(unsafe) var sampledMemoryUsage: UInt64 = 0
+    private nonisolated(unsafe) var sampledMaxMemoryUsage: UInt64 = 0
+    private nonisolated(unsafe) var sampledMemoryPressureHigh: Bool = false
+    private var memorySamplerTask: Task<Void, Never>?
 
     // MARK: - Network Failure Tracking
     private var consecutiveNetworkFailures: Int = 0
@@ -107,6 +114,7 @@ class GlobalImageLoadManager: ObservableObject {
         setupMemoryMonitoring()
         setupAppLifecycleNotifications()
         startPeriodicCleanup()
+        startMemorySampler()
     }
     
     // MARK: - Public Interface
@@ -263,6 +271,12 @@ class GlobalImageLoadManager: ObservableObject {
                 deferRequest(request)
                 return
             }
+        }
+
+        if isBlockedByFocusedImage(request) {
+            addToPendingQueue(request)
+            print("⏸️ [IMAGE LOAD] Holding \(request.id) while fullscreen image \(focusedImageMID ?? "") is focused")
+            return
         }
         
         // Check if we can start loading immediately
@@ -438,10 +452,27 @@ class GlobalImageLoadManager: ObservableObject {
             || pendingRequests.contains { $0.id == id }
             || scheduledRetries[id] != nil
     }
+
+    /// Let the fullscreen image own image-download starts until it has a usable result.
+    func beginFocusedImageLoad(for mid: String) {
+        guard !mid.isEmpty else { return }
+        focusedImageMID = mid
+        cancelBlockedActiveLoadsForFocusedImage()
+        print("🎯 [IMAGE LOAD] Focused image load started: \(mid)")
+        processNextPendingRequest()
+    }
+
+    func endFocusedImageLoad(for mid: String) {
+        guard focusedImageMID == mid else { return }
+        focusedImageMID = nil
+        print("🎯 [IMAGE LOAD] Focused image load ended: \(mid)")
+        processNextPendingRequest()
+    }
     
-    /// Get current memory usage information
+    /// Get current memory usage information (cached from the background sampler).
     func getMemoryInfo() -> (current: UInt64, max: UInt64, pressure: Bool) {
-        return (currentMemoryUsage, maxMemoryUsage, isMemoryPressureHigh())
+        memorySampleLock.lock(); defer { memorySampleLock.unlock() }
+        return (sampledMemoryUsage, sampledMaxMemoryUsage, sampledMemoryPressureHigh)
     }
     
     /// Force cleanup of completed requests to free memory
@@ -474,6 +505,32 @@ class GlobalImageLoadManager: ObservableObject {
 
     private func imageCoalescingKey(for request: ImageLoadRequest) -> String? {
         request.attachment.mid.isEmpty ? nil : request.attachment.mid
+    }
+
+    private func isBlockedByFocusedImage(_ request: ImageLoadRequest) -> Bool {
+        guard let focusedImageMID else { return false }
+        return request.attachment.mid != focusedImageMID
+    }
+
+    private func cancelBlockedActiveLoadsForFocusedImage() {
+        guard let focusedImageMID else { return }
+
+        var cancelled = 0
+        for id in Array(activeLoads.keys) {
+            let mediaID = activeLoadKeyById[id] ?? id
+            guard mediaID != focusedImageMID else { continue }
+
+            activeLoads[id]?.cancel()
+            ImageCacheManager.shared.cancelImageLoad(forMid: mediaID)
+            activeLoadWaiters.removeValue(forKey: id)
+            clearActiveLoadState(for: id)
+            cancelled += 1
+        }
+
+        if cancelled > 0 {
+            print("🛑 [IMAGE LOAD] Cancelled \(cancelled) active non-focused image load(s) for fullscreen image \(focusedImageMID)")
+            updateStatistics()
+        }
     }
 
     private func clearActiveLoadState(for id: String) {
@@ -512,6 +569,12 @@ class GlobalImageLoadManager: ObservableObject {
             }
         }
     }
+
+    private func focusedRetryRequest(for request: ImageLoadRequest) -> ImageLoadRequest? {
+        guard focusedImageMID == request.attachment.mid else { return nil }
+        let candidates = [request] + (activeLoadWaiters[request.id] ?? [])
+        return candidates.first { $0.id.hasPrefix("browser_") } ?? candidates.first
+    }
     
     private func handleLoadFailure(_ request: ImageLoadRequest) {
         let currentRetryCount = retryCounts[request.id] ?? 0
@@ -527,18 +590,34 @@ class GlobalImageLoadManager: ObservableObject {
             
             // Longer delays with exponential backoff: 5s, 10s
             let delay = Double(newRetryCount) * 5.0
+            let focusedRetryRequest = focusedRetryRequest(for: request)
             
             // ✅ CRITICAL MEMORY LEAK FIX: Only capture minimal data, NOT completion handlers
             // Completion handlers may capture views, creating retain cycles via DispatchWorkItem
             // Instead of capturing the completion handler, we mark request as "needs retry"
             // and let the cell request it again when it reappears
             let requestId = request.id
+            let retryRequestId = focusedRetryRequest?.id
             
             // Create a weak reference to avoid retain cycles
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 // Remove the work item from tracking
                 self.scheduledRetries.removeValue(forKey: requestId)
+                if let retryRequestId {
+                    self.scheduledRetries.removeValue(forKey: retryRequestId)
+                }
+
+                if let focusedRetryRequest,
+                   self.focusedImageMID == focusedRetryRequest.attachment.mid {
+                    self.completedRequests.remove(requestId)
+                    self.completedRequests.remove(focusedRetryRequest.id)
+                    self.permanentlyFailedRequests.remove(focusedRetryRequest.id)
+                    self.retryCounts[focusedRetryRequest.id] = newRetryCount
+                    print("🔄 [GlobalImageLoadManager] Retrying focused fullscreen image: \(focusedRetryRequest.id)")
+                    self.loadImage(request: focusedRetryRequest)
+                    return
+                }
                 
                 // ✅ MEMORY FIX: Check if request was cancelled before retry
                 // If cancelLoad() was called, don't retry (cell disappeared)
@@ -566,6 +645,9 @@ class GlobalImageLoadManager: ObservableObject {
             }
             
             scheduledRetries[request.id] = workItem
+            if let retryRequestId {
+                scheduledRetries[retryRequestId] = workItem
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             print("DEBUG: [GlobalImageLoadManager] Scheduled retry #\(newRetryCount) in \(delay)s for: \(request.id)")
         } else {
@@ -577,8 +659,8 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func startLoading(_ request: ImageLoadRequest) {
-        let task = Task(priority: request.priority.taskPriority) {
-            // Check if image is already cached
+        let task = Task.detached(priority: request.priority.taskPriority) { [self] in
+            // Check if image is already cached (disk I/O runs off main actor in detached task)
             if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                 await MainActor.run {
                     guard !Task.isCancelled else {
@@ -596,9 +678,9 @@ class GlobalImageLoadManager: ObservableObject {
                 }
                 return
             }
-            
+
             // Load from network
-            let image = await loadImageFromNetwork(request)
+            let image = await self.loadImageFromNetwork(request)
             
             await MainActor.run {
                 let mediaID = MimeiId(request.attachment.mid)
@@ -689,238 +771,13 @@ class GlobalImageLoadManager: ObservableObject {
         return nil
     }
     
-    private func loadImageOptimized(request: ImageLoadRequest, maxSize: CGSize) {
-        // Check if already completed successfully
-        if completedRequests.contains(request.id) {
-            return
-        }
-        
-        // Check if already loading
-        if activeLoads[request.id] != nil {
-            return
-        }
-        
-        // If image reappears and we haven't completed it successfully, reset retry count
-        if let currentRetryCount = retryCounts[request.id], currentRetryCount > 0 {
-            retryCounts[request.id] = 0
-        }
-        
-        // Check if we can start loading immediately
-        if canStartLoad(priority: request.priority) {
-            startLoadingOptimized(request, maxSize: maxSize)
-        } else {
-            // Add to pending queue with special handling
-            addToPendingQueue(request)
-        }
-    }
-    
-    private func startLoadingOptimized(_ request: ImageLoadRequest, maxSize: CGSize) {
-        let task = Task(priority: request.priority.taskPriority) {
-            do {
-                // Check cancellation early
-                try Task.checkCancellation()
-                
-                // Check if image is already cached
-                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
-                    await MainActor.run {
-                        // Check cancellation again before completing
-                        guard !Task.isCancelled else {
-                            self.activeLoads.removeValue(forKey: request.id)
-                            self.activeLoadPriorities.removeValue(forKey: request.id)
-                            self.updateStatistics()
-                            return
-                        }
-                        request.completion(cachedImage)
-                        self.completedRequests.insert(request.id)
-                        self.activeLoads.removeValue(forKey: request.id)
-                        self.activeLoadPriorities.removeValue(forKey: request.id)
-                        self.updateStatistics()
-                        self.processNextPendingRequest()
-                    }
-                    return
-                }
-                
-                // Check cancellation before network request
-                try Task.checkCancellation()
-                
-                // Load from network with size optimization
-                let optimizedImage = try await loadImageFromNetworkOptimized(request, maxSize: maxSize)
-                
-                await MainActor.run {
-                    // Check cancellation before completing - don't call completion if cancelled
-                    guard !Task.isCancelled else {
-                        // Clean up if cancelled
-                        self.activeLoads.removeValue(forKey: request.id)
-                        self.activeLoadPriorities.removeValue(forKey: request.id)
-                        self.updateStatistics()
-                        return
-                    }
-                    
-                    request.completion(optimizedImage)
-                    if optimizedImage != nil {
-                        // Reset network failure counter on successful load
-                        self.consecutiveNetworkFailures = 0
-                        self.completedRequests.insert(request.id)
-                        self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
-                    } else {
-                        self.handleLoadFailure(request)
-                    }
-                    self.activeLoads.removeValue(forKey: request.id)
-                    self.activeLoadPriorities.removeValue(forKey: request.id)
-                    self.updateStatistics()
-                    self.processNextPendingRequest()
-                }
-            } catch {
-                // Handle cancellation silently - don't treat it as a failure
-                if error is CancellationError {
-                    await MainActor.run {
-                        // Clean up cancelled task
-                        self.activeLoads.removeValue(forKey: request.id)
-                        self.activeLoadPriorities.removeValue(forKey: request.id)
-                        self.updateStatistics()
-                    }
-                    return
-                }
-                
-                // Handle actual errors
-                await MainActor.run {
-                    // Only handle failure if not cancelled
-                    guard !Task.isCancelled else {
-                        self.activeLoads.removeValue(forKey: request.id)
-                        self.activeLoadPriorities.removeValue(forKey: request.id)
-                        self.updateStatistics()
-                        return
-                    }
-
-                    // Track consecutive network failures
-                    self.consecutiveNetworkFailures += 1
-                    print("DEBUG: [GlobalImageLoadManager] Network failure count: \(self.consecutiveNetworkFailures)/\(self.maxConsecutiveFailures)")
-
-                    // Trigger emergency cleanup if too many consecutive failures
-                    if self.consecutiveNetworkFailures >= self.maxConsecutiveFailures {
-                        print("DEBUG: [GlobalImageLoadManager] Too many consecutive network failures, triggering cleanup")
-                        self.handleNetworkFailureCleanup()
-                        self.consecutiveNetworkFailures = 0 // Reset counter after cleanup
-                    }
-
-                    self.handleLoadFailure(request)
-                    self.activeLoads.removeValue(forKey: request.id)
-                    self.activeLoadPriorities.removeValue(forKey: request.id)
-                    self.updateStatistics()
-                    self.processNextPendingRequest()
-                }
-            }
-        }
-        
-        activeLoads[request.id] = task
-        activeLoadPriorities[request.id] = request.priority
-        updateStatistics()
-    }
-    
-    private func loadImageFromNetworkOptimized(_ request: ImageLoadRequest, maxSize: CGSize) async throws -> UIImage? {
-        do {
-            // Check cancellation before network request
-            try Task.checkCancellation()
-            
-            // Create URLRequest with timeout
-            var urlRequest = URLRequest(url: request.url)
-            urlRequest.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
-            urlRequest.cachePolicy = .returnCacheDataElseLoad
-            
-            let (localURL, response) = try await URLSession.shared.download(for: urlRequest)
-            defer {
-                try? FileManager.default.removeItem(at: localURL)
-            }
-            
-            // Check cancellation after network request
-            try Task.checkCancellation()
-            
-            // Check if we got a valid response
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                print("❌ [IMAGE LOAD] HTTP \(statusCode) for optimized \(request.url.lastPathComponent)")
-                return nil
-            }
-
-            // Update progress (only if not cancelled)
-            await MainActor.run {
-                guard !Task.isCancelled else { return }
-                request.onProgress(1.0)
-            }
-
-            // Check cancellation before image processing
-            try Task.checkCancellation()
-
-            let data = try Data(contentsOf: localURL, options: .mappedIfSafe)
-
-            // Create UIImage from downloaded file data
-            guard let originalImage = UIImage(data: data) else {
-                print("❌ [IMAGE LOAD] Failed to decode optimized image data (\(data.count) bytes) for \(request.url.lastPathComponent)")
-                return nil
-            }
-            
-            // Check cancellation before resizing
-            try Task.checkCancellation()
-            
-            // Resize image to fit within maxSize while maintaining aspect ratio
-            let resizedImage = resizeImage(originalImage, toFit: maxSize)
-            
-            // Check cancellation before caching
-            try Task.checkCancellation()
-            
-            if let resizedData = resizedImage.jpegData(compressionQuality: 0.8) {
-                if let cachedImage = ImageCacheManager.shared.cacheImageData(resizedData, for: request.attachment) {
-                    return cachedImage
-                }
-            }
-            
-            return resizedImage
-        } catch {
-            // Re-throw Task cancellation errors so they can be handled upstream
-            if error is CancellationError {
-                throw error
-            }
-
-            // Re-throw URL cancellation errors (user scrolled away)
-            let nsError = error as NSError
-            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
-                throw error
-            }
-
-            return nil
-        }
-    }
-    
-    private func resizeImage(_ image: UIImage, toFit maxSize: CGSize) -> UIImage {
-        let imageSize = image.size
-        
-        // Calculate scale factor to fit within maxSize
-        let widthScale = maxSize.width / imageSize.width
-        let heightScale = maxSize.height / imageSize.height
-        let scale = min(widthScale, heightScale, 1.0) // Don't upscale
-        
-        // If image is already smaller, return original
-        if scale >= 1.0 {
-            return image
-        }
-        
-        // Calculate new size
-        let newSize = CGSize(
-            width: imageSize.width * scale,
-            height: imageSize.height * scale
-        )
-        
-        // Create resized image
-        UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
-        image.draw(in: CGRect(origin: .zero, size: newSize))
-        let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        
-        return resizedImage ?? image
-    }
-    
     private func addToPendingQueue(_ request: ImageLoadRequest) {
+        if let existingIndex = pendingRequests.firstIndex(where: { $0.id == request.id }) {
+            let existing = pendingRequests[existingIndex]
+            guard request.priority.rawValue > existing.priority.rawValue else { return }
+            pendingRequests.remove(at: existingIndex)
+        }
+
         // Insert request in priority order (highest priority first)
         let insertIndex = pendingRequests.firstIndex { $0.priority.rawValue < request.priority.rawValue } ?? pendingRequests.count
         pendingRequests.insert(request, at: insertIndex)
@@ -954,11 +811,12 @@ class GlobalImageLoadManager: ObservableObject {
     private func processNextPendingRequest() {
         guard !pendingRequests.isEmpty else { return }
 
-        let nextPriority = pendingRequests.first!.priority
-        guard canStartLoad(priority: nextPriority) else { return }
+        guard let nextIndex = pendingRequests.firstIndex(where: { request in
+            !isBlockedByFocusedImage(request) && canStartLoad(priority: request.priority)
+        }) else { return }
 
-        // Get the highest priority request
-        let nextRequest = pendingRequests.removeFirst()
+        // Get the highest priority request that is allowed to start now.
+        let nextRequest = pendingRequests.remove(at: nextIndex)
         startLoading(nextRequest)
     }
     
@@ -977,55 +835,76 @@ class GlobalImageLoadManager: ObservableObject {
         updateStatistics()
     }
     
+    /// Cached, syscall-free check read on the main actor (loadImage / handleLoadFailure).
+    /// Updated off-main by startMemorySampler() every ~2s.
     private func isMemoryPressureHigh() -> Bool {
+        memorySampleLock.lock(); defer { memorySampleLock.unlock() }
+        return sampledMemoryPressureHigh
+    }
+
+    // MARK: - Background Memory Sampling
+
+    /// Periodically sample phys_footprint off the main actor so loadImage() never pays the
+    /// two task_info syscalls per call. Runs for the lifetime of the singleton.
+    private func startMemorySampler() {
+        memorySamplerTask?.cancel()
+        memorySamplerTask = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                let sample = self?.sampleMemoryUsage()
+                self?.applyMemorySample(sample)
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    /// Nonisolated: does the mach syscalls on the cooperative pool. Reads only the
+    /// `let memoryWarningThreshold` constant (immutable → safe off-main).
+    private nonisolated func sampleMemoryUsage() -> (usage: UInt64, high: Bool) {
         var memoryInfo = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
-        
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
         let kerr: kern_return_t = withUnsafeMutablePointer(to: &memoryInfo) {
             $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_,
-                         task_flavor_t(MACH_TASK_BASIC_INFO),
-                         $0,
-                         &count)
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
             }
         }
-        
-        if kerr == KERN_SUCCESS {
-            // Use phys_footprint for accurate measurement instead of resident_size
-            var vmInfo = task_vm_info_data_t()
-            var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
-            let vmKerr = withUnsafeMutablePointer(to: &vmInfo) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
-                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
-                }
+        guard kerr == KERN_SUCCESS else { return (0, false) }
+
+        var vmInfo = task_vm_info_data_t()
+        var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
+        let vmKerr = withUnsafeMutablePointer(to: &vmInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
             }
-            
-            if vmKerr == KERN_SUCCESS {
-                currentMemoryUsage = UInt64(vmInfo.phys_footprint)
-            } else {
-                currentMemoryUsage = memoryInfo.resident_size // Fallback
-            }
-            
-            if currentMemoryUsage > maxMemoryUsage {
-                maxMemoryUsage = currentMemoryUsage
-            }
-            
-            // Simple heuristic: if we're using more than threshold or absolute MB limit
-            let availableMemory = ProcessInfo.processInfo.physicalMemory
-            let memoryUsageRatio = Double(currentMemoryUsage) / Double(availableMemory)
-            let memoryUsageMB = Double(currentMemoryUsage) / (1024.0 * 1024.0)
-            let isHigh = memoryUsageRatio > memoryWarningThreshold || memoryUsageMB > 1400.0
-            
-            if isHigh {
-                let percentageString = String(format: "%.1f", memoryUsageRatio * 100)
-                let memoryString = String(format: "%.0f", memoryUsageMB)
-                print("DEBUG: [GlobalImageLoadManager] High memory pressure detected: \(percentageString)% used (\(memoryString) MB)")
-            }
-            
-            return isHigh
         }
-        
-        return false
+
+        let usage: UInt64
+        if vmKerr == KERN_SUCCESS {
+            usage = UInt64(vmInfo.phys_footprint)
+        } else {
+            usage = memoryInfo.resident_size // Fallback
+        }
+
+        let availableMemory = ProcessInfo.processInfo.physicalMemory
+        let ratio = availableMemory > 0 ? Double(usage) / Double(availableMemory) : 0
+        let usageMB = Double(usage) / (1024.0 * 1024.0)
+        let high = ratio > memoryWarningThreshold || usageMB > 1400.0
+        return (usage, high)
+    }
+
+    /// Nonisolated: writes the sampled values under memorySampleLock. Called from the
+    /// detached sampler task.
+    private nonisolated func applyMemorySample(_ sample: (usage: UInt64, high: Bool)?) {
+        guard let sample else { return }
+        memorySampleLock.lock()
+        defer { memorySampleLock.unlock() }
+        sampledMemoryUsage = sample.usage
+        if sample.usage > sampledMaxMemoryUsage { sampledMaxMemoryUsage = sample.usage }
+        let becameHigh = sample.high && !sampledMemoryPressureHigh
+        sampledMemoryPressureHigh = sample.high
+        if becameHigh {
+            let mb = Double(sample.usage) / (1024.0 * 1024.0)
+            print("DEBUG: [GlobalImageLoadManager] High memory pressure sampled: \(String(format: "%.0f", mb)) MB")
+        }
     }
     
     private func updateStatistics() {
@@ -1073,7 +952,7 @@ class GlobalImageLoadManager: ObservableObject {
     
     // MARK: - Periodic Cleanup
 
-    private var periodicCleanupTimer: Timer?
+    private nonisolated(unsafe) var periodicCleanupTimer: Timer?
 
     /// MEMORY LEAK FIX: Periodically trim tracking sets that grow unbounded during a session
     private func startPeriodicCleanup() {
@@ -1216,9 +1095,9 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func handleAppBackgrounded() {
-        // Background cleanup should be absolute. Visible cells will reload from
-        // memory/disk/network on foreground; no image request should keep the app alive.
-        prepareForBackground()
+        // AppDelegate owns the background grace window. Quick backgrounds leave
+        // image/video loading state alone; MemoryCapManager calls prepareForBackground()
+        // only after the aggressive cleanup path is reached.
     }
     
     private func handleAppForegrounded() {
@@ -1259,26 +1138,6 @@ extension GlobalImageLoadManager {
             completion: completion
         )
         loadImage(request: request)
-    }
-    
-    /// Load image optimized for display with size limits (prevents memory issues)
-    func loadImageOptimizedForDisplay(
-        id: String,
-        url: URL,
-        attachment: MimeiFileType,
-        baseUrl: URL,
-        maxSize: CGSize,
-        completion: @escaping @MainActor (UIImage?) -> Void
-    ) {
-        let request = ImageLoadRequest(
-            id: id,
-            url: url,
-            attachment: attachment,
-            baseUrl: baseUrl,
-            priority: .high,
-            completion: completion
-        )
-        loadImageOptimized(request: request, maxSize: maxSize)
     }
     
     /// Load image with normal priority (for thumbnails)

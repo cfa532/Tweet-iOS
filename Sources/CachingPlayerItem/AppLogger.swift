@@ -8,7 +8,7 @@
 import Foundation
 
 /// Log levels for `AppLogger`.
-public enum LogLevel: Int, Comparable, CustomStringConvertible {
+public enum LogLevel: Int, Comparable, CustomStringConvertible, Sendable {
     case none = 0
     case info
     case warning
@@ -36,11 +36,11 @@ public enum LogLevel: Int, Comparable, CustomStringConvertible {
 
 /// Internal logger for the library.
 final class AppLogger {
-    private static let dateFormatter: DateFormatter = {
+    private static func makeDateFormatter() -> DateFormatter {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter
-    }()
+    }
 
     static var currentLevel: LogLevel { CachingPlayerItemConfiguration.logLevel }
 
@@ -61,7 +61,7 @@ final class AppLogger {
         guard level >= currentLevel, currentLevel != .none else { return }
 
         let fileName = (file as NSString).lastPathComponent
-        let timestamp = dateFormatter.string(from: Date())
+        let timestamp = makeDateFormatter().string(from: Date())
 
         print("[CachingPlayerItem \(level)] [\(timestamp)] [\(fileName):\(line)] \(function) > \(message())")
     }

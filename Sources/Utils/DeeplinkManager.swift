@@ -1,6 +1,151 @@
 import Foundation
 import SwiftUI
 
+/// Delivers deeplinks to ContentView without losing cold-start URLs posted before the view exists.
+final class DeeplinkDelivery: @unchecked Sendable {
+    static let shared = DeeplinkDelivery()
+
+    enum Completion {
+        case succeeded
+        case retryScheduled
+        case failed
+    }
+
+    private let lock = NSLock()
+    private var pendingURLStrings: [String] = []
+    private var inFlightURLStrings: Set<String> = []
+    private var recentlyHandledURLStrings: [String: Date] = [:]
+    private var failedOpenCounts: [String: Int] = [:]
+    private let duplicateSuppressionInterval: TimeInterval = 3
+    private let maxFailedOpenRetries = 1
+
+    private init() {}
+
+    func deliver(_ url: URL, delay: TimeInterval = 0) {
+        guard enqueue(url) else {
+            print("[DeeplinkDelivery] Skipping recently handled deeplink: \(url.absoluteString)")
+            return
+        }
+
+        schedulePendingDelivery(url, delay: delay)
+    }
+
+    func consumePendingURLs() -> [URL] {
+        lock.lock()
+        pruneRecentlyHandledURLs()
+        let urlStrings = pendingURLStrings.filter {
+            recentlyHandledURLStrings[$0] == nil && !inFlightURLStrings.contains($0)
+        }
+        pendingURLStrings.removeAll()
+        for urlString in urlStrings {
+            inFlightURLStrings.insert(urlString)
+        }
+        lock.unlock()
+
+        return urlStrings.compactMap { URL(string: $0) }
+    }
+
+    func startHandling(_ url: URL) -> Bool {
+        lock.lock()
+        pruneRecentlyHandledURLs()
+        let urlString = url.absoluteString
+        if recentlyHandledURLStrings[urlString] != nil || inFlightURLStrings.contains(urlString) {
+            pendingURLStrings.removeAll { $0 == urlString }
+            lock.unlock()
+            return false
+        }
+
+        pendingURLStrings.removeAll { $0 == urlString }
+        inFlightURLStrings.insert(urlString)
+        lock.unlock()
+        return true
+    }
+
+    @discardableResult
+    func finishHandling(_ url: URL, succeeded: Bool) -> Completion {
+        let shouldRetry: Bool
+        lock.lock()
+        pruneRecentlyHandledURLs()
+        let urlString = url.absoluteString
+        inFlightURLStrings.remove(urlString)
+        if succeeded {
+            pendingURLStrings.removeAll { $0 == urlString }
+            recentlyHandledURLStrings[urlString] = Date()
+            failedOpenCounts[urlString] = nil
+            shouldRetry = false
+        } else if recentlyHandledURLStrings[urlString] == nil && !pendingURLStrings.contains(urlString) {
+            let failedCount = (failedOpenCounts[urlString] ?? 0) + 1
+            failedOpenCounts[urlString] = failedCount
+            guard failedCount <= maxFailedOpenRetries else {
+                recentlyHandledURLStrings[urlString] = Date()
+                lock.unlock()
+                print("[DeeplinkDelivery] Deeplink failed after retries; giving up: \(url.absoluteString)")
+                return .failed
+            }
+
+            pendingURLStrings.append(urlString)
+            shouldRetry = true
+        } else {
+            shouldRetry = false
+        }
+        lock.unlock()
+
+        if shouldRetry {
+            print("[DeeplinkDelivery] Deeplink did not open; retrying shortly: \(url.absoluteString)")
+            schedulePendingDelivery(url, delay: 2)
+            return .retryScheduled
+        }
+
+        return succeeded ? .succeeded : .failed
+    }
+
+    private func enqueue(_ url: URL) -> Bool {
+        lock.lock()
+        pruneRecentlyHandledURLs()
+        let urlString = url.absoluteString
+        if recentlyHandledURLStrings[urlString] != nil || inFlightURLStrings.contains(urlString) {
+            lock.unlock()
+            return false
+        }
+
+        if !pendingURLStrings.contains(urlString) {
+            pendingURLStrings.append(urlString)
+        }
+        lock.unlock()
+        return true
+    }
+
+    private func schedulePendingDelivery(_ url: URL, delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.isPending(url) else { return }
+            NotificationCenter.default.post(
+                name: .deeplinkReceived,
+                object: nil,
+                userInfo: ["url": url]
+            )
+        }
+    }
+
+    private func isPending(_ url: URL) -> Bool {
+        lock.lock()
+        pruneRecentlyHandledURLs()
+        let result = pendingURLStrings.contains(url.absoluteString)
+        lock.unlock()
+        return result
+    }
+
+    private func pruneRecentlyHandledURLs() {
+        let now = Date()
+        recentlyHandledURLStrings = recentlyHandledURLStrings.filter { entry in
+            let shouldKeep = now.timeIntervalSince(entry.value) < duplicateSuppressionInterval
+            if !shouldKeep {
+                failedOpenCounts[entry.key] = nil
+            }
+            return shouldKeep
+        }
+    }
+}
+
 /// Manages deeplink parsing and navigation
 @MainActor
 class DeeplinkManager: ObservableObject {
@@ -101,7 +246,7 @@ class DeeplinkManager: ObservableObject {
     }
     
     /// Handle deeplink navigation
-    func handleDeeplink(_ deeplink: DeeplinkType, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async {
+    func handleDeeplink(_ deeplink: DeeplinkType, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
         // Wait for app initialization if needed
         if !hproseInstance.isAppInitialized {
             print("[DeeplinkManager] App not initialized, waiting...")
@@ -119,92 +264,131 @@ class DeeplinkManager: ObservableObject {
         
         switch deeplink {
         case .tweet(let tweetId, let authorId):
-            await navigateToTweet(tweetId: tweetId, authorId: authorId, navigationPath: navigationPath, hproseInstance: hproseInstance)
+            return await navigateToTweet(tweetId: tweetId, authorId: authorId, navigationPath: navigationPath, hproseInstance: hproseInstance)
             
         case .user(let userId):
-            await navigateToUser(userId: userId, navigationPath: navigationPath, hproseInstance: hproseInstance)
+            return await navigateToUser(userId: userId, navigationPath: navigationPath, hproseInstance: hproseInstance)
             
         case .unknown:
             print("[DeeplinkManager] Unknown deeplink type")
+            return false
         }
     }
     
     /// Navigate to a tweet
-    private func navigateToTweet(tweetId: String, authorId: String, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async {
+    private func navigateToTweet(tweetId: String, authorId: String, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
         print("[DeeplinkManager] Navigating to tweet: \(tweetId), author: \(authorId)")
         
         // First try to fetch from cache
         if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
             print("[DeeplinkManager] ✅ Found tweet in cache")
-            await MainActor.run {
-                navigationPath.wrappedValue.append(cachedTweet)
-            }
-            return
+            return await replaceNavigationPath(with: cachedTweet, navigationPath: navigationPath)
         }
         
         // If not in cache and we have authorId, fetch from server
         if !authorId.isEmpty {
-            do {
-                print("[DeeplinkManager] Fetching tweet from server...")
-                
-                // Try getTweet first (faster, uses current provider)
-                if let tweet = try await hproseInstance.getTweet(tweetId: tweetId, authorId: authorId) {
-                    print("[DeeplinkManager] ✅ Successfully fetched tweet from server")
-                    await MainActor.run {
-                        navigationPath.wrappedValue.append(tweet)
-                    }
-                    return
+            // Universal links can arrive while provider/bootstrap state is still
+            // settling. Keep the normal read path, then explicit deeplink recovery,
+            // but give transient startup failures a short bounded retry window.
+            let retryDelays: [UInt64] = [
+                0,
+                300_000_000,
+                1_000_000_000,
+                2_000_000_000
+            ]
+
+            for (attemptIndex, delay) in retryDelays.enumerated() {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
                 }
-                
-                // If getTweet returns nil, try refreshTweet (syncs from author's host)
-                print("[DeeplinkManager] Tweet not found with getTweet, trying refreshTweet...")
-                if let tweet = try await hproseInstance.refreshTweet(tweetId: tweetId, authorId: authorId) {
-                    print("[DeeplinkManager] ✅ Successfully fetched tweet with refreshTweet")
-                    await MainActor.run {
-                        navigationPath.wrappedValue.append(tweet)
-                    }
-                    return
+
+                if Task.isCancelled {
+                    return false
                 }
-                
-                // Both methods failed
-                print("[DeeplinkManager] ⚠️ Tweet not found on server")
-                await showTweetNotFoundError()
-                
-            } catch {
-                print("[DeeplinkManager] ❌ Error fetching tweet: \(error)")
-                await showTweetNotFoundError()
+
+                print("[DeeplinkManager] Fetching tweet from server (attempt \(attemptIndex + 1)/\(retryDelays.count))...")
+
+                if let tweet = await fetchDeeplinkTweet(tweetId: tweetId, authorId: authorId, hproseInstance: hproseInstance) {
+                    print("[DeeplinkManager] ✅ Successfully fetched tweet for deeplink")
+                    return await replaceNavigationPath(with: tweet, navigationPath: navigationPath)
+                }
             }
+
+            print("[DeeplinkManager] ⚠️ Tweet not found on server after deeplink retries")
+            return false
         } else {
             print("[DeeplinkManager] ⚠️ Cannot fetch tweet: missing authorId")
-            await showTweetNotFoundError()
+            return false
         }
     }
-    
-    /// Show error notification when tweet is not found
-    private func showTweetNotFoundError() async {
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .deeplinkTweetNotFound,
-                object: nil,
-                userInfo: ["message": NSLocalizedString("Tweet not found. It may have been deleted or the link is invalid.", comment: "Deeplink tweet not found error")]
-            )
+
+    /// Fetch tweet data for deeplink navigation using normal read first, then explicit recovery.
+    private func fetchDeeplinkTweet(tweetId: String, authorId: String, hproseInstance: HproseInstance) async -> Tweet? {
+        // Try getTweet first (faster, uses current provider). It throws when the
+        // author's node can't be resolved — don't let that skip the refreshTweet
+        // fallback, which can still sync via the app user's own node.
+        do {
+            if let tweet = try await hproseInstance.getTweet(tweetId: tweetId, authorId: authorId) {
+                return tweet
+            }
+        } catch {
+            print("[DeeplinkManager] ⚠️ getTweet failed (\(error)), trying refreshTweet...")
+        }
+
+        do {
+            // refreshTweet syncs from the author's host and falls back to the
+            // app user's node when the author's baseUrl is unknown.
+            return try await hproseInstance.refreshTweet(tweetId: tweetId, authorId: authorId)
+        } catch {
+            print("[DeeplinkManager] ❌ refreshTweet failed: \(error)")
+            return nil
         }
     }
     
     /// Navigate to a user profile
-    private func navigateToUser(userId: String, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async {
+    private func navigateToUser(userId: String, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
         print("[DeeplinkManager] Navigating to user: \(userId)")
         
         do {
             if let user = try await hproseInstance.fetchUser(userId) {
                 print("[DeeplinkManager] Successfully fetched user")
-                navigationPath.wrappedValue.append(user)
+                return await replaceNavigationPath(with: user, navigationPath: navigationPath)
             } else {
                 print("[DeeplinkManager] User not found")
+                return false
             }
         } catch {
             print("[DeeplinkManager] Error fetching user: \(error)")
+            return false
         }
     }
-}
 
+    private func replaceNavigationPath<T: Hashable>(with value: T, navigationPath: Binding<NavigationPath>) async -> Bool {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+
+        if !navigationPath.wrappedValue.isEmpty {
+            // SwiftUI can retain a same-depth destination when a path changes directly
+            // from one Tweet/User value to another. Commit the removal first; the
+            // full-screen deeplink placeholder hides both non-animated mutations.
+            withTransaction(transaction) {
+                navigationPath.wrappedValue = NavigationPath()
+            }
+
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return false
+            }
+        }
+
+        guard !Task.isCancelled else { return false }
+
+        var newPath = NavigationPath()
+        newPath.append(value)
+        withTransaction(transaction) {
+            navigationPath.wrappedValue = newPath
+        }
+        return true
+    }
+}

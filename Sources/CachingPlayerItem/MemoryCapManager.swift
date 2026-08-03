@@ -4,7 +4,7 @@ import os.log
 import SDWebImage
 
 /// Manages memory usage with a 2GB cap to prevent OS termination
-class MemoryCapManager {
+final class MemoryCapManager: @unchecked Sendable {
     static let shared = MemoryCapManager()
     
     private init() {
@@ -21,8 +21,15 @@ class MemoryCapManager {
     private let duplicateBlockThreshold: Double = 0.80 // Foreground can use more memory before throttling
     
     // MARK: - State
-    private var monitoringTimer: Timer?
-    private var currentMemoryUsage: UInt64 = 0
+    private nonisolated(unsafe) var monitoringTimer: Timer?
+    // currentMemoryUsage is written on main (checkMemoryStatus) and read off-main
+    // (ImageCacheManager.memoryDuplicateBlockState); guard it with a lock.
+    private var _currentMemoryUsage: UInt64 = 0
+    private let memoryUsageLock = NSLock()
+    private var currentMemoryUsage: UInt64 {
+        get { memoryUsageLock.lock(); defer { memoryUsageLock.unlock() }; return _currentMemoryUsage }
+        set { memoryUsageLock.lock(); defer { memoryUsageLock.unlock() }; _currentMemoryUsage = newValue }
+    }
     private var isMemoryWarningActive = false
     private let logger = Logger(subsystem: "Tweet", category: "MemoryCapManager")
     
@@ -286,12 +293,21 @@ class MemoryCapManager {
         logger.info("Performing background memory release at \(beforeMB, privacy: .public)MB")
 
         GlobalImageLoadManager.shared.prepareForBackground()
+        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
         SharedAssetCache.shared.releaseForBackground()
+        LocalHTTPServer.shared.stopImmediatelyForBackground()
         ImageCacheManager.shared.clearMemoryCache()
         SDImageCache.shared.clearMemory()
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
-        VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
+        // Close pooled hprose URLSessions (keep-alive connections + buffers).
+        // Clients are recreated lazily on the next RPC after foregrounding.
+        HproseInstance.shared.clientPool.clear()
+        // Refault Core Data registered objects / drop row caches (pure cache data).
+        CoreDataManager.shared.releaseMemoryForBackground()
+        // Drop CIContext internal buffer caches accumulated by video frame extraction.
+        // (CIContext is thread-safe; clearCaches keeps the context usable.)
+        VideoFrameExtractor.ciContext.clearCaches()
 
         updateMemoryUsage()
         let afterMB = currentMemoryUsage / (1024 * 1024)

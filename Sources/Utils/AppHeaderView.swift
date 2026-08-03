@@ -5,6 +5,7 @@ struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @EnvironmentObject private var themeManager: ThemeManager
     
     var body: some View {
         HStack {
@@ -52,9 +53,12 @@ struct AppHeaderView: View {
         .background(XTheme.backgroundColor)
         .sheet(isPresented: $isLoginSheetPresented) {
             LoginView()
+                .environmentObject(hproseInstance)
         }
         .sheet(isPresented: $isSettingsSheetPresented) {
             SettingsView()
+                .environmentObject(hproseInstance)
+                .environmentObject(themeManager)
         }
     }
     }

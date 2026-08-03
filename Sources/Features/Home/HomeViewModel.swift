@@ -1,8 +1,11 @@
 import Foundation
 import SwiftUI
+import OSLog
+
+private let homeViewLogger = Logger(subsystem: "com.zz", category: "HomeView")
 
 struct ScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
@@ -22,6 +25,15 @@ struct HomeView: View {
     @State private var isScrolling = false
     @State private var scrollOffset: CGFloat = 0
     @State private var isNavigationVisible = true
+    /// Natural height of the header VStack below, captured via onGeometryChange.
+    /// `.frame(height: isNavigationVisible ? nil : 0)` cannot animate — SwiftUI has
+    /// no way to interpolate towards `nil` (unconstrained), so the height snapped to 0
+    /// in a single frame even though the state change was wrapped in withAnimation.
+    /// Only the opacity animated, producing a visible jump in whatever content sat
+    /// below the header (most noticeable when a video row was mid-scroll at the time).
+    /// Using a concrete measured height instead of nil gives animation two real
+    /// endpoints to interpolate between.
+    @State private var measuredHeaderHeight: CGFloat?
     @State private var previousScrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
     @State private var foregroundObserver: NSObjectProtocol? = nil
@@ -68,7 +80,13 @@ struct HomeView: View {
                     .fill(XTheme.borderColor)
                     .frame(height: 0.5)
             }
-            .frame(height: isNavigationVisible ? nil : 0)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { newHeight in
+                guard newHeight > 0 else { return }
+                measuredHeaderHeight = newHeight
+            }
+            .frame(height: isNavigationVisible ? measuredHeaderHeight : 0)
             .opacity(isNavigationVisible ? 1 : 0)
             .clipped()
 
@@ -277,14 +295,16 @@ struct HomeView: View {
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
-        ) { [self] _ in
-            // Always reset navigation to visible when returning from background
-            isNavigationVisible = true
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": true]
-            )
+        ) { _ in
+            Task { @MainActor in
+                // Always reset navigation to visible when returning from background
+                isNavigationVisible = true
+                NotificationCenter.default.post(
+                    name: .navigationVisibilityChanged,
+                    object: nil,
+                    userInfo: ["isVisible": true]
+                )
+            }
         }
     }
 }
@@ -296,6 +316,7 @@ struct HomeView: View {
 struct UserListDestinationView: View {
     let destination: UserListDestination
     @Binding var navigationPath: NavigationPath
+    let onShowLogin: (() -> Void)?
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     var body: some View {
@@ -303,36 +324,76 @@ struct UserListDestinationView: View {
             title: userListTitle(for: destination),
             userId: destination.userId,
             userFetcher: { page, size in
-                let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
                 let targetUser = User.getInstance(mid: destination.userId)
-                let cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
+                var cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
 
-                if page == 0 || cachedIds == nil {
-                    let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
-                    await MainActor.run {
-                        if destination.listType == .FOLLOWER {
-                            targetUser.fansList = ids
-                        } else {
-                            targetUser.followingList = ids
-                        }
-                    }
+                // The in-memory singleton is empty on cold start, but the profile
+                // owner's cached user record carries the lists too.
+                if cachedIds == nil {
+                    _ = await TweetCacheManager.shared.fetchUser(mid: destination.userId)
+                    cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
                 }
 
-                let ids: [String]
-                if destination.listType == .FOLLOWER {
-                    ids = targetUser.fansList ?? []
-                } else {
-                    ids = targetUser.followingList ?? []
-                }
+                let ids = cachedIds ?? []
                 let startIndex = page * size
                 guard startIndex < ids.count else { return [] }
                 let endIndex = min(startIndex + size, ids.count)
                 return Array(ids[startIndex..<endIndex])
             },
+            authoritativeUserFetcher: {
+                let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                let targetUser = User.getInstance(mid: destination.userId)
+                let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
+
+                if destination.listType == .FOLLOWER {
+                    targetUser.fansList = ids
+                } else {
+                    targetUser.followingList = ids
+                }
+                // Persist the authoritative IDs for cache-first rendering next time.
+                TweetCacheManager.shared.saveUser(targetUser)
+                return ids
+            },
             navigationPath: $navigationPath,
             onFollowToggle: { user in
                 Task {
                     await handleToggleFollowing(for: user)
+                }
+            },
+            onShowLogin: onShowLogin,
+            onPermanentlyBlacklisted: { blacklistedUserId, failureStartedAt in
+                let relationship: UserContentType =
+                    destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                let targetUser = User.getInstance(mid: destination.userId)
+
+                Task {
+                    do {
+                        let result = try await hproseInstance.removePermanentlyBlacklistedUser(
+                            blacklistedUserId,
+                            from: relationship,
+                            owner: targetUser,
+                            failureStartedAt: failureStartedAt
+                        )
+
+                        if result.reason == "relationship_is_newer" {
+                            BlackList.shared.restoreAfterNewerRelationship(blacklistedUserId)
+                            return
+                        }
+                        guard result.removed else { return }
+
+                        await MainActor.run {
+                            if destination.listType == .FOLLOWER {
+                                targetUser.fansList?.removeAll { $0 == blacklistedUserId }
+                            } else {
+                                targetUser.followingList?.removeAll { $0 == blacklistedUserId }
+                            }
+                            TweetCacheManager.shared.saveUser(targetUser)
+                        }
+                    } catch {
+                        homeViewLogger.error(
+                            "Failed to remove permanently blacklisted relationship: \(error.localizedDescription, privacy: .public)"
+                        )
+                    }
                 }
             }
         )
@@ -387,7 +448,9 @@ struct TweetListDestinationView: View {
             tweetFetcher: { page, size, isFromCache in
                 if isFromCache {
                     let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
-                    let cacheKey = "\(tweetType.rawValue)_\(destination.userId)"
+                    let cacheKey = tweetType == .BOOKMARKS
+                        ? TweetCacheManager.bookmarkCacheKey(userId: destination.userId)
+                        : TweetCacheManager.favoriteCacheKey(userId: destination.userId)
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: cacheKey,
                         page: page,
@@ -403,7 +466,7 @@ struct TweetListDestinationView: View {
                 }
             },
             feedIdentifier: feedIdentifier,
-            preserveOrder: isTargetAppUser,
+            preserveOrder: true,
             onAvatarTap: { tappedUser in
                 navigationPath.append(tappedUser)
             },

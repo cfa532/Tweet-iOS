@@ -10,49 +10,34 @@ import SwiftUI
 import Combine
 
 class EmbeddedTweetUIView: UIView {
+    static let contentBottomPadding: CGFloat = 4
+    /// Rendered height of the "Loading quoted tweet..." placeholder state.
+    /// TweetTableViewController's deterministic height calculators must use this same
+    /// value for unloaded embedded tweets or quote rows mis-estimate until load lands.
+    static let placeholderHeight: CGFloat = 36
+
     private let avatarView = AvatarUIView()
     private let headerView = TweetHeaderUIView()
     private let bodyView = TweetBodyUIView()
 
-    // Placeholder shown while loading
+    // Placeholder shown while loading — matches the "Loading quoted tweet..." text used in TweetDetailView.
     private let placeholderView: UIView = {
         let v = UIView()
         v.isHidden = true
 
-        let circle = UIView()
-        circle.backgroundColor = .systemGray5
-        circle.layer.cornerRadius = 20
-        circle.translatesAutoresizingMaskIntoConstraints = false
+        let label = UILabel()
+        label.text = NSLocalizedString("Loading quoted tweet...", comment: "")
+        label.textColor = XTheme.secondaryText
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.numberOfLines = 1
+        label.translatesAutoresizingMaskIntoConstraints = false
 
-        let line1 = UIView()
-        line1.backgroundColor = .systemGray6
-        line1.layer.cornerRadius = 4
-        line1.translatesAutoresizingMaskIntoConstraints = false
-
-        let line2 = UIView()
-        line2.backgroundColor = .systemGray6
-        line2.layer.cornerRadius = 4
-        line2.translatesAutoresizingMaskIntoConstraints = false
-
-        v.addSubview(circle)
-        v.addSubview(line1)
-        v.addSubview(line2)
-
+        v.addSubview(label)
         NSLayoutConstraint.activate([
-            circle.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
-            circle.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
-            circle.widthAnchor.constraint(equalToConstant: 40),
-            circle.heightAnchor.constraint(equalToConstant: 40),
-
-            line1.leadingAnchor.constraint(equalTo: circle.trailingAnchor, constant: 8),
-            line1.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -8),
-            line1.topAnchor.constraint(equalTo: v.topAnchor, constant: 12),
-            line1.heightAnchor.constraint(equalToConstant: 20),
-
-            line2.leadingAnchor.constraint(equalTo: circle.trailingAnchor, constant: 8),
-            line2.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -8),
-            line2.topAnchor.constraint(equalTo: line1.bottomAnchor, constant: 4),
-            line2.heightAnchor.constraint(equalToConstant: 16),
+            label.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -8),
+            label.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -8),
         ])
 
         return v
@@ -88,8 +73,21 @@ class EmbeddedTweetUIView: UIView {
 
     /// Per-feed video coordinator (set by TweetCellContentView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
+    var cellHorizontalPadding: CGFloat = 16 {
+        didSet {
+            bodyView.cellHorizontalPadding = cellHorizontalPadding
+        }
+    }
+    var rowWidth: CGFloat? {
+        didSet {
+            bodyView.rowWidth = rowWidth
+        }
+    }
 
     var onTap: ((Tweet) -> Void)?
+    var onContentExpanded: (() -> Void)?
+    /// Called after async tweet load completes so the parent cell can trigger immediate height check.
+    var onAsyncConfigured: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -139,9 +137,9 @@ class EmbeddedTweetUIView: UIView {
         ])
 
         // Mutually exclusive constraints — only one group active at a time
-        contentStackBottomConstraint = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        contentStackBottomConstraint = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.contentBottomPadding)
         placeholderBottomConstraint = placeholderView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: 60)
+        placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: Self.placeholderHeight)
         // Lower priority so parent's height=0 constraint wins when hidden in stack view
         placeholderHeightConstraint.priority = .defaultHigh
         placeholderBottomConstraint.priority = .defaultHigh
@@ -157,8 +155,15 @@ class EmbeddedTweetUIView: UIView {
 
         // Tap gesture for navigation
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tap.cancelsTouchesInView = false
         addGestureRecognizer(tap)
         isUserInteractionEnabled = true
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        let bodyLocation = gestureRecognizer.location(in: bodyView)
+        guard bodyView.bounds.contains(bodyLocation) else { return true }
+        return !bodyView.isURLLinkPoint(bodyLocation) && !bodyView.isMoreLinkPoint(bodyLocation)
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -212,12 +217,15 @@ class EmbeddedTweetUIView: UIView {
             guard let self, let tweet = self.loadedTweet else { return }
             self.onTap?(tweet)
         }
+        bodyView.onContentExpanded = { [weak self] in
+            self?.onContentExpanded?()
+        }
+        bodyView.onContentDidChangeHeightAsync = { [weak self] in
+            self?.onAsyncConfigured?()
+        }
 
-        // Reduce bottom padding when media is present but no caption
-        // (image attachments have no caption, so the gap looks excessive)
-        let hasMedia = tweet.attachments?.contains(where: { TweetBodyUIView.isMediaType($0.type) }) ?? false
-        let reduceBottom = hasMedia && !bodyView.isCaptionVisible
-        contentStackBottomConstraint.constant = reduceBottom ? 0 : -8
+        // Keep a real inset below embedded media so rounded borders do not clip the content.
+        contentStackBottomConstraint.constant = -Self.contentBottomPadding
 
         // Mark as accessed for cache management
         TweetCacheManager.shared.markTweetAccessed(tweet.mid)
@@ -264,6 +272,7 @@ class EmbeddedTweetUIView: UIView {
                     self?.configure(tweet: cached, quotingTweetId: quotingTweet.mid,
                                     parentViewController: parentViewController)
                     self?.registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: cached)
+                    self?.onAsyncConfigured?()
                 }
                 return
             }
@@ -276,8 +285,11 @@ class EmbeddedTweetUIView: UIView {
                     self?.configure(tweet: serverTweet, quotingTweetId: quotingTweet.mid,
                                     parentViewController: parentViewController)
                     self?.registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: serverTweet)
+                    self?.onAsyncConfigured?()
                 }
             }
+            // Original tweet fetch failed (deleted/404/network error) — leave the
+            // "Loading quoted tweet..." placeholder showing rather than an empty/hidden card.
         }
     }
 
@@ -327,8 +339,8 @@ class EmbeddedTweetUIView: UIView {
         bodyView.mediaGridView.refreshVideoLayersAfterForeground()
     }
 
-    func prepareVideosForBackground() {
-        bodyView.mediaGridView.prepareVideosForBackground()
+    func prepareMediaForBackground(aggressive: Bool = false) {
+        bodyView.mediaGridView.prepareMediaForBackground(aggressive: aggressive)
     }
 
     // MARK: - Intrinsic Size
@@ -336,7 +348,7 @@ class EmbeddedTweetUIView: UIView {
     override var intrinsicContentSize: CGSize {
         // Placeholder needs an explicit height; content relies on constraints
         if contentStack.isHidden {
-            return CGSize(width: UIView.noIntrinsicMetric, height: 60)
+            return CGSize(width: UIView.noIntrinsicMetric, height: Self.placeholderHeight)
         }
         // Let auto-layout constraints determine the height (top/bottom pinned to contentStack)
         return CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
@@ -351,13 +363,15 @@ class EmbeddedTweetUIView: UIView {
         currentTweetId = nil
         loadedTweet = nil
         onTap = nil
+        onContentExpanded = nil
+        onAsyncConfigured = nil
         avatarView.prepareForReuse()
         headerView.prepareForReuse()
         bodyView.prepareForReuse()
         // Reset to placeholder state — swap constraint groups
         contentStack.isHidden = true
         placeholderView.isHidden = false
-        contentStackBottomConstraint.constant = -8  // Reset to default
+        contentStackBottomConstraint.constant = -Self.contentBottomPadding  // Reset to default
         contentStackBottomConstraint.isActive = false
         placeholderBottomConstraint.isActive = true
         placeholderHeightConstraint.isActive = true

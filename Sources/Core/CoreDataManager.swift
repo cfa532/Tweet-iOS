@@ -1,10 +1,13 @@
 import CoreData
 import Foundation
 
-class CoreDataManager {
+final class CoreDataManager: @unchecked Sendable {
     static let shared = CoreDataManager()
     
     let container: NSPersistentContainer
+    private let contextLock = NSLock()
+    private var _cacheContext: NSManagedObjectContext?
+    private var _cacheReadContext: NSManagedObjectContext?
     
     private init() {
         print("[CoreDataManager] Initializing CoreDataManager")
@@ -23,7 +26,7 @@ class CoreDataManager {
         container.persistentStoreDescriptions = [description]
         
         print("[CoreDataManager] Core Data store URL: \(description.url?.absoluteString ?? "nil")")
-        
+
         container.loadPersistentStores { _, error in
             if let error = error {
                 print("[CoreDataManager] Core Data failed to load: \(error)")
@@ -36,6 +39,9 @@ class CoreDataManager {
                 print("[CoreDataManager] Core Data loaded successfully")
             }
         }
+
+        container.viewContext.automaticallyMergesChangesFromParent = true
+        container.viewContext.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
     }
     
     private func recoverFromError() throws {
@@ -48,4 +54,54 @@ class CoreDataManager {
     }
     
     var context: NSManagedObjectContext { container.viewContext }
-} 
+
+    var cacheContext: NSManagedObjectContext {
+        lockedBackgroundContext(
+            storage: &_cacheContext,
+            name: "TweetCacheManager.cacheContext"
+        )
+    }
+
+    var cacheReadContext: NSManagedObjectContext {
+        lockedBackgroundContext(
+            storage: &_cacheReadContext,
+            name: "TweetCacheManager.cacheReadContext"
+        )
+    }
+
+    /// Refault registered objects and drop row-cache data on all contexts.
+    /// Safe: Core Data objects here are pure cache (decoded into TweetRecord/Tweet
+    /// on read), never bound to UI. Each refresh runs on the context's own queue.
+    func releaseMemoryForBackground() {
+        var contexts: [NSManagedObjectContext] = [container.viewContext]
+        contextLock.lock()
+        if let cacheContext = _cacheContext { contexts.append(cacheContext) }
+        if let cacheReadContext = _cacheReadContext { contexts.append(cacheReadContext) }
+        contextLock.unlock()
+
+        for context in contexts {
+            context.perform {
+                context.refreshAllObjects()
+            }
+        }
+    }
+
+    private func lockedBackgroundContext(
+        storage: inout NSManagedObjectContext?,
+        name: String
+    ) -> NSManagedObjectContext {
+        contextLock.lock()
+        defer { contextLock.unlock() }
+
+        if let storage {
+            return storage
+        }
+
+        let context = container.newBackgroundContext()
+        context.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
+        context.automaticallyMergesChangesFromParent = true
+        context.name = name
+        storage = context
+        return context
+    }
+}

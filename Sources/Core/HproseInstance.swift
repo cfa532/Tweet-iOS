@@ -1,8 +1,32 @@
 import Foundation
-import hprose
+import OSLog
+@preconcurrency import hprose
 import PhotosUI
 import AVFoundation
-import ffmpegkit
+
+private let hproseLogger = Logger(subsystem: "com.zz", category: "HproseInstance")
+
+private func hproseDebug(_ message: @autoclosure () -> String) {
+#if DEBUG
+    let renderedMessage = message()
+    hproseLogger.debug("\(renderedMessage, privacy: .private)")
+#endif
+}
+
+private func hproseInfo(_ message: @autoclosure () -> String) {
+    let renderedMessage = message()
+    hproseLogger.info("\(renderedMessage, privacy: .private)")
+}
+
+private func hproseWarning(_ message: @autoclosure () -> String) {
+    let renderedMessage = message()
+    hproseLogger.warning("\(renderedMessage, privacy: .private)")
+}
+
+private func hproseError(_ message: @autoclosure () -> String) {
+    let renderedMessage = message()
+    hproseLogger.error("\(renderedMessage, privacy: .private)")
+}
 
 @objc protocol HproseService {
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
@@ -21,22 +45,40 @@ private struct IPCacheEntry {
 }
 
 // MARK: - HproseInstance
-final class HproseInstance: ObservableObject {
+// Phase B: the class is nonisolated so RPC methods run off the main actor. Members that
+// touch @Published/appUser/UI state are individually marked @MainActor; the remaining
+// mutable stored state is either write-once (nonisolated(unsafe)) or lock-guarded, which
+// is why the class is @unchecked Sendable rather than actor-isolated.
+final class HproseInstance: ObservableObject, @unchecked Sendable {
     // MARK: - Properties
     static let shared = HproseInstance()
-    static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
+    nonisolated(unsafe) static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     private static let updateFollowingTweetsEntry = "update_following_tweets"
     private static let heavyCallInterval: TimeInterval = 5 * 60
-    private var _domainToShare: String = AppConfig.baseUrl
+    @MainActor private var _domainToShare: String = AppConfig.baseUrl
     
     // IP Cache: Stores short-lived HEAD health results with 30-second expiry
     private var ipCache: [String: IPCacheEntry] = [:]
     private let ipCacheLock = NSLock()
     private var heavyCallLastAttemptAt: [String: Date] = [:]
     private let heavyCallLock = NSLock()
+
+    private func invokeRunMApp(
+        using client: HproseClient,
+        entry: String,
+        params: [String: Any],
+        priority: DispatchQoS.QoSClass = .userInitiated
+    ) async -> Any? {
+        await HproseTransport.invokeRunMApp(
+            using: client,
+            entry: entry,
+            params: params,
+            priority: priority
+        )
+    }
     
     /// The domain to use for sharing links
-    var domainToShare: String {
+    @MainActor var domainToShare: String {
         get {
             if let override = appUser.domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines),
                !override.isEmpty {
@@ -50,13 +92,13 @@ final class HproseInstance: ObservableObject {
     }
     
     /// The backend domain from check_upgrade (for placeholder use)
-    var backendDomainToShare: String {
+    @MainActor var backendDomainToShare: String {
         return _domainToShare
     }
-    
+
     // Store the app user's MID instead of the user object itself
     // This ensures appUser always returns the singleton instance
-    @Published private var _appUserId: String = Constants.GUEST_ID
+    @MainActor @Published private var _appUserId: String = Constants.GUEST_ID
     
     /// The current app user singleton instance
     ///
@@ -86,8 +128,8 @@ final class HproseInstance: ObservableObject {
     ///
     /// - Note: Always use this property instead of creating new User instances
     /// - Note: The singleton pattern ensures all parts of the app see the same user data
-    var appUser: User {
-        get { 
+    @MainActor var appUser: User {
+        get {
             // Always return the singleton instance for the current app user ID
             let user = User.getInstance(mid: _appUserId)
             
@@ -108,7 +150,7 @@ final class HproseInstance: ObservableObject {
                             }
                         }
                     } catch {
-                        print("ERROR: [appUser getter] Failed to refresh appUser: \(error)")
+                        hproseError("ERROR: [appUser getter] Failed to refresh appUser: \(error)")
                     }
                 }
             }
@@ -120,13 +162,6 @@ final class HproseInstance: ObservableObject {
             Task { @MainActor in
                 // Update the singleton instance with new values
                 instance.baseUrl = newValue.baseUrl
-                // writableUrl is resolved lazily by resolveWritableUrl() and is
-                // typically not present on a server-fetched User. Only overwrite
-                // when newValue actually provides one — otherwise we'd wipe a
-                // valid cached resolution and force re-resolution on every refresh.
-                if let newWritableUrl = newValue.writableUrl {
-                    instance.writableUrl = newWritableUrl
-                }
                 instance.name = newValue.name
                 instance.username = newValue.username
                 instance.avatar = newValue.avatar
@@ -154,11 +189,17 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    var appId: String = AppConfig.appId      // Initialize with AppConfig value, will be updated during initAppEntry() if server provides different value
-    var preferenceHelper: PreferenceHelper?
+    // Set once during initAppEntry() (on the main actor) and read from many nonisolated
+    // RPC methods thereafter; effectively immutable after startup.
+    nonisolated(unsafe) var appId: String = AppConfig.appId
+    // Set once in initialize() and read from a few nonisolated call sites; PreferenceHelper
+    // wraps thread-safe UserDefaults, so nonisolated(unsafe) is safe here.
+    nonisolated(unsafe) var preferenceHelper: PreferenceHelper?
     
     // MARK: - Upload Management
-    lazy var uploadManager: TweetUploadManager = {
+    // TweetUploadManager is @MainActor, so this lazy var is too; accessed from @MainActor
+    // schedulers and (with an await hop) from the nonisolated uploadToIPFS delegate.
+    @MainActor lazy var uploadManager: TweetUploadManager = {
         return TweetUploadManager(hproseInstance: self)
     }()
     
@@ -184,17 +225,15 @@ final class HproseInstance: ObservableObject {
 
     /// Social block check (app user's explicit blocked-user list).
     /// Do NOT use reliability blacklist for user-facing social filtering.
-    func isUserSociallyBlockedByAppUser(_ userId: MimeiId) -> Bool {
+    @MainActor func isUserSociallyBlockedByAppUser(_ userId: MimeiId) -> Bool {
         appUser.userBlackList?.contains(userId) ?? false
     }
     
     // MARK: - Client Pool Management
-    lazy var clientPool: HproseClientPool = {
-        return HproseClientPool(maxClientsPerURL: 5)
-    }()
+    let clientPool = HproseClientPool()
     
     private var lastInitializationAddresses: String?
-    private var lastLoggedUpgradeDomain: String?
+    @MainActor private var lastLoggedUpgradeDomain: String?
     
     // MARK: - Helper Methods
     
@@ -229,20 +268,28 @@ final class HproseInstance: ObservableObject {
             guard current != newValue else { return }
             user.baseUrl = url
             user.resetClients()
-            print("DEBUG: [updateUserFromServer] Updated baseUrl (\(reason)) to \(newValue) for userId: \(user.mid)")
+            hproseDebug("DEBUG: [updateUserFromServer] Updated baseUrl (\(reason)) to \(newValue) for userId: \(user.mid)")
             NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": user.mid])
         }
     }
 
-    private func shouldAttemptHeavyCall(_ key: String, interval: TimeInterval = HproseInstance.heavyCallInterval) -> Bool {
+    private func shouldAttemptHeavyCall(
+        _ key: String,
+        interval: TimeInterval = HproseInstance.heavyCallInterval,
+        ignoreDebounce: Bool = false
+    ) -> Bool {
         heavyCallLock.lock()
         defer { heavyCallLock.unlock() }
 
         let now = Date()
+        if ignoreDebounce {
+            heavyCallLastAttemptAt[key] = now
+            return true
+        }
         if let lastAttempt = heavyCallLastAttemptAt[key],
            now.timeIntervalSince(lastAttempt) < interval {
             let remaining = Int(interval - now.timeIntervalSince(lastAttempt))
-            print("DEBUG: [\(key)] Skipping heavy call, cooldown remaining \(remaining)s")
+            hproseWarning("DEBUG: [\(key)] Skipping heavy call, cooldown remaining \(remaining)s")
             return false
         }
 
@@ -251,32 +298,93 @@ final class HproseInstance: ObservableObject {
     }
     
     /// If the transport layer returned a JSON object as a string, parse it so v2 unwrapping works.
-    private static func jsonObjectIfEncodedAsString(_ value: Any?) -> Any? {
+    nonisolated private static func jsonObjectIfEncodedAsString(_ value: Any?) -> Any? {
         guard let s = value as? String,
               let data = s.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) else { return value }
         return obj
     }
-    
-    /// `NSDictionary` / JSON sometimes fail to cast directly to `[String: Any]`; normalize for parsing.
-    private static func asStringKeyedDictionary(_ value: Any?) -> [String: Any]? {
-        if let d = value as? [String: Any] { return d }
-        if let d = value as? NSDictionary {
-            var out: [String: Any] = [:]
-            out.reserveCapacity(d.count)
-            for (k, v) in d {
-                if let ks = k as? String { out[ks] = v }
+
+    /// Recursively convert Foundation containers returned by Hprose into their Swift
+    /// equivalents. Do not decode nested strings as JSON: tweet content and other text
+    /// fields must retain their original types even when they contain JSON-looking text.
+    nonisolated private static func normalizeHproseContainers(_ value: Any?) -> Any? {
+        guard let value else { return nil }
+
+        if let dict = value as? [String: Any] {
+            var normalized: [String: Any] = [:]
+            normalized.reserveCapacity(dict.count)
+            for (key, child) in dict {
+                normalized[key] = normalizeHproseContainers(child) ?? child
             }
-            return out
+            return normalized
         }
-        if let parsed = jsonObjectIfEncodedAsString(value) as? [String: Any] {
-            return parsed
+
+        if let dict = value as? NSDictionary {
+            var normalized: [String: Any] = [:]
+            normalized.reserveCapacity(dict.count)
+            for (key, child) in dict {
+                guard let stringKey = key as? String else { continue }
+                normalized[stringKey] = normalizeHproseContainers(child) ?? child
+            }
+            return normalized
         }
-        return nil
+
+        if let array = value as? [Any] {
+            return array.map { normalizeHproseContainers($0) ?? $0 }
+        }
+
+        if let array = value as? NSArray {
+            return array.map { normalizeHproseContainers($0) ?? $0 }
+        }
+
+        return value
+    }
+
+    /// `NSDictionary` / JSON sometimes fail to cast directly to `[String: Any]`; normalize for parsing.
+    nonisolated private static func asStringKeyedDictionary(_ value: Any?) -> [String: Any]? {
+        normalizeHproseContainers(jsonObjectIfEncodedAsString(value)) as? [String: Any]
+    }
+
+    nonisolated private static func stringValues(in value: Any?) -> [String] {
+        let normalized = jsonObjectIfEncodedAsString(value)
+        if let string = normalized as? String {
+            return [string]
+        }
+        if let string = normalized as? NSString {
+            return [string as String]
+        }
+        if let dict = asStringKeyedDictionary(normalized) {
+            return dict.values.flatMap { stringValues(in: $0) }
+        }
+        if let array = normalized as? [Any] {
+            return array.flatMap { stringValues(in: $0) }
+        }
+        return []
+    }
+
+    nonisolated private static func isTweetNotFoundMessage(_ message: String) -> Bool {
+        let normalized = message
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+
+        return normalized.contains("tweet not found")
+            || normalized.contains("cannot find the tweet")
+            || normalized.contains("cannot find tweet")
+            || normalized.contains("tweet does not exist")
+            || (normalized.contains("tweet") && normalized.contains("not found"))
+    }
+
+    nonisolated private static func isTweetNotFoundDeleteFailure(_ error: Error, response: Any?) -> Bool {
+        if isTweetNotFoundMessage(error.localizedDescription) {
+            return true
+        }
+        return stringValues(in: response).contains(where: isTweetNotFoundMessage)
     }
     
     /// Pull a string field from a server dict (NSString bridging, optional `commentId` vs `mid`).
-    private static func stringField(_ dict: [String: Any], keys: [String]) -> String? {
+    nonisolated private static func stringField(_ dict: [String: Any], keys: [String]) -> String? {
         for key in keys {
             if let s = dict[key] as? String, !s.isEmpty { return s }
             if let s = dict[key] as? NSString, s.length > 0 { return s as String }
@@ -284,12 +392,15 @@ final class HproseInstance: ObservableObject {
         return nil
     }
     
-    /// Parse numeric counts from Hprose / JSON (Int, NSNumber, Int64, Double).
-    private static func intField(_ dict: [String: Any], key: String) -> Int? {
+    /// Parse integer-valued fields from Hprose / JSON. Relationship timestamps
+    /// may arrive as integers, floating-point numbers, or numeric strings.
+    nonisolated private static func intField(_ dict: [String: Any], key: String) -> Int? {
         if let v = dict[key] as? Int { return v }
         if let v = dict[key] as? Int64 { return Int(v) }
         if let v = dict[key] as? NSNumber { return v.intValue }
         if let v = dict[key] as? Double { return Int(v) }
+        if let v = dict[key] as? String { return Int(v) }
+        if let v = dict[key] as? NSString { return Int(v as String) }
         return nil
     }
     
@@ -297,9 +408,9 @@ final class HproseInstance: ObservableObject {
     /// v2 format: {success: true, data: result} or {success: false, message: "...", error: ...}
     /// Also handles Int success values: {success: 1, data: result} or {success: 0, message: "..."}
     /// Returns the unwrapped data if success, throws error if failure
-    private static func unwrapV2Response(_ response: Any?) throws -> Any? {
-        let normalizedRoot = jsonObjectIfEncodedAsString(response)
-        guard let dict = asStringKeyedDictionary(normalizedRoot) else {
+    nonisolated private static func unwrapV2Response(_ response: Any?) throws -> Any? {
+        let normalizedRoot = normalizeHproseContainers(jsonObjectIfEncodedAsString(response))
+        guard let dict = normalizedRoot as? [String: Any] else {
             return normalizedRoot
         }
         
@@ -318,7 +429,7 @@ final class HproseInstance: ObservableObject {
             if success {
                 // Success case - return data field if present, otherwise return the whole dict
                 if let data = dict["data"] {
-                    return jsonObjectIfEncodedAsString(data)
+                    return normalizeHproseContainers(jsonObjectIfEncodedAsString(data))
                 }
                 // If no data field, the result might be directly in the dict (e.g., {success: true, mid: "...", count: ...})
                 return dict
@@ -334,36 +445,36 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Print detailed app user content for debugging
-    private func printAppUserContent(_ context: String) {
-        print("=== APP USER CONTENT [\(context)] ===")
-        print("MID: \(appUser.mid)")
-        print("Username: \(appUser.username ?? "nil")")
-        print("Name: \(appUser.name ?? "nil")")
-        print("Profile: \(appUser.profile ?? "nil")")
-        print("Avatar: \(appUser.avatar ?? "nil")")
-        print("Base URL: \(appUser.baseUrl?.absoluteString ?? "nil")")
-        print("Writable URL: \(appUser.writableUrl?.absoluteString ?? "nil")")
-        print("Cloud Drive Port: \(appUser.cloudDrivePort)")
-        print("Host IDs: \(appUser.hostIds ?? [])")
-        print("Tweet Count: \(appUser.tweetCount?.description ?? "nil")")
-        print("Following Count: \(appUser.followingCount?.description ?? "nil")")
-        print("Followers Count: \(appUser.followersCount?.description ?? "nil")")
-        print("Bookmarks Count: \(appUser.bookmarksCount?.description ?? "nil")")
-        print("Favorites Count: \(appUser.favoritesCount?.description ?? "nil")")
-        print("Comments Count: \(appUser.commentsCount?.description ?? "nil")")
-        print("Following List: \(appUser.followingList ?? [])")
-        print("Fans List: \(appUser.fansList ?? [])")
-        print("User Black List: \(appUser.userBlackList ?? [])")
-        print("Bookmarked Tweets: \(appUser.bookmarkedTweets ?? [])")
-        print("Favorite Tweets: \(appUser.favoriteTweets ?? [])")
-        print("Replied Tweets: \(appUser.repliedTweets ?? [])")
-        print("Comments List: \(appUser.commentsList ?? [])")
-        print("Top Tweets: \(appUser.topTweets ?? [])")
-        print("Has Accepted Terms: \(appUser.hasAcceptedTerms)")
-        print("Is Guest: \(appUser.isGuest)")
-        print("Timestamp: \(appUser.timestamp)")
-        print("Last Login: \(appUser.lastLogin?.description ?? "nil")")
-        print("=====================================")
+    @MainActor private func printAppUserContent(_ context: String) {
+        hproseDebug("=== APP USER CONTENT [\(context)] ===")
+        hproseDebug("MID: \(appUser.mid)")
+        hproseDebug("Username: \(appUser.username ?? "nil")")
+        hproseDebug("Name: \(appUser.name ?? "nil")")
+        hproseDebug("Profile: \(appUser.profile ?? "nil")")
+        hproseDebug("Avatar: \(appUser.avatar ?? "nil")")
+        hproseDebug("Base URL: \(appUser.baseUrl?.absoluteString ?? "nil")")
+        hproseDebug("Writable URL: \(appUser.writableUrl?.absoluteString ?? "nil")")
+        hproseDebug("Cloud Drive Port: \(appUser.cloudDrivePort)")
+        hproseDebug("Host IDs: \(appUser.hostIds ?? [])")
+        hproseDebug("Tweet Count: \(appUser.tweetCount?.description ?? "nil")")
+        hproseDebug("Following Count: \(appUser.followingCount?.description ?? "nil")")
+        hproseDebug("Followers Count: \(appUser.followersCount?.description ?? "nil")")
+        hproseDebug("Bookmarks Count: \(appUser.bookmarksCount?.description ?? "nil")")
+        hproseDebug("Favorites Count: \(appUser.favoritesCount?.description ?? "nil")")
+        hproseDebug("Comments Count: \(appUser.commentsCount?.description ?? "nil")")
+        hproseDebug("Following List: \(appUser.followingList ?? [])")
+        hproseDebug("Fans List: \(appUser.fansList ?? [])")
+        hproseDebug("User Black List: \(appUser.userBlackList ?? [])")
+        hproseDebug("Bookmarked Tweets: \(appUser.bookmarkedTweets ?? [])")
+        hproseDebug("Favorite Tweets: \(appUser.favoriteTweets ?? [])")
+        hproseDebug("Replied Tweets: \(appUser.repliedTweets ?? [])")
+        hproseDebug("Comments List: \(appUser.commentsList ?? [])")
+        hproseDebug("Top Tweets: \(appUser.topTweets ?? [])")
+        hproseDebug("Has Accepted Terms: \(appUser.hasAcceptedTerms)")
+        hproseDebug("Is Guest: \(appUser.isGuest)")
+        hproseDebug("Timestamp: \(appUser.timestamp)")
+        hproseDebug("Last Login: \(appUser.lastLogin?.description ?? "nil")")
+        hproseDebug("=====================================")
     }
     
     // MARK: - Initialization
@@ -397,8 +508,7 @@ final class HproseInstance: ObservableObject {
     ///
     /// - Note: This method is called during app startup by TweetApp.AppState.initialize()
     /// - Note: Errors during initAppEntry are caught and logged, allowing the app to continue with defaults
-    func initialize() async throws {
-        print("DEBUG: [HproseInstance] Starting initialization")
+    @MainActor func initialize() async throws {
         
         // Step 1: Initialize preference helper first
         self.preferenceHelper = PreferenceHelper()
@@ -410,19 +520,18 @@ final class HproseInstance: ObservableObject {
         do {
             try await initAppEntry()
         } catch {
-            print("Error initializing app entry: \(error)")
+            hproseError("Error initializing app entry: \(error)")
             // Don't throw here, allow the app to continue with default settings
         }
         
         // Step 5: Clean up expired tweets
         TweetCacheManager.shared.deleteExpiredTweets()
         
-        print("DEBUG: [HproseInstance] Initialization completed")
         isAppInitializing = false
     }
     
     /// Initialize app user with cached or default values
-    func initializeAppUser() async {
+    @MainActor func initializeAppUser() async {
         // Get user ID from preferences or use guest ID
         let userId = await MainActor.run {
             preferenceHelper?.getUserId() ?? Constants.GUEST_ID
@@ -435,7 +544,6 @@ final class HproseInstance: ObservableObject {
         // This ensures safe operation even after cache is completely cleared
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
         
-        print("🔍 [initializeAppUser] Loaded cached appUser: \(userId), avatar: \(cachedUser.avatar ?? "nil"), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
         
         await MainActor.run {
             // CRITICAL: Update the singleton instance instead of replacing appUser
@@ -448,44 +556,49 @@ final class HproseInstance: ObservableObject {
             let appUserInstance = User.getInstance(mid: userId)
             appUserInstance.followingList = Gadget.getAlphaIds()
             
-            print("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil"), baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
-            print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
+            hproseDebug("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
             
             // Pre-populate NodePool with appUser's access node so it's available immediately
             NodePool.shared.updateFromUser(appUser)
+            LocalHTTPServer.shared.updateInitializationSnapshot(
+                isAppInitialized: isInitializationComplete,
+                appUserBaseURL: appUser.baseUrl
+            )
 
             // Mark initialization as complete so error messages can be shown
             // This is safe to do here since the user can now interact with the app
             isAppInitializing = false
-            print("DEBUG: [HproseInstance] App initialization flag cleared - errors will now be shown to user")
+            hproseDebug("DEBUG: [HproseInstance] App initialization flag cleared - errors will now be shown to user")
         }
     }
     
     /// Manually mark initialization as complete (for cases where initialize() is not called)
-    func markInitializationComplete() {
+    @MainActor func markInitializationComplete() {
         let wasAlreadyComplete = isInitializationComplete
         isAppInitializing = false
         isInitializationComplete = true
+        LocalHTTPServer.shared.updateInitializationSnapshot(
+            isAppInitialized: true,
+            appUserBaseURL: appUser.baseUrl
+        )
         
         // Keep startup hooks consistent with initAppEntry() paths.
         // Post only on the transition to "complete" to avoid duplicate work.
         if !wasAlreadyComplete {
-            print("DEBUG: [HproseInstance] Posting .appUserReady from markInitializationComplete()")
+            hproseDebug("DEBUG: [HproseInstance] Posting .appUserReady from markInitializationComplete()")
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .appUserReady, object: nil)
             }
         } else {
-            print("DEBUG: [HproseInstance] markInitializationComplete() called but already complete; skipping .appUserReady")
         }
         
-        print("DEBUG: [HproseInstance] Manually marked initialization as complete")
+        hproseDebug("DEBUG: [HproseInstance] Manually marked initialization as complete")
     }
     
     /// Schedule background tasks
     private func scheduleBackgroundTasks() {
         // Schedule domain update and pending upload recovery
         Task.detached(priority: .background) {
-            print("DEBUG: [HproseInstance] Waiting for app initialization to complete...")
             
             // Wait for app initialization to complete by polling the flag (max 30s timeout)
             var waitCount = 0
@@ -498,7 +611,6 @@ final class HproseInstance: ObservableObject {
                 waitCount += 1
             }
             
-            print("DEBUG: [HproseInstance] App initialized, starting background tasks")
             
             // Check for domain updates
             await self.checkAndUpdateDomain()
@@ -511,28 +623,27 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Fetch alphaId user from backend for guest users
-    private func fetchAlphaIdUserForGuest() async {
+    @MainActor private func fetchAlphaIdUserForGuest() async {
         guard appUser.isGuest else { return }
         
         do {
             // Fetch user data from server
             guard let alphaUserId = Gadget.getAlphaIds().first else {
-                print("fetchAlphaIdUserForGuest: alphaUser.mid is null")
+                hproseDebug("fetchAlphaIdUserForGuest: alphaUser.mid is null")
                 return
             }
             guard let alphaUser = try await fetchUser(alphaUserId, baseUrl: "", forceRefresh: true) else {
-                print("fetchAlphaIdUserForGuest: alphaUser is null")
+                hproseDebug("fetchAlphaIdUserForGuest: alphaUser is null")
                 return
             }
             
-            print("DEBUG: [HproseInstance] Successfully fetched alphaId user for guest")
             await MainActor.run {
                 User.updateUserInstance(with: alphaUser, true)
                 // Notify FollowingsTweetView to refresh
                 NotificationCenter.default.post(name: .appUserReady, object: nil)
             }
         } catch {
-            print("DEBUG: [HproseInstance] Failed to fetch alphaId user for guest: \(error)")
+            hproseWarning("DEBUG: [HproseInstance] Failed to fetch alphaId user for guest: \(error)")
         }
     }
     
@@ -563,28 +674,28 @@ final class HproseInstance: ObservableObject {
                 // Update appId from server if provided, otherwise keep AppConfig value
                 if let serverAppId = paramData["mid"] as? String, !serverAppId.isEmpty {
                     appId = serverAppId
-                    print("DEBUG: [HproseInstance] Updated appId from server: \(appId)")
+                    hproseDebug("DEBUG: [HproseInstance] Updated appId from server: \(appId)")
                 } else {
-                    print("DEBUG: [HproseInstance] Server did not provide appId, keeping AppConfig value: \(appId)")
+                    hproseDebug("DEBUG: [HproseInstance] Server did not provide appId, keeping AppConfig value: \(appId)")
                 }
                 guard let addrs = paramData["addrs"] as? String else { continue }
                 if lastInitializationAddresses != addrs {
-                    print("DEBUG: [HproseInstance] App addresses resolved: \(addrs)")
+                    hproseDebug("DEBUG: [HproseInstance] App addresses resolved: \(addrs)")
                     lastInitializationAddresses = addrs
                 }
                 
                 let candidates = entryIPCandidates(from: addrs)
                 for entryIP in candidates {
                     let normalizedEntryIP = normalizeHostPort(entryIP)
-                    print("DEBUG: [findEntryIP] Testing entry IP: \(normalizedEntryIP)")
+                    hproseDebug("DEBUG: [findEntryIP] Testing entry IP: \(normalizedEntryIP)")
                     if await isServerHealthyWithTimeout(normalizedEntryIP, timeout: 5.0, useCache: false) {
                         HproseInstance.baseUrl = URL(string: "http://\(normalizedEntryIP)")!
                         return normalizedEntryIP
                     }
-                    print("DEBUG: [findEntryIP] Entry IP failed health check: \(normalizedEntryIP)")
+                    hproseWarning("DEBUG: [findEntryIP] Entry IP failed health check: \(normalizedEntryIP)")
                 }
             } catch {
-                print("Error processing URL \(url): \(error)")
+                hproseError("Error processing URL \(url): \(error)")
                 continue
             }
         }
@@ -660,7 +771,7 @@ final class HproseInstance: ObservableObject {
     /// - Throws: Network or parsing errors (caught by caller)
     /// - Note: Called during app initialization by `initialize()` method
     /// - Note: Sets `isInitializationComplete = true` once baseUrl is resolved
-    func initAppEntry() async throws {
+    @MainActor func initAppEntry() async throws {
         var entryIP: String? = nil
         var fetchedUser: User? = nil  // Store fetched user from cached baseUrl verification
 
@@ -669,7 +780,7 @@ final class HproseInstance: ObservableObject {
         if !appUser.isGuest,
            let cachedBaseUrl = appUser.baseUrl,
            let cachedHost = cachedBaseUrl.host {
-            print("🔄 [INIT] Attempting to use cached baseUrl: \(cachedBaseUrl.absoluteString)")
+            hproseDebug("🔄 [INIT] Attempting to use cached baseUrl: \(cachedBaseUrl.absoluteString)")
 
             // Set HproseInstance.baseUrl to cached value temporarily
             HproseInstance.baseUrl = cachedBaseUrl
@@ -679,26 +790,24 @@ final class HproseInstance: ObservableObject {
                 // Try fetching user data with cached baseUrl (don't force re-resolution)
                 let user = try await fetchUser(appUser.mid, baseUrl: cachedBaseUrl.absoluteString)
                 if let user = user {
-                    print("✅ [INIT] Cached baseUrl is valid - skipping findEntryIP()")
+                    hproseInfo("✅ [INIT] Cached baseUrl is valid - skipping findEntryIP()")
                     fetchedUser = user  // Save for later use
                 } else {
-                    print("⚠️ [INIT] Cached baseUrl returned nil user - falling back to findEntryIP()")
+                    hproseWarning("⚠️ [INIT] Cached baseUrl returned nil user - falling back to findEntryIP()")
                     entryIP = nil
                 }
             } catch {
-                print("⚠️ [INIT] Cached baseUrl failed with error: \(error) - falling back to findEntryIP()")
+                hproseWarning("⚠️ [INIT] Cached baseUrl failed with error: \(error) - falling back to findEntryIP()")
                 entryIP = nil
             }
         }
 
         // Fallback to findEntryIP if cached baseUrl not available or failed
         if entryIP == nil {
-            print("🔍 [INIT] Resolving fresh entry IP via findEntryIP()")
             guard let freshIP = try await findEntryIP() else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
             }
             entryIP = freshIP
-            print("✅ [INIT] Fresh entry IP resolved: \(freshIP)")
         }
 
         // Ensure we have a valid entryIP at this point
@@ -715,9 +824,7 @@ final class HproseInstance: ObservableObject {
                 // Need to fetch user data since we didn't use cached baseUrl or it failed
                 // Pass empty string to force IP re-resolution
                 user = try await fetchUser(appUser.mid, baseUrl: "")
-                print("✅ [INIT] appUser data fetched: \(String(describing: user))")
             } else {
-                print("✅ [INIT] Using verified appUser data from cached baseUrl")
             }
 
             if let user = user {
@@ -726,6 +833,10 @@ final class HproseInstance: ObservableObject {
                     isInitializationComplete = true
                     User.updateUserInstance(with: user, true)
                     _appUserId = user.mid
+                    LocalHTTPServer.shared.updateInitializationSnapshot(
+                        isAppInitialized: true,
+                        appUserBaseURL: appUser.baseUrl
+                    )
 
                     // Notify UI that app is ready (tweets can now render with real IP)
                     NotificationCenter.default.post(name: .appUserReady, object: nil)
@@ -734,17 +845,13 @@ final class HproseInstance: ObservableObject {
                 // Ensure the refreshed user with updated baseURL is saved to cache
                 TweetCacheManager.shared.saveUser(user)
                 if fetchedUser != nil {
-                    print("✅ [INIT] App initialized with cached baseUrl: \(finalEntryIP)")
                 } else {
-                    print("✅ [INIT] App initialized with fresh entry IP: \(finalEntryIP)")
                 }
 
                 // Fetch followings and blacklist in background (non-blocking)
                 Task.detached(priority: .background) {
                     let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
-                    print("✅ [INIT] Followings fetched: \(followings.count)")
                     let blackList = (try? await self.getListByType(user: user, entry: .BLACK_LIST)) ?? []
-                    print("✅ [INIT] Blacklist fetched: \(blackList.count)")
                     await MainActor.run {
                         user.followingList = followings
                         user.userBlackList = blackList
@@ -754,8 +861,8 @@ final class HproseInstance: ObservableObject {
             } else {
                 // Fetch failed but user is logged in - use cached appUser data
                 // DO NOT log out user just because their IPs are temporarily unreachable
-                print("⚠️ [INIT] fetchUser failed but user is logged in - using cached appUser data")
-                print("⚠️ [INIT] User \(appUser.mid) will use cached data until network recovers")
+                hproseWarning("⚠️ [INIT] fetchUser failed but user is logged in - using cached appUser data")
+                hproseWarning("⚠️ [INIT] User \(appUser.mid) will use cached data until network recovers")
 
                 await MainActor.run {
                     // appUser is already loaded from cache in initializeAppUser()
@@ -770,12 +877,16 @@ final class HproseInstance: ObservableObject {
                     }
 
                     isInitializationComplete = true
+                    LocalHTTPServer.shared.updateInitializationSnapshot(
+                        isAppInitialized: true,
+                        appUserBaseURL: appUser.baseUrl
+                    )
 
                     // Notify UI that app is ready (will use cached data)
                     NotificationCenter.default.post(name: .appUserReady, object: nil)
                 }
 
-                print("✅ [INIT] App initialized with cached data - network will retry in background")
+                hproseInfo("✅ [INIT] App initialized with cached data - network will retry in background")
             }
         } else {
             let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -786,8 +897,12 @@ final class HproseInstance: ObservableObject {
 
                 // App is now initialized since appUser has IP address
                 isInitializationComplete = true
+                LocalHTTPServer.shared.updateInitializationSnapshot(
+                    isAppInitialized: true,
+                    appUserBaseURL: appUser.baseUrl
+                )
             }
-            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(finalEntryIP)")
+            hproseDebug("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(finalEntryIP)")
 
             // For guest users, fetch the alphaId user from backend now that we have proper IP
             await fetchAlphaIdUserForGuest()
@@ -796,48 +911,71 @@ final class HproseInstance: ObservableObject {
         scheduleBackgroundTasks()
     }
     
+    @MainActor
     func fetchComments(
         _ parentTweet: Tweet,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
-    ) async throws -> ([Tweet?], failedIds: [String]) {
+    ) async throws -> [Tweet?] {
+        let result = try await fetchComments(
+            forTweetId: parentTweet.mid,
+            authorId: parentTweet.authorId,
+            pageNumber: pageNumber,
+            pageSize: pageSize
+        )
+        if parentTweet.author == nil {
+            let author = await TweetCacheManager.shared.fetchUser(mid: parentTweet.authorId)
+            if author.username != nil {
+                parentTweet.author = author
+            }
+        }
+        return result
+    }
+
+    func fetchComments(
+        forTweetId tweetId: MimeiId,
+        authorId: MimeiId,
+        pageNumber: UInt = 0,
+        pageSize: UInt = 20
+    ) async throws -> [Tweet?] {
         let entry = "get_comments"
+        // Phase A (demotion prep): snapshot @MainActor appUser.mid.
+        let appUserMid = await MainActor.run { self.appUser.mid }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "tweetid": parentTweet.mid,
-            "appuserid": appUser.mid,
+            "tweetid": tweetId,
+            "appuserid": appUserMid,
             "pn": pageNumber,
             "ps": pageSize,
         ] as [String : Any]
-        
+
         // CRITICAL: Use the parent tweet's author's baseUrl to fetch comments
         // Comments are stored on the tweet author's node, not the appUser's node
         // Fetch author if not already loaded
+        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: authorId)
+        // Phase A (demotion prep): snapshot @MainActor User reads together.
+        let cachedAuthorValid = await MainActor.run { cachedAuthor.username != nil && cachedAuthor.baseUrl != nil }
         let author: User
-        if let existingAuthor = parentTweet.author {
-            author = existingAuthor
-        } else {
-            // Fetch author to get their baseUrl
-            guard let fetchedAuthor = try? await fetchUser(parentTweet.authorId) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch author for comments", comment: "Author fetch error")])
-            }
+        if cachedAuthorValid {
+            author = cachedAuthor
+        } else if let fetchedAuthor = try? await fetchUser(authorId) {
             author = fetchedAuthor
-            // Update parentTweet's author for future use
-            await MainActor.run {
-                parentTweet.author = author
-            }
+        } else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch author for comments", comment: "Author fetch error")])
         }
-        
+
         // Use author's client - comments are on author's node
-        guard let client = author.hproseClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: \(author.baseUrl?.absoluteString ?? "nil")", comment: "Client initialization error")])
+        let authorSnap = await MainActor.run { UserRecord(user: author) }
+        guard let authorBaseUrl = authorSnap.baseUrl else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: nil", comment: "Client initialization error")])
         }
-        
-        print("DEBUG: [fetchComments] Using author's baseUrl (\(author.baseUrl?.absoluteString ?? "nil")) for tweet \(parentTweet.mid)")
-        
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
+
+        hproseDebug("DEBUG: [fetchComments] Using author's baseUrl (\(authorBaseUrl.absoluteString)) for tweet \(tweetId)")
+
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -849,30 +987,33 @@ final class HproseInstance: ObservableObject {
         } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
             // Server returned empty array - handle gracefully
             response = []
-            print("DEBUG: [HproseInstance] fetchComments - Server returned empty array (no comments)")
+            hproseDebug("DEBUG: [HproseInstance] fetchComments - Server returned empty array (no comments)")
         } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
         }
         
-        // Process each item in the response array, preserving nil positions
+        // Process each item in the response array, preserving nil positions.
+        // A malformed/unparseable entry means the comment either hasn't synced
+        // from the author's write node to the read node yet, or is genuinely
+        // gone — either way, the server (`get_comments`) now handles cleaning
+        // up IDs it can confirm are stale, so the client no longer needs to
+        // sync or retry individual comment IDs itself.
         var commentsWithAuthors: [Tweet?] = []
-        var failedIds: [String] = []
         for item in response {
             if let dict = item {
                 do {
-                    let comment = try await MainActor.run {
-                        return try Tweet.from(dict: dict)
-                    }
+                    let comment = try await mergeTweetFromDict(dict)
 
                     // Check if there's cached author data (expired or not)
                     let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
 
                     // If we have cached data with username and baseUrl, use it regardless of expiration
-                    if cachedAuthor.username != nil && cachedAuthor.baseUrl != nil {
+                    let commentCachedAuthorValid = await MainActor.run { cachedAuthor.username != nil && cachedAuthor.baseUrl != nil }
+                    if commentCachedAuthorValid {
                         await MainActor.run {
                             comment.author = cachedAuthor
                         }
-                        print("DEBUG: [fetchComments] Using cached author for \(comment.authorId), skipping network fetch")
+                        hproseWarning("DEBUG: [fetchComments] Using cached author for \(comment.authorId), skipping network fetch")
                     } else {
                         // Only fetch from network if there's no cached data
                         if let author = try? await fetchUser(comment.authorId) {
@@ -883,64 +1024,20 @@ final class HproseInstance: ObservableObject {
                             // Server fetch failed - use skeleton to indicate error
                             await MainActor.run {
                                 comment.author = User.getInstance(mid: comment.authorId)
-                                print("⚠️ [fetchComments] Server fetch failed, using skeleton for \(comment.authorId) to indicate error")
+                                hproseWarning("⚠️ [fetchComments] Server fetch failed, using skeleton for \(comment.authorId) to indicate error")
                             }
                         }
                     }
                     commentsWithAuthors.append(comment)
                 } catch {
-                    print("Error processing comment: \(error)")
-                    if let commentId = dict["mid"] as? String {
-                        failedIds.append(commentId)
-                    }
+                    hproseError("Error processing comment: \(error)")
                     commentsWithAuthors.append(nil)
                 }
             } else {
                 commentsWithAuthors.append(nil)
             }
         }
-        return (commentsWithAuthors, failedIds)
-    }
-
-    /// Sync a single comment from the author's home node to the current read node, then retry fetching it.
-    func syncComment(commentId: String, parentTweet: Tweet) async -> Tweet? {
-        let author: User
-        if let existingAuthor = parentTweet.author {
-            author = existingAuthor
-        } else {
-            guard let fetched = try? await fetchUser(parentTweet.authorId) else { return nil }
-            author = fetched
-        }
-        guard let client = author.hproseClient,
-              let authorHostId = author.hostIds?.first else { return nil }
-
-        let updateParams: [String: Any] = [
-            "aid": appId, "ver": "last", "version": "v2",
-            "hostid": authorHostId, "userid": parentTweet.authorId, "mid": commentId
-        ]
-        _ = client.invoke("runMApp", withArgs: ["node_update_mid_by_score", updateParams])
-
-        let retryParams: [String: Any] = [
-            "aid": appId, "ver": "last", "version": "v2",
-            "tweetid": commentId, "appuserid": appUser.mid
-        ]
-        guard let raw = client.invoke("runMApp", withArgs: ["get_tweet", retryParams]),
-              let unwrapped = try? Self.unwrapV2Response(raw),
-              let dict = unwrapped as? [String: Any],
-              let comment = try? await MainActor.run(body: { try Tweet.from(dict: dict) }) else {
-            blackList.recordFailure(commentId)
-            return nil
-        }
-
-        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
-        if cachedAuthor.username != nil && cachedAuthor.baseUrl != nil {
-            await MainActor.run { comment.author = cachedAuthor }
-        } else if let commentAuthor = try? await fetchUser(comment.authorId) {
-            await MainActor.run { comment.author = commentAuthor }
-        } else {
-            await MainActor.run { comment.author = User.getInstance(mid: comment.authorId) }
-        }
-        return comment
+        return commentsWithAuthors
     }
 
     // MARK: - Tweet Operations
@@ -956,26 +1053,44 @@ final class HproseInstance: ObservableObject {
         user: User,
         pageNumber: UInt = 0,
         pageSize: UInt = 20,
-        entry: String = "get_tweet_feed"
+        entry: String = "get_tweet_feed",
+        ignoreFollowingTweetsDebounce: Bool = false,
+        onFollowingTweetsRpcStarted: (@Sendable () async -> Bool)? = nil
     ) async throws -> [Tweet?] {
         let isFollowingTweetUpdate = entry == HproseInstance.updateFollowingTweetsEntry
 
-        // If app is not initialized, only return cached tweets
-        if !isInitializationComplete {
-            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
-            return cachedTweets
+        // Phase A (demotion prep): snapshot @MainActor appUser + user into Sendable records.
+        let (appSnap, userSnap) = await MainActor.run {
+            (UserRecord(user: self.appUser), UserRecord(user: user))
         }
 
-        if isFollowingTweetUpdate,
-           !shouldAttemptHeavyCall(HproseInstance.updateFollowingTweetsEntry) {
-            return []
+        // If app is not initialized, only return cached tweets
+        if !isInitializationComplete {
+            let cacheKey = TweetCacheManager.mainFeedCacheKey(appUserId: appSnap.mid)
+            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                for: cacheKey,
+                page: pageNumber,
+                pageSize: pageSize,
+                currentUserId: appSnap.mid
+            )
+            if !cachedTweets.isEmpty {
+                return cachedTweets
+            }
+            // Legacy fallback for cache rows written before the main feed had its own cache key.
+            let legacyCachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                for: userSnap.mid,
+                page: pageNumber,
+                pageSize: pageSize,
+                currentUserId: appSnap.mid
+            )
+            return legacyCachedTweets
         }
-        
+
         let client: HproseClient?
         if isFollowingTweetUpdate {
-            client = await followingTweetsHomeClient()
+            client = try await followingTweetsHomeClient()
         } else {
-            client = appUser.hproseClient
+            client = appSnap.baseUrl.map { clientPool.getClientByUrl(for: $0.absoluteString, timeout: 15) }
         }
 
         guard let client = client else {
@@ -988,14 +1103,22 @@ final class HproseInstance: ObservableObject {
             "version": "v2",
             "pn": pageNumber,
             "ps": pageSize,
-            "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
-            "appuserid": appUser.mid,
+            "userid": userSnap.mid != Constants.GUEST_ID ? userSnap.mid : Gadget.getAlphaIds().first as Any,
+            "appuserid": appSnap.mid,
         ]
-        
+
         if isFollowingTweetUpdate {
-            params["hostid"] = appUser.hostIds?.first
+            params["hostid"] = appSnap.hostIds?.first
+            guard appSnap.mid != Constants.GUEST_ID,
+                  await onFollowingTweetsRpcStarted?() != false,
+                  shouldAttemptHeavyCall(
+                    HproseInstance.updateFollowingTweetsEntry,
+                    ignoreDebounce: ignoreFollowingTweetsDebounce
+                  ) else {
+                return []
+            }
         }
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
@@ -1009,7 +1132,7 @@ final class HproseInstance: ObservableObject {
         
         
         if isFollowingTweetUpdate {
-            print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
+            hproseDebug("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
             await syncFollowingTweetsToAccessHostIfNeeded(homeResponse: response, requestParams: params)
         }
 
@@ -1022,7 +1145,7 @@ final class HproseInstance: ObservableObject {
                     _ = try await self.fetchUser(authorId)
                     // Author singleton is already set, it will update automatically.
                 } catch {
-                    print("⚠️ [fetchTweetFeed] Background fetch failed for \(context) \(authorId): \(error)")
+                    hproseWarning("⚠️ [fetchTweetFeed] Background fetch failed for \(context) \(authorId): \(error)")
                 }
             }
         }
@@ -1031,22 +1154,19 @@ final class HproseInstance: ObservableObject {
         for originalTweetDict in originalTweetsData {
             if let dict = originalTweetDict {
                 do {
-                    let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    
-                    // Use skeleton author immediately - fetch in background to avoid blocking
-                    await MainActor.run {
-                        originalTweet.author = User.getInstance(mid: originalTweet.authorId)
-                    }
+                    let originalTweet = try await mergeTweetFromDict(dict, attachAuthor: true)
                     
                     // Fetch author in background - will update singleton when complete
                     scheduleBackgroundAuthorFetch(authorId: originalTweet.authorId, context: "original author")
                     
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
-                    TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
-                    print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid) under authorId: \(originalTweet.authorId)")
+                    await MainActor.run {
+                        TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
+                        hproseDebug("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid) under authorId: \(originalTweet.authorId)")
+                    }
                 } catch {
-                    print("[fetchTweetFeed] Error caching original tweet: \(error)")
+                    hproseError("[fetchTweetFeed] Error caching original tweet: \(error)")
                 }
             }
         }
@@ -1056,41 +1176,28 @@ final class HproseInstance: ObservableObject {
         for item in tweetsData {
             if let tweetDict = item {
                 do {
-                    let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    
-                    // Use skeleton author immediately - fetch in background to avoid blocking
-                    await MainActor.run {
-                        tweet.author = User.getInstance(mid: tweet.authorId)
-                    }
+                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthor: true)
                     
                     // Fetch author in background - will update singleton when complete
                     scheduleBackgroundAuthorFetch(authorId: tweet.authorId, context: "author")
-                    
-                    // Skip private tweets in feed
-                    if tweet.isPrivate == true {
+
+                    // Skip private tweets in feed; cache the rest under the main-feed list key
+                    // (not the app user's profile key). @MainActor read + cache write in one hop.
+                    let keep = await MainActor.run { () -> Bool in
+                        if tweet.isPrivate == true { return false }
+                        TweetCacheManager.shared.saveTweet(
+                            tweet,
+                            userId: TweetCacheManager.mainFeedCacheKey(appUserId: appSnap.mid)
+                        )
+                        return true
+                    }
+                    if !keep {
                         tweets.append(nil)
                         continue
                     }
-                    
-                    // For retweets/quoted tweets, ensure the original tweet is available
-                    if let originalTweetId = tweet.originalTweetId,
-                       let originalAuthorId = tweet.originalAuthorId {
-                        if Tweet.getInstance(for: originalTweetId) == nil {
-                            // Original tweet not in cache — try fetching from server
-                            let fetched = try? await self.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
-                            if fetched == nil {
-                                print("[fetchTweetFeed] Skipping tweet \(tweet.mid) - original tweet \(originalTweetId) not available")
-                                tweets.append(nil)
-                                continue
-                            }
-                        }
-                    }
-
-                    // Cache main feed tweets under appUser.mid for efficient main feed loading
-                    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
                     tweets.append(tweet)
                 } catch {
-                    print("[fetchTweetFeed] Error processing tweet: \(error)")
+                    hproseError("[fetchTweetFeed] Error processing tweet: \(error)")
                     tweets.append(nil)
                 }
             } else {
@@ -1098,26 +1205,21 @@ final class HproseInstance: ObservableObject {
             }
         }
 
-        print("[fetchTweetFeed] Returning \(tweets.count) tweets")
-        NodePool.shared.updateFromUser(user)
+        hproseDebug("[fetchTweetFeed] Returning \(tweets.count) tweets")
+        await MainActor.run { NodePool.shared.updateFromUser(user) }
         return tweets
     }
 
-    private func followingTweetsHomeClient() async -> HproseClient? {
-        if let _ = try? await appUser.resolveWritableUrl(),
-           let client = appUser.writableClient {
-            client.timeout = 15
-            return client
+    private func followingTweetsHomeClient() async throws -> HproseClient {
+        // appUser is a @MainActor class instance (implicitly Sendable); resolve its
+        // writable client on the main actor.
+        let appUserInstance = await MainActor.run { self.appUser }
+        let writableUrl = try await appUserInstance.resolveWritableUrl()
+        guard let client = await appUserInstance.writableClient(timeout: 30) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Writable client not available for \(writableUrl.absoluteString)"
+            ])
         }
-
-        guard let homeHostId = appUser.hostIds?.first,
-              let homeIP = await getHostIP(homeHostId, v4Only: true) else {
-            print("ERROR: [update_following_tweets] Unable to resolve home host for appUser \(appUser.mid)")
-            return appUser.hproseClient
-        }
-
-        let client = clientPool.getClientByIP(for: homeIP)
-        client.timeout = 15
         return client
     }
 
@@ -1125,7 +1227,8 @@ final class HproseInstance: ObservableObject {
         let newTweetCount = (homeResponse["tweets"] as? [Any])?.filter { !($0 is NSNull) }.count ?? 0
         guard newTweetCount > 0 else { return }
 
-        guard let hostIds = appUser.hostIds,
+        let appHostIds = await MainActor.run { self.appUser.hostIds }
+        guard let hostIds = appHostIds,
               let homeHostId = hostIds.first,
               hostIds.count > 1 else {
             return
@@ -1135,22 +1238,21 @@ final class HproseInstance: ObservableObject {
         guard accessHostId != homeHostId else { return }
 
         guard let accessIP = await getHostIP(accessHostId, v4Only: true) else {
-            print("ERROR: [update_following_tweets] Unable to resolve access host \(accessHostId)")
+            hproseError("ERROR: [update_following_tweets] Unable to resolve access host \(accessHostId)")
             return
         }
 
         var accessParams = requestParams
         accessParams["homeupdated"] = true
 
-        let accessClient = clientPool.getClientByIP(for: accessIP)
-        accessClient.timeout = 15
+        let accessClient = clientPool.getClientByIP(for: accessIP, timeout: 30)
 
         do {
-            let rawResponse = accessClient.invoke("runMApp", withArgs: [HproseInstance.updateFollowingTweetsEntry, accessParams])
+            let rawResponse = await invokeRunMApp(using: accessClient, entry: HproseInstance.updateFollowingTweetsEntry, params: accessParams)
             _ = try Self.unwrapV2Response(rawResponse)
-            print("DEBUG: [update_following_tweets] Synced \(newTweetCount) tweets from home host \(homeHostId) to access host \(accessHostId)")
+            hproseDebug("DEBUG: [update_following_tweets] Synced \(newTweetCount) tweets from home host \(homeHostId) to access host \(accessHostId)")
         } catch {
-            print("ERROR: [update_following_tweets] Failed to sync access host \(accessHostId): \(error)")
+            hproseError("ERROR: [update_following_tweets] Failed to sync access host \(accessHostId): \(error)")
         }
     }
     
@@ -1170,9 +1272,13 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet?] {
+        // Phase A (demotion prep): snapshot @MainActor User + appUser reads used below (cache key + logs).
+        let (userMid, userBaseUrlStr, appUserMid) = await MainActor.run {
+            (user.mid, user.baseUrl?.absoluteString, self.appUser.mid)
+        }
         // If app is not initialized, only return cached tweets
         if !isInitializationComplete {
-            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
+            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: userMid, page: pageNumber, pageSize: pageSize, currentUserId: appUserMid)
             return cachedTweets
         }
 
@@ -1185,7 +1291,23 @@ final class HproseInstance: ObservableObject {
             )
         } catch {
             guard !Task.isCancelled else { throw error }
-            print("DEBUG: [fetchUserTweets] Failed via \(user.baseUrl?.absoluteString ?? "nil"); refreshing route and retrying once for \(user.mid): \(error)")
+            if hasTimeoutCause(error) {
+                hproseWarning("DEBUG: [fetchUserTweets] Timeout via \(userBaseUrlStr ?? "nil"); retrying same route once for \(userMid): \(error)")
+                do {
+                    return try await fetchUserTweetsFromCurrentRoute(
+                        user: user,
+                        pageNumber: pageNumber,
+                        pageSize: pageSize,
+                        entry: entry
+                    )
+                } catch {
+                    if hasTimeoutCause(error) {
+                        hproseWarning("DEBUG: [fetchUserTweets] Timeout again via \(userBaseUrlStr ?? "nil"); not refreshing route for operation timeout")
+                    }
+                    throw error
+                }
+            }
+            hproseWarning("DEBUG: [fetchUserTweets] Failed via \(userBaseUrlStr ?? "nil"); refreshing route and retrying once for \(userMid): \(error)")
             let refreshedUser = try await freshReadUser(for: user, reason: "tweet load retry")
             return try await fetchUserTweetsFromCurrentRoute(
                 user: refreshedUser,
@@ -1197,12 +1319,13 @@ final class HproseInstance: ObservableObject {
     }
 
     private func freshReadUser(for user: User, reason: String) async throws -> User {
+        let userMid = await MainActor.run { user.mid }
         guard let refreshedUser = try await fetchUser(
-            user.mid,
+            userMid,
             baseUrl: "",
             refreshExpiredCacheInBackground: false
         ) else {
-            throw HproseError.userNotFound(userId: user.mid, reason: "Unable to refresh provider IP for \(reason)")
+            throw HproseError.userNotFound(userId: userMid, reason: "Unable to refresh provider IP for \(reason)")
         }
         return refreshedUser
     }
@@ -1213,20 +1336,24 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt,
         entry: String
     ) async throws -> [Tweet?] {
-        guard let client = user.hproseClient else {
+        // Phase A (demotion prep): snapshot @MainActor User + appUser.mid.
+        let snap = await MainActor.run { UserRecord(user: user) }
+        let appUserMid = await MainActor.run { self.appUser.mid }
+        guard let baseUrl = snap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid,
+            "userid": snap.mid,
             "pn": pageNumber,
             "ps": pageSize,
-            "appuserid": appUser.mid,
+            "appuserid": appUserMid,
         ] as [String : Any]
-        
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
@@ -1243,25 +1370,14 @@ final class HproseInstance: ObservableObject {
         for originalTweetDict in originalTweetsData {
             if let dict = originalTweetDict {
                 do {
-                    let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    // Fetch the author - fetchUser returns singleton, which will be updated by background Task if needed
-                    // The singleton reference will see updates when fetch completes
-                    do {
-                        let author = try await fetchUser(originalTweet.authorId)
-                        await MainActor.run {
-                            originalTweet.author = author
-                        }
-                    } catch {
-                        print("⚠️ [fetchUserTweets] Failed to fetch original author \(originalTweet.authorId) for tweet \(originalTweet.mid): \(error)")
-                        // Server fetch failed - use skeleton to indicate error
-                        await MainActor.run {
-                            originalTweet.author = User.getInstance(mid: originalTweet.authorId)
-                            print("⚠️ [fetchUserTweets] Server fetch failed, using skeleton for \(originalTweet.authorId) to indicate error")
-                        }
-                    }
+                    let originalTweet = try await mergeTweetFromDict(dict)
+                    let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: originalTweet.authorId)
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
-                    TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
+                    await MainActor.run {
+                        originalTweet.author = cachedAuthor
+                        TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
+                    }
                 } catch {
                 }
             }
@@ -1271,34 +1387,22 @@ final class HproseInstance: ObservableObject {
         for item in tweetsData {
             if let tweetDict = item {
                 do {
-                    let tweet = try await MainActor.run { 
-                        let tweet = try Tweet.from(dict: tweetDict)
-                        tweet.author = user  // Set on main thread since author is @Published
-                        return tweet
+                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: snap.mid)
+
+                    // Only show private tweets if the current user is the author.
+                    // Cache tweet under its authorId. Both the @MainActor Tweet read and the
+                    // @MainActor cache write happen in one hop.
+                    let keep = await MainActor.run { () -> Bool in
+                        if tweet.isPrivate == true && tweet.authorId != appUserMid {
+                            return false
+                        }
+                        TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                        return true
                     }
-                    
-                    // Only show private tweets if the current user is the author
-                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
+                    if !keep {
                         tweets.append(nil)
                         continue
                     }
-                    
-                    // For retweets/quoted tweets, ensure the original tweet is available
-                    if let originalTweetId = tweet.originalTweetId,
-                       let originalAuthorId = tweet.originalAuthorId {
-                        if Tweet.getInstance(for: originalTweetId) == nil {
-                            // Original tweet not in cache — try fetching from server
-                            let fetched = try? await self.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
-                            if fetched == nil {
-                                print("[fetchUserTweets] Skipping tweet \(tweet.mid) - original tweet \(originalTweetId) not available")
-                                tweets.append(nil)
-                                continue
-                            }
-                        }
-                    }
-
-                    // Cache tweet under its authorId
-                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                     tweets.append(tweet)
                 } catch {
                     tweets.append(nil)
@@ -1323,73 +1427,86 @@ final class HproseInstance: ObservableObject {
     ///   - tweetId: The ID of the tweet to retrieve
     ///   - authorId: The ID of the tweet's author
     ///   - nodeUrl: Optional node URL (unused)
+    ///   - fromDetailView: When true, tells the server this is a detail-view read so it can
+    ///     sync/provide the tweet on its end if this node isn't already a DHT provider for it.
+    ///     Also passes along the author's write hostId (if known) so the server doesn't have
+    ///     to look it up itself.
     /// - Returns: The tweet object, or nil if not found
     func getTweet(
         tweetId: String,
         authorId: String,
         nodeUrl: String? = nil,
-        bypassCache: Bool = false
+        bypassCache: Bool = false,
+        fromDetailView: Bool = false
     ) async throws -> Tweet? {
         // Check if tweet is blacklisted before attempting fetch
         if blackList.isBlacklisted(tweetId) {
-            print("DEBUG: [getTweet] tweetId \(tweetId) is blacklisted, returning cached tweet only")
+            hproseDebug("DEBUG: [getTweet] tweetId \(tweetId) is blacklisted, returning cached tweet only")
             return await TweetCacheManager.shared.fetchTweet(mid: tweetId)
         }
 
         // Check cache first using TweetCacheManager
         let author = try await fetchUser(authorId)
         if !bypassCache, let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
-            // Set author if not already set
-            if cachedTweet.author == nil {
-                await MainActor.run {
+            // Set author if not already set (check + assign on the main actor in one hop)
+            await MainActor.run {
+                if cachedTweet.author == nil {
                     cachedTweet.author = author
                 }
             }
             return cachedTweet
         }
-        
+
         // Fetch from server using get_tweet API (like Android's fetchTweet)
-        guard let authorClient = author?.hproseClient else {
+        // Phase A (demotion prep): snapshot @MainActor author + appUser reads in one hop.
+        let (authorBaseUrl, authorHostId, appUserMid) = await MainActor.run {
+            (author?.baseUrl, author?.hostIds?.first, self.appUser.mid)
+        }
+        guard let authorBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author client not initialized", comment: "Author client initialization error")])
         }
-        
+        let authorClient = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
+
         let entry = "get_tweet"
-        let params = [
+        var params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "tweetid": tweetId,
-            "appuserid": appUser.mid
+            "appuserid": appUserMid
         ]
-        
+        if fromDetailView {
+            params["fromdetailview"] = true
+            if let authorHostId {
+                params["authorhostid"] = authorHostId
+            }
+        }
+
         do {
-            let rawResponse = authorClient.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: authorClient, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
             if let tweetDict = unwrappedResponse as? [String: Any] {
                 // Record successful access
                 blackList.recordSuccess(tweetId)
                 
-                let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                await MainActor.run {
-                    tweet.author = author  // Set on main thread since author is @Published
-                }
-                
+                let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: authorId)
+
                 // Cache tweet by authorId, not appUser.mid
-                TweetCacheManager.shared.saveTweet(tweet, userId: authorId)
-                
+                await MainActor.run { TweetCacheManager.shared.saveTweet(tweet, userId: authorId) }
+
                 return tweet
             } else {
                 // Tweet not found - record failure to blacklist candidates
-                print("DEBUG: [getTweet] Tweet not found for tweetId: \(tweetId), recording failure")
+                hproseError("DEBUG: [getTweet] Tweet not found for tweetId: \(tweetId), recording failure")
                 blackList.recordFailure(tweetId)
                 return nil
             }
         } catch {
             // Record failed access
             blackList.recordFailure(tweetId)
-            print("DEBUG: [getTweet] Error fetching tweet: \(tweetId), author: \(authorId)")
-            print("DEBUG: [getTweet] Exception: \(error)")
+            hproseError("DEBUG: [getTweet] Error fetching tweet: \(tweetId), author: \(authorId)")
+            hproseDebug("DEBUG: [getTweet] Exception: \(error)")
             throw error
         }
     }
@@ -1412,25 +1529,33 @@ final class HproseInstance: ObservableObject {
         authorId: String,
     ) async throws -> Tweet? {
         let author = try await fetchUser(authorId)
-        guard let client = author?.hproseClient ?? appUser.hproseClient else {
+        // Phase A (demotion prep): snapshot @MainActor author + appUser reads in one hop.
+        let (authorBaseUrl, authorHostId, appUserBaseUrl, appUserMid) = await MainActor.run {
+            (author?.baseUrl, author?.hostIds?.first, self.appUser.baseUrl, self.appUser.mid)
+        }
+        guard let baseUrl = authorBaseUrl ?? appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         let entry = "refresh_tweet"
-        let params = [
+        var params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "tweetid": tweetId,
             "userid": authorId,
-            "hostid": author?.hostIds?.first,
-            "appuserid": appUser.mid
+            "appuserid": appUserMid
         ]
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        if let hostId = authorHostId {
+            params["hostid"] = hostId
+        }
+        hproseDebug("DEBUG: [refreshTweet] Calling refresh_tweet for tweetId: \(tweetId), authorId: \(authorId), baseUrl: \(baseUrl.absoluteString)")
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         if let tweetDict = unwrappedResponse as? [String: Any] {
             do {
-                let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+                let tweet = try await mergeTweetFromDict(tweetDict)
                 if let author = try? await fetchUser(authorId) {
                     await MainActor.run {
                         tweet.author = author  // Set on main thread since author is @Published
@@ -1439,14 +1564,14 @@ final class HproseInstance: ObservableObject {
                 
                 // Cache the tweet under its authorId, not appUser.mid
                 // This ensures original tweets are cached under their author, not the current user
-                TweetCacheManager.shared.saveTweet(tweet, userId: authorId)
-                
+                await MainActor.run { TweetCacheManager.shared.saveTweet(tweet, userId: authorId) }
+
                 // Record success if tweet was successfully fetched
                 blackList.recordSuccess(tweetId)
                 
                 return tweet
             } catch {
-                print("Error processing tweet: \(error)")
+                hproseError("Error processing tweet: \(error)")
                 // Record failure for tweet processing error
                 blackList.recordFailure(tweetId)
                 throw error
@@ -1454,7 +1579,7 @@ final class HproseInstance: ObservableObject {
         }
         
         // Tweet not found - record failure to blacklist candidates
-        print("DEBUG: [refreshTweet] Tweet not found for tweetId: \(tweetId), recording failure")
+        hproseError("DEBUG: [refreshTweet] Tweet not found for tweetId: \(tweetId), recording failure")
         blackList.recordFailure(tweetId)
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Tweet not found", comment: "Tweet lookup error")])
     }
@@ -1471,12 +1596,12 @@ final class HproseInstance: ObservableObject {
             // get_userid is a discovery operation — always use the entry node,
             // not appUser.hproseClient which may point to a provider node after logout
             guard let entryIP = try await findEntryIP() else {
-                print("[getUserId] Cannot resolve entry IP - will retry")
+                hproseWarning("[getUserId] Cannot resolve entry IP - will retry")
                 throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Entry IP not available"])
             }
             let client = clientPool.getClientByIP(for: entryIP)
 
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
             if let stringResponse = unwrappedResponse as? String {
@@ -1489,23 +1614,24 @@ final class HproseInstance: ObservableObject {
                 }
             }
 
-            print("[getUserId] Unexpected response format for username: \(username)")
+            hproseWarning("[getUserId] Unexpected response format for username: \(username)")
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected response format from get_userid"])
         }
     }
     
-    /// If @baseUrl is an empty string, the function will ignore the cache and try to find a provider's IP for this user
-    /// and update cache with the new user.
-    /// If @baseUrl is omitted, the user's cached route, NodePool fast path, or provider lookup is used.
-    /// Otherwise, user object will be retrieved from the node of the given baseUrl after the route is validated.
+    /// If @baseUrl is an empty string, cached user data is bypassed, but NodePool
+    /// still wins route selection when it has an entry for the user's access node.
+    /// If NodePool has no entry, the user's cached baseUrl or provider lookup is used.
+    /// Otherwise, the supplied baseUrl is used as the fallback route after NodePool.
     ///
     /// - Parameters:
     ///   - userId: The user ID to fetch
     /// Fetches user data with caching, blacklist checking, and concurrent update management
     /// - Parameters:
     ///   - userId: The user ID to fetch
-    ///   - baseUrl: Explicit route for this user. Pass nil to use this user's
-    ///     cached route/NodePool/provider lookup, or "" to force provider lookup.
+    ///   - baseUrl: Explicit fallback route for this user. Pass nil to use this
+    ///     user's cached route/NodePool/provider lookup, or "" to bypass the
+    ///     cached user return while still letting NodePool win route selection.
     ///   - maxRetries: Maximum number of retry attempts (default: 2)
     ///   - forceRefresh: If true, bypasses cache and fetches fresh data
     ///   - skipRetryAndBlacklist: If true, skips retry logic and blacklist management (for internal use)
@@ -1522,7 +1648,7 @@ final class HproseInstance: ObservableObject {
         // Guard against fetching the guest user - GUEST_ID should never make network calls
         // as it represents an unauthenticated state
         guard userId != Constants.GUEST_ID else {
-            print("DEBUG: [fetchUser] Null userId, returning nil")
+            hproseDebug("DEBUG: [fetchUser] Null userId, returning nil")
             return nil
         }
         
@@ -1533,11 +1659,12 @@ final class HproseInstance: ObservableObject {
         // Skip this check if we're in internal retry logic to prevent double-checking
         if !skipRetryAndBlacklist && blackList.isBlacklisted(userId) {
             let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
-            if cachedUser.username != nil {
-                print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning cached=true")
+            let cachedHasUsername = await MainActor.run { cachedUser.username != nil }
+            if cachedHasUsername {
+                hproseDebug("DEBUG: [fetchUser] User \(userId) is blacklisted, returning cached=true")
                 return cachedUser
             }
-            print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning cached=false")
+            hproseDebug("DEBUG: [fetchUser] User \(userId) is blacklisted, returning cached=false")
             return nil
         }
         
@@ -1545,14 +1672,16 @@ final class HproseInstance: ObservableObject {
         if !forceRefresh {
             // Fetch the user from the local cache
             let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
-            
+
             // Verify that we have a complete cached user with required fields
-            if cachedUser.username != nil && cachedUser.baseUrl != nil {
+            let cachedComplete = await MainActor.run { cachedUser.username != nil && cachedUser.baseUrl != nil }
+            if cachedComplete {
                 let hasExpired = await cachedUser.hasExpired()
                 
                 // Return cached user if it's still valid and the caller did
                 // not explicitly ask us to re-resolve the provider route.
                 if !hasExpired && !forceFreshIPResolution {
+                    _ = await applyNodePoolBaseUrlIfAvailable(for: cachedUser, reason: "fresh cache NodePool")
                     await MainActor.run {
                         cachedUser.cacheStatus = .fresh
                     }
@@ -1561,11 +1690,12 @@ final class HproseInstance: ObservableObject {
                     await MainActor.run {
                         cachedUser.cacheStatus = .stale
                     }
-                    // User data has expired
-                    // If baseUrl is empty (forcing fresh IP resolution), don't return stale data
-                    // This is critical during login to ensure we get a healthy IP
+                    // User data has expired.
+                    // If baseUrl is empty, don't return stale data; route selection
+                    // below still checks NodePool before falling back to cached baseUrl
+                    // or provider discovery.
                     if forceFreshIPResolution {
-                        print("DEBUG: [fetchUser] Cache expired and baseUrl empty (forcing IP resolution), fetching fresh data")
+                        hproseDebug("DEBUG: [fetchUser] Cache expired and baseUrl empty (forcing IP resolution), fetching fresh data")
                         forceFreshIPResolution = true
                         // Fall through to fetch fresh data with IP resolution below
                     } else {
@@ -1596,7 +1726,7 @@ final class HproseInstance: ObservableObject {
                                 }
                             }
                         } else {
-                            print("DEBUG: [fetchUser] Returning expired cached user without background refresh for userId: \(userId)")
+                            hproseDebug("DEBUG: [fetchUser] Returning expired cached user without background refresh for userId: \(userId)")
                         }
                         
                         // Return the stale cached user immediately for better UX (non-login flows)
@@ -1634,10 +1764,12 @@ final class HproseInstance: ObservableObject {
         }
         
         do {
-            // Get or create a User instance for this userId
-            let user = User.getInstance(mid: userId)
-            await MainActor.run {
-                user.cacheStatus = .refreshing
+            // Get or create a User instance for this userId (on the main actor;
+            // User is a @MainActor class instance).
+            let user = await MainActor.run { () -> User in
+                let u = User.getInstance(mid: userId)
+                u.cacheStatus = .refreshing
+                return u
             }
             
             // Validate an explicitly supplied route, but do not write it to the
@@ -1669,12 +1801,17 @@ final class HproseInstance: ObservableObject {
             return updatedUser
         } catch {
             // Catch and log any exceptions during the fetch process
-            print("DEBUG: [fetchUser] Exception in fetchUser: userId: \(userId), error: \(error)")
+            hproseError("DEBUG: [fetchUser] Exception in fetchUser: userId: \(userId), error: \(error)")
             userUpdateQueue.sync {
                 userUpdateErrors[userId] = error as NSError
             }
             await MainActor.run {
                 User.getInstance(mid: userId).cacheStatus = .refreshFailed
+            }
+            // Backstop: ensure repeated fetchUser failures drive the 2-strike session block,
+            // even if the inner performUserUpdate path didn't record this attempt.
+            if !skipRetryAndBlacklist {
+                blackList.recordFailure(userId)
             }
             throw error
         }
@@ -1712,7 +1849,7 @@ final class HproseInstance: ObservableObject {
             }
         }
 
-        print("DEBUG: [fetchUser] Timed out waiting for concurrent refresh of \(userId); throwing instead of returning stale cache")
+        hproseWarning("DEBUG: [fetchUser] Timed out waiting for concurrent refresh of \(userId); throwing instead of returning stale cache")
         throw HproseError.userNotFound(userId: userId, reason: "Timed out waiting for concurrent refresh")
     }
     
@@ -1756,7 +1893,7 @@ final class HproseInstance: ObservableObject {
             await MainActor.run {
                 cachedUser.cacheStatus = .refreshFailed
             }
-            print("DEBUG: [startBackgroundRefresh] Background refresh failed for userId: \(userId): \(error)")
+            hproseWarning("DEBUG: [startBackgroundRefresh] Background refresh failed for userId: \(userId): \(error)")
         }
     }
     
@@ -1789,6 +1926,164 @@ final class HproseInstance: ObservableObject {
             invalidateIPCache(for: host)
         }
     }
+
+    private func hasTimeoutCause(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        var depth = 0
+
+        while let nsError = current, depth < 8 {
+            if nsError.code == NSURLErrorTimedOut {
+                return true
+            }
+
+            let description = nsError.localizedDescription.lowercased()
+            if description.contains("timeout") || description.contains("timed out") {
+                return true
+            }
+
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                current = underlying
+            } else if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                current = underlying as NSError
+            } else {
+                current = nil
+            }
+            depth += 1
+        }
+
+        return false
+    }
+
+    /// Validates the route currently displayed by a profile without delaying cached rendering.
+    /// Returns true when the current route is healthy or an unhealthy route was replaced.
+    func validateAndRepairProfileRoute(for user: User) async -> Bool {
+        let (userMid, currentBaseUrl, accessNodeMid) = await MainActor.run {
+            (
+                user.mid,
+                user.baseUrl?.absoluteString,
+                user.hostIds.flatMap { $0.count > 1 ? $0[1] : nil }
+            )
+        }
+
+        if let currentBaseUrl, !currentBaseUrl.isEmpty {
+            let currentHostPort = normalizeHostPort(currentBaseUrl)
+            hproseDebug("DEBUG: [ProfileRoute] Fresh health check for user \(userMid) at \(currentHostPort)")
+            let routeIsHealthy = await isServerHealthyWithTimeout(
+                currentHostPort,
+                timeout: 5.0,
+                useCache: false
+            )
+            if routeIsHealthy {
+                hproseDebug("DEBUG: [ProfileRoute] Current route is healthy for user \(userMid); refreshing profile data")
+                return true
+            }
+            guard !Task.isCancelled else { return false }
+
+            hproseWarning("DEBUG: [ProfileRoute] Current route is unhealthy for user \(userMid): \(currentHostPort)")
+            invalidateIPCacheForBaseUrl(currentBaseUrl)
+            if let accessNodeMid {
+                await MainActor.run {
+                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: currentBaseUrl)
+                }
+            }
+        }
+
+        var replacementIP: String?
+        if let accessNodeMid {
+            replacementIP = await getHostIP(
+                accessNodeMid,
+                v4Only: false,
+                forceHealthCheck: true
+            )
+        }
+        if replacementIP == nil {
+            replacementIP = try? await getProviderIP(userMid, v4Only: false)
+        }
+
+        guard let replacementIP,
+              let replacementURL = URL(string: ensureHttpPrefix(replacementIP)),
+              !Task.isCancelled else {
+            hproseWarning("DEBUG: [ProfileRoute] Could not resolve a healthy replacement route for user \(userMid)")
+            return false
+        }
+
+        await applyBaseUrlIfNeeded(user, url: replacementURL, reason: "profile health repair")
+        hproseDebug("DEBUG: [ProfileRoute] Repaired route for user \(userMid): \(replacementURL.absoluteString)")
+        return true
+    }
+
+    private func evictNodeRouteAfterFailure(
+        user: User,
+        attemptedBaseUrl: String?,
+        logPrefix: String
+    ) async {
+        // Phase A (demotion prep): snapshot @MainActor user.hostIds.
+        let userHostIds = await MainActor.run { user.hostIds }
+        guard let baseUrlString = attemptedBaseUrl,
+              let hostIds = userHostIds,
+              hostIds.count > 1 else {
+            return
+        }
+
+        let accessNodeMid = hostIds[1]
+
+        // Health check is the source of truth for route invalidation. Bypass
+        // cached health so this failure is judged by a fresh probe.
+        hproseWarning("DEBUG: [\(logPrefix)] Fetch-user timeout to \(baseUrlString); checking route health before changing NodePool")
+        invalidateIPCacheForBaseUrl(baseUrlString)
+        let routeHostPort = normalizeHostPort(baseUrlString)
+        let routeStillHealthy = await isServerHealthyWithTimeout(routeHostPort, timeout: 5.0, useCache: false)
+        if !routeStillHealthy {
+            hproseWarning("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failed health check")
+            await MainActor.run { NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString) }
+            return
+        }
+
+        hproseDebug("DEBUG: [\(logPrefix)] Keeping node \(accessNodeMid) in pool; health check passed after failure to \(baseUrlString)")
+    }
+
+    func applyNodePoolBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
+        // Phase A (demotion prep): snapshot @MainActor NodePool + User reads.
+        let (poolIP, userMid, userHostIds) = await MainActor.run {
+            (NodePool.shared.getIPFromNode(for: user), user.mid, user.hostIds)
+        }
+        guard let poolIP else {
+            return nil
+        }
+
+        guard let url = URL(string: ensureHttpPrefix(poolIP)) else {
+            hproseWarning("DEBUG: [NodePool] Ignoring invalid pooled IP for userId: \(userMid): \(poolIP)")
+            if let hostIds = userHostIds, hostIds.count > 1 {
+                await MainActor.run { NodePool.shared.removeIPFromNode(nodeMid: hostIds[1], ip: poolIP) }
+            }
+            return nil
+        }
+
+        await applyBaseUrlIfNeeded(user, url: url, reason: reason)
+        return url
+    }
+
+    func applyReadNodeBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
+        if let pooledUrl = await applyNodePoolBaseUrlIfAvailable(for: user, reason: reason) {
+            return pooledUrl
+        }
+
+        // Phase A (demotion prep): snapshot @MainActor User reads.
+        let (userHostIds, userMid) = await MainActor.run { (user.hostIds, user.mid) }
+        guard let accessNodeMid = userHostIds.flatMap({ $0.count > 1 ? $0[1] : nil }) else {
+            return nil
+        }
+
+        hproseDebug("DEBUG: [read route] Resolving read node \(accessNodeMid) for userId: \(userMid), reason: \(reason)")
+        guard let accessIP = await getHostIP(accessNodeMid),
+              let url = URL(string: ensureHttpPrefix(accessIP)) else {
+            hproseDebug("DEBUG: [read route] Could not resolve read node \(accessNodeMid) for userId: \(userMid)")
+            return nil
+        }
+
+        await applyBaseUrlIfNeeded(user, url: url, reason: reason)
+        return url
+    }
     
     /// Ensures URL has http:// prefix
     private func ensureHttpPrefix(_ url: String) -> String {
@@ -1799,8 +2094,8 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Validates user data is complete and valid
-    private func isValidUserData(_ user: User) -> Bool {
-        return !user.mid.isEmpty && user.username != nil
+    private func isValidUserData(_ user: User) async -> Bool {
+        return await MainActor.run { !user.mid.isEmpty && user.username != nil }
     }
     
     /// Checks if two normalized IPs represent a redirect loop
@@ -1815,12 +2110,13 @@ final class HproseInstance: ObservableObject {
         forceFreshIP: Bool = false,
         routeHint: String? = nil
     ) async throws -> User {
+        // Phase A (demotion prep): snapshot @MainActor user.mid + baseUrl (used in params + logs throughout).
+        let (userMid, userBaseUrlString) = await MainActor.run { (user.mid, user.baseUrl?.absoluteString) }
         let trimmedRouteHint = routeHint?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let originalBaseUrl = (trimmedRouteHint?.isEmpty == false) ? trimmedRouteHint : user.baseUrl?.absoluteString
+        let originalBaseUrl = (trimmedRouteHint?.isEmpty == false) ? trimmedRouteHint : userBaseUrlString
         let hasExpired = await user.hasExpired()
-        // Only explicit fresh-resolution paths skip NodePool. Expired cache still
-        // gets the one-shot NodePool fast path, then falls through to getProviderIP
-        // immediately if that address fails.
+        // NodePool is checked before every network attempt. If it has no route,
+        // the user's baseUrl is used once before falling back to provider discovery.
         let shouldForceFreshIP = forceFreshIP || trimmedRouteHint == "" || originalBaseUrl == nil || originalBaseUrl?.isEmpty == true
         
         var lastError: Error?
@@ -1839,33 +2135,32 @@ final class HproseInstance: ObservableObject {
                     v4Only: v4Only
                 )
                 attemptedBaseUrl = candidateBaseUrl.absoluteString
-                
+                let previousAccessNodeMid = await MainActor.run { user.hostIds.flatMap { $0.count > 1 ? $0[1] : nil } }
+
                 // Prepare server request
                 let entry = "get_user"
                 let params: [String: Any] = [
                     "aid": appId,
                     "ver": "last",
                     "version": "v3",
-                    "userid": user.mid,
+                    "userid": userMid,
                     "v4only": v4Only ? "true" : "false"
                 ]
-                
-                let hproseClient = clientPool.getClientByUrl(for: candidateBaseUrl.absoluteString)
-                hproseClient.timeout = 15
-                
+
+                let hproseClient = clientPool.getClientByUrl(for: candidateBaseUrl.absoluteString, timeout: 15)
+
                 // Make server call
-                guard let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
-                    throw HproseError.noResponse(userId: user.mid)
+                guard let rawResponse = await invokeRunMApp(using: hproseClient, entry: entry, params: params) else {
+                    throw HproseError.noResponse(userId: userMid)
                 }
-                
+
                 // Check if the response is an error object (network failure case)
                 if let error = rawResponse as? Error {
                     let nsError = error as NSError
-                    print("ERROR: [\(logPrefix)] Network error during get_user: userId: \(user.mid), domain: \(nsError.domain), code: \(nsError.code)")
+                    hproseError("ERROR: [\(logPrefix)] Network error during get_user: userId: \(userMid), domain: \(nsError.domain), code: \(nsError.code)")
                     throw error
                 }
-                
-                print("DEBUG: [\(logPrefix)] get_user rawResponse received for \(user.mid)")
+
                 
                 // Unwrap and process response
                 let response = try Self.unwrapV2Response(rawResponse)
@@ -1875,63 +2170,44 @@ final class HproseInstance: ObservableObject {
                     user: user,
                     response: response as Any,
                     skipRetryAndBlacklist: skipRetryAndBlacklist,
-                    confirmedBaseUrl: candidateBaseUrl
+                    confirmedBaseUrl: candidateBaseUrl,
+                    previousAccessNodeMid: previousAccessNodeMid
                 )
                 
                 if success {
                     return user
                 }
                 
-                // If we get here, response was null - clear baseUrl and let retry loop handle it
-                print("DEBUG: [\(logPrefix)] NULL RESPONSE for userId: \(user.mid) on attempt \(attempt)/\(maxRetries)")
-                
-                // Remove unhealthy node from pool (null response indicates node issue)
-                invalidateIPCacheForBaseUrl(attemptedBaseUrl)
-                if let baseUrlString = attemptedBaseUrl,
-                   let hostIds = user.hostIds, hostIds.count > 1 {
-                    let accessNodeMid = hostIds[1]
-                    print("DEBUG: [\(logPrefix)] Removing node \(accessNodeMid) from pool after null response")
-                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+                // Null get_user data means the user's data is missing or broken.
+                // It is not evidence that the node IP is stale.
+                hproseError("ERROR: [\(logPrefix)] NULL USER DATA RESPONSE for userId: \(userMid) on attempt \(attempt)/\(maxRetries)")
+                if !skipRetryAndBlacklist {
+                    blackList.recordFailure(userMid)
                 }
-
-                // If this was the last attempt, fail
-                if attempt >= maxRetries {
-                    print("ERROR: [\(logPrefix)] NULL RESPONSE on final attempt for userId: \(user.mid), adding to blacklist")
-                    if !skipRetryAndBlacklist {
-                        blackList.recordFailure(user.mid)
-                    }
-                    throw HproseError.userNotFound(userId: user.mid, reason: "User returned null after \(maxRetries) attempts")
-                }
-                
-                // Otherwise, continue to next attempt - resolveAndUpdateBaseUrl will get fresh IP
-                print("DEBUG: [\(logPrefix)] Will retry with fresh providerIP on next attempt")
-                lastError = HproseError.userNotFound(userId: user.mid, reason: "Null response")
-                continue
+                throw HproseError.invalidUserData(userId: userMid, reason: "Null user data response")
             } catch {
                 // Handle cancellation specially - don't log as failure, don't retry
                 if error is CancellationError {
-                    print("DEBUG: [\(logPrefix)] Fetch cancelled for userId: \(user.mid), attempt: \(attempt)/\(maxRetries)")
+                    hproseDebug("DEBUG: [\(logPrefix)] Fetch cancelled for userId: \(userMid), attempt: \(attempt)/\(maxRetries)")
                     throw error // Propagate cancellation immediately
                 }
-                
+
+                if let typedError = error as? HproseError,
+                   case .invalidUserData = typedError {
+                    hproseError("ERROR: [\(logPrefix)] USER DATA INVALID: userId: \(userMid), error: \(error)")
+                    throw error
+                }
+
                 lastError = error
                 let nsError = error as NSError
-                print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), domain: \(nsError.domain), code: \(nsError.code)")
+                hproseError("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(userMid), attempt: \(attempt)/\(maxRetries), domain: \(nsError.domain), code: \(nsError.code)")
 
-                // Invalidate IP cache so retry's getProviderIP() health check won't
-                // return stale "healthy" for the failed IP
-                invalidateIPCacheForBaseUrl(attemptedBaseUrl)
-
-                // This address failed for this user flow. Remove it from NodePool
-                // so the next attempt resolves through getProviderIP instead of
-                // trusting the same failed fast-path again.
-                let nsCode = (error as NSError).code
-                if nsCode != NSURLErrorCancelled,
-                   let baseUrlString = attemptedBaseUrl,
-                   let hostIds = user.hostIds, hostIds.count > 1 {
-                    let accessNodeMid = hostIds[1]
-                    print("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failure")
-                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+                if hasTimeoutCause(error) {
+                    await evictNodeRouteAfterFailure(
+                        user: user,
+                        attemptedBaseUrl: attemptedBaseUrl,
+                        logPrefix: logPrefix
+                    )
                 }
                 
                 if skipRetryAndBlacklist {
@@ -1939,7 +2215,7 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 if attempt < maxRetries {
-                    print("DEBUG: [\(logPrefix)] Discarded failed IP; resolving fresh provider IP immediately")
+                    hproseWarning("DEBUG: [\(logPrefix)] Retrying get_user after failure; route health will decide whether IP changes")
                     continue
                 }
             }
@@ -1948,11 +2224,11 @@ final class HproseInstance: ObservableObject {
         // All retries failed - remove node from pool, clear stale baseUrl, and
         // surface the error. Leave the cached User object untouched so profile
         // screens can keep rendering stale-but-useful cached data.
-        print("ERROR: [\(logPrefix)] ALL RETRIES FAILED: userId: \(user.mid), maxRetries: \(maxRetries)")
+        hproseError("ERROR: [\(logPrefix)] ALL RETRIES FAILED: userId: \(userMid), maxRetries: \(maxRetries)")
         if !skipRetryAndBlacklist {
-            blackList.recordFailure(user.mid)
+            blackList.recordFailure(userMid)
         }
-        throw lastError ?? HproseError.noResponse(userId: user.mid)
+        throw lastError ?? HproseError.noResponse(userId: userMid)
     }
     
     /// Processes user data response from server
@@ -1961,8 +2237,11 @@ final class HproseInstance: ObservableObject {
         user: User,
         response: Any,
         skipRetryAndBlacklist: Bool,
-        confirmedBaseUrl: URL?
+        confirmedBaseUrl: URL?,
+        previousAccessNodeMid: String?
     ) async throws -> Bool {
+        // Phase A (demotion prep): snapshot @MainActor user.mid (used in logs + records throughout).
+        let userMid = await MainActor.run { user.mid }
         // Handle dictionary response (user data)
         if let userDict = response as? [String: Any] {
             // Validate response data BEFORE updating the singleton to avoid overwriting
@@ -1970,36 +2249,65 @@ final class HproseInstance: ObservableObject {
             guard let mid = userDict["mid"] as? String, !mid.isEmpty,
                   let username = userDict["username"] as? String,
                   !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                print("ERROR: [processUserDataResponse] INVALID USER DATA in response: mid missing or username empty for userId: \(user.mid)")
-                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid user data received - missing mid or empty username")
+                hproseError("ERROR: [processUserDataResponse] INVALID USER DATA in response: mid missing or username empty for userId: \(userMid)")
+                if !skipRetryAndBlacklist {
+                    blackList.recordFailure(userMid)
+                }
+                throw HproseError.invalidUserData(userId: userMid, reason: "Missing mid or empty username")
             }
 
             if !skipRetryAndBlacklist {
-                blackList.recordSuccess(user.mid)
+                blackList.recordSuccess(userMid)
             }
 
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false, confirmedBaseUrl: confirmedBaseUrl)
 
-            // Update NodePool with successful access (replace IP list with working IP)
-            // Only update access node (hostIds[1]) since that's what we resolved during fetchUser
-            if let baseUrlString = confirmedBaseUrl?.absoluteString,
-               let hostIds = User.getInstance(mid: user.mid).hostIds, hostIds.count > 1 {
+            // NodePool is authoritative for the access node. After a confirmed
+            // fetch, replace the pool entry only when the user's route differs
+            // from what the pool already knows.
+            let fetchedUser = await MainActor.run { User.getInstance(mid: userMid) }
+            let (currentAccessNodeMid, fetchedBaseUrlString, fetchedHostIds) = await MainActor.run {
+                (fetchedUser.hostIds.flatMap { $0.count > 1 ? $0[1] : nil },
+                 fetchedUser.baseUrl?.absoluteString,
+                 fetchedUser.hostIds)
+            }
+            if let previousAccessNodeMid,
+               let currentAccessNodeMid,
+               previousAccessNodeMid != currentAccessNodeMid {
+                hproseDebug("DEBUG: [processUserDataResponse] Access node changed for \(userMid): \(previousAccessNodeMid) -> \(currentAccessNodeMid); resolving new node before updating NodePool")
+
+                if let accessIP = await getHostIP(currentAccessNodeMid, v4Only: true),
+                   let accessUrl = URL(string: ensureHttpPrefix(accessIP)) {
+                    await applyBaseUrlIfNeeded(fetchedUser, url: accessUrl, reason: "access node changed")
+                    await MainActor.run { NodePool.shared.updateNodeIP(nodeMid: currentAccessNodeMid, newIP: accessUrl.absoluteString) }
+                } else {
+                    hproseDebug("DEBUG: [processUserDataResponse] Could not resolve changed access node \(currentAccessNodeMid); leaving NodePool unchanged")
+                }
+                return true
+            }
+
+            let ipValid = await MainActor.run { NodePool.shared.isUserIPValid(for: fetchedUser) }
+            if let baseUrlString = fetchedBaseUrlString,
+               let hostIds = fetchedHostIds, hostIds.count > 1,
+               !ipValid {
                 let accessNodeMid = hostIds[1]
-                NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString)
-                print("DEBUG: [processUserDataResponse] ✅ Updated pool: access node \(accessNodeMid) now has working IP")
+                await MainActor.run { NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString) }
             }
             return true
         }
-        
+
         // Handle nil response - return false to indicate retry needed
         if response is NSNull {
-            print("DEBUG: [processUserDataResponse] NULL RESPONSE: userId: \(user.mid), will retry with fresh providerIP")
-            return false
+            hproseError("ERROR: [processUserDataResponse] NULL USER DATA RESPONSE: userId: \(userMid)")
+            if !skipRetryAndBlacklist {
+                blackList.recordFailure(userMid)
+            }
+            throw HproseError.invalidUserData(userId: userMid, reason: "Null user data response")
         }
-        
+
         // Unexpected response type
-        print("ERROR: [processUserDataResponse] UNEXPECTED RESPONSE TYPE: userId: \(user.mid), type: \(type(of: response))")
-        throw HproseError.unexpectedResponse(response: response)
+        hproseError("ERROR: [processUserDataResponse] UNEXPECTED RESPONSE TYPE: userId: \(userMid), type: \(type(of: response))")
+        throw HproseError.unexpectedResponse(description: String(describing: response))
     }
     /// Resolves a candidate baseUrl (for first attempt or retries) without
     /// mutating the cached User. The candidate is committed only after get_user
@@ -2013,28 +2321,26 @@ final class HproseInstance: ObservableObject {
         originalBaseUrl: String?,
         v4Only: Bool = false
     ) async throws -> URL {
-        // NodePool is the performance fast-path, but only for the first attempt.
-        // If it fails, performUserUpdate removes the IP and retries through
-        // getProviderIP immediately.
-        if attempt == 1, !forceFreshIP, let poolIP = NodePool.shared.getIPFromNode(for: user) {
-            if let url = URL(string: ensureHttpPrefix(poolIP)) {
-                print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using trusted NodePool IP once: \(poolIP) for userId: \(user.mid)")
-                return url
-            }
-            print("DEBUG: [resolveAndUpdateBaseUrl] Ignoring invalid NodePool IP for userId: \(user.mid): \(poolIP)")
+        // Phase A (demotion prep): snapshot @MainActor user reads (mid for logs, hostIds for read-node fallback).
+        let (userMid, userHostIds) = await MainActor.run { (user.mid, user.hostIds) }
+        // Forced resolution must validate a pooled route through getHostIP below.
+        // That health check removes an unreachable IP before discovering a replacement.
+        if !forceFreshIP,
+           let url = await applyNodePoolBaseUrlIfAvailable(for: user, reason: "NodePool route") {
+            hproseDebug("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using NodePool IP: \(url.absoluteString) for userId: \(userMid)")
+            return url
         }
 
-        if attempt == 1, !forceFreshIP, let originalBaseUrl, !originalBaseUrl.isEmpty {
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using cached baseUrl once: \(originalBaseUrl) for userId: \(user.mid)")
+        if attempt == 1, let originalBaseUrl, !originalBaseUrl.isEmpty {
+            hproseDebug("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - No NodePool entry; using user baseUrl once: \(originalBaseUrl) for userId: \(userMid)")
             guard let url = URL(string: ensureHttpPrefix(originalBaseUrl)) else {
-                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid cached baseUrl: \(originalBaseUrl)")
+                throw HproseError.userNotFound(userId: userMid, reason: "Invalid cached baseUrl: \(originalBaseUrl)")
             }
             return url
         }
 
-        // getProviderIP is the source of truth after the one allowed cached
-        // route attempt. A failed cached route is removed from the local
-        // fast-paths, so retries come here immediately instead of reusing it.
+        // Direct read-node discovery is the strongest fallback for known users:
+        // baseUrl may be stale, while hostIds[1] identifies the node that serves reads.
         let reason: String
         if attempt > 1 {
             reason = "retry after failure"
@@ -2048,23 +2354,36 @@ final class HproseInstance: ObservableObject {
             reason = "provider discovery"
         }
         
-        print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid), reason: \(reason)")
-        
-        do {
-            guard let providerIP = try await getProviderIP(user.mid, v4Only: v4Only) else {
-                // getProviderIP returned nil (not exception) - user not found or no IPs available
-                print("WARNING: [resolveAndUpdateBaseUrl] getProviderIP returned nil for userId: \(user.mid) - user not found or no IPs available")
-                throw HproseError.userNotFound(userId: user.mid, reason: "No healthy provider IP found")
+        if let accessNodeMid = userHostIds.flatMap({ $0.count > 1 ? $0[1] : nil }) {
+            hproseDebug("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving read node \(accessNodeMid) for userId: \(userMid), reason: \(reason)")
+            if let accessIP = await getHostIP(
+                accessNodeMid,
+                v4Only: v4Only,
+                forceHealthCheck: forceFreshIP
+            ),
+               let url = URL(string: ensureHttpPrefix(accessIP)) {
+                return url
             }
-            
+            hproseWarning("WARNING: [resolveAndUpdateBaseUrl] getHostIP returned nil for read node \(accessNodeMid), falling back to provider IP for userId: \(userMid)")
+        }
+
+        hproseDebug("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(userMid), reason: \(reason)")
+
+        do {
+            guard let providerIP = try await getProviderIP(userMid, v4Only: v4Only) else {
+                // getProviderIP returned nil (not exception) - user not found or no IPs available
+                hproseWarning("WARNING: [resolveAndUpdateBaseUrl] getProviderIP returned nil for userId: \(userMid) - user not found or no IPs available")
+                throw HproseError.userNotFound(userId: userMid, reason: "No healthy provider IP found")
+            }
+
             if let url = URL(string: ensureHttpPrefix(providerIP)) {
                 return url
             }
 
-            throw HproseError.userNotFound(userId: user.mid, reason: "Invalid provider IP: \(providerIP)")
+            throw HproseError.userNotFound(userId: userMid, reason: "Invalid provider IP: \(providerIP)")
         } catch {
             // getProviderIP threw exception - network error, should trigger retry
-            print("WARNING: [resolveAndUpdateBaseUrl] Network error calling getProviderIP for userId: \(user.mid), attempt: \(attempt)/\(maxRetries)")
+            hproseWarning("WARNING: [resolveAndUpdateBaseUrl] Network error calling getProviderIP for userId: \(userMid), attempt: \(attempt)/\(maxRetries)")
             throw error  // Re-throw to trigger retry logic
         }
     }
@@ -2078,7 +2397,7 @@ final class HproseInstance: ObservableObject {
     func getProviderIP(_ mid: String, v4Only: Bool = false) async throws -> String? {
         // Safety check: never try to get provider IP for GUEST_ID
         if mid == Constants.GUEST_ID {
-            print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
+            hproseError("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
         }
 
@@ -2091,7 +2410,7 @@ final class HproseInstance: ObservableObject {
 
         let providerIP = try await _getProviderIP(mid, v4Only: v4Only, hproseClient: entryClient)
         if providerIP == nil {
-            print("DEBUG: [getProviderIP] No provider IP found for \(mid) - user not found or all IPs unhealthy")
+            hproseWarning("DEBUG: [getProviderIP] No provider IP found for \(mid) - user not found or all IPs unhealthy")
         }
         return providerIP
     }
@@ -2099,7 +2418,7 @@ final class HproseInstance: ObservableObject {
     private func _getProviderIP(
         _ mid: MimeiId,
         v4Only: Bool = false,
-        hproseClient: HproseClient? = HproseInstance.shared.appUser.hproseClient
+        hproseClient: HproseClient? = nil
     ) async throws -> String? {
         let entry = "get_provider_ips"
         let params = [
@@ -2109,26 +2428,32 @@ final class HproseInstance: ObservableObject {
             "mid": mid,
             "v4only": v4Only ? "true" : "false"
         ]
-        
-        guard let hproseClient = hproseClient else {
-            print("DEBUG: [_getProviderIP] No hprose client available")
+
+        // Phase A (demotion prep): the default client (appUser's) can't be a @MainActor
+        // default argument once the class is nonisolated — resolve it here instead.
+        let resolvedClient: HproseClient?
+        if let hproseClient {
+            resolvedClient = hproseClient
+        } else {
+            resolvedClient = await MainActor.run { HproseInstance.shared.appUser.hproseClient }
+        }
+        guard let hproseClient = resolvedClient else {
+            hproseDebug("DEBUG: [_getProviderIP] No hprose client available")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available"])
         }
         
         // Let network errors propagate as exceptions
-        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
-        print("DEBUG: [_getProviderIP][RAW] mid=\(mid), rawResponse=\(providerIPDebugDescription(rawResponse))")
+        let rawResponse = await invokeRunMApp(using: hproseClient, entry: entry, params: params)
         guard let response = rawResponse else {
-            print("DEBUG: [_getProviderIP] No response from server - network error")
+            hproseDebug("DEBUG: [_getProviderIP] No response from server - network error")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server"])
         }
         
         // Unwrap v2 response - let exceptions propagate for network/format errors
         let unwrappedResponse = try Self.unwrapV2Response(response)
-        print("DEBUG: [_getProviderIP][RAW] mid=\(mid), unwrappedResponse=\(providerIPDebugDescription(unwrappedResponse))")
+        hproseDebug("DEBUG: [_getProviderIP][RAW] mid=\(mid), unwrappedResponse=\(providerIPDebugDescription(unwrappedResponse))")
         
         if let ipList = unwrappedResponse as? [String] {
-            print("DEBUG: [_getProviderIP][RAW] mid=\(mid), rawIPList=\(providerIPDebugDescription(ipList))")
 
             // Filter and trim IP addresses, excluding private/reserved ranges
             let ipAddresses = ipList
@@ -2136,8 +2461,8 @@ final class HproseInstance: ObservableObject {
                 .filter { !$0.isEmpty }
                 .filter { Gadget.isValidPublicIpAddress($0) }
 
-            print("DEBUG: [_getProviderIP][RAW] mid=\(mid), filteredPublicIPs=\(providerIPDebugDescription(ipAddresses))")
-            print("DEBUG: [_getProviderIP] Retrieved \(ipAddresses.count) IP address(es) from get_provider_ips API")
+            hproseDebug("DEBUG: [_getProviderIP][RAW] mid=\(mid), filteredPublicIPs=\(providerIPDebugDescription(ipAddresses))")
+            hproseDebug("DEBUG: [_getProviderIP] Retrieved \(ipAddresses.count) IP address(es) from get_provider_ips API")
             
             // Test IPs two at a time to match Android and avoid stampeding weak nodes.
             let batchSize = 2
@@ -2145,26 +2470,22 @@ final class HproseInstance: ObservableObject {
                 let batchEnd = min(batchStart + batchSize, ipAddresses.count)
                 let batch = Array(ipAddresses[batchStart..<batchEnd])
                 
-                print("DEBUG: [_getProviderIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
                 
                 // Test this batch in parallel - return as soon as first IP responds successfully
                 let healthyIP: String? = await withTaskGroup(of: (String, Bool)?.self) { group in
-                    for (index, ip) in batch.enumerated() {
-                        let absoluteIndex = batchStart + index + 1
+                    for ip in batch {
                         group.addTask {
                             // Check for cancellation before starting
                             if Task.isCancelled {
                                 return nil
                             }
                             
-                            print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
                             let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0, logFailures: false)
 
                             if Task.isCancelled { return nil }
 
                             if isHealthy {
-                                print("DEBUG: [_getProviderIP] ✅ IP test PASSED: \(ip)")
                             }
                             
                             return (ip, isHealthy)
@@ -2174,7 +2495,7 @@ final class HproseInstance: ObservableObject {
                     // Return IMMEDIATELY when first healthy IP is found
                     for await result in group {
                         if let (ip, isHealthy) = result, isHealthy {
-                            print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip) - returning immediately")
+                            hproseDebug("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip) - returning immediately")
                             group.cancelAll()  // Cancel remaining checks in this batch
                             return ip as String?
                         }
@@ -2191,13 +2512,13 @@ final class HproseInstance: ObservableObject {
             // If no healthy IP is found, return nil. The caller must fail or
             // explicitly retry discovery; it must not silently reuse a stale URL.
             if !ipAddresses.isEmpty {
-                print("DEBUG: [_getProviderIP] All health checks failed for \(ipAddresses.count) IP(s)")
+                hproseError("DEBUG: [_getProviderIP] All health checks failed for \(ipAddresses.count) IP(s)")
                 return nil
             }
             
             return nil
         }
-        print("DEBUG: [_getProviderIP] Invalid IpList response format")
+        hproseWarning("DEBUG: [_getProviderIP] Invalid IpList response format")
         return nil
     }
 
@@ -2214,20 +2535,15 @@ final class HproseInstance: ObservableObject {
     // MARK: - IP Cache Methods
     
     /// Check if an IP health result is in the cache and still valid.
-    private func getCachedIPHealth(_ ip: String, logFailures: Bool = true) -> Bool? {
+    private func getCachedIPHealth(_ ip: String, logFailures _: Bool = true) -> Bool? {
         ipCacheLock.lock()
         defer { ipCacheLock.unlock() }
         let key = normalizeHostPort(ip)
         
         if let entry = ipCache[key] {
             if !entry.isExpired {
-                let state = entry.isHealthy ? "healthy" : "unhealthy"
-                if entry.isHealthy || logFailures {
-                    print("DEBUG: [IPCache] Cache HIT for IP: \(key) = \(state) (age: \(Int(Date().timeIntervalSince(entry.timestamp)))s)")
-                }
                 return entry.isHealthy
             } else {
-                print("DEBUG: [IPCache] Cache EXPIRED for IP: \(key)")
                 ipCache.removeValue(forKey: key)
             }
         }
@@ -2235,16 +2551,12 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Cache a HEAD health result.
-    private func cacheIP(_ ip: String, isHealthy: Bool, logFailures: Bool = true) {
+    private func cacheIP(_ ip: String, isHealthy: Bool, logFailures _: Bool = true) {
         ipCacheLock.lock()
         defer { ipCacheLock.unlock() }
         let key = normalizeHostPort(ip)
         
         ipCache[key] = IPCacheEntry(ip: key, isHealthy: isHealthy, timestamp: Date())
-        let state = isHealthy ? "healthy" : "unhealthy"
-        if isHealthy || logFailures {
-            print("DEBUG: [IPCache] Cached IP: \(key) = \(state)")
-        }
     }
     
     /// Clear expired entries from cache
@@ -2256,7 +2568,7 @@ final class HproseInstance: ObservableObject {
         ipCache = ipCache.filter { !$0.value.isExpired }
         let removedCount = beforeCount - ipCache.count
         if removedCount > 0 {
-            print("DEBUG: [IPCache] Cleaned up \(removedCount) expired entries")
+            hproseDebug("DEBUG: [IPCache] Cleaned up \(removedCount) expired entries")
         }
     }
     
@@ -2267,7 +2579,7 @@ final class HproseInstance: ObservableObject {
         let key = normalizeHostPort(ip)
         
         if ipCache.removeValue(forKey: key) != nil {
-            print("DEBUG: [IPCache] Invalidated cache for IP: \(key)")
+            hproseWarning("DEBUG: [IPCache] Invalidated cache for IP: \(key)")
         }
     }
     
@@ -2278,7 +2590,7 @@ final class HproseInstance: ObservableObject {
         
         let count = ipCache.count
         ipCache.removeAll()
-        print("DEBUG: [IPCache] Cleared all \(count) cached IPs")
+        hproseDebug("DEBUG: [IPCache] Cleared all \(count) cached IPs")
     }
     
     // MARK: - Health Check Methods
@@ -2308,13 +2620,12 @@ final class HproseInstance: ObservableObject {
             _ = try await URLSession.shared.data(for: request)
             // Any response (any status code) means the server is reachable.
             cacheIP(ip, isHealthy: true)
-            print("DEBUG: [isServerHealthy] ✅ \(ip) reachable")
             return true
         } catch {
             let nsError = error as NSError
             if nsError.code != NSURLErrorCancelled {
                 if logFailures {
-                    print("DEBUG: [isServerHealthy] ❌ \(ip): \(nsError.domain) \(nsError.code)")
+                    hproseError("DEBUG: [isServerHealthy] ❌ \(ip): \(nsError.domain) \(nsError.code)")
                 }
                 cacheIP(ip, isHealthy: false, logFailures: logFailures)
             }
@@ -2326,6 +2637,29 @@ final class HproseInstance: ObservableObject {
         cleanupExpiredCache()
         return await isServerHealthy(ip, timeout: timeout, useCache: useCache, logFailures: logFailures)
     }
+
+    private func mergeTweetFromDict(
+        _ dict: [String: Any],
+        attachAuthor: Bool = false,
+        attachAuthorMid: MimeiId? = nil
+    ) async throws -> Tweet {
+        let record = try TweetRecord.fromDictionary(dict)
+        return await MainActor.run {
+            let authorMid = attachAuthor ? record.authorId : attachAuthorMid
+            let author = authorMid.map { UserStore.shared.user(mid: $0) }
+            return TweetStore.shared.merge(record, author: author)
+        }
+    }
+
+    private func mergeUserFromDict(
+        _ dict: [String: Any],
+        shouldUpdateBaseUrl: Bool = false
+    ) async throws -> User {
+        let decoded = try UserRecord.fromDictionary(dict)
+        return await MainActor.run {
+            UserStore.shared.merge(decoded, shouldUpdateBaseUrl: shouldUpdateBaseUrl)
+        }
+    }
     
 
     
@@ -2336,22 +2670,24 @@ final class HproseInstance: ObservableObject {
         preserveBaseUrl: Bool = false,
         confirmedBaseUrl: URL? = nil
     ) async throws {
-        try await MainActor.run {
-            let originalBaseUrl = user.baseUrl
-            let updatedUser = try User.from(dict: dict)
-            
+        var decodedUser = try UserRecord.fromDictionary(dict)
+        let originalBaseUrl = await MainActor.run { user.baseUrl }
+
+        if let confirmedBaseUrl {
+            decodedUser.record.baseUrl = confirmedBaseUrl
+        } else if preserveBaseUrl || originalBaseUrl != nil {
+            decodedUser.record.baseUrl = originalBaseUrl
+        }
+
+        let decodedUserForMerge = decodedUser
+        await MainActor.run {
             // Commit a newly-tested route only after the response has been
             // validated. Failed/null refreshes leave the cached object alone.
-            if let confirmedBaseUrl {
-                updatedUser.baseUrl = confirmedBaseUrl
-            } else if preserveBaseUrl || originalBaseUrl != nil {
-                updatedUser.baseUrl = originalBaseUrl
-            }
-            
-            print("DEBUG: [updateUserFromDict] Updated user: \(updatedUser.username ?? "nil") (\(updatedUser.mid))")
-            
-            User.updateUserInstance(with: updatedUser, confirmedBaseUrl != nil)
-            User.getInstance(mid: updatedUser.mid).cacheStatus = .fresh
+            let updatedUser = UserStore.shared.merge(decodedUserForMerge, shouldUpdateBaseUrl: confirmedBaseUrl != nil)
+            updatedUser.cacheStatus = .fresh
+
+            hproseDebug("DEBUG: [updateUserFromDict] Updated user: \(updatedUser.username ?? "nil") (\(updatedUser.mid))")
+
             TweetCacheManager.shared.saveUser(updatedUser)
             NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": updatedUser.mid])
         }
@@ -2363,7 +2699,8 @@ final class HproseInstance: ObservableObject {
         case noClient(userId: String)
         case noResponse(userId: String)
         case userNotFound(userId: String, reason: String)
-        case unexpectedResponse(response: Any)
+        case invalidUserData(userId: String, reason: String)
+        case unexpectedResponse(description: String)
         
         var errorDescription: String? {
             switch self {
@@ -2373,8 +2710,10 @@ final class HproseInstance: ObservableObject {
                 return "No response from server for user: \(userId)"
             case .userNotFound(let userId, let reason):
                 return "User \(userId) not found: \(reason)"
-            case .unexpectedResponse(let response):
-                return "Unexpected response from server: \(String(describing: response))"
+            case .invalidUserData(let userId, let reason):
+                return "Invalid user data for \(userId): \(reason)"
+            case .unexpectedResponse(let description):
+                return "Unexpected response from server: \(description)"
             }
         }
         
@@ -2392,9 +2731,12 @@ final class HproseInstance: ObservableObject {
 
     /// Resyncs a user from the backend and returns the updated user plus newly synced tweets.
     func resyncUser(userId: String) async throws -> ResyncUserResult {
-        let user = User.getInstance(mid: userId)
+        // Phase A (demotion prep): snapshot @MainActor User.getInstance baseUrl + appUser.mid.
+        let (userBaseUrl, appUserMid) = await MainActor.run {
+            (User.getInstance(mid: userId).baseUrl, self.appUser.mid)
+        }
 
-        let route = user.baseUrl?.absoluteString
+        let route = userBaseUrl?.absoluteString
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
         guard !route.isEmpty else {
@@ -2411,16 +2753,15 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "version": "v3",
             "userid": userId,
-            "appuserid": appUser.mid
+            "appuserid": appUserMid
         ]
 
-        let client = HproseHttpClient()
-        client.uri = "\(route)/webapi/"
-        client.timeout = 300
+        // 300s: resync can be a long server-side operation. Pooled per (URL, timeout).
+        let client = clientPool.getClientByUrl(for: route, timeout: 300)
 
-        print("DEBUG: [resyncUser] Calling resync_user for userId: \(userId) with baseUrl: \(route)")
+        hproseDebug("DEBUG: [resyncUser] Calling resync_user for userId: \(userId) with baseUrl: \(route)")
 
-        guard let rawResponse = client.invoke("runMApp", withArgs: [entry, params]) else {
+        guard let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from resync_user for user \(userId)"])
         }
 
@@ -2433,30 +2774,33 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid resync_user response for user \(userId): missing user data"])
         }
 
-        let syncedUser = try await MainActor.run {
-            try User.from(dict: userData)
-        }
-        guard syncedUser.mid == userId, !(syncedUser.username?.isEmpty ?? true) else {
+        let syncedUser = try await mergeUserFromDict(userData)
+        let (syncedMid, syncedUsername) = await MainActor.run { (syncedUser.mid, syncedUser.username) }
+        guard syncedMid == userId, !(syncedUsername?.isEmpty ?? true) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid resync_user data for user \(userId)"])
         }
 
         let tweetDataList = Self.tweetDataDictionaries(from: responseData["tweets"])
-        let syncedTweets = tweetDataList.compactMap { tweetData -> Tweet? in
+        var syncedTweets: [Tweet] = []
+        for tweetData in tweetDataList {
             do {
-                let tweet = try Tweet.from(dict: tweetData)
-                tweet.author = tweet.authorId == syncedUser.mid
-                    ? syncedUser
-                    : User.getInstance(mid: tweet.authorId)
-                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
-                return tweet
+                let tweet = try await mergeTweetFromDict(
+                    tweetData,
+                    attachAuthorMid: tweetData["authorId"] as? String == syncedMid ? syncedMid : nil
+                )
+                await MainActor.run {
+                    if tweet.author == nil {
+                        tweet.author = UserStore.shared.user(mid: tweet.authorId)
+                    }
+                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                }
+                syncedTweets.append(tweet)
             } catch {
-                print("WARN: [resyncUser] Ignoring invalid synced tweet for user \(userId): \(error)")
-                return nil
+                hproseWarning("WARN: [resyncUser] Ignoring invalid synced tweet for user \(userId): \(error)")
             }
         }
 
-        TweetCacheManager.shared.saveUser(syncedUser)
-        print("DEBUG: [resyncUser] Successfully resynced user \(userId) with \(syncedTweets.count) tweets")
+        await MainActor.run { TweetCacheManager.shared.saveUser(syncedUser) }
 
         return ResyncUserResult(user: syncedUser, tweets: syncedTweets)
     }
@@ -2479,62 +2823,60 @@ final class HproseInstance: ObservableObject {
     
     func login(_ loginUser: User) async throws -> [String: Any] {
         let entry = "login"
+        // Phase A (demotion prep): snapshot @MainActor loginUser credential + route reads.
+        let (loginUsername, loginPassword, loginBaseUrl) = await MainActor.run {
+            (loginUser.username, loginUser.password, loginUser.baseUrl)
+        }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "username": loginUser.username!,
-            "password": loginUser.password!
+            "username": loginUsername!,
+            "password": loginPassword!
         ]
-        
-        guard let baseUrl = loginUser.baseUrl else {
-            print("ERROR: [login] Nil user baseUrl")
+
+        // Match TweetWeb: authenticate through the resolved read/provider route.
+        // hostIds[0] is the writable home node and is resolved lazily for writes.
+        guard let loginUrl = loginBaseUrl else {
+            hproseError("ERROR: [login] No URL available for login")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
-        
-        print("DEBUG: [login] Starting login API call to baseUrl: \(baseUrl.absoluteString)")
-        
+        hproseDebug("DEBUG: [login] Using provider URL for authentication: \(loginUrl.absoluteString)")
+
+
         return try await retryOperation(maxRetries: 3) {
-            print("DEBUG: [login] Creating client for baseUrl: \(baseUrl.absoluteString)")
-            let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            newClient.timeout = 30.0  // 30 seconds (login can be slow due to remote node communication)
-            
-            // Release client back to pool when done (no need to close)
-            defer { 
-                // Note: Not releasing back to pool since timeout is configured differently
-                // Let the pool manage lifecycle naturally
-            }
-            
-            print("DEBUG: [login] Invoking login API...")
-            let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
-            print("DEBUG: [login] Got raw response, unwrapping...")
-            
+            hproseDebug("DEBUG: [login] Creating client for: \(loginUrl.absoluteString)")
+            let newClient = self.clientPool.getClientByUrl(for: loginUrl.absoluteString, timeout: 30)
+
+            hproseDebug("DEBUG: [login] Invoking login API...")
+            let rawResponse = await self.invokeRunMApp(using: newClient, entry: entry, params: params)
+
             // Check if the response is nil (network error)
             guard rawResponse != nil else {
-                print("ERROR: [login] Network request failed - nil response (timeout or connection error)")
+                hproseError("ERROR: [login] Network request failed - nil response (timeout or connection error)")
                 throw NSError(domain: "NSURLErrorDomain", code: -1001, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Request timed out", comment: "Network timeout error")])
             }
-            
+
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
+
             guard let response = unwrappedResponse as? [String: Any] else {
-                print("ERROR: [login] Invalid response format from server")
+                hproseError("ERROR: [login] Invalid response format from server")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
-            
-            print("DEBUG: [login] Response received: \(response)")
-            
+
+            hproseDebug("DEBUG: [login] Response received: \(response)")
+
             // Handle v2 format: check success field first, then status field for backward compatibility
             if let success = response["success"] as? Bool {
                 if !success {
                     let message = response["message"] as? String ?? NSLocalizedString("Login failed", comment: "Generic login failure message")
                     let localizedReason = self.localizeLoginError(message)
-                    print("DEBUG: [login] Login failed with message: \(message)")
+                    hproseError("DEBUG: [login] Login failed with message: \(message)")
                     return ["reason": localizedReason, "status": "failure"]
                 }
                 // success is true, check for user data
                 if response["user"] != nil || response["data"] != nil {
-                    print("DEBUG: [login] Login successful, setting appUser")
+                    hproseDebug("DEBUG: [login] Login successful, setting appUser")
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
@@ -2543,20 +2885,23 @@ final class HproseInstance: ObservableObject {
                     Task {
                         await self.populateFellowLists(user: loginUser)
                     }
+                    Task {
+                        _ = try? await loginUser.resolveWritableUrl()
+                    }
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
-            
+
             // Check for status field (alternate response format)
             if let status = response["status"] as? String {
                 if status == "failure" {
                     // Extract and localize the reason from server
                     let serverReason = response["reason"] as? String ?? NSLocalizedString("Login failed", comment: "Generic login failure message")
                     let localizedReason = self.localizeLoginError(serverReason)
-                    print("DEBUG: [login] Login failed with status: \(status), reason: \(serverReason)")
+                    hproseError("DEBUG: [login] Login failed with status: \(status), reason: \(serverReason)")
                     return ["reason": localizedReason, "status": "failure"]
                 } else if status == "success" && response["user"] != nil {
-                    print("DEBUG: [login] Login successful (status field), setting appUser")
+                    hproseDebug("DEBUG: [login] Login successful (status field), setting appUser")
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
@@ -2565,11 +2910,14 @@ final class HproseInstance: ObservableObject {
                     Task {
                         await self.populateFellowLists(user: loginUser)
                     }
+                    Task {
+                        _ = try? await loginUser.resolveWritableUrl()
+                    }
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
-            
-            print("DEBUG: [login] Login failed - no success field or no user data")
+
+            hproseError("DEBUG: [login] Login failed - no success field or no user data")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
     }
@@ -2605,11 +2953,9 @@ final class HproseInstance: ObservableObject {
     }
     
     func logout() async {
-        preferenceHelper?.setUserId(nil as String?)
-
         // Don't clear tweet cache on logout - cache persists per user and is cleared periodically or manually
         // Clear chat cache on signout
-        ChatCacheManager.shared.clearAllCache()
+        await ChatCacheManager.shared.clearAllCache()
 
         // Clear all video cache files from disk
         // await CachingPlayerItem.clearAllCache()
@@ -2618,8 +2964,10 @@ final class HproseInstance: ObservableObject {
         clientPool.clear()
 
         // Reset appUser to guest user with entry baseUrl (not the old user's node)
-        let guestUser = User.getInstance(mid: Constants.GUEST_ID)
         await MainActor.run {
+            self.preferenceHelper?.setUserId(nil)
+
+            let guestUser = User.getInstance(mid: Constants.GUEST_ID)
             guestUser.baseUrl = HproseInstance.baseUrl
             guestUser.followingList = Gadget.getAlphaIds()
             self.appUser = guestUser
@@ -2636,17 +2984,22 @@ final class HproseInstance: ObservableObject {
         user: User,
         entry: UserContentType
     ) async throws -> [String] {
+        // Phase A (HproseInstance demotion prep): snapshot the @MainActor User into a Sendable
+        // UserRecord so this function no longer reads user.X directly. The class is still
+        // @MainActor so this compiles and ships; once demoted the function runs off-main and
+        // this is its one main-actor hop. invokeRunMApp is retained until Phase C.
+        let snap = await MainActor.run { UserRecord(user: user) }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid,
+            "userid": snap.mid,
         ]
-        guard let client = user.hproseClient else {
+        guard let baseUrl = snap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
-        let rawResponse = client.invoke("runMApp", withArgs: [entry.rawValue, params])
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let rawResponse = await invokeRunMApp(using: client, entry: entry.rawValue, params: params)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -2658,18 +3011,80 @@ final class HproseInstance: ObservableObject {
         } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
             // Server returned empty array - handle gracefully
             response = []
-            print("DEBUG: [HproseInstance] getListByType - Server returned empty array for \(entry.rawValue)")
+            hproseDebug("DEBUG: [HproseInstance] getListByType - Server returned empty array for \(entry.rawValue)")
         } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
         }
         
         let sorted = response.sorted {
             (lhs, rhs) in
-            let lval = (lhs["value"] as? Int) ?? 0
-            let rval = (rhs["value"] as? Int) ?? 0
+            let lval = Self.intField(lhs, key: "value") ?? 0
+            let rval = Self.intField(rhs, key: "value") ?? 0
             return lval > rval
         }
         return sorted.compactMap { $0["field"] as? String }
+    }
+
+    /// Removes a row that has just crossed the permanent reliability blacklist
+    /// threshold. The backend rechecks the relationship timestamp on hostIds[0]
+    /// so a relationship added after this failure streak began is never removed.
+    func removePermanentlyBlacklistedUser(
+        _ blacklistedUserId: MimeiId,
+        from relationship: UserContentType,
+        owner: User,
+        failureStartedAt: TimeInterval
+    ) async throws -> (removed: Bool, reason: String?) {
+        let relationshipName: String
+        switch relationship {
+        case .FOLLOWER:
+            relationshipName = "followers"
+        case .FOLLOWING:
+            relationshipName = "followings"
+        default:
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Unsupported relationship cleanup type"]
+            )
+        }
+
+        let ownerRecord = await MainActor.run { UserRecord(user: owner) }
+        guard let ownerHostId = ownerRecord.hostIds?.first, !ownerHostId.isEmpty else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Profile owner has no writable host"]
+            )
+        }
+
+        let writableUrl = try await owner.resolveWritableUrl()
+        let client = clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 30)
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "userid": ownerRecord.mid,
+            "otherid": blacklistedUserId,
+            "relationship": relationshipName,
+            "userid_hostid": ownerHostId,
+            "failurestartedat": Int64(failureStartedAt * 1_000),
+            "failurecount": 14
+        ]
+        let rawResponse = await invokeRunMApp(
+            using: client,
+            entry: "remove_blacklisted_relationship",
+            params: params
+        )
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        guard let response = unwrappedResponse as? [String: Any],
+              let removed = response["removed"] as? Bool else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid relationship cleanup response"]
+            )
+        }
+        return (removed, response["reason"] as? String)
     }
     
     /**
@@ -2678,23 +3093,26 @@ final class HproseInstance: ObservableObject {
      */
     func getFollowings(user: User) async throws -> [MimeiId] {
         let entry = "get_followings_sorted"
+        // Phase A (demotion prep): snapshot @MainActor User → Sendable UserRecord.
+        let snap = await MainActor.run { UserRecord(user: user) }
+        let attemptedBaseUrl = snap.baseUrl?.absoluteString
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid
+            "userid": snap.mid
         ]
-        
+
         do {
-            guard let client = user.hproseClient else {
+            guard let baseUrl = snap.baseUrl else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            
+            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
+
             // Unwrap v2 response
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
+
             // Handle empty array case - server returns empty array when user has no followings
             let response: [[String: Any]]
             if let arrayResponse = unwrappedResponse as? [[String: Any]] {
@@ -2702,20 +3120,20 @@ final class HproseInstance: ObservableObject {
             } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
                 // Server returned empty array - handle gracefully
                 response = []
-                print("DEBUG: [HproseInstance] getFollowings - Server returned empty array (no followings)")
+                hproseDebug("DEBUG: [HproseInstance] getFollowings - Server returned empty array (no followings)")
             } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
             
             let sorted = response.sorted { (lhs, rhs) in
-                let lval = (lhs["value"] as? Int) ?? 0
-                let rval = (rhs["value"] as? Int) ?? 0
+                let lval = Self.intField(lhs, key: "value") ?? 0
+                let rval = Self.intField(rhs, key: "value") ?? 0
                 return lval > rval
             }
-            NodePool.shared.updateFromUser(user)
+            await MainActor.run { NodePool.shared.updateFromUser(user) }
             return sorted.compactMap { $0["field"] as? String }
         } catch {
-            print("DEBUG: [HproseInstance] getFollowings error: \(error)")
+            hproseError("DEBUG: [HproseInstance] getFollowings error: \(error) (baseUrl: \(attemptedBaseUrl ?? "nil"))")
             return Gadget.getAlphaIds()
         }
     }
@@ -2728,13 +3146,14 @@ final class HproseInstance: ObservableObject {
     func isAppUserBlacklisted(by targetUserId: MimeiId) async -> Bool {
         do {
             guard let targetUser = try await fetchUser(targetUserId) else {
-                print("DEBUG: [HproseInstance] Target user not found: \(targetUserId)")
+                hproseWarning("DEBUG: [HproseInstance] Target user not found: \(targetUserId)")
                 return false
             }
             let blackList = (try? await getListByType(user: targetUser, entry: .BLACK_LIST)) ?? []
-            return blackList.contains(appUser.mid)
+            let appUserMid = await MainActor.run { self.appUser.mid }
+            return blackList.contains(appUserMid)
         } catch {
-            print("DEBUG: [HproseInstance] Error checking blacklist for user \(targetUserId): \(error)")
+            hproseError("DEBUG: [HproseInstance] Error checking blacklist for user \(targetUserId): \(error)")
             return false
         }
     }
@@ -2743,25 +3162,27 @@ final class HproseInstance: ObservableObject {
      * Populate fans and following lists for a given user
      */
     func populateFellowLists(user: User) async {
+        // Phase A (demotion prep): snapshot @MainActor user.mid for logging.
+        let userMid = await MainActor.run { user.mid }
         do {
             // Get followings (users that the user is following)
             let followings = try await getFollowings(user: user)
             await MainActor.run {
                 user.followingList = followings
             }
-            print("DEBUG: [HproseInstance] Populated followingList for user \(user.mid) with \(followings.count) users")
-            
+            hproseDebug("DEBUG: [HproseInstance] Populated followingList for user \(userMid) with \(followings.count) users")
+
             // Get fans (users who are following the user)
             if let fans = try await getFans(user: user) {
                 await MainActor.run {
                     user.fansList = fans
                 }
-                print("DEBUG: [HproseInstance] Populated fansList for user \(user.mid) with \(fans.count) users")
+                hproseDebug("DEBUG: [HproseInstance] Populated fansList for user \(userMid) with \(fans.count) users")
             } else {
-                print("DEBUG: [HproseInstance] No fans found for user \(user.mid)")
+                hproseDebug("DEBUG: [HproseInstance] No fans found for user \(userMid)")
             }
         } catch {
-            print("DEBUG: [HproseInstance] Error populating fans/following lists for user \(user.mid): \(error)")
+            hproseError("DEBUG: [HproseInstance] Error populating fans/following lists for user \(userMid): \(error)")
         }
     }
     
@@ -2771,21 +3192,24 @@ final class HproseInstance: ObservableObject {
      */
     func getFans(user: User) async throws -> [MimeiId]? {
         let entry = "get_followers_sorted"
+        // Phase A (demotion prep): snapshot @MainActor User → Sendable UserRecord.
+        let snap = await MainActor.run { UserRecord(user: user) }
+        let attemptedBaseUrl = snap.baseUrl?.absoluteString
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid
+            "userid": snap.mid
         ]
-        
+
         do {
-            guard let client = user.hproseClient else {
+            guard let baseUrl = snap.baseUrl else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
+
             // Handle empty array case - server returns empty array when user has no fans
             let response: [[String: Any]]
             if let arrayResponse = unwrappedResponse as? [[String: Any]] {
@@ -2793,20 +3217,20 @@ final class HproseInstance: ObservableObject {
             } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
                 // Server returned empty array - handle gracefully
                 response = []
-                print("DEBUG: [HproseInstance] getFans - Server returned empty array (no fans)")
+                hproseDebug("DEBUG: [HproseInstance] getFans - Server returned empty array (no fans)")
             } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
             
             let sorted = response.sorted { (lhs, rhs) in
-                let lval = (lhs["value"] as? Int) ?? 0
-                let rval = (rhs["value"] as? Int) ?? 0
+                let lval = Self.intField(lhs, key: "value") ?? 0
+                let rval = Self.intField(rhs, key: "value") ?? 0
                 return lval > rval
             }
-            NodePool.shared.updateFromUser(user)
+            await MainActor.run { NodePool.shared.updateFromUser(user) }
             return sorted.compactMap { $0["field"] as? String }
         } catch {
-            print("DEBUG: [HproseInstance] getFans error: \(error)")
+            hproseError("DEBUG: [HproseInstance] getFans error: \(error) (baseUrl: \(attemptedBaseUrl ?? "nil"))")
             return nil
         }
     }
@@ -2817,31 +3241,32 @@ final class HproseInstance: ObservableObject {
         pageNumber: UInt = 0,
         pageSize: UInt = 20
     ) async throws -> [Tweet?] {
-        print("DEBUG: [HproseInstance] getUserTweetsByType called - user: \(user.mid), type: \(type.rawValue), page: \(pageNumber), size: \(pageSize)")
+        // Phase A (demotion prep): snapshot @MainActor User + appUser.mid.
+        let snap = await MainActor.run { UserRecord(user: user) }
+        let appUserMid = await MainActor.run { self.appUser.mid }
         let entry = "get_user_meta"
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid,
+            "userid": snap.mid,
             "type": type.rawValue,
             "pn": pageNumber,
             "ps": pageSize,
-            "appuserid": appUser.mid
+            "appuserid": appUserMid
         ] as [String : Any]
-        print("DEBUG: [HproseInstance] getUserTweetsByType params: \(params)")
+        hproseDebug("DEBUG: [HproseInstance] getUserTweetsByType params: \(params)")
         
-        guard let client = user.hproseClient else {
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Client not initialized for user: \(user.mid)")
+        guard let baseUrl = snap.baseUrl else {
+            hproseDebug("DEBUG: [HproseInstance] getUserTweetsByType - Client not initialized for user: \(snap.mid)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
-        print("DEBUG: [HproseInstance] getUserTweetsByType - Unwrapped response type: \(String(describing: Swift.type(of: unwrappedResponse)))")
         
         // Handle response - can be an array of dictionaries or array of optional dictionaries
         let response: [[String: Any]?]
@@ -2855,71 +3280,132 @@ final class HproseInstance: ObservableObject {
             // Array of Any - try to cast each element
             if arrayResponse.isEmpty {
                 response = []
-                print("DEBUG: [HproseInstance] getUserTweetsByType - Server returned empty array (no bookmarks/favorites)")
+                hproseDebug("DEBUG: [HproseInstance] getUserTweetsByType - Server returned empty array (no bookmarks/favorites)")
             } else {
                 response = arrayResponse.map { item in
                     if let dict = item as? [String: Any] {
                         return dict
                     } else {
-                        print("DEBUG: [HproseInstance] getUserTweetsByType - Array item is not a dictionary: \(String(describing: Swift.type(of: item)))")
+                        hproseDebug("DEBUG: [HproseInstance] getUserTweetsByType - Array item is not a dictionary: \(String(describing: Swift.type(of: item)))")
                         return nil
                     }
                 }
             }
         } else {
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format: \(String(describing: unwrappedResponse))")
+            hproseWarning("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format: \(String(describing: unwrappedResponse))")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
         }
         
-        print("DEBUG: [HproseInstance] getUserTweetsByType - Got response with \(response.count) items")
+        hproseDebug("DEBUG: [HproseInstance] getUserTweetsByType - Got response with \(response.count) items")
         
-        // For bookmarks/favorites, preserve server order by using a base timestamp minus index
-        // This ensures tweets are sorted correctly when retrieved from cache
+        // For bookmarks/favorites, preserve server order by using a stable rank timestamp.
+        // The rank must include the page offset; using Date() per page lets later-fetched
+        // pages outrank page 0 on the next cached first paint.
         let isBookmarkOrFavorite = type == .BOOKMARKS || type == .FAVORITES
-        let baseTime = Date()
+        let savedListCacheKey = type == .BOOKMARKS
+            ? TweetCacheManager.bookmarkCacheKey(userId: snap.mid)
+            : TweetCacheManager.favoriteCacheKey(userId: snap.mid)
+        if isBookmarkOrFavorite {
+            // The response is authoritative for this ranked page. Clear only that
+            // page before repopulating it so nil/deleted rows cannot survive in
+            // cache or pull records from the next page into the first paint.
+            await TweetCacheManager.shared.clearSavedListCachePage(
+                cacheKey: savedListCacheKey,
+                page: pageNumber,
+                pageSize: pageSize
+            )
+        }
+        var scheduledBackgroundAuthorFetches = Set<String>()
+        func scheduleBackgroundAuthorFetch(authorId: String) {
+            guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
+
+            Task(priority: .utility) { [weak self] in
+                await Task.yield()
+                do {
+                    _ = try await self?.fetchUser(authorId)
+                } catch {
+                    hproseError("DEBUG: [HproseInstance] getUserTweetsByType - Background author fetch failed for \(authorId): \(error)")
+                }
+            }
+        }
         
         var tweetsWithAuthors: [Tweet?] = []
         for (index, dict) in response.enumerated() {
             if let item = dict {
                 do {
-                    let tweet = try await MainActor.run { return try Tweet.from(dict: item) }
-                    if (tweet.author == nil) {
-                        if let author = try? await fetchUser(tweet.authorId) {
-                            await MainActor.run {
-                                tweet.author = author  // Set on main thread since author is @Published
+                    let tweet = try await mergeTweetFromDict(item)
+                    let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
+                    await MainActor.run {
+                        tweet.author = cachedAuthor
+                        // Membership in these server-owned lists is authoritative even
+                        // when the access-node copy has stale viewer interaction flags.
+                        if type == .BOOKMARKS {
+                            tweet.isBookmarked = true
+                        } else if type == .FAVORITES {
+                            tweet.isFavorite = true
+                        }
+                    }
+                    scheduleBackgroundAuthorFetch(authorId: tweet.authorId)
+
+                    // Saved comments need their immediate parent available before the
+                    // bookmark/favorite cell can render it as embedded context. This is
+                    // an ordinary access-node read; it does not force synchronization.
+                    if isBookmarkOrFavorite,
+                       let parentTweetId = await MainActor.run(body: { tweet.parentTweetId }) {
+                        let cachedParent = await TweetCacheManager.shared.fetchTweet(mid: parentTweetId)
+                        if case nil = cachedParent {
+                            let parentRawResponse = await invokeRunMApp(
+                                using: client,
+                                entry: "get_tweet",
+                                params: [
+                                    "aid": appId,
+                                    "ver": "last",
+                                    "version": "v2",
+                                    "tweetid": parentTweetId,
+                                    "appuserid": appUserMid
+                                ]
+                            )
+
+                            if let parentPayload = try? Self.unwrapV2Response(parentRawResponse),
+                               let parentDict = Self.asStringKeyedDictionary(parentPayload),
+                               let parentTweet = try? await mergeTweetFromDict(parentDict) {
+                                let parentAuthor = await TweetCacheManager.shared.fetchUser(mid: parentTweet.authorId)
+                                await MainActor.run {
+                                    parentTweet.author = parentAuthor
+                                    TweetCacheManager.shared.saveTweet(parentTweet, userId: parentTweet.authorId)
+                                }
+                                scheduleBackgroundAuthorFetch(authorId: parentTweet.authorId)
                             }
                         }
                     }
-                    // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed
-                    // Use format: "bookmark_list_userId" or "favorite_list_userId"
+
+                    // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed.
+                    // Use format: "bookmark_list_userId" or "favorite_list_userId".
                     // saveTweet will automatically mark media as permanent based on the prefix
-                    let cacheKey = "\(type.rawValue)_\(user.mid)"
-                    
-                    // For bookmarks/favorites, preserve server order by using a timestamp that reflects position
-                    // Subtract index milliseconds to ensure earlier items (lower index) have later timestamps
-                    // This way, when sorted descending by timeCached, they appear in the correct order
-                    // Using milliseconds provides better precision for large lists
                     let timeCached: Date?
                     if isBookmarkOrFavorite {
-                        // Use baseTime minus index milliseconds to preserve order (most recent bookmark first)
-                        // Index 0 gets baseTime (latest), index 1 gets baseTime - 0.001s, etc.
-                        timeCached = baseTime.addingTimeInterval(-TimeInterval(index) * 0.001)
+                        timeCached = TweetCacheManager.savedListCacheTime(
+                            page: pageNumber,
+                            index: index,
+                            pageSize: pageSize
+                        )
                     } else {
                         // For other types, use current time
                         timeCached = nil
                     }
                     
                     // Reduced logging to prevent console buffer overflow
-                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey, timeCached: timeCached)
-                    
+                    await MainActor.run {
+                        TweetCacheManager.shared.saveTweet(tweet, userId: savedListCacheKey, timeCached: timeCached)
+                    }
+
                     tweetsWithAuthors.append(tweet)
-                    print("DEBUG: [HproseInstance] getUserTweetsByType - Successfully processed tweet \(index): \(tweet.mid)")
                 } catch {
-                    print("DEBUG: [HproseInstance] getUserTweetsByType - Error processing tweet \(index): \(error)")
+                    hproseError("DEBUG: [HproseInstance] getUserTweetsByType - Error processing tweet \(index): \(error)")
                     tweetsWithAuthors.append(nil)
                 }
             } else {
-                print("DEBUG: [HproseInstance] getUserTweetsByType - Item \(index) is nil")
+                hproseDebug("DEBUG: [HproseInstance] getUserTweetsByType - Item \(index) is nil")
                 tweetsWithAuthors.append(nil)
             }
         }
@@ -2930,17 +3416,20 @@ final class HproseInstance: ObservableObject {
         if type == .BOOKMARKS || type == .FAVORITES {
             // Preserve server order - don't sort
             sortedTweets = tweetsWithAuthors
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), preserving server order (bookmarks/favorites)")
+            hproseDebug("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), preserving server order (bookmarks/favorites)")
         } else {
-            // Sort tweets in descending order by timestamp (most recent first)
-            sortedTweets = tweetsWithAuthors.sorted { tweet1, tweet2 in
-                guard let t1 = tweet1, let t2 = tweet2 else {
-                    // Put non-nil tweets before nil tweets
-                    return tweet1 != nil && tweet2 == nil
+            // Sort tweets in descending order by timestamp (most recent first).
+            // tweet.timestamp is @MainActor state — sort on the main actor.
+            sortedTweets = await MainActor.run {
+                tweetsWithAuthors.sorted { tweet1, tweet2 in
+                    guard let t1 = tweet1, let t2 = tweet2 else {
+                        // Put non-nil tweets before nil tweets
+                        return tweet1 != nil && tweet2 == nil
+                    }
+                    return t1.timestamp > t2.timestamp
                 }
-                return t1.timestamp > t2.timestamp
             }
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), sorted by timestamp (descending)")
+            hproseDebug("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), sorted by timestamp (descending)")
         }
         
         return sortedTweets
@@ -2955,27 +3444,30 @@ final class HproseInstance: ObservableObject {
         followingId: MimeiId,
         userId: MimeiId? = nil
     )  async throws -> Bool? {
-        let effectiveUserId = userId ?? appUser.mid
+        // Phase A (demotion prep): snapshot @MainActor appUser.mid.
+        let appUserMid = await MainActor.run { self.appUser.mid }
+        let effectiveUserId = userId ?? appUserMid
 
         // Check if app user is blacklisted by the target user
         guard let targetUser = try await fetchUser(followingId) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Target user not found", comment: "User lookup error")])
         }
-        if targetUser.isUserBlacklisted(effectiveUserId) {
+        let isBlocked = await MainActor.run { targetUser.isUserBlacklisted(effectiveUserId) }
+        if isBlocked {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot follow this user because you are blocked", comment: "Follow blocked error")])
         }
 
         // toggle_following is NOT idempotent — never retry. A timed-out request
         // may still be processed server-side; a retry would flip the state back.
         let entry = "toggle_following"
-        let cachedFollowing = User.getInstance(mid: followingId)
+        let followingHostId = await MainActor.run { User.getInstance(mid: followingId).hostIds?.first }
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "followingid": followingId,
             "userid": effectiveUserId,
-            "followingid_hostid": cachedFollowing.hostIds?.first as Any,
+            "followingid_hostid": followingHostId as Any,
         ]
         // Route the call directly to appUser's primary host (hostIds[0]) so the
         // backend's `userHostId === nodeId` check fires and the local handler
@@ -2983,20 +3475,10 @@ final class HproseInstance: ObservableObject {
         // response payload (Java-Map-backed bridge object whose keys are not
         // JS-enumerable), making a clearly successful operation look like a
         // failure on the client. By calling the home node directly we bypass it.
-        // Falls back to appUser.hproseClient if the writable host can't be
-        // resolved, so the call still goes out (just risks the stale-payload bug).
-        let client: HproseClient
-        if let writableUrl = try? await appUser.resolveWritableUrl() {
-            client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
-        } else if let fallback = appUser.hproseClient {
-            client = fallback
-        } else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let appUserInstance = await MainActor.run { self.appUser }
+        let writableUrl = try await appUserInstance.resolveWritableUrl()
+        let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 60)
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
         if let dataDict = unwrappedResponse as? [String: Any],
@@ -3012,107 +3494,287 @@ final class HproseInstance: ObservableObject {
     /*
      Return an updated tweet object after toggling favorite status of the tweet by appUser.
      */
-    func toggleFavorite(_ tweet: Tweet) async throws -> (Tweet?, User?) {
-        // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
-        let _ = try? await tweet.author?.resolveWritableUrl()
-        let client = tweet.author?.writableClient ?? appUser.writableClient
-        guard let client else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+    private enum SavedTweetList {
+        case favorites
+        case bookmarks
+
+        var fallbackEntry: String {
+            switch self {
+            case .favorites:
+                return "toggle_favorite_by_user"
+            case .bookmarks:
+                return "toggle_bookmark_by_user"
+            }
         }
-        let entry = "toggle_favorite"
-        let params = [
+
+        var desiredStateParameter: String {
+            switch self {
+            case .favorites:
+                return "isfavorite"
+            case .bookmarks:
+                return "isbookmarked"
+            }
+        }
+    }
+
+    @MainActor
+    private func stageLocalSavedTweetRemoval(
+        tweetId: String,
+        list: SavedTweetList
+    ) -> Bool {
+        switch list {
+        case .favorites:
+            let containedTweet = appUser.favoriteTweets?.contains(tweetId) == true
+            appUser.favoriteTweets?.removeAll { $0 == tweetId }
+            return containedTweet
+        case .bookmarks:
+            let containedTweet = appUser.bookmarkedTweets?.contains(tweetId) == true
+            appUser.bookmarkedTweets?.removeAll { $0 == tweetId }
+            return containedTweet
+        }
+    }
+
+    @MainActor
+    private func restoreLocalSavedTweetRemoval(
+        tweetId: String,
+        list: SavedTweetList,
+        wasListed: Bool
+    ) {
+        guard wasListed else { return }
+
+        switch list {
+        case .favorites:
+            if appUser.favoriteTweets == nil {
+                appUser.favoriteTweets = []
+            }
+            if appUser.favoriteTweets?.contains(tweetId) == false {
+                appUser.favoriteTweets?.append(tweetId)
+            }
+        case .bookmarks:
+            if appUser.bookmarkedTweets == nil {
+                appUser.bookmarkedTweets = []
+            }
+            if appUser.bookmarkedTweets?.contains(tweetId) == false {
+                appUser.bookmarkedTweets?.append(tweetId)
+            }
+        }
+    }
+
+    private func removeSavedTweetFromAppUser(
+        tweetId: String,
+        list: SavedTweetList
+    ) async throws -> User {
+        let appUserInstance = await MainActor.run { self.appUser }
+        let appUserMid = await MainActor.run { appUserInstance.mid }
+        let writableUrl = try await appUserInstance.resolveWritableUrl()
+        let client = clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 60)
+        let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "appuserid": appUser.mid,
-            "tweetid": tweet.mid,
-            "authorid": tweet.authorId,
-            "userhostid": appUser.hostIds?.first as Any
+            "userid": appUserMid,
+            "tweetid": tweetId,
+            list.desiredStateParameter: false,
+            "skipcontentsync": true
         ]
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-        // Hprose syncInvoke returns the error object (not throws) on failure
+
+        let rawResponse = await invokeRunMApp(
+            using: client,
+            entry: list.fallbackEntry,
+            params: params
+        )
         if let error = rawResponse as? NSError {
             throw error
         }
+
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        guard let response = unwrappedResponse as? [String: Any] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+        guard let userDict = Self.asStringKeyedDictionary(unwrappedResponse) else {
+            throw NSError(
+                domain: "HproseClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")]
+            )
         }
 
-        // unwrapV2Response already threw for success=false
-        var updatedUser: User?
-        var updatedTweet: Tweet?
-
-        // Parse updated user
-        if let userDict = response["user"] as? [String: Any] {
-            updatedUser = try User.from(dict: userDict)
-        }
-
-        // Parse updated tweet
-        if let tweetDict = response["tweet"] as? [String: Any] {
-            updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-            TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
-        }
-
-        return (updatedTweet, updatedUser)
+        return try await mergeUserFromDict(userDict)
     }
-    
-    func toggleBookmark(_ tweet: Tweet) async throws -> (Tweet?, User?) {
-        // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
-        let _ = try? await tweet.author?.resolveWritableUrl()
-        let client = tweet.author?.writableClient ?? appUser.writableClient
-        guard let client else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        let entry = "toggle_bookmark"
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "userid": appUser.mid,
-            "tweetid": tweet.mid,
-            "authorid": tweet.authorId,
-            "userhostid": appUser.hostIds?.first as Any
-        ]
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-        // Hprose syncInvoke returns the error object (not throws) on failure
-        if let error = rawResponse as? NSError {
-            throw error
-        }
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        guard let response = unwrappedResponse as? [String: Any] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-        }
 
-        // unwrapV2Response already threw for success=false
-        var updatedUser: User?
-        var updatedTweet: Tweet?
-
-        // Parse updated user
-        if let userDict = response["user"] as? [String: Any] {
-            updatedUser = try User.from(dict: userDict)
+    private func finishSavedTweetRemoval(
+        tweetId: String,
+        list: SavedTweetList,
+        appUserId: String
+    ) async {
+        let cacheKey: String
+        switch list {
+        case .favorites:
+            cacheKey = TweetCacheManager.favoriteCacheKey(userId: appUserId)
+        case .bookmarks:
+            cacheKey = TweetCacheManager.bookmarkCacheKey(userId: appUserId)
         }
-
-        // Parse updated tweet
-        if let tweetDict = response["tweet"] as? [String: Any] {
-            updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-            TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
-        }
-
-        return (updatedTweet, updatedUser)
+        await TweetCacheManager.shared.deleteTweet(mid: tweetId, from: cacheKey)
     }
-    
+
+    func toggleFavorite(_ tweet: Tweet, isFavorite: Bool) async throws -> (Tweet?, User?) {
+        // Normal mutations go to the author's writable node. Removal can fall
+        // back to the app user's writable node when the author route is gone.
+        let (tweetMid, tweetAuthorId, appUserMid, appHostId) = await MainActor.run {
+            (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
+        }
+        let wasListed = isFavorite
+            ? false
+            : await MainActor.run {
+                stageLocalSavedTweetRemoval(tweetId: tweetMid, list: .favorites)
+            }
+
+        do {
+            let author = await MainActor.run { tweet.author }
+            guard let author else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author not available", comment: "Writable client error")])
+            }
+            _ = try await author.resolveWritableUrl()
+            guard let client = await author.writableClient(timeout: 60) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            }
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "version": "v2",
+                "appuserid": appUserMid,
+                "tweetid": tweetMid,
+                "authorid": tweetAuthorId,
+                "userhostid": appHostId as Any,
+                "isfavorite": isFavorite
+            ]
+            let rawResponse = await invokeRunMApp(using: client, entry: "toggle_favorite", params: params)
+            // Hprose syncInvoke returns the error object (not throws) on failure
+            if let error = rawResponse as? NSError {
+                throw error
+            }
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            guard let response = unwrappedResponse as? [String: Any] else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+            }
+
+            // unwrapV2Response already threw for success=false
+            var updatedUser: User?
+            var updatedTweet: Tweet?
+
+            if let userDict = response["user"] as? [String: Any] {
+                updatedUser = try await mergeUserFromDict(userDict)
+            }
+            if let tweetDict = response["tweet"] as? [String: Any] {
+                updatedTweet = try await mergeTweetFromDict(tweetDict)
+            }
+
+            if !isFavorite {
+                await finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
+            }
+            return (updatedTweet, updatedUser)
+        } catch {
+            guard !isFavorite else { throw error }
+
+            do {
+                hproseWarning("WARN: [toggleFavorite] Author mutation failed; removing \(tweetMid) directly from app user favorites: \(error)")
+                let updatedUser = try await removeSavedTweetFromAppUser(tweetId: tweetMid, list: .favorites)
+                await finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
+                return (nil, updatedUser)
+            } catch {
+                await MainActor.run {
+                    restoreLocalSavedTweetRemoval(
+                        tweetId: tweetMid,
+                        list: .favorites,
+                        wasListed: wasListed
+                    )
+                }
+                throw error
+            }
+        }
+    }
+
+    func toggleBookmark(_ tweet: Tweet, isBookmarked: Bool) async throws -> (Tweet?, User?) {
+        // Normal mutations go to the author's writable node. Removal can fall
+        // back to the app user's writable node when the author route is gone.
+        let (tweetMid, tweetAuthorId, appUserMid, appHostId) = await MainActor.run {
+            (tweet.mid, tweet.authorId, self.appUser.mid, self.appUser.hostIds?.first)
+        }
+        let wasListed = isBookmarked
+            ? false
+            : await MainActor.run {
+                stageLocalSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks)
+            }
+
+        do {
+            let author = await MainActor.run { tweet.author }
+            guard let author else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author not available", comment: "Writable client error")])
+            }
+            _ = try await author.resolveWritableUrl()
+            guard let client = await author.writableClient(timeout: 60) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            }
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "version": "v2",
+                "userid": appUserMid,
+                "tweetid": tweetMid,
+                "authorid": tweetAuthorId,
+                "userhostid": appHostId as Any,
+                "isbookmarked": isBookmarked
+            ]
+            let rawResponse = await invokeRunMApp(using: client, entry: "toggle_bookmark", params: params)
+            // Hprose syncInvoke returns the error object (not throws) on failure
+            if let error = rawResponse as? NSError {
+                throw error
+            }
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            guard let response = unwrappedResponse as? [String: Any] else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+            }
+
+            // unwrapV2Response already threw for success=false
+            var updatedUser: User?
+            var updatedTweet: Tweet?
+
+            if let userDict = response["user"] as? [String: Any] {
+                updatedUser = try await mergeUserFromDict(userDict)
+            }
+            if let tweetDict = response["tweet"] as? [String: Any] {
+                updatedTweet = try await mergeTweetFromDict(tweetDict)
+            }
+
+            if !isBookmarked {
+                await finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
+            }
+            return (updatedTweet, updatedUser)
+        } catch {
+            guard !isBookmarked else { throw error }
+
+            do {
+                hproseWarning("WARN: [toggleBookmark] Author mutation failed; removing \(tweetMid) directly from app user bookmarks: \(error)")
+                let updatedUser = try await removeSavedTweetFromAppUser(tweetId: tweetMid, list: .bookmarks)
+                await finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
+                return (nil, updatedUser)
+            } catch {
+                await MainActor.run {
+                    restoreLocalSavedTweetRemoval(
+                        tweetId: tweetMid,
+                        list: .bookmarks,
+                        wasListed: wasListed
+                    )
+                }
+                throw error
+            }
+        }
+    }
+
     func retweet(_ tweet: Tweet) async throws -> Tweet? {
         // Create a unique temporary ID for this retweet to avoid singleton collisions
         // Multiple rapid retweets would otherwise share the same GUEST_ID singleton
         let temporaryId = "TEMP_RETWEET_\(UUID().uuidString)"
-        print("🔄 [HproseInstance.retweet] Creating retweet with temporary ID: \(temporaryId) for original tweet: \(tweet.mid)")
+        // Phase A (demotion prep): snapshot @MainActor tweet.mid for logging.
+        let tweetMid = await MainActor.run { tweet.mid }
+        hproseDebug("🔄 [HproseInstance.retweet] Creating retweet with temporary ID: \(temporaryId) for original tweet: \(tweetMid)")
         
         // Upload the retweet
         guard let retweet = try await uploadTweet(
@@ -3129,26 +3791,29 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Retweet upload failed", comment: "Retweet error")])
         }
         
+        // Phase A (demotion prep): snapshot @MainActor retweet reads.
+        let (retweetMid, retweetAuthorId) = await MainActor.run { (retweet.mid, retweet.authorId) }
+
         // Update retweet count of the original tweet and cache the updated tweet
         // Match Android behavior: update count, cache result, then post notification
-        if let updatedTweet = await updateRetweetCount(tweet: tweet, retweetId: retweet.mid) {
+        if let updatedTweet = await updateRetweetCount(tweet: tweet, retweetId: retweetMid) {
             // Cache the updated original tweet with its authorId as the cache key
             // This ensures the original tweet is cached under its author's cache, not appUser's
-            TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
+            await MainActor.run { TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId) }
         }
-        
+
         // Cache the retweet by its authorId (matches Android behavior)
         // For retweets, authorId equals appUser.mid, so this is consistent with mainfeed caching
         // The retweet will also be cached via .newTweetCreated notification in handleNewTweet,
         // but we cache it here explicitly to ensure it's saved
-        TweetCacheManager.shared.saveTweet(retweet, userId: retweet.authorId)
-        
+        await MainActor.run { TweetCacheManager.shared.saveTweet(retweet, userId: retweetAuthorId) }
+
         // Clean up the temporary tweet instance to prevent memory leaks
-        if temporaryId != retweet.mid {
-            Tweet.clearInstance(mid: temporaryId)
-            print("🧹 [HproseInstance.retweet] Cleaned up temporary tweet instance: \(temporaryId)")
+        if temporaryId != retweetMid {
+            await MainActor.run { Tweet.clearInstance(mid: temporaryId) }
+            hproseDebug("🧹 [HproseInstance.retweet] Cleaned up temporary tweet instance: \(temporaryId)")
         }
-        
+
         return retweet
     }
     
@@ -3169,34 +3834,39 @@ final class HproseInstance: ObservableObject {
         direction: Bool = true   // add/remove retweet
     ) async -> Tweet? {
         let entry = direction ? "retweet_added" : "retweet_removed"
+        // Phase A (demotion prep): snapshot @MainActor Tweet + appUser reads.
+        let (appUserMid, tweetMid, tweetAuthorId) = await MainActor.run { (self.appUser.mid, tweet.mid, tweet.authorId) }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "appuserid": appUser.mid,
+            "appuserid": appUserMid,
             "retweetid": retweetId,
-            "tweetid": tweet.mid,
-            "authorid": tweet.authorId,
+            "tweetid": tweetMid,
+            "authorid": tweetAuthorId,
         ]
-        
+
+        let existingAuthor = await MainActor.run { tweet.author }
         let author: User?
-        if let existingAuthor = tweet.author {
+        if let existingAuthor {
             author = existingAuthor
         } else {
-            author = try? await fetchUser(tweet.authorId, baseUrl: "")
+            author = try? await fetchUser(tweetAuthorId, baseUrl: "")
         }
-        guard let client = author?.hproseClient else {
-            print("⚠️ [updateRetweetCount] Author client not initialized; refusing to fall back to appUser baseUrl")
+        let authorBaseUrl = await MainActor.run { author?.baseUrl }
+        guard let authorBaseUrl else {
+            hproseWarning("⚠️ [updateRetweetCount] Author client not initialized; refusing to fall back to appUser baseUrl")
             return nil
         }
-        
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
+
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
-            print("⚠️ [updateRetweetCount] Failed to unwrap v2 response")
+            hproseError("⚠️ [updateRetweetCount] Failed to unwrap v2 response")
             return nil
         }
         guard let tweetDict = unwrappedResponse as? [String: Any] else {
-            print("⚠️ [updateRetweetCount] Nil response from server")
+            hproseWarning("⚠️ [updateRetweetCount] Nil response from server")
             return nil
         }
         
@@ -3208,7 +3878,7 @@ final class HproseInstance: ObservableObject {
             // Return the updated tweet (same instance, updated in place)
             return tweet
         } catch {
-            print("⚠️ [updateRetweetCount] Failed to update tweet from server response: \(error)")
+            hproseError("⚠️ [updateRetweetCount] Failed to update tweet from server response: \(error)")
             return nil
         }
     }
@@ -3221,111 +3891,124 @@ final class HproseInstance: ObservableObject {
         // toggle_tweet_privacy is NON-idempotent — never retry. A timed-out
         // request may still be processed server-side; a retry would flip it back.
         let entry = "toggle_tweet_privacy"
+        // Phase A (demotion prep): snapshot @MainActor appUser.mid.
+        let appUserMid = await MainActor.run { self.appUser.mid }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "appuserid": appUser.mid,
+            "appuserid": appUserMid,
             "tweetid": tweetId
         ]
         // Mutation: send directly to the user's writable node. The server-side
         // delegation path was returning empty objects; routing here avoids it.
         // writableUrl is lazy-resolved — make sure it's populated first.
-        _ = try await appUser.resolveWritableUrl()
-        guard let client = appUser.writableClient else {
+        let appUserInstance = await MainActor.run { self.appUser }
+        _ = try await appUserInstance.resolveWritableUrl()
+        guard let client = await appUserInstance.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
 
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-        print("[toggleTweetPrivacy] Raw response: \(String(describing: rawResponse))")
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
 
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        print("[toggleTweetPrivacy] Unwrapped response: \(String(describing: unwrappedResponse))")
+        hproseDebug("[toggleTweetPrivacy] Unwrapped response: \(String(describing: unwrappedResponse))")
 
         // For v2 API: server returns {success: true, data: {isPrivate: bool}}
         // After unwrapV2Response, we get {isPrivate: bool}.
         // Hprose bridges JS booleans to NSNumber, so accept both Bool and NSNumber.
         if let dataDict = unwrappedResponse as? [String: Any],
            let isPrivate = (dataDict["isPrivate"] as? Bool) ?? (dataDict["isPrivate"] as? NSNumber)?.boolValue {
-            print("[toggleTweetPrivacy] Privacy status from v2 format: \(isPrivate)")
+            hproseDebug("[toggleTweetPrivacy] Privacy status from v2 format: \(isPrivate)")
             return isPrivate
         }
 
         // Fallback: check if it's a direct Bool (legacy format)
         if let isPrivateBool = unwrappedResponse as? Bool {
-            print("[toggleTweetPrivacy] Direct boolean response: \(isPrivateBool)")
+            hproseDebug("[toggleTweetPrivacy] Direct boolean response: \(isPrivateBool)")
             return isPrivateBool
         }
 
         // Handle numeric responses (0 = false, 1 = true) - legacy format
         if let numericResponse = unwrappedResponse as? NSNumber {
             let isPrivate = numericResponse.boolValue
-            print("[toggleTweetPrivacy] Numeric response: \(numericResponse) -> boolean: \(isPrivate)")
+            hproseDebug("[toggleTweetPrivacy] Numeric response: \(numericResponse) -> boolean: \(isPrivate)")
             return isPrivate
         }
 
         // Handle integer responses (0 = false, 1 = true) - legacy format
         if let intResponse = unwrappedResponse as? Int {
             let isPrivate = intResponse != 0
-            print("[toggleTweetPrivacy] Integer response: \(intResponse) -> boolean: \(isPrivate)")
+            hproseDebug("[toggleTweetPrivacy] Integer response: \(intResponse) -> boolean: \(isPrivate)")
             return isPrivate
         }
 
-        print("[toggleTweetPrivacy] Unexpected response format: \(String(describing: unwrappedResponse))")
+        hproseWarning("[toggleTweetPrivacy] Unexpected response format: \(String(describing: unwrappedResponse))")
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
     }
     
     /**
      * Delete a tweet.
-     * For the caller's own tweets: uses appUser's writable client with appUser.mid as userid.
-     * For others' tweets (admin path): fetches the author, routes through the author's own
-     * writable client so the request lands on their node where getUser() always has hostIds.
+     * Sends the current app user as the requester and the tweet author as owner metadata.
+     * The backend decides whether to permanently delete the tweet or only remove it
+     * from the requester's personal lists.
      */
-    func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String? {
+    func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String {
         let entry = "delete_tweet"
+        // Phase A (demotion prep): snapshot @MainActor appUser.mid + admin check.
+        let (appUserMid, isAdminDeletingAnotherUsersTweet) = await MainActor.run {
+            (self.appUser.mid, tweetAuthorId != self.appUser.mid && Gadget.isResearchAdminUser(self.appUser))
+        }
         let params = [
             "aid": appId,
             "ver": "last",
-            "version": "v2",
-            "userid": tweetAuthorId,
+            "version": "v3",
+            // The backend permanently deletes only when userid == authorid. Admin
+            // deletes are already gated client-side and routed to the author's host.
+            "userid": isAdminDeletingAnotherUsersTweet ? tweetAuthorId : appUserMid,
+            "appuserid": isAdminDeletingAnotherUsersTweet ? tweetAuthorId : appUserMid,
+            "authorid": tweetAuthorId,
             "tweetid": tweetId
         ]
 
-        // Resolve which client to use:
-        // - Own tweet  → appUser's writable client (fast path, same as before)
-        // - Other's tweet → fetch the author and use THEIR writable client so the call
-        //   lands on the author's own node; getUser() always has hostIds there.
         let requestUser: User
-        if tweetAuthorId == appUser.mid {
-            requestUser = appUser
-        } else {
+        if isAdminDeletingAnotherUsersTweet {
             guard let author = try await fetchUser(tweetAuthorId) else {
-                throw NSError(domain: "HproseClient", code: -1,
-                              userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "")])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "Author fetch error")])
             }
             requestUser = author
+        } else {
+            requestUser = await MainActor.run { self.appUser }
         }
 
-        _ = try await requestUser.resolveWritableUrl()
-        guard let client = requestUser.writableClient ?? appUser.hproseClient else {
+        // Delete is a mutation, so it must run directly against the current
+        // writable/root host. resolveWritableUrl() always resolves hostIds[0]
+        // fresh rather than reusing the last writable URL.
+        let writableUrl = try await requestUser.resolveWritableUrl()
+        guard let client = await requestUser.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "")])
+                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
 
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        hproseDebug("DEBUG: [deleteTweet] Using writable client at \(writableUrl.absoluteString) for tweet \(tweetId)")
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
+        let unwrappedResponse: Any?
+        do {
+            unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        } catch {
+            if Self.isTweetNotFoundDeleteFailure(error, response: rawResponse) {
+                hproseDebug("DEBUG: [deleteTweet] Tweet \(tweetId) is already missing on server; clearing local cache")
+                await removeDeletedTweetLocally(tweetId)
+                try? await self.refreshAppUserFromServer()
+                return tweetId
+            }
+            throw error
+        }
 
-        // unwrapV2Response already threw for success=false.
-        // Trust the success signal; fall back to the input tweetId if the server
-        // doesn't echo it back, so we never spuriously restore the UI.
-        var resolvedDeletedTweetId: String = tweetId
+        // unwrapV2Response already threw for success=false. For delete, also require
+        // a concrete tweet id so malformed success responses are not silently accepted.
+        var resolvedDeletedTweetId: String?
         if let response = unwrappedResponse as? [String: Any] {
             if let tid = response["tweetid"] as? String, !tid.isEmpty {
                 resolvedDeletedTweetId = tid
@@ -3333,31 +4016,24 @@ final class HproseInstance: ObservableObject {
                 resolvedDeletedTweetId = tid as String
             }
         }
-        let deletedTweetId = resolvedDeletedTweetId
-
-        print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
-
-        await MainActor.run {
-            TweetDeletionRegistry.shared.markDeleted(deletedTweetId)
-            TweetCacheManager.shared.deleteTweet(mid: deletedTweetId)
-            Tweet.clearInstance(mid: deletedTweetId)
-            NotificationCenter.default.post(
-                name: .tweetDeleted,
-                object: nil,
-                userInfo: ["tweetId": deletedTweetId, "confirmed": true]
-            )
+        guard let deletedTweetId = resolvedDeletedTweetId else {
+            throw NSError(domain: "HproseClient", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid delete response from server", comment: "Server response error")])
         }
+
+
+        await removeDeletedTweetLocally(deletedTweetId)
 
         // Only decrement tweetCount if appUser is the author
         // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
-        if tweetAuthorId == appUser.mid {
+        if tweetAuthorId == appUserMid {
             await MainActor.run {
                 let currentCount = self.appUser.tweetCount ?? 0
                 self.appUser.tweetCount = max(0, currentCount - 1)
-                print("DEBUG: [deleteTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+                hproseDebug("DEBUG: [deleteTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
             }
         } else {
-            print("DEBUG: [deleteTweet] Skipping tweetCount decrement — tweet authored by \(tweetAuthorId), not appUser")
+            hproseWarning("DEBUG: [deleteTweet] Skipping tweetCount decrement — tweet authored by \(tweetAuthorId), not appUser")
         }
 
         // Refresh appUser from server to get updated tweetCount and other properties
@@ -3366,16 +4042,30 @@ final class HproseInstance: ObservableObject {
         return deletedTweetId
     }
 
+    @MainActor
+    private func removeDeletedTweetLocally(_ tweetId: String) {
+        TweetDeletionRegistry.shared.markDeleted(tweetId)
+        TweetCacheManager.shared.deleteTweet(mid: tweetId)
+        Tweet.clearInstance(mid: tweetId)
+        NotificationCenter.default.post(
+            name: .tweetDeleted,
+            object: nil,
+            userInfo: ["tweetId": tweetId, "confirmed": true]
+        )
+    }
+
     /// TweetWeb passes `appuserid: target author` so the server author check passes.
     func updateTweetContent(tweetId: String, content: String, tweetAuthorId: String) async throws {
-        guard Gadget.isResearchAdminUser(appUser) else {
+        // Phase A (demotion prep): snapshot @MainActor admin check + appUser.mid.
+        let (isAdmin, appUserMid) = await MainActor.run { (Gadget.isResearchAdminUser(self.appUser), self.appUser.mid) }
+        guard isAdmin else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not available in this distribution"])
         }
         // Execute mutation using the original author's writable client context so
         // the update is performed in the author's name, not the admin's.
         let requestUser: User
-        if tweetAuthorId == appUser.mid {
-            requestUser = appUser
+        if tweetAuthorId == appUserMid {
+            requestUser = await MainActor.run { self.appUser }
         } else {
             guard let author = try await fetchUser(tweetAuthorId) else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "Author fetch error")])
@@ -3394,26 +4084,25 @@ final class HproseInstance: ObservableObject {
         ]
         // Mutation path should use writable client, same as other write APIs.
         _ = try await requestUser.resolveWritableUrl()
-        guard let client = requestUser.writableClient else {
+        guard let client = await requestUser.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
-        let originalTimeout = client.timeout
-        client.timeout = 30.0
-        defer { client.timeout = originalTimeout }
 
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-        print("[updateTweetContent] Updating as author \(requestUser.mid), raw response: \(String(describing: rawResponse))")
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         _ = try Self.unwrapV2Response(rawResponse)
     }
     
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
-        return try await withRetry {
+        // add_comment is non-idempotent: a retry after a lost/late response can create
+        // a second comment even though the first request already succeeded on the node.
+        // Surface ambiguous failures to the caller instead of automatically resubmitting.
             // Comments are stored on the tweet author's node (same as get_comments / fetchComments).
+            let existingAuthor = await MainActor.run { tweet.author }
             let author: User
-            if let existingAuthor = tweet.author {
+            if let existingAuthor {
                 author = existingAuthor
             } else {
-                guard let fetchedAuthor = try await fetchUser(tweet.authorId) else {
+                guard let fetchedAuthor = try await self.fetchUser(tweet.authorId) else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch author to post comment", comment: "Comment author error")])
                 }
                 author = fetchedAuthor
@@ -3421,48 +4110,58 @@ final class HproseInstance: ObservableObject {
                     tweet.author = author
                 }
             }
-            
-            if author.isUserBlacklisted(appUser.mid) {
+
+            // Phase A (demotion prep): snapshot @MainActor author + appUser reads.
+            let appUserMid = await MainActor.run { self.appUser.mid }
+            let isBlocked = await MainActor.run { author.isUserBlacklisted(appUserMid) }
+            if isBlocked {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot comment on this tweet because you are blocked by the author", comment: "Comment blocked error")])
             }
-            
-            guard let commentClient = author.hproseClient else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: \(author.baseUrl?.absoluteString ?? "nil")", comment: "Client initialization error")])
+
+            let authorSnap = await MainActor.run { UserRecord(user: author) }
+            let writableUrl = try await author.resolveWritableUrl()
+            guard let commentClient = await author.writableClient(timeout: 15) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's writable client not initialized", comment: "Client initialization error")])
             }
-            
-            print("DEBUG: [addComment] add_comment via author's baseUrl (\(author.baseUrl?.absoluteString ?? "nil")), tweet hostid: \(author.hostIds?.first ?? "nil")")
-            
-            comment.author = nil
+
+            hproseDebug("DEBUG: [addComment] add_comment via parent's author writableUrl (\(writableUrl.absoluteString)), tweet hostid: \(authorSnap.hostIds?.first ?? "nil")")
+
+            // Encode the comment and read tweet.mid on the main actor (Tweet is @MainActor).
+            let (commentJSON, tweetMid): (String, String) = try await MainActor.run {
+                comment.author = nil
+                let data = try JSONEncoder().encode(comment)
+                return (String(data: data, encoding: .utf8) ?? "", tweet.mid)
+            }
             let params: [String: Any] = [
-                "aid": appId,
+                "aid": self.appId,
                 "ver": "last",
                 "version": "v2",
-                "hostid": author.hostIds?.first as Any,
-                "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
-                "tweetid": tweet.mid,
-                "tweetauthorid": author.mid
+                "hostid": authorSnap.hostIds?.first as Any,
+                "comment": commentJSON,
+                "tweetid": tweetMid,
+                "tweetauthorid": authorSnap.mid
             ]
             let entry = "add_comment"
-            let rawResponse = commentClient.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await self.invokeRunMApp(using: commentClient, entry: entry, params: params)
             
             if let err = rawResponse as? Error {
-                print("DEBUG: [addComment] invoke returned error: \(err)")
+                hproseError("DEBUG: [addComment] invoke returned error: \(err)")
                 throw err
             }
             
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             guard let response = Self.asStringKeyedDictionary(unwrappedResponse) else {
-                print("DEBUG: [addComment] Unexpected response type: \(Swift.type(of: unwrappedResponse)) value: \(String(describing: unwrappedResponse))")
+                hproseWarning("DEBUG: [addComment] Unexpected response type: \(Swift.type(of: unwrappedResponse)) value: \(String(describing: unwrappedResponse))")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
             guard let commentId = Self.stringField(response, keys: ["mid", "commentId"]) else {
-                print("DEBUG: [addComment] Missing mid/commentId in response keys: \(Array(response.keys))")
+                hproseDebug("DEBUG: [addComment] Missing mid/commentId in response keys: \(Array(response.keys))")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
             guard let count = Self.intField(response, key: "count") else {
-                print("DEBUG: [addComment] Missing or unparsable count in response keys: \(Array(response.keys))")
+                hproseDebug("DEBUG: [addComment] Missing or unparsable count in response keys: \(Array(response.keys))")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
@@ -3473,35 +4172,37 @@ final class HproseInstance: ObservableObject {
             }
             // Cache the updated tweet under its authorId, not appUser.mid
             // This ensures original tweets are cached under their author, not the current user
-            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
-            
+            await MainActor.run { TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId) }
+
             // Check if retweetid is present and create a new tweet
             if let retweetId = response["retweetid"] as? String, !retweetId.isEmpty {
-                print("[HproseInstance] Retweet ID received: \(retweetId)")
-                
+                hproseDebug("[HproseInstance] Retweet ID received: \(retweetId)")
+
                 // Create a new tweet with the comment's content and original tweet ID using singleton
                 // Register it in the singleton cache (even though we return the original comment)
-                _ = Tweet.getInstance(
-                    mid: retweetId,
-                    authorId: appUser.mid,
-                    content: comment.content,
-                    timestamp: comment.timestamp,
-                    originalTweetId: tweet.mid,
-                    originalAuthorId: tweet.authorId,
-                    author: appUser,
-                    attachments: comment.attachments
-                )
+                _ = await MainActor.run {
+                    Tweet.getInstance(
+                        mid: retweetId,
+                        authorId: self.appUser.mid,
+                        content: comment.content,
+                        timestamp: comment.timestamp,
+                        originalTweetId: tweet.mid,
+                        originalAuthorId: tweet.authorId,
+                        author: self.appUser,
+                        attachments: comment.attachments
+                    )
+                }
                 
                 // For comments, we should NOT post newTweetCreated notification
                 // Comments should only appear in comment sections, not in the main feed
-                print("[HproseInstance] Comment created with retweetId: \(retweetId), but NOT posting newTweetCreated notification")
+                hproseDebug("[HproseInstance] Comment created with retweetId: \(retweetId), but NOT posting newTweetCreated notification")
                 
                 // Only post the comment notification on main thread
                 await MainActor.run {
-                    print("[HproseInstance] Posting newCommentAdded notification")
-                    print("[HproseInstance] New comment mid: \(comment.mid)")
-                    print("[HproseInstance] New retweet ID: \(retweetId)")
-                    print("[HproseInstance] Parent tweet mid: \(tweet.mid)")
+                    hproseDebug("[HproseInstance] Posting newCommentAdded notification")
+                    hproseDebug("[HproseInstance] New comment mid: \(comment.mid)")
+                    hproseDebug("[HproseInstance] New retweet ID: \(retweetId)")
+                    hproseDebug("[HproseInstance] Parent tweet mid: \(tweet.mid)")
                     
                     NotificationCenter.default.post(
                         name: .newCommentAdded,
@@ -3514,9 +4215,9 @@ final class HproseInstance: ObservableObject {
             } else {
                 // No retweetid, just post comment notification on main thread
                 await MainActor.run {
-                    print("[HproseInstance] No retweet ID, posting only newCommentAdded notification")
-                    print("[HproseInstance] New comment mid: \(comment.mid)")
-                    print("[HproseInstance] Parent tweet mid: \(tweet.mid)")
+                    hproseDebug("[HproseInstance] No retweet ID, posting only newCommentAdded notification")
+                    hproseDebug("[HproseInstance] New comment mid: \(comment.mid)")
+                    hproseDebug("[HproseInstance] Parent tweet mid: \(tweet.mid)")
                     
                     NotificationCenter.default.post(
                         name: .newCommentAdded,
@@ -3527,13 +4228,14 @@ final class HproseInstance: ObservableObject {
                 
                 return comment
             }
-        }
     }
 
     // both author and tweet author can delete this comment
     func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
+        // Phase A (demotion prep): snapshot @MainActor parentTweet.author.
+        let existingAuthor = await MainActor.run { parentTweet.author }
         let author: User
-        if let existingAuthor = parentTweet.author {
+        if let existingAuthor {
             author = existingAuthor
         } else {
             guard let fetchedAuthor = try await fetchUser(parentTweet.authorId) else {
@@ -3544,23 +4246,27 @@ final class HproseInstance: ObservableObject {
                 parentTweet.author = author
             }
         }
-        
+
         let entry = "delete_comment"
+        let (authorSnap, appUserMid, parentTweetMid) = await MainActor.run {
+            (UserRecord(user: author), self.appUser.mid, parentTweet.mid)
+        }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "tweetid": parentTweet.mid,
-            "hostid": author.hostIds?.first as Any,
+            "tweetid": parentTweetMid,
+            "hostid": authorSnap.hostIds?.first as Any,
             "commentid": commentId,
-            "appuserid": appUser.mid
+            "appuserid": appUserMid
         ]
-        guard let client = author.hproseClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: \(author.baseUrl?.absoluteString ?? "nil")", comment: "Client initialization error")])
+        let writableUrl = try await author.resolveWritableUrl()
+        guard let client = await author.writableClient(timeout: 15) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's writable client not initialized", comment: "Client initialization error")])
         }
-        print("DEBUG: [deleteComment] delete_comment via author's baseUrl (\(author.baseUrl?.absoluteString ?? "nil"))")
+        hproseDebug("DEBUG: [deleteComment] delete_comment via parent's author writableUrl (\(writableUrl.absoluteString))")
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         if let err = rawResponse as? Error {
             throw err
         }
@@ -3590,7 +4296,7 @@ final class HproseInstance: ObservableObject {
         fileName: String? = nil,
         referenceId: String? = nil,
         noResample: Bool = false,
-        progressCallback: ((String, Int) -> Void)? = nil
+        progressCallback: (@Sendable (String, Int) -> Void)? = nil
     ) async throws -> (MimeiFileType?, String?) {
         // Delegate to upload manager
         return try await uploadManager.uploadToIPFS(
@@ -3876,8 +4582,8 @@ final class HproseInstance: ObservableObject {
         /// Process and upload video files with new routing logic:
         /// 1. Normalize to 720p reference bitrate (preserving original resolution if lower)
         /// 2. Route based on normalized size and resolution:
-        ///    - ≤ 32MB: Progressive video route
-        ///    - > 32MB: HLS conversion based on resolution
+        ///    - ≤ 50MB: Progressive video route
+        ///    - > 50MB: HLS conversion based on resolution
         ///      * resolution > 480p: HLS with 720p + 480p variants
         ///      * resolution ≤ 480p: HLS with 480p variant only
         static func processVideo(
@@ -3888,9 +4594,8 @@ final class HproseInstance: ObservableObject {
             noResample: Bool,
             appUser: User,
             appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Starting video processing with optimized resolution-based routing logic")
             
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -3926,24 +4631,23 @@ final class HproseInstance: ObservableObject {
                 } else {
                     originalVideoResolution = info.displayHeight
                 }
-                print("Original video resolution: \(info.displayWidth)x\(info.displayHeight) (\(originalVideoResolution ?? 0)p)")
+                hproseDebug("Original video resolution: \(info.displayWidth)x\(info.displayHeight) (\(originalVideoResolution ?? 0)p)")
             }
             
-            // Step 2: Always normalize videos (≤720p keeps original resolution with proportional bitrate, >720p scales to 720p)
-            print("📹 [VIDEO UPLOAD] Starting video normalization")
+            // Step 2: Always normalize videos (>720p scales to 720p; bitrate is never raised above the source)
             if let origRes = originalVideoResolution {
                 if origRes <= 720 {
-                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p ≤ 720p: will normalize with original resolution and proportional bitrate")
+                    hproseDebug("📹 [VIDEO UPLOAD] Resolution \(origRes)p ≤ 720p: will normalize with original resolution")
                 } else {
-                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p with \(Int(VideoConversionService.reference720pBitrate))k bitrate")
+                    hproseDebug("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p without raising source bitrate")
                 }
             } else {
-                print("📹 [VIDEO UPLOAD] Could not detect resolution: will normalize (defaulting to 720p if needed)")
+                hproseDebug("📹 [VIDEO UPLOAD] Could not detect resolution: will normalize (defaulting to 720p if needed)")
             }
             
-            print("========== FIRST NORMALIZATION (Standardization) ==========")
-            print("📹 [VIDEO UPLOAD] Original video: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
-            print("📹 [VIDEO UPLOAD] Purpose: Unified format for 32MB routing decision")
+            hproseDebug("========== FIRST NORMALIZATION (Standardization) ==========")
+            hproseDebug("📹 [VIDEO UPLOAD] Original video: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
+            hproseDebug("📹 [VIDEO UPLOAD] Purpose: Unified format for 50MB routing decision")
             
             progressCallback?("Normalizing video...", 10)
             let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
@@ -3955,10 +4659,10 @@ final class HproseInstance: ObservableObject {
                 outputURL: normalizedVideoURL,
                 progressCallback: progressCallback
             )
-            print("==========================================================")
+            hproseDebug("==========================================================")
             
             guard normalizationSuccess else {
-                print("❌ [VIDEO UPLOAD] Video normalization failed, falling back to original video")
+                hproseError("❌ [VIDEO UPLOAD] Video normalization failed, falling back to original video")
                 progressCallback?("Uploading original video...", 10)
                 let result = try await MediaProcessor.uploadRegularFile(
                     data: data,
@@ -3972,7 +4676,6 @@ final class HproseInstance: ObservableObject {
                 return (result, nil)
             }
             
-            print("✅ [VIDEO UPLOAD] Video normalization completed successfully")
             let videoData = try Data(contentsOf: normalizedVideoURL)
             let videoSize = Int64(videoData.count)
             
@@ -3986,23 +4689,22 @@ final class HproseInstance: ObservableObject {
                 } else {
                     videoResolution = info.displayHeight
                 }
-                print("📹 [VIDEO UPLOAD] Normalized video resolution: \(info.displayWidth)x\(info.displayHeight) (\(videoResolution)p)")
+                hproseDebug("📹 [VIDEO UPLOAD] Normalized video resolution: \(info.displayWidth)x\(info.displayHeight) (\(videoResolution)p)")
             } else {
                 // Fallback to original resolution if detection fails
                 videoResolution = originalVideoResolution ?? 720
-                print("📹 [VIDEO UPLOAD] Could not detect normalized video resolution, using original: \(videoResolution)p")
+                hproseDebug("📹 [VIDEO UPLOAD] Could not detect normalized video resolution, using original: \(videoResolution)p")
             }
             
             let videoFileName = normalizedFileName
-            print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", Double(videoSize) / (1024 * 1024)))MB")
+            hproseDebug("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", Double(videoSize) / (1024 * 1024)))MB")
             
             // Step 3: Route based on video size
             let videoSizeMB = Double(videoSize) / (1024 * 1024)
-            print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", videoSizeMB))MB (\(videoSize) bytes)")
+            hproseDebug("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", videoSizeMB))MB (\(videoSize) bytes)")
             
             if videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
-                // ≤ 32MB: progressive video route
-                print("📹 [VIDEO UPLOAD] Size ≤ 32MB: using progressive video route (direct MP4 upload)")
+                // ≤ 50MB: progressive video route
                 progressCallback?("Uploading video...", 50)
                 let result = try await uploadRegularFile(
                     data: videoData,
@@ -4013,14 +4715,13 @@ final class HproseInstance: ObservableObject {
                     appUser: appUser,
                     appId: appId
                 )
-                print("✅ [VIDEO UPLOAD] Progressive video uploaded successfully, CID: \(result.mid)")
                 return (result, nil)
             } else {
-                // > 32MB: Need HLS conversion - check if cloud drive is available
-                print("📹 [VIDEO UPLOAD] Size > 32MB: will use HLS conversion route")
-                let cloudPort = appUser.cloudDrivePort
+                // > 50MB: Need HLS conversion - check if cloud drive is available
+                hproseDebug("📹 [VIDEO UPLOAD] Size > 50MB: will use HLS conversion route")
+                let cloudPort = await MainActor.run { appUser.cloudDrivePort }
                 guard cloudPort > 0 else {
-                    print("⚠️ [VIDEO UPLOAD] No cloud drive configured, falling back to progressive video")
+                    hproseWarning("⚠️ [VIDEO UPLOAD] No cloud drive configured, falling back to progressive video")
                     await MainActor.run {
                         NotificationCenter.default.post(
                             name: .videoUploadFormatWarning,
@@ -4047,14 +4748,14 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 progressCallback?("Checking video service availability...", 10)
-                print("📹 [VIDEO UPLOAD] Checking cloud drive service availability (port: \(cloudPort))...")
+                hproseDebug("📹 [VIDEO UPLOAD] Checking cloud drive service availability (port: \(cloudPort))...")
                 
                 // Resolve writableUrl once for all video HTTP operations
                 _ = try await appUser.resolveWritableUrl()
                 let isCloudDriveAvailable = await MediaProcessor.checkCloudDriveServiceAvailability(appUser: appUser)
                 
                 guard isCloudDriveAvailable else {
-                    print("⚠️ [VIDEO UPLOAD] Cloud drive service not available, falling back to progressive video")
+                    hproseWarning("⚠️ [VIDEO UPLOAD] Cloud drive service not available, falling back to progressive video")
                     progressCallback?("Uploading video...", 50)
                     let result = try await uploadRegularFile(
                         data: videoData,
@@ -4075,7 +4776,7 @@ final class HproseInstance: ObservableObject {
                 if videoResolution > 480 {
                     // Resolution > 480p: HLS with high-quality + 480p variants
                     // High-quality variant uses actual resolution (capped at 720p)
-                    print("📹 [VIDEO UPLOAD] Resolution \(videoResolution)p > 480p: using HLS with \(min(videoResolution, 720))p + 480p variants")
+                    hproseDebug("📹 [VIDEO UPLOAD] Resolution \(videoResolution)p > 480p: using HLS with \(min(videoResolution, 720))p + 480p variants")
                     return try await MediaProcessor.uploadVideoWithLocalHLSConversion(
                         data: videoData,
                         fileName: fileName,
@@ -4089,7 +4790,7 @@ final class HproseInstance: ObservableObject {
                     )
                 } else {
                     // Resolution ≤ 480p: HLS with 480p variant only
-                    print("📹 [VIDEO UPLOAD] Resolution \(videoResolution)p ≤ 480p: using HLS with 480p variant only")
+                    hproseDebug("📹 [VIDEO UPLOAD] Resolution \(videoResolution)p ≤ 480p: using HLS with 480p variant only")
                     return try await MediaProcessor.uploadVideoWithLocalHLSConversion(
                         data: videoData,
                         fileName: fileName,
@@ -4161,7 +4862,7 @@ final class HproseInstance: ObservableObject {
             default:
                 // Analyze file header for unknown types
                 let detectedType = await FileTypeDetector.detectFromData(data)
-                print("Detected type via file header: \(detectedType.rawValue)")
+                hproseDebug("Detected type via file header: \(detectedType.rawValue)")
                 return detectedType
             }
         }
@@ -4178,9 +4879,8 @@ final class HproseInstance: ObservableObject {
             singleVariant480p: Bool = false,
             sourceVideoResolution: Int,
             isNormalized: Bool = false,
-            progressCallback: ((String, Int) -> Void)? = nil
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Starting local HLS conversion with FFmpeg (single 480p variant: \(singleVariant480p))")
             progressCallback?("Converting video to HLS...", 10)
 
             // Log initial memory state
@@ -4219,10 +4919,10 @@ final class HproseInstance: ObservableObject {
             if let info = videoInfo {
                 // Calculate aspect ratio from display dimensions (after rotation correction)
                 videoAspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
-                print("DEBUG: [HLS CONVERSION] FFmpeg detected: \(info.width)x\(info.height), display: \(info.displayWidth)x\(info.displayHeight), rotation: \(info.rotation)°, aspect ratio: \(videoAspectRatio!)")
+                hproseDebug("DEBUG: [HLS CONVERSION] FFmpeg detected: \(info.width)x\(info.height), display: \(info.displayWidth)x\(info.displayHeight), rotation: \(info.rotation)°, aspect ratio: \(videoAspectRatio!)")
             } else {
                 videoAspectRatio = await MediaProcessor.getVideoAspectRatioWithFallback(from: data)
-                print("DEBUG: [HLS CONVERSION] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0)")
+                hproseWarning("DEBUG: [HLS CONVERSION] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0)")
             }
             
             // Convert to HLS using FFmpeg with foreground processing (high priority)
@@ -4247,7 +4947,7 @@ final class HproseInstance: ObservableObject {
             
             guard conversionResult.success,
                   let hlsDirectory = conversionResult.hlsDirectoryURL else {
-                print("DEBUG: Video conversion failed: \(conversionResult.errorMessage ?? "Unknown error")")
+                hproseError("DEBUG: Video conversion failed: \(conversionResult.errorMessage ?? "Unknown error")")
                 progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
                 // Clean up temp files
                 try? FileManager.default.removeItem(at: tempDir)
@@ -4265,7 +4965,7 @@ final class HproseInstance: ObservableObject {
             // Monitor HLS directory size for memory planning
             if let hlsAttributes = try? FileManager.default.attributesOfItem(atPath: hlsDirectory.path),
                let hlsSize = hlsAttributes[.size] as? Int64 {
-                print("DEBUG: [MEMORY MONITORING] HLS directory size: \(hlsSize / 1024)KB")
+                hproseDebug("DEBUG: [MEMORY MONITORING] HLS directory size: \(hlsSize / 1024)KB")
             }
 
             // Compress the HLS directory
@@ -4295,7 +4995,10 @@ final class HproseInstance: ObservableObject {
                 do {
                     // Resolve writableUrl (may use cached or resolve fresh)
                     _ = try await appUser.resolveWritableUrl()
-                    print("DEBUG: [HLS Upload] Attempt \(attempt)/\(maxRetries) - writableUrl: \(appUser.writableUrl?.absoluteString ?? "nil")")
+                    let writableUrlDescription = await MainActor.run {
+                        appUser.writableUrl?.absoluteString ?? "nil"
+                    }
+                    hproseDebug("DEBUG: [HLS Upload] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrlDescription)")
                     
                     jobId = try await MediaProcessor.uploadCompressedHLS(
                         compressedURL: compressedURL,
@@ -4308,16 +5011,16 @@ final class HproseInstance: ObservableObject {
                 } catch let error {
                     lastError = error
                     let nsError = error as NSError
-                    print("ERROR: [HLS Upload] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
+                    hproseError("ERROR: [HLS Upload] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
                     
                     if attempt >= maxRetries {
-                        print("ERROR: [HLS Upload] All retry attempts exhausted")
+                        hproseError("ERROR: [HLS Upload] All retry attempts exhausted")
                         throw error
                     }
                     
-                    // Clear cached writableUrl to force fresh resolution on retry
+                    // Drop the last resolved URL before retrying; the next attempt resolves hostIds[0] again.
                     await MainActor.run {
-                        print("DEBUG: [HLS Upload] Clearing writableUrl to force fresh IP resolution on retry")
+                        hproseWarning("DEBUG: [HLS Upload] Clearing last writableUrl before retry")
                         appUser.writableUrl = nil
                     }
                     
@@ -4336,7 +5039,6 @@ final class HproseInstance: ObservableObject {
             // Log memory usage after upload
             VideoConversionService.shared.logMemoryUsage("after HLS upload")
 
-            print("✅ [HLS Upload] Uploaded to server, job ID: \(jobId)")
             progressCallback?("Video uploaded to server", 100)
             
             // OPTIMIZATION: Return immediately with job ID instead of waiting for processing
@@ -4354,7 +5056,7 @@ final class HproseInstance: ObservableObject {
             )
             
             // Clean up temp files (aggressive cleanup to reduce memory footprint)
-            print("DEBUG: [HLS UPLOAD] Cleaning up temporary files...")
+            hproseDebug("DEBUG: [HLS UPLOAD] Cleaning up temporary files...")
 
             // Force memory cleanup before file deletion
             autoreleasepool {}
@@ -4366,7 +5068,7 @@ final class HproseInstance: ObservableObject {
             // Final memory cleanup
             autoreleasepool {}
 
-            print("DEBUG: [HLS UPLOAD] Temporary files cleaned up")
+            hproseDebug("DEBUG: [HLS UPLOAD] Temporary files cleaned up")
             VideoConversionService.shared.logMemoryUsage("after cleanup")
             
             // Return (placeholder MimeiFileType, jobId)
@@ -4376,16 +5078,19 @@ final class HproseInstance: ObservableObject {
         
         /// Check if cloud drive service is available at clouddriveport
         private static func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
-            guard !appUser.isGuest else {
-                print("Cloud drive check skipped for guest user - using fallback")
+            let userSnapshot = await MainActor.run {
+                (isGuest: appUser.isGuest, writableUrl: appUser.writableUrl, cloudDrivePort: appUser.cloudDrivePort)
+            }
+            guard !userSnapshot.isGuest else {
+                hproseWarning("Cloud drive check skipped for guest user - using fallback")
                 return false
             }
             
             do {
-                guard let writableUrl = appUser.writableUrl,
+                guard let writableUrl = userSnapshot.writableUrl,
                       let host = writableUrl.host,
-                      appUser.cloudDrivePort > 0,
-                      let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+                      userSnapshot.cloudDrivePort > 0,
+                      let cloudBaseURL = URL(string: "http://\(host):\(userSnapshot.cloudDrivePort)") else {
                     return false
                 }
                 
@@ -4399,22 +5104,21 @@ final class HproseInstance: ObservableObject {
                 
                 guard let httpResponse = response as? HTTPURLResponse,
                       httpResponse.statusCode == 200 else {
-                    print("Cloud drive service unavailable (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))")
+                    hproseDebug("Cloud drive service unavailable (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))")
                     return false
                 }
                 
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let status = json["status"] as? String,
                    status == "ok" {
-                    print("✅ Cloud drive service available - using HLS conversion")
                     return true
                 } else {
-                    print("Cloud drive service health check failed - invalid response")
+                    hproseError("Cloud drive service health check failed - invalid response")
                     return false
                 }
             } catch {
                 let nsError = error as NSError
-                print("Cloud drive service unavailable - using MP4 fallback (domain: \(nsError.domain), code: \(nsError.code))")
+                hproseWarning("Cloud drive service unavailable - using MP4 fallback (domain: \(nsError.domain), code: \(nsError.code))")
                 return false
             }
         }
@@ -4426,9 +5130,8 @@ final class HproseInstance: ObservableObject {
             referenceId: String?,
             appUser: User,
             appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Starting MP4 conversion (\(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
             progressCallback?("Converting video to MP4...", 10)
             
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -4451,11 +5154,11 @@ final class HproseInstance: ObservableObject {
                 videoAspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
                 let minDimension = min(info.displayWidth, info.displayHeight)
                 targetResolution = minDimension > 720 ? 720 : minDimension
-                print("Converting \(info.displayWidth)x\(info.displayHeight) → \(targetResolution)p (aspect: \(String(format: "%.2f", videoAspectRatio ?? 0)))")
+                hproseDebug("Converting \(info.displayWidth)x\(info.displayHeight) → \(targetResolution)p (aspect: \(String(format: "%.2f", videoAspectRatio ?? 0)))")
             } else {
                 videoAspectRatio = await MediaProcessor.getVideoAspectRatioWithFallback(from: data)
                 targetResolution = 720
-                print("Using fallback settings: \(targetResolution)p")
+                hproseWarning("Using fallback settings: \(targetResolution)p")
             }
             
             progressCallback?("Converting to MP4 format...", 30)
@@ -4487,7 +5190,7 @@ final class HproseInstance: ObservableObject {
             )
             
             guard conversionSuccess else {
-                print("ERROR: Video conversion to MP4 failed")
+                hproseError("ERROR: Video conversion to MP4 failed")
                 progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
                 throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to MP4"])
             }
@@ -4496,7 +5199,7 @@ final class HproseInstance: ObservableObject {
             
             let convertedData = try Data(contentsOf: outputVideoURL)
             let outputFileName = outputVideoName
-            print("Converted: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB → uploading to IPFS...")
+            hproseDebug("Converted: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB → uploading to IPFS...")
             
             let result = try await MediaProcessor.uploadRegularFile(
                 data: convertedData,
@@ -4509,7 +5212,6 @@ final class HproseInstance: ObservableObject {
             )
             
             progressCallback?("Video upload completed", 100)
-            print("✅ Video uploaded: CID \(result.mid)")
             
             return (result, nil)
         }
@@ -4522,7 +5224,7 @@ final class HproseInstance: ObservableObject {
             width: Int,
             height: Int,
             aspectRatio: Float?,
-            progressCallback: ((String, Int) -> Void)? = nil
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async -> Bool {
             return await withCheckedContinuation { continuation in
                 // Determine scaling filter based on aspect ratio
@@ -4553,9 +5255,7 @@ final class HproseInstance: ObservableObject {
                     let pixelCount = width * height
                     let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
                     bitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
-                    print("📊 Pixel-based calculation: \(width)×\(height) (\(pixelCount) pixels) = \(calculatedBitrate)k → \(bitrateKbps)k (with \(VideoConversionService.minBitrate)k min)")
                 }
-                print("📊 Using calculated bitrate for \(targetResolution)p: \(bitrateKbps)k")
                 
                 let command = """
                     -i "\(inputURL.path)" \
@@ -4570,27 +5270,24 @@ final class HproseInstance: ObservableObject {
                     "\(outputURL.path)"
                     """
                 
-                FFmpegKit.executeAsync(command) { session in
+                DynamicFFmpegKit.shared.executeAsync(command) { session in
                     guard let session = session else {
-                        print("ERROR: Failed to create FFmpeg session")
+                        hproseError("ERROR: Failed to create FFmpeg session")
                         continuation.resume(returning: false)
                         return
                     }
                     
-                    let returnCode = session.getReturnCode()
-                    let success = ReturnCode.isSuccess(returnCode)
+                    let success = session.isSuccess
                     
                     if success {
                         if FileManager.default.fileExists(atPath: outputURL.path) {
-                            let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
-                            print("✅ Converted to \(targetResolution)p MP4 (\(fileSize / 1024)KB)")
                             continuation.resume(returning: true)
                         } else {
-                            print("ERROR: Output file missing")
+                            hproseError("ERROR: Output file missing")
                             continuation.resume(returning: false)
                         }
                     } else {
-                        print("ERROR: FFmpeg conversion failed (code: \(String(describing: returnCode)))")
+                        hproseError("ERROR: FFmpeg conversion failed (code: \(session.returnCodeDescription))")
                         continuation.resume(returning: false)
                     }
                 }
@@ -4602,7 +5299,7 @@ final class HproseInstance: ObservableObject {
         private static func normalizeToReferenceBitrate(
             inputURL: URL,
             outputURL: URL,
-            progressCallback: ((String, Int) -> Void)? = nil
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async -> Bool {
             
             return await withCheckedContinuation { continuation in
@@ -4613,7 +5310,7 @@ final class HproseInstance: ObservableObject {
                     
                     // If AVFoundation fails, try with a temporary file with proper extension
                     if videoInfo == nil {
-                        print("AVFoundation probe failed, trying with temporary file...")
+                        hproseError("AVFoundation probe failed, trying with temporary file...")
                         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
                         let tempVideoURL = tempDir.appendingPathComponent("\(UUID().uuidString).mp4")
@@ -4648,32 +5345,34 @@ final class HproseInstance: ObservableObject {
                                 }
                                 
                                 videoInfo = (Int(dimensions.width), Int(dimensions.height), displayWidth, displayHeight, rotation)
-                                print("✅ Got video info via AVFoundation: \(displayWidth)x\(displayHeight) (rotation: \(rotation)°)")
                             }
                             
                             // Clean up temp file
                             try? FileManager.default.removeItem(at: tempDir)
                         } catch {
-                            print("Failed to get video info via AVFoundation: \(error)")
+                            hproseError("Failed to get video info via AVFoundation: \(error)")
                             try? FileManager.default.removeItem(at: tempDir)
                         }
                     }
                     
-                    // Note: Bitrate detection is unreliable, so we always use calculated bitrate
+                    let sourceBitrateKbps = try? await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: inputURL.path)
                     
                     // Get original resolution
-                    var originalWidth: Int? = nil
-                    var originalHeight: Int? = nil
+                    let originalWidth: Int?
+                    let originalHeight: Int?
                     if let info = videoInfo {
                         originalWidth = info.displayWidth
                         originalHeight = info.displayHeight
+                    } else {
+                        originalWidth = nil
+                        originalHeight = nil
                     }
                     
                     // Determine if we need to scale and calculate target bitrate
                     let needsScaling: Bool
                     let scaleFilter: String
                     let targetBitrateKbps: Int
-                    var videoResolution: Int = 720 // Default to 720p
+                    let videoResolution: Int
                     
                     if let width = originalWidth, let height = originalHeight {
                         let aspectRatio = Float(width) / Float(height)
@@ -4692,7 +5391,7 @@ final class HproseInstance: ObservableObject {
                         needsScaling = videoResolution > 720
                         
                         if needsScaling {
-                            // Resolution > 720p: scale to 720p with the shared reference bitrate
+                            // Resolution > 720p: scale to 720p, capped at the source bitrate.
                             if aspectRatio < 1.0 {
                                 // Portrait: scale to target width
                                 scaleFilter = "scale=720:-2"
@@ -4700,11 +5399,19 @@ final class HproseInstance: ObservableObject {
                                 // Landscape: scale to target height
                                 scaleFilter = "scale=-2:720"
                             }
-                            // Always use the reference bitrate for 720p normalization (bitrate detection is unreliable)
-                            targetBitrateKbps = Int(VideoConversionService.reference720pBitrate)
-                            print("📊 Scaling to 720p with \(targetBitrateKbps)k bitrate")
+                            let referenceBitrateKbps = Int(VideoConversionService.reference720pBitrate)
+                            if let sourceBitrateKbps, sourceBitrateKbps > 0, sourceBitrateKbps < referenceBitrateKbps {
+                                targetBitrateKbps = sourceBitrateKbps
+                            } else {
+                                targetBitrateKbps = referenceBitrateKbps
+                            }
+                        } else if videoResolution < 720, let sourceBitrateKbps, sourceBitrateKbps > 0 {
+                            // Sub-720p sources stay at their original bitrate instead of being raised by the 720p reference curve.
+                            scaleFilter = ""
+                            targetBitrateKbps = sourceBitrateKbps
                         } else {
-                            // Resolution ≤ 720p: keep original resolution with proportional bitrate (min minBitrate to avoid inflating low-bitrate videos)
+                            // 720p sources keep the reference curve; bitrate detection can vary across formats.
+                            // If source bitrate is unavailable for sub-720p, fall back to the previous pixel-based estimate.
                             scaleFilter = ""
                             // Calculate proportional bitrate based on pixel count
                             // Formula: bitrate = max(minBitrate, (pixel_count / REFERENCE_720P_PIXELS) * reference720pBitrate)
@@ -4712,18 +5419,22 @@ final class HproseInstance: ObservableObject {
                             let pixelCount = width * height
                             let REFERENCE_720P_PIXELS = 921600
                             let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
-                            targetBitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
-                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), pixel-based: \(calculatedBitrate)k → \(targetBitrateKbps)k (with \(VideoConversionService.minBitrate)k min)")
+                            let estimatedBitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
+                            if let sourceBitrateKbps, sourceBitrateKbps > 0, sourceBitrateKbps < estimatedBitrateKbps {
+                                targetBitrateKbps = sourceBitrateKbps
+                            } else {
+                                targetBitrateKbps = estimatedBitrateKbps
+                            }
                         }
                     } else {
                         // Fallback: assume scaling needed
+                        videoResolution = 720
                         needsScaling = true
                         scaleFilter = "scale=-2:720"
                         targetBitrateKbps = Int(VideoConversionService.reference720pBitrate)
-                        print("📊 Could not detect resolution, defaulting to 720p with \(targetBitrateKbps)k bitrate")
                     }
                     
-                    print("📹 [NORMALIZE] Original: \(originalWidth ?? 0)x\(originalHeight ?? 0), target bitrate: \(targetBitrateKbps)k, scaling: \(needsScaling ? "YES (to 720p)" : "NO (keep original resolution)")")
+                    hproseDebug("📹 [NORMALIZE] Original: \(originalWidth ?? 0)x\(originalHeight ?? 0), target bitrate: \(targetBitrateKbps)k, scaling: \(needsScaling ? "YES (to 720p)" : "NO (keep original resolution)")")
                     
                     // Build FFmpeg command
                     var command: String
@@ -4767,36 +5478,24 @@ final class HproseInstance: ObservableObject {
                             """
                     }
                     
-                    FFmpegKit.executeAsync(command) { session in
+                    DynamicFFmpegKit.shared.executeAsync(command) { session in
                         guard let session = session else {
-                            print("ERROR: Failed to create FFmpeg session for normalization")
+                            hproseError("ERROR: Failed to create FFmpeg session for normalization")
                             continuation.resume(returning: false)
                             return
                         }
                         
-                        let returnCode = session.getReturnCode()
-                        let success = ReturnCode.isSuccess(returnCode)
+                        let success = session.isSuccess
                         
                         if success {
                             if FileManager.default.fileExists(atPath: outputURL.path) {
-                                let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
-                                // Determine output resolution for logging
-                                let outputResolution: String
-                                if needsScaling {
-                                    outputResolution = "720p"
-                                } else if let width = originalWidth, let height = originalHeight {
-                                    outputResolution = "\(width)x\(height) (\(videoResolution)p)"
-                                } else {
-                                    outputResolution = "unknown"
-                                }
-                                print("✅ Normalized to \(outputResolution) with \(targetBitrateKbps)k bitrate - \(fileSize / 1024)KB")
                                 continuation.resume(returning: true)
                             } else {
-                                print("ERROR: Normalized output file missing")
+                                hproseError("ERROR: Normalized output file missing")
                                 continuation.resume(returning: false)
                             }
                         } else {
-                            print("ERROR: FFmpeg normalization failed (code: \(String(describing: returnCode)))")
+                            hproseError("ERROR: FFmpeg normalization failed (code: \(session.returnCodeDescription))")
                             continuation.resume(returning: false)
                         }
                     }
@@ -4805,14 +5504,13 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Compress HLS directory into a zip file (memory-optimized streaming approach)
-        private static func compressHLSDirectory(hlsDirectory: URL, originalFileName: String, progressCallback: ((String, Int) -> Void)? = nil) async throws -> URL {
+        private static func compressHLSDirectory(hlsDirectory: URL, originalFileName: String, progressCallback: (@Sendable (String, Int) -> Void)? = nil) async throws -> URL {
             let zipFileName = "\(originalFileName)_hls.zip"
             let tempDir = hlsDirectory.deletingLastPathComponent()
             let zipURL = tempDir.appendingPathComponent(zipFileName)
 
-            print("DEBUG: [ZIP CREATION] Starting memory-optimized zip creation")
-            print("DEBUG: [ZIP CREATION] HLS directory: \(hlsDirectory.path)")
-            print("DEBUG: [ZIP CREATION] Zip file will be created at: \(zipURL.path)")
+            hproseDebug("DEBUG: [ZIP CREATION] HLS directory: \(hlsDirectory.path)")
+            hproseDebug("DEBUG: [ZIP CREATION] Zip file will be created at: \(zipURL.path)")
 
             // Log initial memory usage
             VideoConversionService.shared.logMemoryUsage("before zip creation")
@@ -4842,14 +5540,8 @@ final class HproseInstance: ObservableObject {
                             }
                         }
 
-                        print("DEBUG: [ZIP CREATION] Found \(fileURLs.count) files, total size: \(totalSize / 1024)KB")
+                        hproseDebug("DEBUG: [ZIP CREATION] Found \(fileURLs.count) files, total size: \(totalSize / 1024)KB")
                         
-                        // Log some file paths for debugging
-                        if !fileURLs.isEmpty {
-                            let samplePaths = fileURLs.prefix(3).map { $0.lastPathComponent }
-                            print("DEBUG: [ZIP CREATION] Sample files: \(samplePaths.joined(separator: ", "))")
-                        }
-
                         // Force memory cleanup before zip creation
                         autoreleasepool {}
                         progressCallback?("Creating ZIP file...", 10)
@@ -4857,15 +5549,14 @@ final class HproseInstance: ObservableObject {
                         // Create ZIP file directly without copying directory
                         // Use parent directory as base so "hls/" is included in ZIP structure
                         let baseDirectory = hlsDirectory.deletingLastPathComponent()
-                        print("DEBUG: [ZIP CREATION] Base directory: \(baseDirectory.path)")
-                        print("DEBUG: [ZIP CREATION] HLS directory name: \(hlsDirectory.lastPathComponent)")
+                        hproseDebug("DEBUG: [ZIP CREATION] Base directory: \(baseDirectory.path)")
+                        hproseDebug("DEBUG: [ZIP CREATION] HLS directory name: \(hlsDirectory.lastPathComponent)")
                         try MediaProcessor.createZipFile(from: fileURLs, relativeTo: baseDirectory, to: zipURL, progressCallback: progressCallback)
 
                         // Verify zip file was created and get its size
                         if let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
                            let zipSize = zipAttributes[.size] as? Int64 {
-                            print("DEBUG: [ZIP CREATION] Successfully created zip file at: \(zipURL.path)")
-                            print("DEBUG: [ZIP CREATION] Zip file size: \(zipSize / 1024)KB (original: \(totalSize / 1024)KB)")
+                            hproseDebug("DEBUG: [ZIP CREATION] Zip file size: \(zipSize / 1024)KB (original: \(totalSize / 1024)KB)")
 
                             // Log memory usage after zip creation
                             VideoConversionService.shared.logMemoryUsage("after zip creation")
@@ -4876,7 +5567,7 @@ final class HproseInstance: ObservableObject {
                         }
 
                     } catch {
-                        print("DEBUG: [ZIP CREATION] Zip creation failed: \(error)")
+                        hproseError("DEBUG: [ZIP CREATION] Zip creation failed: \(error)")
                         continuation.resume(throwing: error)
                     }
                 }
@@ -4884,7 +5575,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Create ZIP file from array of file URLs using system ZIP functionality (memory efficient)
-        private static func createZipFile(from fileURLs: [URL], relativeTo baseURL: URL, to zipURL: URL, progressCallback: ((String, Int) -> Void)? = nil) throws {
+        private static func createZipFile(from fileURLs: [URL], relativeTo baseURL: URL, to zipURL: URL, progressCallback: (@Sendable (String, Int) -> Void)? = nil) throws {
             let fileManager = FileManager.default
             var processedCount = 0
             let totalFiles = fileURLs.count
@@ -4906,7 +5597,7 @@ final class HproseInstance: ObservableObject {
                         
                         // Log first few relative paths for debugging
                         if processedCount < 3 {
-                            print("DEBUG: [ZIP CREATION] File \(processedCount + 1): relativePath=\(relativePath), fullPath=\(fileURL.path)")
+                            hproseDebug("DEBUG: [ZIP CREATION] File \(processedCount + 1): relativePath=\(relativePath), fullPath=\(fileURL.path)")
                         }
 
                         // Create a temporary directory structure that mirrors the relative path
@@ -4920,7 +5611,7 @@ final class HproseInstance: ObservableObject {
                         
                         // Verify file was copied
                         if !fileManager.fileExists(atPath: tempFileURL.path) {
-                            print("DEBUG: [ZIP CREATION] WARNING: File copy verification failed for \(relativePath)")
+                            hproseError("DEBUG: [ZIP CREATION] WARNING: File copy verification failed for \(relativePath)")
                         }
 
                         processedCount += 1
@@ -4930,7 +5621,7 @@ final class HproseInstance: ObservableObject {
                         }
 
                     } catch {
-                        print("DEBUG: [ZIP CREATION] Error processing file \(fileURL.lastPathComponent): \(error)")
+                        hproseError("DEBUG: [ZIP CREATION] Error processing file \(fileURL.lastPathComponent): \(error)")
                         // Continue with other files rather than failing completely
                     }
                 }
@@ -4939,9 +5630,9 @@ final class HproseInstance: ObservableObject {
             progressCallback?("Creating ZIP archive...", 25)
 
             // Verify tempZipDir structure before zipping
-            print("DEBUG: [ZIP CREATION] Verifying tempZipDir structure: \(tempZipDir.path)")
+            hproseDebug("DEBUG: [ZIP CREATION] Verifying tempZipDir structure: \(tempZipDir.path)")
             let contents = try? fileManager.contentsOfDirectory(at: tempZipDir, includingPropertiesForKeys: [.isDirectoryKey])
-            print("DEBUG: [ZIP CREATION] tempZipDir top-level contents: \(contents?.map { $0.lastPathComponent } ?? [])")
+            hproseDebug("DEBUG: [ZIP CREATION] tempZipDir top-level contents: \(contents?.map { $0.lastPathComponent } ?? [])")
             
             // Find the "hls" subdirectory in tempZipDir
             let hlsSubdir = tempZipDir.appendingPathComponent("hls")
@@ -4952,7 +5643,7 @@ final class HproseInstance: ObservableObject {
             // If hls subdirectory exists, zip it directly (ZIP will contain hls/720p/, hls/480p/, etc.)
             // If not, zip tempZipDir (structure might be different)
             let dirToZip = hlsExists ? hlsSubdir : tempZipDir
-            print("DEBUG: [ZIP CREATION] Zipping directory: \(dirToZip.path) (hls subdir exists: \(hlsExists))")
+            hproseDebug("DEBUG: [ZIP CREATION] Zipping directory: \(dirToZip.path) (hls subdir exists: \(hlsExists))")
 
             // Use NSFileCoordinator to create ZIP from the directory
             // When zipping a directory with .forUploading, the ZIP will contain that directory's name
@@ -4963,12 +5654,12 @@ final class HproseInstance: ObservableObject {
 
             coordinator.coordinate(readingItemAt: dirToZip, options: [.forUploading], error: &localError) { (tempZipURL) in
                 do {
-                    print("DEBUG: [ZIP CREATION] NSFileCoordinator created temporary ZIP at: \(tempZipURL.path)")
+                    hproseDebug("DEBUG: [ZIP CREATION] NSFileCoordinator created temporary ZIP at: \(tempZipURL.path)")
                     
                     // Verify temporary ZIP exists and has content
                     if let tempAttributes = try? fileManager.attributesOfItem(atPath: tempZipURL.path),
                        let tempSize = tempAttributes[.size] as? Int64 {
-                        print("DEBUG: [ZIP CREATION] Temporary ZIP size: \(tempSize / 1024)KB")
+                        hproseDebug("DEBUG: [ZIP CREATION] Temporary ZIP size: \(tempSize / 1024)KB")
                         
                         if tempSize == 0 {
                             throw NSError(domain: "ZipCreation", code: -1,
@@ -4981,9 +5672,8 @@ final class HproseInstance: ObservableObject {
                         try fileManager.removeItem(at: zipURL)
                     }
                     try fileManager.moveItem(at: tempZipURL, to: zipURL)
-                    print("DEBUG: [ZIP CREATION] Successfully created zip file at: \(zipURL.path)")
                 } catch {
-                    print("DEBUG: [ZIP CREATION] Failed to create final zip file: \(error)")
+                    hproseError("DEBUG: [ZIP CREATION] Failed to create final zip file: \(error)")
                     coordinatorError = error as NSError
                 }
             }
@@ -4992,7 +5682,7 @@ final class HproseInstance: ObservableObject {
             if let error = localError ?? coordinatorError {
                 // Clean up temporary directory
                 try? fileManager.removeItem(at: tempZipDir)
-                print("DEBUG: [ZIP CREATION] File coordinator error: \(error)")
+                hproseError("DEBUG: [ZIP CREATION] File coordinator error: \(error)")
                 throw error
             }
             
@@ -5012,7 +5702,7 @@ final class HproseInstance: ObservableObject {
             // Get final ZIP size and verify it's not empty
             if let zipAttributes = try? fileManager.attributesOfItem(atPath: zipURL.path),
                let zipSize = zipAttributes[.size] as? Int64 {
-                print("DEBUG: [ZIP CREATION] Final ZIP size: \(zipSize / 1024)KB")
+                hproseDebug("DEBUG: [ZIP CREATION] Final ZIP size: \(zipSize / 1024)KB")
                 
                 if zipSize == 0 {
                     throw NSError(domain: "ZipCreation", code: -1,
@@ -5021,7 +5711,7 @@ final class HproseInstance: ObservableObject {
                 
                 // Verify ZIP file is readable (basic validation)
                 if zipSize < 100 {
-                    print("DEBUG: [ZIP CREATION] WARNING: ZIP file seems too small (\(zipSize) bytes)")
+                    hproseWarning("DEBUG: [ZIP CREATION] WARNING: ZIP file seems too small (\(zipSize) bytes)")
                 }
             } else {
                 throw NSError(domain: "ZipCreation", code: -1,
@@ -5029,10 +5719,9 @@ final class HproseInstance: ObservableObject {
             }
             
             // Log ZIP file path for server debugging
-            print("DEBUG: [ZIP CREATION] ZIP file ready for upload: \(zipURL.lastPathComponent)")
+            hproseDebug("DEBUG: [ZIP CREATION] ZIP file ready for upload: \(zipURL.lastPathComponent)")
 
             progressCallback?("ZIP creation completed", 30)
-            print("DEBUG: [ZIP CREATION] Memory-efficient zip creation completed")
         }
 
         /// Upload compressed HLS to server via process-zip route
@@ -5042,7 +5731,10 @@ final class HproseInstance: ObservableObject {
             referenceId: String?,
             appUser: User
         ) async throws -> String {
-            guard let writableUrl = appUser.writableUrl else {
+            let userSnapshot = await MainActor.run {
+                (writableUrl: appUser.writableUrl, cloudDrivePort: appUser.cloudDrivePort)
+            }
+            guard let writableUrl = userSnapshot.writableUrl else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
@@ -5052,16 +5744,16 @@ final class HproseInstance: ObservableObject {
             }
             
             // Get cloud drive port - no fallback, must be configured
-            guard appUser.cloudDrivePort > 0 else {
+            guard userSnapshot.cloudDrivePort > 0 else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
             }
             
-            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+            guard let cloudBaseURL = URL(string: "http://\(host):\(userSnapshot.cloudDrivePort)") else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
             }
             let uploadURL = cloudBaseURL.appendingPathComponent("process-zip").absoluteString
             
-            print("DEBUG: Constructed process-zip URL: \(uploadURL)")
+            hproseDebug("DEBUG: Constructed process-zip URL: \(uploadURL)")
             guard let url = URL(string: uploadURL) else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid process-zip URL"])
             }
@@ -5098,12 +5790,12 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Zip file appears to be corrupted (invalid header: \(headerData.map { String(format: "%02x", $0) }.joined()))"])
             }
 
-            print("DEBUG: [UPLOAD] Preparing to upload zip file, size: \(fileSize / 1024)KB")
+            hproseDebug("DEBUG: [UPLOAD] Preparing to upload zip file, size: \(fileSize / 1024)KB")
 
             // For very large files (>50MB), use file-based streaming to avoid memory issues
             let maxMemoryEfficientSize = Int64(50 * 1024 * 1024) // 50MB
             if fileSize > maxMemoryEfficientSize {
-                print("DEBUG: [UPLOAD] Large zip file (\(fileSize / (1024 * 1024))MB) - using file-based streaming upload")
+                hproseDebug("DEBUG: [UPLOAD] Large zip file (\(fileSize / (1024 * 1024))MB) - using file-based streaming upload")
                 VideoConversionService.shared.logMemoryUsage("before large file upload")
             }
 
@@ -5184,9 +5876,9 @@ final class HproseInstance: ObservableObject {
                 
                 // Get final file size after flushing and closing
                 let multipartFileSize = (try? FileManager.default.attributesOfItem(atPath: tempMultipartFile.path))?[.size] as? Int64 ?? 0
-                print("DEBUG: [UPLOAD] Multipart form file created, size: \(multipartFileSize / (1024 * 1024))MB")
-                print("DEBUG: [UPLOAD] ZIP file streamed in chunks, total: \(bytesWritten / (1024 * 1024))MB")
-                print("DEBUG: [UPLOAD] Expected multipart size: ~\(fileSize + 500) bytes (ZIP + headers)")
+                hproseDebug("DEBUG: [UPLOAD] Multipart form file created, size: \(multipartFileSize / (1024 * 1024))MB")
+                hproseDebug("DEBUG: [UPLOAD] ZIP file streamed in chunks, total: \(bytesWritten / (1024 * 1024))MB")
+                hproseDebug("DEBUG: [UPLOAD] Expected multipart size: ~\(fileSize + 500) bytes (ZIP + headers)")
                 
                 // Verify the multipart file is valid
                 guard multipartFileSize > fileSize else {
@@ -5203,9 +5895,8 @@ final class HproseInstance: ObservableObject {
                         verifyHandle.closeFile()
                         
                         if let firstString = String(data: firstBytes, encoding: .utf8), firstString.hasPrefix("--\(boundary)") {
-                            print("DEBUG: [UPLOAD] Multipart file header verified")
                         } else {
-                            print("DEBUG: [UPLOAD] WARNING: Multipart file header doesn't match expected boundary")
+                            hproseWarning("DEBUG: [UPLOAD] WARNING: Multipart file header doesn't match expected boundary")
                         }
                         
                         // Verify ZIP signature is present (read only first 10KB to find ZIP start, then 4 bytes for signature)
@@ -5231,14 +5922,13 @@ final class HproseInstance: ObservableObject {
                                 zipHeader.starts(with: signature)
                             }
                             if isValidZipInMultipart {
-                                print("DEBUG: [UPLOAD] ZIP file signature verified within multipart form at offset \(zipStartOffset)")
                             } else {
-                                print("DEBUG: [UPLOAD] ERROR: ZIP file signature NOT found in multipart form at offset \(zipStartOffset)")
-                                print("DEBUG: [UPLOAD] First 4 bytes at ZIP start: \(zipHeader.map { String(format: "%02x", $0) }.joined())")
+                                hproseError("DEBUG: [UPLOAD] ERROR: ZIP file signature NOT found in multipart form at offset \(zipStartOffset)")
+                                hproseDebug("DEBUG: [UPLOAD] First 4 bytes at ZIP start: \(zipHeader.map { String(format: "%02x", $0) }.joined())")
                             }
                         }
                     } catch {
-                        print("DEBUG: [UPLOAD] Validation error (non-critical): \(error)")
+                        hproseDebug("DEBUG: [UPLOAD] Validation error (non-critical): \(error)")
                         // Don't fail upload if validation has issues - file might still be valid
                     }
                 }
@@ -5296,10 +5986,8 @@ final class HproseInstance: ObservableObject {
             // Match the server upload window; /process-zip now responds after the ZIP upload finishes.
             request.timeoutInterval = 6 * 60 * 60
             
-            print("DEBUG: [UPLOAD] Sending request to: \(url)")
-            print("DEBUG: [UPLOAD] Content-Type: \(request.value(forHTTPHeaderField: "Content-Type") ?? "nil")")
-            print("DEBUG: [UPLOAD] Content-Length: \(request.value(forHTTPHeaderField: "Content-Length") ?? "nil")")
-            print("DEBUG: [UPLOAD] Using file-based upload: \(shouldUseFileBasedUpload)")
+            hproseDebug("DEBUG: [UPLOAD] Sending request to: \(url)")
+            hproseDebug("DEBUG: [UPLOAD] Using file-based upload: \(shouldUseFileBasedUpload)")
 
             // Upload from file using uploadTask to avoid loading entire file into memory
             if fileSize > maxMemoryEfficientSize {
@@ -5316,36 +6004,36 @@ final class HproseInstance: ObservableObject {
                 VideoConversionService.shared.logMemoryUsage("after file-based upload")
             }
 
-            print("DEBUG: [UPLOAD] Received response with status: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+            hproseDebug("DEBUG: [UPLOAD] Received response with status: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
 
             if let httpResponse = response as? HTTPURLResponse {
-                print("DEBUG: [UPLOAD] Response headers: \(httpResponse.allHeaderFields)")
+                hproseDebug("DEBUG: [UPLOAD] Response headers: \(httpResponse.allHeaderFields)")
 
                 if httpResponse.statusCode == 200 {
                     // Parse response to get job ID
                     if let responseString = String(data: responseData, encoding: .utf8) {
-                        print("DEBUG: process-zip upload response: \(responseString)")
+                        hproseDebug("DEBUG: process-zip upload response: \(responseString)")
 
                         // Parse JSON response to extract job ID
                         if let jsonData = responseString.data(using: .utf8),
                            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
                            let jobId = json["jobId"] as? String {
-                            print("DEBUG: Extracted job ID from response: \(jobId)")
+                            hproseDebug("DEBUG: Extracted job ID from response: \(jobId)")
                             return jobId
                         } else {
                             // Fallback: try to extract job ID from response string
                             let trimmedResponse = responseString.trimmingCharacters(in: .whitespacesAndNewlines)
-                            print("DEBUG: Using fallback job ID extraction: \(trimmedResponse)")
+                            hproseWarning("DEBUG: Using fallback job ID extraction: \(trimmedResponse)")
                             return trimmedResponse
                         }
                     } else {
-                        print("DEBUG: [UPLOAD] Could not decode response as UTF-8 string")
+                        hproseDebug("DEBUG: [UPLOAD] Could not decode response as UTF-8 string")
                         throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
                     }
                 } else {
                     // Log the response body for debugging failed requests
                     if let errorResponseString = String(data: responseData, encoding: .utf8) {
-                        print("DEBUG: [UPLOAD] Error response body: \(errorResponseString)")
+                        hproseError("DEBUG: [UPLOAD] Error response body: \(errorResponseString)")
                     }
                     throw NSError(domain: "VideoUpload", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Upload failed with status code: \(httpResponse.statusCode)"])
                 }
@@ -5356,18 +6044,16 @@ final class HproseInstance: ObservableObject {
         
         /// Wait for server to return CID via message pull
         private func waitForServerCID(cid: String, appUser: User) async throws -> (MimeiFileType?, String?) {
-            print("DEBUG: Waiting for server CID: \(cid)")
             
             // Poll for server response with timeout
             let maxAttempts = 12 // 12 attempts (60 seconds total with 5s intervals)
             let pollInterval: UInt64 = 5_000_000_000 // 5 seconds in nanoseconds
             
-            for attempt in 1...maxAttempts {
-                print("DEBUG: Polling attempt \(attempt)/\(maxAttempts) for CID: \(cid)")
+            for _ in 1...maxAttempts {
                 
                 // Check for server response via message pull
                 if let result = try await checkForServerResponse(cid: cid, appUser: appUser) {
-                    print("DEBUG: Received server response for CID: \(cid)")
+                    hproseDebug("DEBUG: Received server response for CID: \(cid)")
                     return result
                 }
                 
@@ -5380,7 +6066,10 @@ final class HproseInstance: ObservableObject {
         
         /// Check for server response via message pull
         private func checkForServerResponse(cid: String, appUser: User, originalVideoDataSize: Int64? = nil) async throws -> (MimeiFileType?, String?)? {
-            guard let client = appUser.hproseClient else {
+            let userSnapshot = await MainActor.run {
+                (client: appUser.hproseClient, userId: appUser.mid)
+            }
+            guard let client = userSnapshot.client else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             
@@ -5389,11 +6078,15 @@ final class HproseInstance: ObservableObject {
                 "aid": "Tweet",
                 "ver": "last",
                 "version": "v2",
-                "userid": appUser.mid,
+                "userid": userSnapshot.userId,
                 "cid": cid
             ]
             
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await HproseTransport.invokeRunMApp(
+                using: client,
+                entry: entry,
+                params: params
+            )
             let unwrappedResponse = try? HproseInstance.unwrapV2Response(rawResponse)
             guard let response = unwrappedResponse as? [String: Any] else {
                 return nil // No response yet
@@ -5410,14 +6103,13 @@ final class HproseInstance: ObservableObject {
                     // Use original video data size instead of server response size
                     let finalSize = originalVideoDataSize ?? Int64(serverFileSize)
                     
-                    print("DEBUG: [checkForServerResponse] Server response file data:")
-                    print("DEBUG: - MID: \(mid)")
-                    print("DEBUG: - File name: \(fileName)")
-                    print("DEBUG: - Server file size: \(serverFileSize)")
-                    print("DEBUG: - Original video data size: \(originalVideoDataSize ?? -1)")
-                    print("DEBUG: - Final size used: \(finalSize)")
-                    print("DEBUG: - Aspect ratio: \(aspectRatio)")
-                    print("DEBUG: - Full fileData: \(fileData)")
+                    hproseDebug("DEBUG: [checkForServerResponse] Server response file data:")
+                    hproseDebug("DEBUG: - MID: \(mid)")
+                    hproseDebug("DEBUG: - File name: \(fileName)")
+                    hproseDebug("DEBUG: - Server file size: \(serverFileSize)")
+                    hproseDebug("DEBUG: - Original video data size: \(originalVideoDataSize ?? -1)")
+                    hproseDebug("DEBUG: - Final size used: \(finalSize)")
+                    hproseDebug("DEBUG: - Aspect ratio: \(aspectRatio)")
                     
                     let mimeiFile = MimeiFileType(
                         mid: mid,
@@ -5441,9 +6133,9 @@ final class HproseInstance: ObservableObject {
             referenceId: String?,
             noResample: Bool,
             appUser: User,
-            progressCallback: ((String, Int) -> Void)? = nil
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Uploading original video to backend for conversion, data size: \(data.count) bytes")
+            hproseDebug("Uploading original video to backend for conversion, data size: \(data.count) bytes")
             
             // Retry logic: Try with cached/pooled IP first, retry with fresh IP if it fails
             var lastError: Error?
@@ -5453,7 +6145,7 @@ final class HproseInstance: ObservableObject {
                 do {
                     // Resolve writableUrl (may use NodePool cache or resolve fresh)
                     let writableUrl = try await appUser.resolveWritableUrl()
-                    print("DEBUG: [Backend Conversion] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrl.absoluteString)")
+                    hproseDebug("DEBUG: [Backend Conversion] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrl.absoluteString)")
 
                     // Try to upload with current writableUrl
                     return try await performBackendVideoUpload(
@@ -5469,16 +6161,16 @@ final class HproseInstance: ObservableObject {
                 } catch let error {
                     lastError = error
                     let nsError = error as NSError
-                    print("ERROR: [Backend Conversion] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
+                    hproseError("ERROR: [Backend Conversion] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
                     
                     if attempt >= maxRetries {
-                        print("ERROR: [Backend Conversion] All retry attempts exhausted")
+                        hproseError("ERROR: [Backend Conversion] All retry attempts exhausted")
                         throw error
                     }
                     
-                    // Clear cached writableUrl to force fresh resolution on retry
+                    // Drop the last resolved URL before retrying; the next attempt resolves hostIds[0] again.
                     await MainActor.run {
-                        print("DEBUG: [Backend Conversion] Clearing writableUrl to force fresh IP resolution on retry")
+                        hproseWarning("DEBUG: [Backend Conversion] Clearing last writableUrl before retry")
                         appUser.writableUrl = nil
                     }
                     
@@ -5499,30 +6191,31 @@ final class HproseInstance: ObservableObject {
             noResample: Bool,
             writableUrl: URL,
             appUser: User,
-            progressCallback: ((String, Int) -> Void)?
+            progressCallback: (@Sendable (String, Int) -> Void)?
         ) async throws -> (MimeiFileType?, String?) {
             // Get host from writableUrl - no fallback, must succeed
             guard let host = writableUrl.host else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
             }
             
+            let cloudDrivePort = await MainActor.run { appUser.cloudDrivePort }
             // Get cloud drive port - no fallback, must be configured
-            guard appUser.cloudDrivePort > 0 else {
+            guard cloudDrivePort > 0 else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
             }
             
-            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudDrivePort)") else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
             }
             let convertVideoURL = cloudBaseURL.appendingPathComponent("convert-video").absoluteString
-            print("DEBUG: Constructed convert-video URL: \(convertVideoURL)")
+            hproseDebug("DEBUG: Constructed convert-video URL: \(convertVideoURL)")
             guard let url = URL(string: convertVideoURL) else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid convert-video URL"])
             }
             
             // Determine content type based on file extension
             let contentType = determineVideoContentType(fileName: fileName)
-            print("DEBUG: Determined content type: \(contentType)")
+            hproseDebug("DEBUG: Determined content type: \(contentType)")
             
             // Create multipart form data
             let boundary = "Boundary-\(UUID().uuidString)"
@@ -5635,19 +6328,19 @@ final class HproseInstance: ObservableObject {
             appUser: User,
             appId: String
         ) async throws -> MimeiFileType {
-            print("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
+            hproseDebug("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
             
-            // Retry logic: Try with cached/pooled IP first, retry with fresh IP if it fails
+            // Retry logic: resolve the writable host for each attempt.
             var lastError: Error?
             let maxRetries = 2
             
             for attempt in 1...maxRetries {
                 do {
-                    // Resolve writable URL (may use NodePool cache or resolve fresh)
+                    // Resolve the writable host for this attempt.
                     let writableUrl = try await appUser.resolveWritableUrl()
-                    print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl.absoluteString)")
+                    hproseDebug("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl.absoluteString)")
                     
-                    guard let uploadClient = appUser.writableClient else {
+                    guard let uploadClient = await MainActor.run(body: { appUser.writableClient(timeout: 240) }) else {
                         throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
                     }
                     
@@ -5663,17 +6356,17 @@ final class HproseInstance: ObservableObject {
                     
                 } catch let error as NSError {
                     lastError = error
-                    print("ERROR: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) failed - domain: \(error.domain), code: \(error.code)")
+                    hproseError("ERROR: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) failed - domain: \(error.domain), code: \(error.code)")
                     
                     // If this was the last attempt, throw the error
                     if attempt >= maxRetries {
-                        print("ERROR: [uploadRegularFile] All retry attempts exhausted")
+                        hproseError("ERROR: [uploadRegularFile] All retry attempts exhausted")
                         throw error
                     }
                     
-                    // Invalidate cached writableUrl so the retry re-resolves a fresh IP.
+                    // Drop the last resolved URL before retrying.
                     await MainActor.run {
-                        print("DEBUG: [uploadRegularFile] Invalidating cached writableUrl to force fresh IP resolution on retry")
+                        hproseWarning("DEBUG: [uploadRegularFile] Clearing last writableUrl before retry")
                         appUser.writableUrl = nil
                         appUser.writableUrlResolvedAt = nil
                     }
@@ -5696,7 +6389,6 @@ final class HproseInstance: ObservableObject {
             uploadClient: HproseClient,
             appId: String
         ) async throws -> MimeiFileType {
-            
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try data.write(to: tempURL)
             defer { try? FileManager.default.removeItem(at: tempURL) }
@@ -5734,7 +6426,7 @@ final class HproseInstance: ObservableObject {
                         request["offset"] = offset
                         request["fsid"] = fsid
                     } else {
-                        print("ERROR: Chunk \(chunkCount) upload failed - invalid response type: \(type(of: response))")
+                        hproseError("ERROR: Chunk \(chunkCount) upload failed - invalid response type: \(type(of: response))")
                         throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Server returned invalid response", comment: "Upload error")])
                     }
                 } catch let error as NSError {
@@ -5742,14 +6434,14 @@ final class HproseInstance: ObservableObject {
                     if error.domain == NSURLErrorDomain {
                         switch error.code {
                         case NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet:
-                            print("ERROR: Chunk \(chunkCount) upload failed - network connection lost")
+                            hproseError("ERROR: Chunk \(chunkCount) upload failed - network connection lost")
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Network connection lost. Please check your connection and try again.", comment: "Network error")])
                         case NSURLErrorTimedOut:
-                            print("ERROR: Chunk \(chunkCount) upload failed - timeout")
+                            hproseError("ERROR: Chunk \(chunkCount) upload failed - timeout")
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload timed out. Please try again.", comment: "Timeout error")])
                         default:
                             let nsError = error as NSError
-                            print("ERROR: Chunk \(chunkCount) upload failed - network error: domain: \(nsError.domain), code: \(nsError.code)")
+                            hproseError("ERROR: Chunk \(chunkCount) upload failed - network error: domain: \(nsError.domain), code: \(nsError.code)")
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Network error: %@", comment: "Network error"), ErrorMessageHelper.userFriendlyMessage(from: error))])
                         }
                     } else {
@@ -5763,10 +6455,18 @@ final class HproseInstance: ObservableObject {
             if let referenceId = referenceId {
                 request["referenceid"] = referenceId
             }
-            print("Uploaded \(chunkCount) chunks, finalizing...")
+            hproseDebug("Uploaded \(chunkCount) chunks, finalizing...")
             
-            let rawFinalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
-            let finalResponse = try? HproseInstance.unwrapV2Response(rawFinalResponse)
+            let rawFinalResponse = await HproseTransport.invokeRunMApp(
+                using: uploadClient,
+                entry: "upload_ipfs",
+                params: request
+            )
+            guard rawFinalResponse != nil else {
+                hproseError("ERROR: Upload finalization failed - nil response")
+                throw uploadTimeoutError("Upload finalization timed out")
+            }
+            let finalResponse = try HproseInstance.unwrapV2Response(rawFinalResponse)
             
             var cid: String? = nil
             if let stringResponse = finalResponse as? String {
@@ -5776,7 +6476,7 @@ final class HproseInstance: ObservableObject {
             }
             
             guard let cid = cid, !cid.isEmpty else {
-                print("ERROR: Upload finalization failed - invalid CID response")
+                hproseError("ERROR: Upload finalization failed - invalid CID response")
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
             }
             
@@ -5813,7 +6513,7 @@ final class HproseInstance: ObservableObject {
                 
                 // Ensure the file exists and is readable
                 guard FileManager.default.fileExists(atPath: tempURL.path) else {
-                    print("Warning: Temporary video file was not created successfully")
+                    hproseWarning("Warning: Temporary video file was not created successfully")
                     return nil
                 }
                 
@@ -5822,7 +6522,7 @@ final class HproseInstance: ObservableObject {
                 let fileSize = fileAttributes[.size] as? UInt64 ?? 0
                 
                 if fileSize == 0 {
-                    print("Warning: Temporary video file is empty")
+                    hproseWarning("Warning: Temporary video file is empty")
                     try? FileManager.default.removeItem(at: tempURL)
                     return nil
                 }
@@ -5835,7 +6535,7 @@ final class HproseInstance: ObservableObject {
                 
                 return aspectRatio
             } catch {
-                print("Warning: Could not determine video aspect ratio: \(error)")
+                hproseWarning("Warning: Could not determine video aspect ratio: \(error)")
                 // Clean up any temporary files that might have been created
                 let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
                 try? FileManager.default.removeItem(at: tempURL)
@@ -5846,18 +6546,18 @@ final class HproseInstance: ObservableObject {
         /// Get image aspect ratio from data
         private static func getImageAspectRatio(from data: Data) async throws -> Float? {
             guard let image = UIImage(data: data) else {
-                print("Warning: Could not create UIImage from data")
+                hproseWarning("Warning: Could not create UIImage from data")
                 return nil
             }
             
             let size = image.size
             guard size.height > 0 else {
-                print("Warning: Image height is zero")
+                hproseWarning("Warning: Image height is zero")
                 return nil
             }
             
             let aspectRatio = Float(size.width / size.height)
-            print("DEBUG: Image aspect ratio: \(aspectRatio) (size: \(size))")
+            hproseDebug("DEBUG: Image aspect ratio: \(aspectRatio) (size: \(size))")
             return aspectRatio
             
         }
@@ -5868,7 +6568,7 @@ final class HproseInstance: ObservableObject {
             data: Data,
             fileName: String?,
             aspectRatio: Float?,
-            progressCallback: ((String, Int) -> Void)? = nil
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
             // Create a custom URLSession with longer timeout for large uploads
             let config = URLSessionConfiguration.default
@@ -5876,17 +6576,17 @@ final class HproseInstance: ObservableObject {
             config.timeoutIntervalForResource = 600 // 10 minutes
             let session = URLSession(configuration: config)
             
-            print("DEBUG: Video upload attempt")
+            hproseDebug("DEBUG: Video upload attempt")
             progressCallback?("Uploading video...", 10)
             let (responseData, response) = try await session.data(for: request)
             
             if let httpResponse = response as? HTTPURLResponse {
-                print("DEBUG: HTTP status code: \(httpResponse.statusCode)")
+                hproseDebug("DEBUG: HTTP status code: \(httpResponse.statusCode)")
                 
                 if httpResponse.statusCode == 200 {
                     // Parse initial response to get job ID
                     let jobId = try parseVideoUploadResponse(responseData: responseData)
-                    print("DEBUG: Video upload started, job ID: \(jobId)")
+                    hproseDebug("DEBUG: Video upload started, job ID: \(jobId)")
                     progressCallback?("Video uploaded, starting conversion...", 20)
                     
                     // Poll for job completion
@@ -5923,7 +6623,7 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response encoding"])
             }
             
-            print("DEBUG: Upload response: \(responseString)")
+            hproseDebug("DEBUG: Upload response: \(responseString)")
             
             do {
                 guard let jsonData = responseString.data(using: .utf8),
@@ -5933,18 +6633,18 @@ final class HproseInstance: ObservableObject {
                 
                 if let success = json["success"] as? Bool, success {
                     if let jobId = json["jobId"] as? String, !jobId.isEmpty {
-                        print("DEBUG: Video upload started, job ID: \(jobId)")
+                        hproseDebug("DEBUG: Video upload started, job ID: \(jobId)")
                         return jobId
                     } else {
                         throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "No job ID in response"])
                     }
                 } else {
                     let message = json["message"] as? String ?? "Unknown error"
-                    print("DEBUG: Server reported error: \(message)")
+                    hproseError("DEBUG: Server reported error: \(message)")
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server error: \(message)"])
                 }
             } catch {
-                print("DEBUG: Failed to parse upload response: \(error)")
+                hproseError("DEBUG: Failed to parse upload response: \(error)")
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Unable to process data. Please try again.", comment: "Parse error")])
             }
         }
@@ -5956,7 +6656,7 @@ final class HproseInstance: ObservableObject {
             data: Data,
             fileName: String?,
             aspectRatio: Float?,
-            progressCallback: ((String, Int) -> Void)? = nil
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> MimeiFileType? {
             guard let baseURL = baseURL else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL for status polling"])
@@ -5967,16 +6667,17 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from base URL"])
             }
             
+            let cloudDrivePort = await MainActor.run { HproseInstance.shared.appUser.cloudDrivePort }
             // Get cloud drive port - no fallback, must be configured
-            guard HproseInstance.shared.appUser.cloudDrivePort > 0 else {
+            guard cloudDrivePort > 0 else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
             }
             
-            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudDrivePort)") else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
             }
             let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
-            print("DEBUG: Polling status at: \(statusURL)")
+            hproseDebug("DEBUG: Polling status at: \(statusURL)")
             
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 30  // 30 seconds for status checks
@@ -5989,7 +6690,6 @@ final class HproseInstance: ObservableObject {
             
             while attempts < maxAttempts {
                 attempts += 1
-                print("DEBUG: Status check attempt \(attempts)/\(maxAttempts)")
                 
                 do {
                     let (responseData, response) = try await session.data(from: statusURL)
@@ -6000,12 +6700,11 @@ final class HproseInstance: ObservableObject {
                             
                             switch statusResult.status {
                             case "completed":
-                                print("DEBUG: Video conversion completed, CID: \(statusResult.cid ?? "unknown")")
-                                print("DEBUG: [pollVideoConversionStatus] Creating MimeiFileType with:")
-                                print("DEBUG: - CID: \(statusResult.cid ?? "unknown")")
-                                print("DEBUG: - Original data size: \(data.count) bytes")
-                                print("DEBUG: - File name: \(fileName ?? "unknown")")
-                                print("DEBUG: - Aspect ratio: \(aspectRatio ?? 0)")
+                                hproseDebug("DEBUG: [pollVideoConversionStatus] Creating MimeiFileType with:")
+                                hproseDebug("DEBUG: - CID: \(statusResult.cid ?? "unknown")")
+                                hproseDebug("DEBUG: - Original data size: \(data.count) bytes")
+                                hproseDebug("DEBUG: - File name: \(fileName ?? "unknown")")
+                                hproseDebug("DEBUG: - Aspect ratio: \(aspectRatio ?? 0)")
                                 progressCallback?("Video conversion completed!", 100)
                                 return MimeiFileType(
                                     mid: statusResult.cid ?? "",
@@ -6019,28 +6718,27 @@ final class HproseInstance: ObservableObject {
                                 
                             case "failed":
                                 let errorMessage = statusResult.message ?? NSLocalizedString("Video conversion failed", comment: "Video processing error")
-                                print("DEBUG: Video conversion failed: \(errorMessage)")
+                                hproseError("DEBUG: Video conversion failed: \(errorMessage)")
                                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video conversion failed: \(errorMessage)"])
                                 
                             case "uploading", "processing":
                                 let message = statusResult.message ?? NSLocalizedString("Processing...", comment: "Processing status")
-                                print("DEBUG: Video conversion in progress: \(message) (\(statusResult.progress)%)")
                                 progressCallback?(message, statusResult.progress)
                                 // Continue polling
                                 
                             default:
-                                print("DEBUG: Unknown status: \(statusResult.status)")
+                                hproseDebug("DEBUG: Unknown status: \(statusResult.status)")
                                 // Continue polling
                             }
                         } else if httpResponse.statusCode == 404 {
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Job not found"])
                         } else {
-                            print("DEBUG: Status check failed with HTTP \(httpResponse.statusCode)")
+                            hproseError("DEBUG: Status check failed with HTTP \(httpResponse.statusCode)")
                             // Continue polling on server errors
                         }
                     }
                 } catch {
-                    print("DEBUG: Status check error: \(error)")
+                    hproseError("DEBUG: Status check error: \(error)")
                     // Continue polling on network errors
                 }
                 
@@ -6057,7 +6755,7 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid status response encoding"])
             }
             
-            print("DEBUG: Status response: \(responseString)")
+            hproseDebug("DEBUG: Status response: \(responseString)")
             
             do {
                 guard let jsonData = responseString.data(using: .utf8),
@@ -6082,7 +6780,7 @@ final class HproseInstance: ObservableObject {
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Status check failed: \(message)"])
                 }
             } catch {
-                print("DEBUG: Failed to parse status response: \(error)")
+                hproseError("DEBUG: Failed to parse status response: \(error)")
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Unable to process data. Please try again.", comment: "Parse error")])
             }
         }
@@ -6098,7 +6796,7 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response encoding"])
             }
             
-            print("DEBUG: Server response: \(responseString)")
+            hproseDebug("DEBUG: Server response: \(responseString)")
             
             do {
                 guard let jsonData = responseString.data(using: .utf8),
@@ -6108,7 +6806,7 @@ final class HproseInstance: ObservableObject {
                 
                 if let success = json["success"] as? Bool, success {
                     if let cid = json["cid"] as? String, !cid.isEmpty {
-                        print("DEBUG: Video conversion successful, CID: \(cid)")
+                        hproseDebug("DEBUG: Video conversion successful, CID: \(cid)")
                         return MimeiFileType(
                             mid: cid,
                             mediaType: .hls_video,
@@ -6126,98 +6824,93 @@ final class HproseInstance: ObservableObject {
                     let error = json["error"] as? String
                     let errorMessage = error != nil ? "\(message). Error: \(error!)" : message
                     
-                    print("DEBUG: Server reported error: \(errorMessage)")
+                    hproseError("DEBUG: Server reported error: \(errorMessage)")
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server error: \(errorMessage)"])
                 }
             } catch {
-                print("DEBUG: Failed to parse response: \(error)")
+                hproseError("DEBUG: Failed to parse response: \(error)")
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Unable to process data. Please try again.", comment: "Parse error")])
             }
         }
         
         /// Upload chunk for regular files (no retry)
+        private struct UploadChunkResponse: @unchecked Sendable {
+            let value: Any
+        }
+
+        private struct UploadChunkInvocation: @unchecked Sendable {
+            let uploadClient: HproseClient
+            let request: [String: Any]
+            let data: NSData
+            let chunkNumber: Int
+        }
+
         private static func uploadChunk(
             uploadClient: HproseClient,
             request: [String: Any],
             data: NSData,
             chunkNumber: Int
         ) async throws -> Any {
-            // Add 3 minute timeout for each chunk upload (handles slow connections)
-            return try await withThrowingTaskGroup(of: Any.self) { group in
-                group.addTask {
-                    let rawResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]])
-                    return try HproseInstance.unwrapV2Response(rawResponse) as Any
+            // Keep this safety timeout slightly above the Hprose client timeout so
+            // the blocking invoke normally returns first and does not leave work behind.
+            let invocation = UploadChunkInvocation(
+                uploadClient: uploadClient,
+                request: request,
+                data: data,
+                chunkNumber: chunkNumber
+            )
+            return try await withThrowingTaskGroup(of: UploadChunkResponse.self) { group in
+                group.addTask { [invocation] in
+                    let rawResponse = await HproseTransport.invoke(
+                        "runMApp",
+                        using: invocation.uploadClient,
+                        args: ["upload_ipfs", invocation.request, [invocation.data]]
+                    )
+                    guard rawResponse != nil else {
+                        throw uploadTimeoutError("Upload timed out on chunk \(invocation.chunkNumber)")
+                    }
+                    guard let response = try HproseInstance.unwrapV2Response(rawResponse) else {
+                        throw uploadTimeoutError("Upload returned no response on chunk \(invocation.chunkNumber)")
+                    }
+                    return UploadChunkResponse(value: response as Any)
                 }
                 
                 group.addTask {
-                    try await Task.sleep(nanoseconds: 180_000_000_000) // 180 seconds (3 minutes)
-                    throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload timeout - chunk \(chunkNumber) took too long"])
+                    try await Task.sleep(nanoseconds: 270_000_000_000) // 270 seconds
+                    throw uploadTimeoutError("Upload timeout - chunk \(chunkNumber) took too long")
                 }
                 
                 // Return the first result (either success or timeout)
                 let result = try await group.next()!
                 group.cancelAll()
-                return result
+                return result.value
             }
+        }
+
+        private static func uploadTimeoutError(_ message: String) -> NSError {
+            NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut, userInfo: [NSLocalizedDescriptionKey: message])
         }
     }
     
     // MARK: - Private Methods
     private func fetchHTML(from urlString: String) async throws -> String {
-        // Extract MimeiId from URL if possible (assuming it's in the URL path)
-        if let url = URL(string: urlString),
-           let mimeiId = extractMimeiIdFromURL(url) {
-            // Check if this resource is blacklisted
-            if blackList.isBlacklisted(mimeiId) {
-                print("[HproseInstance] Skipping blacklisted resource: \(mimeiId)")
-                throw URLError(.badServerResponse)
-            }
-        }
-        
         guard let url = URL(string: urlString) else {
             throw URLError(.badURL)
         }
-        
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            guard let htmlString = String(data: data, encoding: .utf8) else {
-                throw URLError(.cannotDecodeContentData)
-            }
-            
-            // Record success if we can extract MimeiId
-            if let mimeiId = extractMimeiIdFromURL(url) {
-                blackList.recordSuccess(mimeiId)
-            }
-            
-            return htmlString
-        } catch {
-            // Record failure if we can extract MimeiId
-            if let url = URL(string: urlString),
-               let mimeiId = extractMimeiIdFromURL(url) {
-                blackList.recordFailure(mimeiId)
-            }
-            throw error
+
+        let (data, _) = try await URLSession.shared.data(from: url)
+        guard let htmlString = String(data: data, encoding: .utf8) else {
+            throw URLError(.cannotDecodeContentData)
         }
-    }
-    
-    /// Extract MimeiId from URL if present
-    private func extractMimeiIdFromURL(_ url: URL) -> MimeiId? {
-        // Try to extract MimeiId from URL path components
-        let pathComponents = url.pathComponents
-        for component in pathComponents {
-            // Check if component looks like a MimeiId (you may need to adjust this logic)
-            if component.count > 10 && component.range(of: "^[a-zA-Z0-9]+$", options: .regularExpression) != nil {
-                return MimeiId(component)
-            }
-        }
-        return nil
+
+        return htmlString
     }
     
     /// Access a resource by MimeiId with BlackList integration
     func accessResource(mimeiId: MimeiId, url: String) async throws -> Data {
         // Check if this resource is blacklisted
         if blackList.isBlacklisted(mimeiId) {
-            print("[HproseInstance] Skipping blacklisted resource: \(mimeiId)")
+            hproseWarning("[HproseInstance] Skipping blacklisted resource: \(mimeiId)")
             throw URLError(.badServerResponse)
         }
         
@@ -6251,7 +6944,7 @@ final class HproseInstance: ObservableObject {
         blacklistProcessingTask = Task.detached(priority: .background) { [weak self] in
             guard let self = self else { return }
             
-            print("DEBUG: [HproseInstance] Started periodic blacklist candidate processing (every hour)")
+            hproseDebug("DEBUG: [HproseInstance] Started periodic blacklist candidate processing (every hour)")
             
             while !Task.isCancelled {
                 // Wait 1 hour
@@ -6284,12 +6977,12 @@ final class HproseInstance: ObservableObject {
             do {
                 return try await block()
             } catch {
-                print("DEBUG: [withRetry] Attempt \(attempt)/\(maxAttempts) failed: \(error)")
+                hproseWarning("DEBUG: [withRetry] Attempt \(attempt)/\(maxAttempts) failed: \(error)")
                 
                 if attempt < maxAttempts {
                     // Wait 1 second before retry
                     let delay: UInt64 = 1_000_000_000 // 1 second
-                    print("DEBUG: [withRetry] Retrying in 1 second...")
+                    hproseWarning("DEBUG: [withRetry] Retrying in 1 second...")
                     try await Task.sleep(nanoseconds: delay)
                     
                     // Refresh appUser from server instead of full app reinitialization
@@ -6320,12 +7013,14 @@ final class HproseInstance: ObservableObject {
     /// - Note: Changes to appUser are applied on MainActor to ensure thread safety
     /// - Note: IP re-resolution is automatically handled by fetchUser's internal retry mechanism
     func refreshAppUserFromServer() async throws {
-        guard !appUser.isGuest else {
-            print("DEBUG: [HproseInstance] Skipping refresh for guest user")
+        // Phase A (demotion prep): snapshot @MainActor appUser reads.
+        let (appUserMid, appUserIsGuest) = await MainActor.run { (self.appUser.mid, self.appUser.isGuest) }
+        guard !appUserIsGuest else {
+            hproseWarning("DEBUG: [HproseInstance] Skipping refresh for guest user")
             return
         }
-        
-        print("DEBUG: [HproseInstance] Refreshing appUser from server...")
+
+        hproseDebug("DEBUG: [HproseInstance] Refreshing appUser from server...")
         do {
             // fetchUser's internal retry mechanism (maxRetries: 2) automatically re-resolves IP on second attempt if first fails.
             // This means:
@@ -6333,19 +7028,18 @@ final class HproseInstance: ObservableObject {
             // - If attempt 1 fails: Attempt 2 automatically calls getProviderIP() for fresh IP
             
             // Call fetchUser to fetch from server (force refresh bypasses cache)
-            if let refreshedUser = try await fetchUser(appUser.mid, forceRefresh: true) {
+            if let refreshedUser = try await fetchUser(appUserMid, forceRefresh: true) {
                 
                 // Update appUser with refreshed data
                 await MainActor.run {
                     self.appUser = refreshedUser
                 }
                 
-                print("DEBUG: [HproseInstance] Successfully refreshed appUser from server")
             } else {
-                print("DEBUG: [HproseInstance] Failed to refresh user from server")
+                hproseError("DEBUG: [HproseInstance] Failed to refresh user from server")
             }
         } catch {
-            print("DEBUG: [HproseInstance] Error refreshing appUser: \(error)")
+            hproseError("DEBUG: [HproseInstance] Error refreshing appUser: \(error)")
             // Don't throw here - let the retry continue with existing appUser
         }
     }
@@ -6361,129 +7055,140 @@ final class HproseInstance: ObservableObject {
     typealias PendingTweetUpload = TweetUploadManager.PendingTweetUpload
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
-        return try await withRetry {
-            // Create a clean upload payload with only allowed fields (excluding nil values)
-            var uploadPayload: [String: Any] = [
-                "mid": tweet.mid,
-                "authorId": tweet.authorId,
-                "timestamp": tweet.timestamp.timeIntervalSince1970 * 1000 // milliseconds
-            ]
+        // add_tweet is non-idempotent on the backend: it creates a fresh server
+        // tweet id on every accepted request. Do not automatically retry this
+        // call after a timeout; only media/attachment upload is safe to retry.
+        // Use a longer timeout so tweets with large attachment references can
+        // finish without triggering duplicate creates.
+        // Create a clean upload payload with only allowed fields (excluding nil values).
+        // Phase A (demotion prep): the whole payload is @MainActor Tweet state — build it on the main actor.
+        let (tweetJSON, tweetAuthorId, logContent, logAttachCount): (String, String, String, Int) = try await MainActor.run {
+        var uploadPayload: [String: Any] = [
+            "mid": tweet.mid,
+            "authorId": tweet.authorId,
+            "timestamp": tweet.timestamp.timeIntervalSince1970 * 1000 // milliseconds
+        ]
             
-            // Add optional fields only if they are not nil
-            if let content = tweet.content {
-                uploadPayload["content"] = content
-            }
-            if let title = tweet.title {
-                uploadPayload["title"] = title
-            }
-            if let originalTweetId = tweet.originalTweetId {
-                uploadPayload["originalTweetId"] = originalTweetId
-            }
-            if let originalAuthorId = tweet.originalAuthorId {
-                uploadPayload["originalAuthorId"] = originalAuthorId
-            }
-            if let attachments = tweet.attachments, !attachments.isEmpty {
-                uploadPayload["attachments"] = attachments.map { attachment in
-                    var attachmentDict: [String: Any] = [
-                        "mid": attachment.mid,
-                        "type": attachment.type.rawValue
-                    ]
-                    attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
-                    
-                    // Add optional fields
-                    if let size = attachment.size {
-                        attachmentDict["size"] = size
-                    }
-                    if let fileName = attachment.fileName {
-                        attachmentDict["fileName"] = fileName
-                    }
-                    if let aspectRatio = attachment.aspectRatio {
-                        attachmentDict["aspectRatio"] = aspectRatio
-                    }
-                    
-                    return attachmentDict
-                }
-            }
-            if let isPrivate = tweet.isPrivate {
-                uploadPayload["isPrivate"] = isPrivate
-            }
-            if let downloadable = tweet.downloadable {
-                uploadPayload["downloadable"] = downloadable
-            }
-            
-            // Convert to JSON string
-            let jsonData = try JSONSerialization.data(withJSONObject: uploadPayload, options: [])
-            let tweetJSON = String(data: jsonData, encoding: .utf8) ?? ""
-            
-            // Capture appUser properties on main thread to avoid publishing warnings
-            let hostId = await MainActor.run {
-                self.appUser.hostIds?.first
-            }
-            let client = await MainActor.run {
-                self.appUser.hproseClient
-            }
-            
-            let params: [String: Any] = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "hostid": hostId as Any,
-                "tweet": tweetJSON
-            ]
-            
-            print("DEBUG: [uploadTweet] Complete params: \(params)")
-            print("DEBUG: [uploadTweet] Tweet JSON: \(tweetJSON)")
-            print("DEBUG: [uploadTweet] Tweet authorId: \(tweet.authorId), content: \(tweet.content ?? "nil"), attachments count: \(tweet.attachments?.count ?? 0)")
-            
-            let rawResponse = client?.invoke("runMApp", withArgs: ["add_tweet", params])
-            
-            print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
-            
-            // Unwrap v2 response
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
-            // Handle the JSON response format
-            guard let responseDict = unwrappedResponse as? [String: Any] else {
-                print("DEBUG: [uploadTweet] ERROR: Invalid response format - not a dictionary")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
-            }
-            
-            print("DEBUG: [uploadTweet] Response dictionary keys: \(responseDict.keys)")
-            
-            // unwrapV2Response already threw for success=false
-            guard let newTweetId = responseDict["mid"] as? String else {
-                print("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
-            }
-            print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
+        // Add optional fields only if they are not nil
+        if let content = tweet.content {
+            uploadPayload["content"] = content
+        }
+        if let title = tweet.title {
+            uploadPayload["title"] = title
+        }
+        if let originalTweetId = tweet.originalTweetId {
+            uploadPayload["originalTweetId"] = originalTweetId
+        }
+        if let originalAuthorId = tweet.originalAuthorId {
+            uploadPayload["originalAuthorId"] = originalAuthorId
+        }
+        if let parentTweetId = tweet.parentTweetId {
+            uploadPayload["parentTweetId"] = parentTweetId
+        }
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            uploadPayload["attachments"] = attachments.map { attachment in
+                var attachmentDict: [String: Any] = [
+                    "mid": attachment.mid,
+                    "type": attachment.type.rawValue
+                ]
+                attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
                 
-                // Immediately update appUser tweet count (like favorites/bookmarks)
-                await MainActor.run {
-                    let currentCount = self.appUser.tweetCount ?? 0
-                    self.appUser.tweetCount = currentCount + 1
-                    print("DEBUG: [uploadTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+                // Add optional fields
+                if let size = attachment.size {
+                    attachmentDict["size"] = size
+                }
+                if let fileName = attachment.fileName {
+                    attachmentDict["fileName"] = fileName
+                }
+                if let aspectRatio = attachment.aspectRatio {
+                    attachmentDict["aspectRatio"] = aspectRatio
                 }
                 
-                // Refresh appUser from server to get updated tweetCount and other properties
-                try? await self.refreshAppUserFromServer()
+                return attachmentDict
+            }
+        }
+        if let isPrivate = tweet.isPrivate {
+            uploadPayload["isPrivate"] = isPrivate
+        }
+        if let downloadable = tweet.downloadable {
+            uploadPayload["downloadable"] = downloadable
+        }
+            
+        // Convert to JSON string
+        let jsonData = try JSONSerialization.data(withJSONObject: uploadPayload, options: [])
+        let json = String(data: jsonData, encoding: .utf8) ?? ""
+        return (json, tweet.authorId, tweet.content ?? "nil", tweet.attachments?.count ?? 0)
+        }
+
+        // Capture appUser properties on main thread to avoid publishing warnings
+        let hostId = await MainActor.run {
+            self.appUser.hostIds?.first
+        }
+        // Non-idempotent add_tweet can be slow server-side: use a dedicated 240s
+        // timeout class instead of mutating the shared 15s client.
+        guard let client = await MainActor.run(body: { self.appUser.baseUrl.map { self.clientPool.getClientByUrl(for: $0.absoluteString, timeout: 240) } }) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
+        }
+            
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "hostid": hostId as Any,
+            "tweet": tweetJSON
+        ]
+            
+        hproseDebug("DEBUG: [uploadTweet] Tweet authorId: \(tweetAuthorId), content: \(logContent), attachments count: \(logAttachCount)")
+        
+        let rawResponse = await invokeRunMApp(using: client, entry: "add_tweet", params: params)
+            
+        
+        guard rawResponse != nil else {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Tweet submission timed out. Please refresh before retrying to avoid duplicate posts.", comment: "Tweet upload timeout")])
+        }
+        
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        // Handle the JSON response format
+        guard let responseDict = unwrappedResponse as? [String: Any] else {
+            hproseError("DEBUG: [uploadTweet] ERROR: Invalid response format - not a dictionary")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
+        }
+        
+        hproseDebug("DEBUG: [uploadTweet] Response dictionary keys: \(responseDict.keys)")
+        
+        // unwrapV2Response already threw for success=false
+        guard let newTweetId = responseDict["mid"] as? String else {
+            hproseError("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
+        }
                 
-                // IMPORTANT: Fetch the complete tweet from server to avoid showing partial data
-                // This ensures all server-generated fields are populated correctly
-                print("DEBUG: [uploadTweet] Fetching complete tweet from server: \(newTweetId)")
-                if let completeTweet = try? await self.getTweet(tweetId: newTweetId, authorId: tweet.authorId) {
-                    print("DEBUG: [uploadTweet] Successfully fetched complete tweet with all fields")
-                    return completeTweet
-                } else {
-                    print("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
-                    // Fallback: return partial tweet if fetch fails
-                    let uploadedTweet = tweet
-                    let author = try? await self.fetchUser(tweet.authorId)
-                    await MainActor.run {
-                        uploadedTweet.mid = newTweetId
-                        uploadedTweet.author = author
-                    }
-                    return uploadedTweet
-                }
+        // Immediately update appUser tweet count (like favorites/bookmarks)
+        await MainActor.run {
+            let currentCount = self.appUser.tweetCount ?? 0
+            self.appUser.tweetCount = currentCount + 1
+            hproseDebug("DEBUG: [uploadTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+        }
+                
+        // Refresh appUser from server to get updated tweetCount and other properties
+        try? await self.refreshAppUserFromServer()
+                
+        // IMPORTANT: Fetch the complete tweet from server to avoid showing partial data
+        // This ensures all server-generated fields are populated correctly
+        hproseDebug("DEBUG: [uploadTweet] Fetching complete tweet from server: \(newTweetId)")
+        if let completeTweet = try? await self.getTweet(tweetId: newTweetId, authorId: tweetAuthorId) {
+            return completeTweet
+        } else {
+            hproseWarning("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
+            // Fallback: return partial tweet if fetch fails
+            let uploadedTweet = tweet
+            let author = try? await self.fetchUser(tweetAuthorId)
+            await MainActor.run {
+                uploadedTweet.mid = newTweetId
+                uploadedTweet.author = author
+            }
+            return uploadedTweet
         }
     }
     
@@ -6496,7 +7201,6 @@ final class HproseInstance: ObservableObject {
                     fileName: itemData.fileName,
                     noResample: itemData.noResample,
                     progressCallback: { message, progress in
-                        print("DEBUG: Upload progress for \(itemData.fileName): \(message) (\(progress)%)")
                     }
                 )
                 return result
@@ -6523,18 +7227,18 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
+    @MainActor func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
         // Delegate to upload manager
         uploadManager.scheduleTweetUpload(tweet: tweet, itemData: itemData)
     }
     
-    func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
+    @MainActor func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
         // Delegate to upload manager
         uploadManager.scheduleChatMessageUpload(message: message, itemData: itemData)
     }
     
     private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0, videoJobId: String? = nil) async {
-        print("DEBUG: [uploadTweetWithPersistenceAndRetry] Starting upload with retry count: \(retryCount)")
+        hproseWarning("DEBUG: [uploadTweetWithPersistenceAndRetry] Starting upload with retry count: \(retryCount)")
         
         // Save pending upload to disk for persistence
         let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount, videoJobId: videoJobId)
@@ -6545,7 +7249,7 @@ final class HproseInstance: ObservableObject {
             let (uploadedAttachments, _) = try await uploadAttachments(itemData: itemData)
             
             // Update tweet with uploaded attachments
-            tweet.attachments = uploadedAttachments
+            await MainActor.run { tweet.attachments = uploadedAttachments }
             
             // Upload the tweet - this will handle retries internally via withRetry
             if let uploadedTweet = try await self.uploadTweet(tweet) {
@@ -6554,40 +7258,39 @@ final class HproseInstance: ObservableObject {
                 
                 // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                 await MainActor.run {
-                    print("DEBUG: [HproseInstance] Posting .newTweetCreated notification for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
+                    hproseDebug("DEBUG: [HproseInstance] Posting .newTweetCreated notification for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
                     NotificationCenter.default.post(
                         name: .newTweetCreated,
                         object: nil,
                         userInfo: ["tweet": uploadedTweet]
                     )
-                    print("DEBUG: [HproseInstance] .newTweetCreated notification posted successfully")
                 }
             } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
             }
         } catch {
-            print("Error uploading tweet: \(error)")
+            hproseError("Error uploading tweet: \(error)")
             
             // Check if we've reached max retries
             let maxRetries = 2
             
-            print("DEBUG: [Error handling] retryCount=\(retryCount), maxRetries=\(maxRetries), will show error: \(retryCount >= maxRetries)")
+            hproseDebug("DEBUG: [Error handling] retryCount=\(retryCount), maxRetries=\(maxRetries), will show error: \(retryCount >= maxRetries)")
             
             if retryCount >= maxRetries {
                 // All retries exhausted - show error to user
-                print("DEBUG: [Error handling] MAX RETRIES REACHED - Showing error to user and removing pending upload")
+                hproseError("DEBUG: [Error handling] MAX RETRIES REACHED - Showing error to user and removing pending upload")
                 let userFriendlyMessage = NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Tweet upload failed error")
                 
                 await MainActor.run {
                     if !self.isAppInitializing {
-                        print("DEBUG: [Error handling] Posting backgroundUploadFailed notification")
+                        hproseError("DEBUG: [Error handling] Posting backgroundUploadFailed notification")
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
                             object: nil,
                             userInfo: ["error": userFriendlyMessage]
                         )
                     } else {
-                        print("DEBUG: [Error handling] App still initializing, NOT showing error")
+                        hproseError("DEBUG: [Error handling] App still initializing, NOT showing error")
                     }
                 }
                 
@@ -6595,7 +7298,7 @@ final class HproseInstance: ObservableObject {
                 await removePendingUpload()
             } else {
                 // Will retry in background - don't show error yet
-                print("DEBUG: [Error handling] Retry \(retryCount + 1) of \(maxRetries + 1) failed, scheduling background retry")
+                hproseWarning("DEBUG: [Error handling] Retry \(retryCount + 1) of \(maxRetries + 1) failed, scheduling background retry")
                 
                 // Schedule immediate background retry
                 let delay = UInt64(retryCount + 1) * 2_000_000_000 // 2, 4 seconds exponential backoff
@@ -6637,16 +7340,15 @@ final class HproseInstance: ObservableObject {
             
             if resultMessage.success == true {
                 // Success - message will appear in chat automatically
-                print("Chat message sent successfully: \(resultMessage.id)")
             } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: resultMessage.errorMsg ?? "Failed to send chat message"])
             }
         } catch {
-            print("Error uploading chat message: \(error)")
+            hproseError("Error uploading chat message: \(error)")
             
             // No retry - the message will show with a failure icon
             // No need to post notification since the UI already handles failed messages
-            print(NSLocalizedString("Chat message upload failed", comment: "Chat upload error"))
+            hproseError("Chat message upload failed")
         }
     }
     
@@ -6669,7 +7371,6 @@ final class HproseInstance: ObservableObject {
                         fileName: item.fileName,
                         noResample: item.noResample,
                         progressCallback: { message, progress in
-                            print("DEBUG: Upload progress for \(item.fileName): \(message) (\(progress)%)")
                         }
                     )
                     
@@ -6680,10 +7381,10 @@ final class HproseInstance: ObservableObject {
                     // Store the job ID for video items
                     if let jobId = jobId {
                         videoJobId = jobId
-                        print("DEBUG: Stored video job ID: \(jobId)")
+                        hproseDebug("DEBUG: Stored video job ID: \(jobId)")
                     }
                 } catch {
-                    print("Error uploading item \(item.fileName): \(error)")
+                    hproseError("Error uploading item \(item.fileName): \(error)")
                     throw error
                 }
             }
@@ -6696,7 +7397,7 @@ final class HproseInstance: ObservableObject {
                     let pairAttachments = try await self.uploadItemPair(pair)
                     uploadedAttachments.append(contentsOf: pairAttachments)
                 } catch {
-                    print("Error uploading pair \(pairIndex + 1): \(error)")
+                    hproseError("Error uploading pair \(pairIndex + 1): \(error)")
                     throw error
                 }
             }
@@ -6714,16 +7415,16 @@ final class HproseInstance: ObservableObject {
             let data = try JSONEncoder().encode(pendingUpload)
             let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
             try data.write(to: fileURL)
-            print("Saved pending upload to disk")
+            hproseDebug("Saved pending upload to disk")
         } catch {
-            print("Failed to save pending upload: \(error)")
+            hproseError("Failed to save pending upload: \(error)")
         }
     }
     
     private func removePendingUpload() async {
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
         try? FileManager.default.removeItem(at: fileURL)
-        print("Removed pending upload from disk")
+        hproseDebug("Removed pending upload from disk")
     }
     
     // MARK: - Video Job Status Checking
@@ -6759,7 +7460,7 @@ final class HproseInstance: ObservableObject {
         guard let baseURL = baseURL else { return nil }
         
         let statusURL = baseURL.appendingPathComponent("process-zip/status/\(jobId)")
-        print("DEBUG: Checking video job status at: \(statusURL)")
+        hproseDebug("DEBUG: Checking video job status at: \(statusURL)")
         
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
@@ -6773,15 +7474,15 @@ final class HproseInstance: ObservableObject {
                 if httpResponse.statusCode == 200 {
                     return try parseVideoStatusResponse(responseData: responseData)
                 } else if httpResponse.statusCode == 404 {
-                    print("DEBUG: Video job not found: \(jobId)")
+                    hproseWarning("DEBUG: Video job not found: \(jobId)")
                     return nil
                 } else {
-                    print("DEBUG: Video job status check failed with HTTP \(httpResponse.statusCode)")
+                    hproseError("DEBUG: Video job status check failed with HTTP \(httpResponse.statusCode)")
                     return nil
                 }
             }
         } catch {
-            print("DEBUG: Video job status check error: \(error)")
+            hproseError("DEBUG: Video job status check error: \(error)")
         }
         
         return nil
@@ -6790,7 +7491,6 @@ final class HproseInstance: ObservableObject {
     /// Handle a completed video job by creating MimeiFileType and continuing tweet upload
     private func handleCompletedVideoJob(pendingUpload: PendingTweetUpload, cid: String?) async {
         guard let cid = cid, !cid.isEmpty else {
-            print("DEBUG: No CID available for completed video job")
             // Fallback to re-upload
             await uploadTweetWithPersistenceAndRetry(
                 tweet: pendingUpload.tweet,
@@ -6819,20 +7519,19 @@ final class HproseInstance: ObservableObject {
                     aspectRatio = try await HLSVideoProcessor.shared.getVideoAspectRatio(filePath: tempURL.path)
                     try? FileManager.default.removeItem(at: tempURL)
                 } catch {
-                    print("DEBUG: Could not determine video aspect ratio: \(error), using default 16:9")
+                    hproseDebug("DEBUG: Could not determine video aspect ratio: \(error), using default 16:9")
                     aspectRatio = 16.0 / 9.0 // Default to 16:9 aspect ratio
                 }
                 
                 // Create Date object from current time (this will be properly encoded as Unix timestamp in milliseconds)
                 let currentDate = Date()
                 
-                print("DEBUG: [handleCompletedVideoJob] Creating MimeiFileType for video:")
-                print("DEBUG: - CID: \(cid)")
-                print("DEBUG: - Original video data size: \(item.data.count) bytes")
-                print("DEBUG: - File name: \(item.fileName)")
-                print("DEBUG: - Aspect ratio: \(aspectRatio ?? 0)")
-                print("DEBUG: - Current timestamp: \(currentDate)")
-                print("DEBUG: - Unix timestamp (ms): \(Int64(currentDate.timeIntervalSince1970 * 1000))")
+                hproseDebug("DEBUG: - CID: \(cid)")
+                hproseDebug("DEBUG: - Original video data size: \(item.data.count) bytes")
+                hproseDebug("DEBUG: - File name: \(item.fileName)")
+                hproseDebug("DEBUG: - Aspect ratio: \(aspectRatio ?? 0)")
+                hproseDebug("DEBUG: - Current timestamp: \(currentDate)")
+                hproseDebug("DEBUG: - Unix timestamp (ms): \(Int64(currentDate.timeIntervalSince1970 * 1000))")
                 
                 let videoFile = MimeiFileType(
                     mid: cid,
@@ -6853,14 +7552,13 @@ final class HproseInstance: ObservableObject {
                         fileName: item.fileName,
                         noResample: item.noResample,
                         progressCallback: { message, progress in
-                            print("DEBUG: Upload progress for \(item.fileName): \(message) (\(progress)%)")
                         }
                     )
                     if let fileType = result {
                         uploadedAttachments.append(fileType)
                     }
                 } catch {
-                    print("Error uploading non-video item \(item.fileName): \(error)")
+                    hproseError("Error uploading non-video item \(item.fileName): \(error)")
                     // Fallback to re-upload everything
                     await uploadTweetWithPersistenceAndRetry(
                         tweet: pendingUpload.tweet,
@@ -6875,7 +7573,7 @@ final class HproseInstance: ObservableObject {
         
         if hasVideoItem && uploadedAttachments.count == pendingUpload.itemData.count {
             // All attachments uploaded successfully, continue with tweet upload
-            pendingUpload.tweet.attachments = uploadedAttachments
+            await MainActor.run { pendingUpload.tweet.attachments = uploadedAttachments }
             
             do {
                 if let uploadedTweet = try await self.uploadTweet(pendingUpload.tweet) {
@@ -6884,19 +7582,19 @@ final class HproseInstance: ObservableObject {
                     
                     // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                     await MainActor.run {
-                        print("DEBUG: [HproseInstance] Posting .newTweetCreated notification (retry path) for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
+                        hproseWarning("DEBUG: [HproseInstance] Posting .newTweetCreated notification (retry path) for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
                         NotificationCenter.default.post(
                             name: .newTweetCreated,
                             object: nil,
                             userInfo: ["tweet": uploadedTweet]
                         )
-                        print("DEBUG: [HproseInstance] .newTweetCreated notification posted successfully (retry path)")
+                        hproseDebug("DEBUG: [HproseInstance] .newTweetCreated notification posted successfully (retry path)")
                     }
                 } else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
                 }
             } catch {
-                print("Error uploading tweet: \(error)")
+                hproseError("Error uploading tweet: \(error)")
                 
                 // Notify failure but keep pending upload for manual retry (only if app is initialized)
                 await MainActor.run {
@@ -6907,12 +7605,12 @@ final class HproseInstance: ObservableObject {
                             userInfo: ["error": ErrorMessageHelper.userFriendlyMessage(from: error)]
                         )
                     } else {
-                        print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
+                        hproseWarning("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
                     }
                 }
             }
         } else {
-            print("DEBUG: No video item found or attachment count mismatch")
+            hproseDebug("DEBUG: No video item found or attachment count mismatch")
             // Fallback to re-upload
             await uploadTweetWithPersistenceAndRetry(
                 tweet: pendingUpload.tweet,
@@ -6925,32 +7623,35 @@ final class HproseInstance: ObservableObject {
     
     /// Resume polling for a video job that's still in progress
     private func resumeVideoJobPolling(pendingUpload: PendingTweetUpload, jobId: String) async {
-        print("DEBUG: Resuming video job polling for job ID: \(jobId)")
+        hproseDebug("DEBUG: Resuming video job polling for job ID: \(jobId)")
         
-        // Get base URL for polling - ensure writableUrl is resolved
-        _ = try? await appUser.resolveWritableUrl()
-        let originalBaseURL = appUser.writableUrl?.deletingLastPathComponent()
-        
+        // Get base URL for polling - ensure writableUrl is resolved.
+        // Phase A (demotion prep): appUser is a @MainActor class instance.
+        let appUserInstance = await MainActor.run { self.appUser }
+        _ = try? await appUserInstance.resolveWritableUrl()
+        let (writableUrl, cloudDrivePort) = await MainActor.run { (appUserInstance.writableUrl, appUserInstance.cloudDrivePort) }
+        let originalBaseURL = writableUrl?.deletingLastPathComponent()
+
         // Get host - must succeed
         guard let host = originalBaseURL?.host else {
-            print("ERROR: No host available for video job polling")
+            hproseError("ERROR: No host available for video job polling")
             return
         }
-        
+
         // Get cloud drive port - must be configured
-        guard appUser.cloudDrivePort > 0 else {
-            print("ERROR: Cloud drive port not configured for video job polling")
+        guard cloudDrivePort > 0 else {
+            hproseError("ERROR: Cloud drive port not configured for video job polling")
             return
         }
-        
-        guard let baseURL = URL(string: "http://\(host):\(appUser.cloudDrivePort)") else {
-            print("ERROR: Failed to construct cloud drive URL")
+
+        guard let baseURL = URL(string: "http://\(host):\(cloudDrivePort)") else {
+            hproseError("ERROR: Failed to construct cloud drive URL")
             return
         }
         
         // Find the video item to get its data
         guard let videoItem = pendingUpload.itemData.first(where: { isVideoUploadTypeIdentifier($0.typeIdentifier) }) else {
-            print("DEBUG: No video item found for polling resume")
+            hproseDebug("DEBUG: No video item found for polling resume")
             return
         }
         
@@ -6963,12 +7664,10 @@ final class HproseInstance: ObservableObject {
                 fileName: videoItem.fileName,
                 aspectRatio: nil as Float?, // We don't have aspect ratio stored
                 progressCallback: { message, progress in
-                    print("DEBUG: Resume polling progress: \(message) (\(progress)%)")
                 }
             )
             
-            if let completedVideo = result {
-                print("DEBUG: Video job completed during resume polling, CID: \(completedVideo.mid)")
+            if result != nil {
                 
                 // Update the item data with the completed video
                 var updatedItemData = pendingUpload.itemData
@@ -6995,7 +7694,7 @@ final class HproseInstance: ObservableObject {
                 )
             }
         } catch {
-            print("DEBUG: Resume polling failed: \(error)")
+            hproseError("DEBUG: Resume polling failed: \(error)")
             // Fallback to re-upload
             await uploadTweetWithPersistenceAndRetry(
                 tweet: pendingUpload.tweet,
@@ -7016,7 +7715,7 @@ final class HproseInstance: ObservableObject {
     // New system: User sees dialog with retry/discard options instead of auto-retry
     
     
-    func scheduleCommentUpload(
+    @MainActor func scheduleCommentUpload(
         comment: Tweet,
         to tweet: Tweet,
         itemData: [PendingTweetUpload.ItemData],
@@ -7031,28 +7730,41 @@ final class HproseInstance: ObservableObject {
      */
     func togglePinnedTweet(tweetId: String) async throws -> Bool? {
         let entry = "toggle_pinned_tweet"
+        // Phase A (demotion prep): snapshot @MainActor appUser reads.
+        let (appUserMid, appUserInstance) = await MainActor.run { (self.appUser.mid, self.appUser) }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "tweetid": tweetId,
-            "appuserid": appUser.mid,
+            "appuserid": appUserMid,
         ]
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+
+        // Pinning mutates the app user's data, so route directly to its writable node.
+        _ = try await appUserInstance.resolveWritableUrl()
+        guard let pinClient = await appUserInstance.writableClient(timeout: 15) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
+        }
+        let rawResponse = await invokeRunMApp(using: pinClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         // For v2 API: server returns {success: true, data: {isPinned: bool}}
         // After unwrapV2Response, we get {isPinned: bool}
-        if let dataDict = unwrappedResponse as? [String: Any] {
-            if let isPinned = dataDict["isPinned"] as? Bool {
-                return isPinned
-            }
+        if let dataDict = Self.asStringKeyedDictionary(unwrappedResponse),
+           let isPinned = (dataDict["isPinned"] as? Bool)
+            ?? (dataDict["isPinned"] as? NSNumber)?.boolValue {
+            return isPinned
         }
         
         // Fallback: check if it's a direct Bool (legacy format)
         if let boolResponse = unwrappedResponse as? Bool {
             return boolResponse
         }
+        if let numericResponse = unwrappedResponse as? NSNumber {
+            return numericResponse.boolValue
+        }
+
+        hproseWarning("[togglePinnedTweet] Unexpected response type: \(Swift.type(of: unwrappedResponse)) value: \(String(describing: unwrappedResponse))")
         
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")])
     }
@@ -7061,21 +7773,25 @@ final class HproseInstance: ObservableObject {
      * Return a list of {tweetId, timestamp} for each pinned Tweet. The timestamp is when
      * the tweet is pinned.
      */
-    func getPinnedTweets(user: User) async throws -> [[String: Any]] {
+    func getPinnedTweets(user: User) async throws -> [Tweet] {
         let entry = "get_pinned_tweets"
+        // Phase A (demotion prep): snapshot @MainActor User + appUser.mid.
+        let snap = await MainActor.run { UserRecord(user: user) }
+        let appUserMid = await MainActor.run { self.appUser.mid }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid,
-            "appuserid": appUser.mid
+            "userid": snap.mid,
+            "appuserid": appUserMid
         ]
-        
-        guard let client = user.hproseClient else {
+
+        guard let baseUrl = snap.baseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -7087,25 +7803,34 @@ final class HproseInstance: ObservableObject {
         } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
             // Server returned empty array - handle gracefully
             response = []
-            print("DEBUG: [HproseInstance] getPinnedTweets - Server returned empty array (no pinned tweets)")
+            hproseDebug("DEBUG: [HproseInstance] getPinnedTweets - Server returned empty array (no pinned tweets)")
         } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to get pinned tweets", comment: "Get pinned tweets error")])
         }
         
-        var result: [[String: Any]] = []
+        var result: [Tweet] = []
+        var scheduledBackgroundAuthorFetches = Set<String>()
+        func scheduleBackgroundAuthorFetch(authorId: String) {
+            guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
+
+            Task(priority: .utility) { [weak self] in
+                do {
+                    _ = try await self?.fetchUser(authorId)
+                } catch {
+                    hproseError("DEBUG: [getPinnedTweets] Background author fetch failed for \(authorId): \(error)")
+                }
+            }
+        }
+
         for dict in response {
             if let tweetDict = dict["tweet"] as? [String: Any] {
-                let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                if let author = try? await fetchUser(tweet.authorId) {
-                    await MainActor.run {
-                        tweet.author = author  // Set on main thread since author is @Published
-                    }
+                let tweet = try await mergeTweetFromDict(tweetDict)
+                let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
+                await MainActor.run {
+                    tweet.author = cachedAuthor
                 }
-                let timePinned = dict["timestamp"]
-                result.append([
-                    "tweet": tweet,
-                    "timePinned": timePinned as Any
-                ])
+                scheduleBackgroundAuthorFetch(authorId: tweet.authorId)
+                result.append(tweet)
             }
         }
         return result
@@ -7119,30 +7844,29 @@ final class HproseInstance: ObservableObject {
         hostId: String? = nil,
         cloudDrivePort: Int = 0
     ) async throws -> Bool {
-        print("DEBUG: [registerUser] Starting registration")
-        print("DEBUG: [registerUser] hostId parameter: \(hostId ?? "nil")")
+        hproseDebug("DEBUG: [registerUser] hostId parameter: \(hostId ?? "nil")")
         
         var hosts: [String]? = nil
         if let hostId = hostId, !hostId.isEmpty {
             hosts = [hostId]
-            print("DEBUG: [registerUser] Setting hosts to [\(hostId)]")
+            hproseDebug("DEBUG: [registerUser] Setting hosts to [\(hostId)]")
         } else {
-            print("DEBUG: [registerUser] No hostId provided, hosts will be nil")
+            hproseDebug("DEBUG: [registerUser] No hostId provided, hosts will be nil")
         }
         
-        let newUser = User(mid: appUser.mid, name: alias, username: username, password: password,
-                           profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
-        print("DEBUG: [registerUser] Created User object with hostIds: \(newUser.hostIds ?? [])")
-        
+        // Phase A (demotion prep): User is a @MainActor type — create + encode it on the main actor.
+        let (userJsonString, newUserHostIdsLog): (String, [String]) = try await MainActor.run {
+            let newUser = User(mid: self.appUser.mid, name: alias, username: username, password: password,
+                               profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let data = try encoder.encode(newUser)
+            return (String(data: data, encoding: .utf8) ?? "", newUser.hostIds ?? [])
+        }
+        hproseDebug("DEBUG: [registerUser] Created User object with hostIds: \(newUserHostIdsLog)")
+        hproseDebug("DEBUG: [registerUser] Encoded user JSON: \(userJsonString)")
+
         let entry = "register"
-        
-        // Configure encoder to use milliseconds for timestamps
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        
-        let userJsonData = try encoder.encode(newUser)
-        let userJsonString = String(data: userJsonData, encoding: .utf8) ?? ""
-        print("DEBUG: [registerUser] Encoded user JSON: \(userJsonString)")
         
         let params: [String: Any] = [
             "aid": appId,
@@ -7152,53 +7876,53 @@ final class HproseInstance: ObservableObject {
         ]
         
         // Use the current appUser's client for all backend calls
-        guard let client = appUser.hproseClient else {
-            print("DEBUG: [registerUser] ERROR: appUser.hproseClient is nil")
-            print("DEBUG: [registerUser] appUser.baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
+        let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
+        guard let baseUrl = appUserBaseUrl else {
+            hproseError("DEBUG: [registerUser] ERROR: appUser.baseUrl is nil")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized. Please check your connection.", comment: "Client initialization error")])
         }
-        let targetUrl = appUser.baseUrl?.absoluteString ?? "unknown"
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let targetUrl = baseUrl.absoluteString
         
-        print("DEBUG: [registerUser] Sending registration request to server")
-        print("DEBUG: [registerUser] Using target URL: \(targetUrl)")
+        hproseDebug("DEBUG: [registerUser] Sending registration request to server")
+        hproseDebug("DEBUG: [registerUser] Using target URL: \(targetUrl)")
         
         let unwrappedResponse: Any?
         do {
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            print("DEBUG: [registerUser] Unwrapped response: \(String(describing: unwrappedResponse))")
+            hproseDebug("DEBUG: [registerUser] Unwrapped response: \(String(describing: unwrappedResponse))")
         } catch {
-            print("DEBUG: [registerUser] ERROR: Exception during API call: \(error)")
-            print("DEBUG: [registerUser] Error details: \(error.localizedDescription)")
+            hproseError("DEBUG: [registerUser] ERROR: Exception during API call: \(error)")
+            hproseError("DEBUG: [registerUser] Error details: \(error.localizedDescription)")
             throw error
         }
         
         guard let response = unwrappedResponse as? [String: Any] else {
-            print("DEBUG: [registerUser] ERROR: Response is not a dictionary")
+            hproseError("DEBUG: [registerUser] ERROR: Response is not a dictionary")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
         
         // v2 format: {success: true, user: <parsed user object>}
         guard let success = response["success"] as? Bool else {
-            print("DEBUG: [registerUser] ERROR: 'success' field not found in response")
-            print("DEBUG: [registerUser] Response keys: \(response.keys)")
+            hproseError("DEBUG: [registerUser] ERROR: 'success' field not found in response")
+            hproseDebug("DEBUG: [registerUser] Response keys: \(response.keys)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
         
-        print("DEBUG: [registerUser] Registration success status: \(success)")
+        hproseDebug("DEBUG: [registerUser] Registration success status: \(success)")
         if success {
             // Extract the newly created user's ID from the response
             guard let userDict = response["user"] as? [String: Any],
                   let registeredUserId = userDict["mid"] as? String else {
                 // If user object is missing, still return success but log warning
-                print("DEBUG: [registerUser] Warning: User object not found in registration response")
+                hproseWarning("DEBUG: [registerUser] Warning: User object not found in registration response")
                 return true
             }
             
             // Make the newly registered user follow each user in getAlphaIds()
             // Run this in a detached task so we can return success immediately
             let alphaIds = Gadget.getAlphaIds()
-            print("DEBUG: [registerUser] Starting background auto-follow for \(alphaIds.count) alpha user(s): \(alphaIds)")
             
             Task.detached { [weak self] in
                 guard let self = self else { return }
@@ -7206,32 +7930,29 @@ final class HproseInstance: ObservableObject {
                 for alphaId in alphaIds {
                     do {
                         // First verify the alphaId user exists before attempting to follow
-                        print("DEBUG: [registerUser:background] Checking if alphaId user exists: \(alphaId)")
+                        hproseDebug("DEBUG: [registerUser:background] Checking if alphaId user exists: \(alphaId)")
                         guard let _ = try await self.fetchUser(alphaId, forceRefresh: false) else {
-                            print("DEBUG: [registerUser:background] AlphaId user \(alphaId) not found, skipping auto-follow")
+                            hproseWarning("DEBUG: [registerUser:background] AlphaId user \(alphaId) not found, skipping auto-follow")
                             continue
                         }
                         
-                        print("DEBUG: [registerUser:background] AlphaId user exists, attempting to follow: \(alphaId)")
+                        hproseDebug("DEBUG: [registerUser:background] AlphaId user exists, attempting to follow: \(alphaId)")
                         _ = try await self.toggleFollowing(followingId: alphaId, userId: registeredUserId)
-                        print("DEBUG: [registerUser:background] Successfully followed alphaId: \(alphaId)")
                     } catch {
                         let nsError = error as NSError
-                        print("DEBUG: [registerUser:background] Failed to follow alphaId \(alphaId): domain: \(nsError.domain), code: \(nsError.code), description: \(error.localizedDescription)")
+                        hproseError("DEBUG: [registerUser:background] Failed to follow alphaId \(alphaId): domain: \(nsError.domain), code: \(nsError.code), description: \(error.localizedDescription)")
                         // Continue with other users even if one fails
                     }
                 }
                 
-                print("DEBUG: [registerUser:background] Auto-follow process completed")
             }
             
             // Return success immediately without waiting for auto-follow to complete
-            print("DEBUG: [registerUser] Returning success immediately, auto-follow running in background")
+            hproseDebug("DEBUG: [registerUser] Returning success immediately, auto-follow running in background")
             return true
         } else {
             let message = response["message"] as? String ?? response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")
-            print("DEBUG: [registerUser] ERROR: Registration failed with message: \(message)")
-            print("DEBUG: [registerUser] Full response: \(response)")
+            hproseError("DEBUG: [registerUser] ERROR: Registration failed with message: \(message)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
         }
     }
@@ -7244,65 +7965,63 @@ final class HproseInstance: ObservableObject {
         cloudDrivePort: Int = 0,
         domainToShare: String? = nil
     ) async throws -> Bool {
-        print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), domainToShare: \(domainToShare ?? "nil")")
         
         let sanitizedDomain = domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalShareDomain = sanitizedDomain?.isEmpty == true ? nil : sanitizedDomain
         
-        // Determine domainToShare value: if explicitly provided (even if empty/nil), use it; otherwise preserve existing
-        // Empty string "" is converted to nil, which will exclude the field from JSON (encodeIfPresent)
-        let domainToShareValue: String?
-        if domainToShare != nil {
-            // Parameter was explicitly provided (even if empty string), use finalShareDomain (nil if empty)
-            domainToShareValue = finalShareDomain
-        } else {
-            // Parameter was not provided, preserve existing value
-            domainToShareValue = appUser.domainToShare
-        }
-        
-        // Create a copy of the user object with all existing properties
-        let updatedUser = User(
-            mid: appUser.mid,
-            name: alias ?? appUser.name,
-            password: password ?? appUser.password,
-            profile: profile ?? appUser.profile,
-            cloudDrivePort: cloudDrivePort,
-            domainToShare: domainToShareValue
-        )
-        // Copy other properties from appUser
-        updatedUser.baseUrl = appUser.baseUrl
-        updatedUser.writableUrl = appUser.writableUrl
-        updatedUser.username = appUser.username
-        updatedUser.avatar = appUser.avatar
-        updatedUser.email = appUser.email
-        updatedUser.timestamp = appUser.timestamp
-        updatedUser.lastLogin = appUser.lastLogin
-        updatedUser.tweetCount = appUser.tweetCount
-        updatedUser.followingCount = appUser.followingCount
-        updatedUser.followersCount = appUser.followersCount
-        updatedUser.bookmarksCount = appUser.bookmarksCount
-        updatedUser.favoritesCount = appUser.favoritesCount
-        updatedUser.commentsCount = appUser.commentsCount
-        updatedUser.publicKey = appUser.publicKey
-        updatedUser.fansList = appUser.fansList
-        updatedUser.followingList = appUser.followingList
-        
-        // Only set hostIds if hostId is provided and not empty
-        // If hostId is nil or empty, preserve existing hostIds (don't modify)
-        if let hostId = hostId, !hostId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            updatedUser.hostIds = [hostId]
-        } else {
-            // Preserve existing hostIds when hostId is not provided
-            updatedUser.hostIds = appUser.hostIds
-        }
-        
-        // Configure encoder to use milliseconds for timestamps
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        
         let entry = "set_author_core_data"
-        let userJsonData = try encoder.encode(updatedUser)
-        let userJsonString = String(data: userJsonData, encoding: .utf8) ?? ""
+
+        // Phase A (demotion prep): the copy of appUser and its encoding are @MainActor state —
+        // build updatedUser and encode it on the main actor.
+        let userJsonString: String = try await MainActor.run {
+            // Determine domainToShare value: if explicitly provided (even if empty/nil), use it; otherwise preserve existing.
+            // Empty string "" is converted to nil, which will exclude the field from JSON (encodeIfPresent).
+            let domainToShareValue: String?
+            if domainToShare != nil {
+                domainToShareValue = finalShareDomain
+            } else {
+                domainToShareValue = self.appUser.domainToShare
+            }
+
+            // Create a copy of the user object with all existing properties
+            let updatedUser = User(
+                mid: self.appUser.mid,
+                name: alias ?? self.appUser.name,
+                password: password ?? self.appUser.password,
+                profile: profile ?? self.appUser.profile,
+                cloudDrivePort: cloudDrivePort,
+                domainToShare: domainToShareValue
+            )
+            // Copy other properties from appUser
+            updatedUser.baseUrl = self.appUser.baseUrl
+            updatedUser.writableUrl = self.appUser.writableUrl
+            updatedUser.username = self.appUser.username
+            updatedUser.avatar = self.appUser.avatar
+            updatedUser.email = self.appUser.email
+            updatedUser.timestamp = self.appUser.timestamp
+            updatedUser.lastLogin = self.appUser.lastLogin
+            updatedUser.tweetCount = self.appUser.tweetCount
+            updatedUser.followingCount = self.appUser.followingCount
+            updatedUser.followersCount = self.appUser.followersCount
+            updatedUser.bookmarksCount = self.appUser.bookmarksCount
+            updatedUser.favoritesCount = self.appUser.favoritesCount
+            updatedUser.commentsCount = self.appUser.commentsCount
+            updatedUser.publicKey = self.appUser.publicKey
+            updatedUser.fansList = self.appUser.fansList
+            updatedUser.followingList = self.appUser.followingList
+
+            // Only set hostIds if hostId is provided and not empty; otherwise preserve existing.
+            if let hostId = hostId, !hostId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updatedUser.hostIds = [hostId]
+            } else {
+                updatedUser.hostIds = self.appUser.hostIds
+            }
+
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let data = try encoder.encode(updatedUser)
+            return String(data: data, encoding: .utf8) ?? ""
+        }
         let params = [
             "aid": appId,
             "ver": "last",
@@ -7310,26 +8029,31 @@ final class HproseInstance: ObservableObject {
             "user": userJsonString
         ]
         
-        print("DEBUG: updateUserCore - sending request to server with user data")
-        print("DEBUG: updateUserCore - domainToShare in User object: \(finalShareDomain ?? "nil")")
-        print("DEBUG: updateUserCore - encoded user JSON contains domainToShare: \(userJsonString.contains("domainToShare"))")
+        hproseDebug("DEBUG: updateUserCore - sending request to server with user data")
+        hproseDebug("DEBUG: updateUserCore - domainToShare in User object: \(finalShareDomain ?? "nil")")
+        hproseDebug("DEBUG: updateUserCore - encoded user JSON contains domainToShare: \(userJsonString.contains("domainToShare"))")
         // Print a snippet of the JSON to verify domainToShare is included
         if let domainRange = userJsonString.range(of: "\"domainToShare\"") {
             let startIndex = userJsonString.index(domainRange.lowerBound, offsetBy: -50, limitedBy: userJsonString.startIndex) ?? userJsonString.startIndex
             let endIndex = userJsonString.index(domainRange.upperBound, offsetBy: 50, limitedBy: userJsonString.endIndex) ?? userJsonString.endIndex
             let snippet = String(userJsonString[startIndex..<endIndex])
-            print("DEBUG: updateUserCore - JSON snippet around domainToShare: ...\(snippet)...")
+            hproseDebug("DEBUG: updateUserCore - JSON snippet around domainToShare: ...\(snippet)...")
         }
-        
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+
+        let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
+        guard let baseUrl = appUserBaseUrl else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        }
+        let updateClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 30)
+        let rawResponse = await invokeRunMApp(using: updateClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
-            print("DEBUG: updateUserCore - failed to get response from server")
+            hproseError("DEBUG: updateUserCore - failed to get response from server")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Profile update failed", comment: "Profile update error")])
         }
         
-        print("DEBUG: updateUserCore - server response: \(response)")
+        hproseDebug("DEBUG: updateUserCore - server response: \(response)")
         
         // Handle v2 format: check success field first
         if let success = response["success"] as? Bool {
@@ -7342,7 +8066,7 @@ final class HproseInstance: ObservableObject {
         
         if let result = response["status"] as? String {
             if result == "success" {
-                print("DEBUG: updateUserCore - server returned success")
+                hproseDebug("DEBUG: updateUserCore - server returned success")
                 
                 // Update in-memory appUser with new values on MainActor (User has @Published properties)
                 await MainActor.run {
@@ -7364,21 +8088,24 @@ final class HproseInstance: ObservableObject {
                     } else {
                         self.appUser.domainToShare = nil
                     }
-                    print("DEBUG: updateUserCore - updated in-memory appUser, cloudDrivePort: \(cloudDrivePort), domainToShare: \(self.appUser.domainToShare ?? "nil")")
+                    hproseDebug("DEBUG: updateUserCore - updated in-memory appUser, cloudDrivePort: \(cloudDrivePort), domainToShare: \(self.appUser.domainToShare ?? "nil")")
                 }
                 
-                TweetCacheManager.shared.saveUser(appUser)
-                print("DEBUG: updateUserCore - saved updated user cache for: \(appUser.mid)")
-                
+                let savedMid = await MainActor.run { () -> String in
+                    TweetCacheManager.shared.saveUser(self.appUser)
+                    return self.appUser.mid
+                }
+                hproseDebug("DEBUG: updateUserCore - saved updated user cache for: \(savedMid)")
+
                 return true
             } else {
                 let errorMessage = response["reason"] as? String ?? "Unknown registration error."
-                print("DEBUG: updateUserCore - server returned error: \(errorMessage)")
+                hproseError("DEBUG: updateUserCore - server returned error: \(errorMessage)")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
         
-        print("DEBUG: updateUserCore - unexpected response format")
+        hproseWarning("DEBUG: updateUserCore - unexpected response format")
         return false
     }
     
@@ -7388,59 +8115,68 @@ final class HproseInstance: ObservableObject {
     /// The public key is stored on the server for verification.
     /// Returns the exportable token string that should be given to the AI agent.
     func generateAgentToken() async throws -> String {
-        guard !appUser.isGuest else {
+        // Phase A (demotion prep): snapshot @MainActor appUser reads.
+        let (appUserMid, appUserIsGuest) = await MainActor.run { (self.appUser.mid, self.appUser.isGuest) }
+        guard !appUserIsGuest else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: NSLocalizedString("Must be logged in to generate agent token", comment: "Agent token error")
             ])
         }
-        
+
         // Generate new token with keypair
         guard let tokenResult = AgentTokenManager.shared.createAndExportToken(
-            for: appUser.mid,
+            for: appUserMid,
             scope: ["post", "comment"]
         ) else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: NSLocalizedString("Failed to generate agent token", comment: "Agent token error")
             ])
         }
-        
+
         // Save public key to server
         try await updateAgentPublicKey(tokenResult.publicKey)
-        
+
         // Update local user object
         await MainActor.run {
             self.appUser.agentPublicKey = tokenResult.publicKey
         }
-        
-        print("DEBUG: [generateAgentToken] Generated new agent token for user \(appUser.mid)")
+
+        hproseDebug("DEBUG: [generateAgentToken] Generated new agent token for user \(appUserMid)")
         return tokenResult.tokenString
     }
     
     /// Updates the user's agent public key on the server
     private func updateAgentPublicKey(_ publicKey: String) async throws {
         let entry = "set_author_core_data"
-        
+
+        // Phase A (demotion prep): snapshot @MainActor appUser reads.
+        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
+
         // Create minimal user object with just the fields we need to update
         let userUpdate: [String: Any] = [
-            "mid": appUser.mid,
+            "mid": appUserMid,
             "agentPublicKey": publicKey
         ]
-        
+
         guard let userJsonData = try? JSONSerialization.data(withJSONObject: userUpdate),
               let userJsonString = String(data: userJsonData, encoding: .utf8) else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: "Failed to serialize user data"
             ])
         }
-        
+
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "user": userJsonString
         ]
-        
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+
+        guard let baseUrl = appUserBaseUrl else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        }
+        let profileClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let rawResponse = await invokeRunMApp(using: profileClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
@@ -7460,22 +8196,27 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: reason])
         }
         
-        print("DEBUG: [updateAgentPublicKey] Successfully updated agent public key on server")
     }
     
     // MARK: - User Avatar
     /// Sets the user's avatar on the server and returns confirmed avatar
     func setUserAvatar(user: User, avatar: MimeiId) async throws -> String {
         let entry = "set_user_avatar"
+        // Phase A (demotion prep): snapshot @MainActor user.mid + appUser.baseUrl (client is appUser's).
+        let (userMid, appUserBaseUrl) = await MainActor.run { (user.mid, self.appUser.baseUrl) }
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": user.mid,
+            "userid": userMid,
             "avatar": avatar
         ]
-        
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+
+        guard let baseUrl = appUserBaseUrl else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
+        }
+        let avatarClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let rawResponse = await invokeRunMApp(using: avatarClient, entry: entry, params: params)
         guard rawResponse != nil else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
         }
@@ -7498,40 +8239,49 @@ final class HproseInstance: ObservableObject {
     /// - Parameters:
     ///   - nodeId: The node ID to resolve IPs for
     ///   - v4Only: Whether to request IPv4 addresses only
+    ///   - forceHealthCheck: Whether to bypass a cached health result for a pooled IP
     /// - Returns: A healthy IP address for the node, or nil if none found
-    func getHostIP(_ nodeId: String, v4Only: Bool = false) async -> String? {
-        print("DEBUG: [getHostIP] Resolving IPs for node \(nodeId)")
+    func getHostIP(
+        _ nodeId: String,
+        v4Only: Bool = false,
+        forceHealthCheck: Bool = false
+    ) async -> String? {
+        hproseDebug("DEBUG: [getHostIP] Resolving IPs for node \(nodeId)")
         
         // Step 0: Check NodePool first for cached IP
         if let pooledIP = NodePool.shared.getIPForNode(nodeMid: nodeId) {
-            print("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
+            hproseDebug("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
             
             // Test if pooled IP is still healthy
-            let isHealthy = await isServerHealthyWithTimeout(pooledIP, timeout: 5.0)
+            let isHealthy = await isServerHealthyWithTimeout(
+                pooledIP,
+                timeout: 5.0,
+                useCache: !forceHealthCheck
+            )
             
             if isHealthy {
-                print("DEBUG: [getHostIP] ✅ Pooled IP \(pooledIP) is healthy, using it")
                 return pooledIP
             } else {
-                print("DEBUG: [getHostIP] ❌ Pooled IP \(pooledIP) is unhealthy, removing from pool")
+                hproseError("DEBUG: [getHostIP] ❌ Pooled IP \(pooledIP) is unhealthy, removing from pool")
                 NodePool.shared.removeIPFromNode(nodeMid: nodeId, ip: pooledIP)
             }
         }
         
-        print("DEBUG: [getHostIP] Attempt 1: Resolving IPs from API for node \(nodeId)")
+        hproseDebug("DEBUG: [getHostIP] Attempt 1: Resolving IPs from API for node \(nodeId)")
         
         // First attempt with current appUser client
         if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
             NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
-            print("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP")
             return ip
         }
         
-        print("DEBUG: [getHostIP] Attempt 1 failed, checking appUser health...")
-        
+        hproseError("DEBUG: [getHostIP] Attempt 1 failed, checking appUser health...")
+
         // First attempt failed - check if appUser is healthy
-        guard let baseUrl = appUser.baseUrl, let host = baseUrl.host else {
-            print("DEBUG: [getHostIP] No appUser base URL, cannot retry")
+        // Phase A (demotion prep): snapshot @MainActor appUser.baseUrl.
+        let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
+        guard let baseUrl = appUserBaseUrl, let host = baseUrl.host else {
+            hproseWarning("DEBUG: [getHostIP] No appUser base URL, cannot retry")
             return nil
         }
         let appUserIP = baseUrl.port.map { "\(host):\($0)" } ?? host
@@ -7539,43 +8289,42 @@ final class HproseInstance: ObservableObject {
         
         if isAppUserHealthy {
             // AppUser is healthy but still couldn't get IPs - node might not exist
-            print("DEBUG: [getHostIP] AppUser is healthy but node IPs not found - node may not exist")
+            hproseWarning("DEBUG: [getHostIP] AppUser is healthy but node IPs not found - node may not exist")
             return nil
         }
         
         // AppUser is unhealthy - refresh it and retry
-        print("DEBUG: [getHostIP] ⚠️ AppUser is unhealthy, refreshing via entry IP...")
+        hproseWarning("DEBUG: [getHostIP] ⚠️ AppUser is unhealthy, refreshing via entry IP...")
         
         do {
             guard let entryIP = try await findEntryIP() else {
-                print("DEBUG: [getHostIP] Failed to find entry IP for appUser refresh")
+                hproseError("DEBUG: [getHostIP] Failed to find entry IP for appUser refresh")
                 return nil
             }
             
-            print("DEBUG: [getHostIP] Using entry IP to refresh appUser: \(entryIP)")
+            hproseDebug("DEBUG: [getHostIP] Using entry IP to refresh appUser: \(entryIP)")
             
             // Refresh appUser's IP via entry
             if let newAppUserIP = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP)) {
                 await applyBaseUrlIfNeeded(appUser, url: URL(string: "http://\(newAppUserIP)")!, reason: "getHostIP appUser refresh")
-                print("DEBUG: [getHostIP] ✅ AppUser refreshed with new IP: \(newAppUserIP)")
             } else {
-                print("DEBUG: [getHostIP] Failed to refresh appUser IP")
+                hproseError("DEBUG: [getHostIP] Failed to refresh appUser IP")
                 return nil
             }
             
             // Retry with refreshed appUser
-            print("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")
+            hproseWarning("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")
             if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
                 NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
-                print("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
+                hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
                 return ip
             }
             
-            print("DEBUG: [getHostIP] Attempt 2 also failed, node IPs not resolvable")
+            hproseError("DEBUG: [getHostIP] Attempt 2 also failed, node IPs not resolvable")
             return nil
             
         } catch {
-            print("DEBUG: [getHostIP] Error during appUser refresh: \(error)")
+            hproseError("DEBUG: [getHostIP] Error during appUser refresh: \(error)")
             return nil
         }
     }
@@ -7597,13 +8346,13 @@ final class HproseInstance: ObservableObject {
         ]
         
         guard let hproseClient = hproseClient else {
-            print("DEBUG: [_getHostIP] No hprose client available")
+            hproseDebug("DEBUG: [_getHostIP] No hprose client available")
             return nil
         }
         
-        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: hproseClient, entry: entry, params: params)
         guard let response = rawResponse else {
-            print("DEBUG: [_getHostIP] No response from server.")
+            hproseDebug("DEBUG: [_getHostIP] No response from server.")
             return nil
         }
         
@@ -7613,7 +8362,7 @@ final class HproseInstance: ObservableObject {
             unwrappedResponse = try Self.unwrapV2Response(response)
         } catch {
             let nsError = error as NSError
-            print("DEBUG: [_getHostIP] Error unwrapping v2 response: domain: \(nsError.domain), code: \(nsError.code)")
+            hproseError("DEBUG: [_getHostIP] Error unwrapping v2 response: domain: \(nsError.domain), code: \(nsError.code)")
             return nil
         }
         
@@ -7623,7 +8372,7 @@ final class HproseInstance: ObservableObject {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             
-            print("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
+            hproseDebug("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
             
             // Test IPs in batches of 4 for faster discovery during high load
             let batchSize = 4
@@ -7631,26 +8380,22 @@ final class HproseInstance: ObservableObject {
                 let batchEnd = min(batchStart + batchSize, ipAddresses.count)
                 let batch = Array(ipAddresses[batchStart..<batchEnd])
                 
-                print("DEBUG: [_getHostIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
                 
                 // Test this batch in parallel - return as soon as first IP responds successfully
                 let healthyIP: String? = await withTaskGroup(of: (String, Bool)?.self) { group in
-                    for (index, ip) in batch.enumerated() {
-                        let absoluteIndex = batchStart + index + 1
+                    for ip in batch {
                         group.addTask {
                             // Check for cancellation before starting
                             if Task.isCancelled {
                                 return nil
                             }
                             
-                            print("DEBUG: [_getHostIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
                             let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0, logFailures: false)
 
                             if Task.isCancelled { return nil }
 
                             if isHealthy {
-                                print("DEBUG: [_getHostIP] ✅ IP test PASSED: \(ip)")
                             }
                             
                             return (ip, isHealthy)
@@ -7660,7 +8405,7 @@ final class HproseInstance: ObservableObject {
                     // Return IMMEDIATELY when first healthy IP is found
                     for await result in group {
                         if let (ip, isHealthy) = result, isHealthy {
-                            print("DEBUG: [_getHostIP] Found healthy node IP: \(ip) - returning immediately")
+                            hproseDebug("DEBUG: [_getHostIP] Found healthy node IP: \(ip) - returning immediately")
                             group.cancelAll()  // Cancel remaining checks in this batch
                             return ip as String?
                         }
@@ -7677,14 +8422,14 @@ final class HproseInstance: ObservableObject {
             // If no healthy IP found in any batch, return nil
             // The caller should handle the nil case appropriately
             if !ipAddresses.isEmpty {
-                print("DEBUG: [_getHostIP] All health checks failed for \(ipAddresses.count) IP(s), returning nil")
+                hproseError("DEBUG: [_getHostIP] All health checks failed for \(ipAddresses.count) IP(s), returning nil")
                 return nil
             }
             
-            print("DEBUG: [_getHostIP] No IPs available in response")
+            hproseDebug("DEBUG: [_getHostIP] No IPs available in response")
             return nil
         }
-        print("DEBUG: [_getHostIP] Invalid IpList response format")
+        hproseWarning("DEBUG: [_getHostIP] Invalid IpList response format")
         return nil
     }
     
@@ -7703,39 +8448,43 @@ final class HproseInstance: ObservableObject {
         maxRetries: Int = 2
     ) async throws -> MessageSendResult {
         var lastError: String?
-        
+        // Phase A (demotion prep): appUser.mid doesn't change across retries.
+        let appUserMid = await MainActor.run { self.appUser.mid }
+
         for attempt in 0...maxRetries {
             // On retry, force refresh appUser's baseUrl by passing empty string
             let forceRefresh = attempt > 0
             if forceRefresh {
-                print("[sendMessage] 🔄 Retry attempt \(attempt): Refreshing sender's baseUrl")
+                hproseWarning("[sendMessage] 🔄 Retry attempt \(attempt): Refreshing sender's baseUrl")
             }
-            
+
             // Refresh appUser's baseUrl if needed
             if forceRefresh {
-                if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: "") {
+                if let refreshedUser = try await fetchUser(appUserMid, baseUrl: "") {
                     await MainActor.run {
                         if refreshedUser.baseUrl != appUser.baseUrl {
                             appUser.baseUrl = refreshedUser.baseUrl
-                            print("[sendMessage] ✅ Updated sender's baseUrl to: \(refreshedUser.baseUrl?.absoluteString ?? "nil")")
                         }
                     }
                 }
             }
-            
+
+            // Snapshot the (possibly just-refreshed) sender baseUrl for this attempt.
+            let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
+
             let entry = "message_outgoing"
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
                 "version": "v2",
-                "userid": appUser.mid,
+                "userid": appUserMid,
                 "receiptid": receiptId,
                 "msg": message.toJSONString()
             ]
-            
-            guard let senderClient = appUser.hproseClient else {
+
+            guard let baseUrl = appUserBaseUrl else {
                 let errorMsg = "Failed to create client for sender node"
-                print("[sendMessage] ❌ \(errorMsg) - baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
+                hproseError("[sendMessage] ❌ \(errorMsg) - baseUrl: nil")
                 if attempt < maxRetries {
                     try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
                     continue
@@ -7756,22 +8505,22 @@ final class HproseInstance: ObservableObject {
                 )
             }
             
-            print("[sendMessage] 📤 Sending to sender node (attempt \(attempt + 1)/\(maxRetries + 1)) - baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
-            
-            let rawResponse = senderClient.invoke("runMApp", withArgs: [entry, params])
+            let senderClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+
+            let rawResponse = await invokeRunMApp(using: senderClient, entry: entry, params: params)
             let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
-            let response = unwrappedResponse ?? rawResponse
+            let response = unwrappedResponse ?? Self.normalizeHproseContainers(rawResponse)
             
             // Handle new response format: {success: false, error: e.message}
-            if let responseDict = response as? [String: Any] {
+            if let responseDict = Self.asStringKeyedDictionary(response) {
                 if let success = responseDict["success"] as? Bool, !success {
                     let errorMessage = responseDict["error"] as? String ?? "Unknown error"
                     lastError = errorMessage
-                    print("[sendMessage] ❌ Failed to send to sender node (attempt \(attempt + 1)/\(maxRetries + 1)): \(errorMessage)")
+                    hproseError("[sendMessage] ❌ Failed to send to sender node (attempt \(attempt + 1)/\(maxRetries + 1)): \(errorMessage)")
                     
                     if attempt < maxRetries {
                         let delay = UInt64(attempt + 1) * 2_000_000_000 // 2, 4 seconds
-                        print("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
+                        hproseWarning("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
                         try? await Task.sleep(nanoseconds: delay)
                         continue
                     }
@@ -7792,19 +8541,17 @@ final class HproseInstance: ObservableObject {
                     )
                 } else {
                     // Success!
-                    print("[sendMessage] ✅ Successfully sent to sender node (attempt \(attempt + 1))")
                     return MessageSendResult(success: true, errorMessage: nil)
                 }
             } else {
                 // Handle legacy boolean response
                 let isSuccess = response as? Bool ?? false
                 if isSuccess {
-                    print("[sendMessage] ✅ Successfully sent to sender node (attempt \(attempt + 1), legacy format)")
                     return MessageSendResult(success: true, errorMessage: nil)
                 } else {
                     let errorMessage = "Failed to send to sender node (legacy format)"
                     lastError = errorMessage
-                    print("[sendMessage] ❌ \(errorMessage) (attempt \(attempt + 1)/\(maxRetries + 1))")
+                    hproseError("[sendMessage] ❌ \(errorMessage) (attempt \(attempt + 1)/\(maxRetries + 1))")
                     
                     if attempt < maxRetries {
                         try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
@@ -7816,7 +8563,7 @@ final class HproseInstance: ObservableObject {
         
         // All retries exhausted
         let finalError = lastError ?? "Failed to send message to sender node after \(maxRetries + 1) attempts"
-        print("[sendMessage] ❌ All retry attempts exhausted for sender node: \(finalError)")
+        hproseError("[sendMessage] ❌ All retry attempts exhausted for sender node: \(finalError)")
         return MessageSendResult(
             success: false,
             errorMessage: ChatMessage(
@@ -7841,12 +8588,14 @@ final class HproseInstance: ObservableObject {
     ) async throws -> MessageSendResult {
         var receiptUser: User?
         var lastError: String?
-        
+        // Phase A (demotion prep): appUser.mid doesn't change across retries.
+        let appUserMid = await MainActor.run { self.appUser.mid }
+
         for attempt in 0...maxRetries {
             // On retry, force refresh recipient's baseUrl by passing empty string
             let forceRefresh = attempt > 0
             if forceRefresh {
-                print("[sendMessage] 🔄 Retry attempt \(attempt): Refreshing recipient's baseUrl for userId: \(receiptId)")
+                hproseWarning("[sendMessage] 🔄 Retry attempt \(attempt): Refreshing recipient's baseUrl for userId: \(receiptId)")
             }
             
             // Fetch recipient user (with forced refresh on retry)
@@ -7854,7 +8603,7 @@ final class HproseInstance: ObservableObject {
             
             guard let recipient = receiptUser else {
                 let errorMsg = "Recipient user not found"
-                print("[sendMessage] ❌ \(errorMsg) for userId: \(receiptId)")
+                hproseError("[sendMessage] ❌ \(errorMsg) for userId: \(receiptId)")
                 return MessageSendResult(
                     success: false,
                     errorMessage: ChatMessage(
@@ -7871,20 +8620,23 @@ final class HproseInstance: ObservableObject {
                 )
             }
             
+            // Snapshot recipient's (freshly-fetched) baseUrl for this attempt.
+            let recipientBaseUrl = await MainActor.run { recipient.baseUrl }
+
             let receiptEntry = "message_incoming"
             let receiptParams: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
                 "version": "v2",
-                "senderid": appUser.mid,
+                "senderid": appUserMid,
                 "receiptid": receiptId,
                 "msg": message.toJSONString()
             ]
-            
+
             // Get fresh client (will be recreated if baseUrl changed)
-            guard let recipientClient = recipient.hproseClient else {
+            guard let rBaseUrl = recipientBaseUrl else {
                 let errorMsg = "Failed to create client for recipient node"
-                print("[sendMessage] ❌ \(errorMsg) - baseUrl: \(recipient.baseUrl?.absoluteString ?? "nil")")
+                hproseError("[sendMessage] ❌ \(errorMsg) - baseUrl: nil")
                 if attempt < maxRetries {
                     // Wait before retry
                     try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
@@ -7906,23 +8658,23 @@ final class HproseInstance: ObservableObject {
                 )
             }
             
-            print("[sendMessage] 📤 Sending to recipient node (attempt \(attempt + 1)/\(maxRetries + 1)) - baseUrl: \(recipient.baseUrl?.absoluteString ?? "nil")")
-            
-            let rawReceiptResponse = recipientClient.invoke("runMApp", withArgs: [receiptEntry, receiptParams])
+            let recipientClient = clientPool.getClientByUrl(for: rBaseUrl.absoluteString, timeout: 15)
+
+            let rawReceiptResponse = await invokeRunMApp(using: recipientClient, entry: receiptEntry, params: receiptParams)
             let receiptResponseUnwrapped = try? Self.unwrapV2Response(rawReceiptResponse)
-            let receiptResponse = receiptResponseUnwrapped ?? rawReceiptResponse
+            let receiptResponse = receiptResponseUnwrapped ?? Self.normalizeHproseContainers(rawReceiptResponse)
             
             // Handle new response format for message_incoming
-            if let receiptResponseDict = receiptResponse as? [String: Any] {
+            if let receiptResponseDict = Self.asStringKeyedDictionary(receiptResponse) {
                 if let success = receiptResponseDict["success"] as? Bool, !success {
                     let errorMessage = receiptResponseDict["error"] as? String ?? "Failed to send to recipient node"
                     lastError = errorMessage
-                    print("[sendMessage] ❌ Failed to send to recipient node (attempt \(attempt + 1)/\(maxRetries + 1)): \(errorMessage)")
+                    hproseError("[sendMessage] ❌ Failed to send to recipient node (attempt \(attempt + 1)/\(maxRetries + 1)): \(errorMessage)")
                     
                     if attempt < maxRetries {
                         // Wait before retry with exponential backoff
                         let delay = UInt64(attempt + 1) * 2_000_000_000 // 2, 4 seconds
-                        print("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
+                        hproseWarning("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
                         try? await Task.sleep(nanoseconds: delay)
                         continue
                     }
@@ -7943,19 +8695,17 @@ final class HproseInstance: ObservableObject {
                     )
                 } else {
                     // Success!
-                    print("[sendMessage] ✅ Successfully sent to recipient node (attempt \(attempt + 1))")
                     return MessageSendResult(success: true, errorMessage: nil)
                 }
             } else {
                 // Legacy boolean response
                 let receiptSuccess = receiptResponse as? Bool ?? false
                 if receiptSuccess {
-                    print("[sendMessage] ✅ Successfully sent to recipient node (attempt \(attempt + 1), legacy format)")
                     return MessageSendResult(success: true, errorMessage: nil)
                 } else {
                     let errorMessage = "Failed to send to recipient node (legacy format)"
                     lastError = errorMessage
-                    print("[sendMessage] ❌ \(errorMessage) (attempt \(attempt + 1)/\(maxRetries + 1))")
+                    hproseError("[sendMessage] ❌ \(errorMessage) (attempt \(attempt + 1)/\(maxRetries + 1))")
                     
                     if attempt < maxRetries {
                         // Wait before retry
@@ -7968,7 +8718,7 @@ final class HproseInstance: ObservableObject {
         
         // All retries exhausted
         let finalError = lastError ?? "Failed to send message after \(maxRetries + 1) attempts"
-        print("[sendMessage] ❌ All retry attempts exhausted: \(finalError)")
+        hproseError("[sendMessage] ❌ All retry attempts exhausted: \(finalError)")
         return MessageSendResult(
             success: false,
             errorMessage: ChatMessage(
@@ -7994,12 +8744,12 @@ final class HproseInstance: ObservableObject {
         guard let recipient = try await fetchUser(receiptId) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Recipient user not found", comment: "User lookup error")])
         }
-        if recipient.isUserBlacklisted(appUser.mid) {
+        let isBlocked = await MainActor.run { recipient.isUserBlacklisted(self.appUser.mid) }
+        if isBlocked {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot send a message to this user because you are blocked", comment: "Message blocked error")])
         }
         
         // Step 1: Send to sender's own node (message_outgoing) with retry
-        print("[sendMessage] 📤 Step 1: Sending message_outgoing to sender's node")
         let senderSendResult = try await sendToSenderNodeWithRetry(
             receiptId: receiptId,
             message: message,
@@ -8023,10 +8773,8 @@ final class HproseInstance: ObservableObject {
             return errorMessage
         }
         
-        print("[sendMessage] ✅ Step 1 completed: Successfully sent to sender's node")
         
         // Step 2: Send to recipient's node (message_incoming) with retry
-        print("[sendMessage] 📤 Step 2: Sending message_incoming to recipient's node")
         let recipientSendResult = try await sendToRecipientNodeWithRetry(
             receiptId: receiptId,
             message: message,
@@ -8050,7 +8798,6 @@ final class HproseInstance: ObservableObject {
             return errorMessage
         }
         
-        print("[sendMessage] ✅ Step 2 completed: Successfully sent to recipient's node")
         
         // Both steps succeeded
         return ChatMessage(
@@ -8068,20 +8815,23 @@ final class HproseInstance: ObservableObject {
     
     /// Fetch recent unread messages from a sender (incoming messages only)
     func fetchMessages(senderId: String) async throws -> [ChatMessage] {
-        guard let client = appUser.hproseClient else {
+        // Phase A (demotion prep): snapshot @MainActor appUser reads.
+        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
+        guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+
         let entry = "message_fetch"
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": appUser.mid,
+            "userid": appUserMid,
             "senderid": senderId
         ]
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         // Handle new response format: {success: false, error: e.message}
@@ -8102,15 +8852,14 @@ final class HproseInstance: ObservableObject {
                 
                 // Only return messages that are incoming (sent by others to current user)
                 // Filter out messages sent by the current user
-                if message.authorId != appUser.mid {
+                if message.authorId != appUserMid {
                     // Return message with server's timestamp preserved
                     return message
                 } else {
-                    print("[fetchMessages] Filtered out outgoing message from \(message.authorId)")
                     return nil
                 }
             } catch {
-                print("[fetchMessages] Error decoding message: \(error)")
+                hproseError("[fetchMessages] Error decoding message: \(error)")
                 return nil
             }
         }
@@ -8118,21 +8867,24 @@ final class HproseInstance: ObservableObject {
     
     /// Check for new incoming messages (only check, do not fetch them)
     func checkNewMessages() async throws -> [ChatMessage] {
-        guard !appUser.isGuest else { return [] }
-        
-        guard let client = appUser.hproseClient else {
+        // Phase A (demotion prep): snapshot @MainActor appUser reads.
+        let (appUserMid, appUserBaseUrl, appUserIsGuest) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl, self.appUser.isGuest) }
+        guard !appUserIsGuest else { return [] }
+
+        guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+
         let entry = "message_check"
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": appUser.mid
+            "userid": appUserMid
         ]
         
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
         
         let response = unwrappedResponse as? [[String: Any]] ?? []
@@ -8144,23 +8896,21 @@ final class HproseInstance: ObservableObject {
                 
                 // Only return messages that are incoming (sent by others to current user)
                 // Filter out messages sent by the current user
-                if message.authorId != appUser.mid {
+                if message.authorId != appUserMid {
                     // Return message with server's timestamp preserved
                     return message
                 } else {
-                    print("[checkNewMessages] Filtered out outgoing message from \(message.authorId)")
                     return nil
                 }
             } catch {
-                print("[checkNewMessages] Error decoding message: \(error)")
+                hproseError("[checkNewMessages] Error decoding message: \(error)")
                 return nil
             }
         }
     }
     
     /// Check for app upgrades and update domain in preferences
-    private func checkAndUpdateDomain() async {
-        print("[checkAndUpdateDomain] Starting background upgrade check")
+    func checkAndUpdateDomain() async {
         
         let entry = "check_upgrade"
         let params: [String: Any] = [
@@ -8170,16 +8920,18 @@ final class HproseInstance: ObservableObject {
             "entry": entry
         ]
         
-        guard let client = appUser.hproseClient else {
-            print("[checkAndUpdateDomain] Client not initialized")
+        let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
+        guard let baseUrl = appUserBaseUrl else {
+            hproseDebug("[checkAndUpdateDomain] Client not initialized")
             return
         }
-        
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params, priority: .background)
         let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
-            print("[checkAndUpdateDomain] Invalid response format")
+            hproseWarning("[checkAndUpdateDomain] Invalid response format")
             return
         }
         
@@ -8192,17 +8944,17 @@ final class HproseInstance: ObservableObject {
         }
         
         guard let domain = domain else {
-            print("[checkAndUpdateDomain] No upgrade domain received")
+            hproseDebug("[checkAndUpdateDomain] No upgrade domain received")
             return
         }
         
-        if lastLoggedUpgradeDomain != domain {
-            print("[checkAndUpdateDomain] Received domain: \(domain)")
-            lastLoggedUpgradeDomain = domain
-        }
-        
-        // Update domain to share and save to preferences
+        // Keep the log deduplication and published domain update together so startup
+        // and foreground checks can safely overlap.
         await MainActor.run {
+            if lastLoggedUpgradeDomain != domain {
+                hproseDebug("[checkAndUpdateDomain] Received domain: \(domain)")
+                lastLoggedUpgradeDomain = domain
+            }
             _domainToShare = "http://" + domain
         }
     }
@@ -8232,37 +8984,42 @@ final class HproseInstance: ObservableObject {
     
     /// Blocks a user
     func blockUser(userId: String) async throws {
-        guard let client = appUser.hproseClient else {
+        // Phase A (demotion prep): snapshot @MainActor appUser reads.
+        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
+        guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+
         let entry = "block_user"
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": appUser.mid,
+            "userid": appUserMid,
             "blocked": userId
         ]
         
-        client.invoke("runMApp", withArgs: [entry, params])
-        print("[blockUser] Backend call completed for user: \(userId)")
+        _ = await invokeRunMApp(using: client, entry: entry, params: params)
     }
     
     /// Deletes the current user's account
     func deleteAccount() async throws -> [String: Any] {
-        guard let client = appUser.hproseClient else {
+        // Phase A (demotion prep): snapshot @MainActor appUser reads.
+        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
+        guard let baseUrl = appUserBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+
         let entry = "delete_account"
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": appUser.mid
+            "userid": appUserMid
         ]
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
         return unwrappedResponse as? [String: Any] ?? [:]
     }
@@ -8270,12 +9027,7 @@ final class HproseInstance: ObservableObject {
     /// Reports a tweet for inappropriate content and deletes it from backend
     func reportTweet(tweetId: String, tweetAuthorId: String, category: String, comments: String) async throws {
         // First, delete the tweet from backend
-        if let deletedTweetId = try await deleteTweet(tweetId, tweetAuthorId: tweetAuthorId) {
-            print("[reportTweet] Successfully deleted tweet from backend: \(deletedTweetId)")
-        } else {
-            print("[reportTweet] Failed to delete tweet from backend: \(tweetId)")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to report tweet", comment: "Report tweet error")])
-        }
+        _ = try await deleteTweet(tweetId, tweetAuthorId: tweetAuthorId)
         
         // Send notification to system admin about the reported and deleted content
         // Note: Admin notification failure won't affect tweet deletion success
@@ -8285,25 +9037,27 @@ final class HproseInstance: ObservableObject {
     /// Send notification to system admin about reported and deleted content
     private func notifySystemAdmin(tweetId: String, category: String, comments: String) async {
         let adminUserId = Gadget.getAlphaIds().first ?? "" // System admin user ID
-        
+        // Phase A (demotion prep): snapshot @MainActor appUser.mid.
+        let appUserMid = await MainActor.run { self.appUser.mid }
+
         // Create notification message
         let notificationContent = """
         🚨 CONTENT REPORT & DELETION ALERT 🚨
-        
+
         Tweet ID: \(tweetId) - DELETED
         Category: \(category)
-        Reporter: \(appUser.mid)
+        Reporter: \(appUserMid)
         Comments: \(comments.isEmpty ? "None" : comments)
         Time: \(Date().formatted())
-        
+
         Tweet has been automatically deleted from the platform due to reported content.
         Please review this action within 24 hours as per App Store compliance requirements.
         """
-        
+
         // Create chat message
-        let sessionId = ChatMessage.generateSessionId(userId: appUser.mid, receiptId: adminUserId)
+        let sessionId = ChatMessage.generateSessionId(userId: appUserMid, receiptId: adminUserId)
         let notificationMessage = ChatMessage(
-            authorId: appUser.mid,
+            authorId: appUserMid,
             receiptId: adminUserId,
             chatSessionId: sessionId,
             content: notificationContent
@@ -8312,13 +9066,12 @@ final class HproseInstance: ObservableObject {
         do {
             let result = try await sendMessage(receiptId: adminUserId, message: notificationMessage)
             if result.success == true {
-                print("[notifySystemAdmin] Successfully sent notification to admin for tweet: \(tweetId)")
             } else {
-                print("[notifySystemAdmin] Failed to send notification to admin: \(result.errorMsg ?? "Unknown error")")
+                hproseError("[notifySystemAdmin] Failed to send notification to admin: \(result.errorMsg ?? "Unknown error")")
                 // Log the failure but don't throw error - admin notification is not critical for tweet deletion
             }
         } catch {
-            print("[notifySystemAdmin] Error sending notification to admin: \(error)")
+            hproseError("[notifySystemAdmin] Error sending notification to admin: \(error)")
             // Log the error but don't throw - admin notification is not critical for tweet deletion
             // The tweet has already been deleted successfully, so we don't want to fail the entire operation
         }

@@ -27,7 +27,11 @@ struct AppNavigationDestinationsModifier: ViewModifier {
                 }
             }
             .navigationDestination(for: UserListDestination.self) { destination in
-                UserListDestinationView(destination: destination, navigationPath: $navigationPath)
+                UserListDestinationView(
+                    destination: destination,
+                    navigationPath: $navigationPath,
+                    onShowLogin: onShowLogin
+                )
             }
             .navigationDestination(for: TweetListDestination.self) { destination in
                 TweetListDestinationView(

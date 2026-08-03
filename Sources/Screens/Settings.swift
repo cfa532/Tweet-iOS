@@ -122,6 +122,7 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showLoginSheet) {
                 LoginView()
+                    .environmentObject(hproseInstance)
             }
             .navigationTitle(NSLocalizedString("Settings", comment: "Settings screen title"))
             .navigationBarItems(trailing: Button(NSLocalizedString("Done", comment: "Done button")) {
@@ -201,11 +202,11 @@ struct SettingsView: View {
         Task {
             // Use tweet-centered cleanup - clears ALL tweets (including private) and their media
             print("DEBUG: [Settings] Clearing TweetCacheManager")
-            TweetCacheManager.shared.manualClearAllCache()
+            await TweetCacheManager.shared.manualClearAllCache()
 
             // Clear chat cache
             print("DEBUG: [Settings] Clearing ChatCacheManager")
-            ChatCacheManager.shared.clearAllCache()
+            await ChatCacheManager.shared.clearAllCache()
 
             // Clear all memory caches
             print("DEBUG: [Settings] Clearing memory caches")

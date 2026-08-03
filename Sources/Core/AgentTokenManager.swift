@@ -11,7 +11,7 @@ import CryptoKit
 import Security
 
 /// Represents an agent token that can be exported and used by AI agents
-struct AgentToken: Codable {
+struct AgentToken: Codable, Sendable {
     let version: Int
     let mimeiId: String
     let privateKey: String  // Base64-encoded Ed25519 private key
@@ -36,14 +36,14 @@ struct AgentToken: Codable {
 }
 
 /// Authentication data to include with agent requests
-struct AgentAuth: Codable {
+struct AgentAuth: Codable, Sendable {
     let mimeiId: String
     let timestamp: Int64
     let signature: String  // Base64-encoded signature
 }
 
 /// Manages agent token generation, storage, and verification
-class AgentTokenManager {
+final class AgentTokenManager: Sendable {
     static let shared = AgentTokenManager()
     
     private let keychainService = "com.tweet.agent-token"

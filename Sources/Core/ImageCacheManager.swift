@@ -118,13 +118,7 @@ class ImageCacheManager: @unchecked Sendable {
             return nil
         }
         
-        let scale: CGFloat = {
-            if Thread.isMainThread {
-                return UIScreen.main.scale
-            } else {
-                return DispatchQueue.main.sync { UIScreen.main.scale }
-            }
-        }()
+        let scale: CGFloat = 1
         let maxPixelSize = max(1, Int(maxDimension))
         let downsampleOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -234,16 +228,10 @@ class ImageCacheManager: @unchecked Sendable {
     
     /// Check if an image ID belongs to a private tweet
     private func isPrivateTweet(imageID: String) -> Bool {
-        // Check if this image ID belongs to a private tweet
-        if let tweet = findTweetByMediaID(imageID) {
-            return tweet.isPrivate ?? false
-        }
+        // Private/bookmarked/favorited images are retained by markImageIDsAsPermanent(_:)
+        // when tweets are saved. Cache cleanup runs off the main actor and must not
+        // inspect live Tweet UI models.
         return false
-    }
-    
-    /// Find a tweet by its media ID
-    private func findTweetByMediaID(_ mediaID: String) -> Tweet? {
-        return Tweet.getInstance(for: mediaID)
     }
     
     func cleanupOldCache() {
@@ -449,6 +437,23 @@ class ImageCacheManager: @unchecked Sendable {
                 task.cancel()
             }
             self.activeAvatarLoads.removeAll()
+        }
+    }
+
+    func cancelImageLoad(forMid mid: String) {
+        guard !mid.isEmpty else { return }
+        let cacheKeys = [mid, "\(mid)_original"]
+        requestsQueue.async(flags: .barrier) {
+            var cancelled = 0
+            for cacheKey in cacheKeys {
+                if let task = self.ongoingRequests.removeValue(forKey: cacheKey) {
+                    task.cancel()
+                    cancelled += 1
+                }
+            }
+            if cancelled > 0 {
+                print("🛑 [ImageCacheManager] Cancelled \(cancelled) in-flight image request(s) for focused fullscreen load: \(mid)")
+            }
         }
     }
 

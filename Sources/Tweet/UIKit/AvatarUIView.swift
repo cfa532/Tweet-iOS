@@ -14,16 +14,24 @@ class AvatarUIView: UIView {
         let iv = UIImageView()
         iv.contentMode = .scaleAspectFill
         iv.clipsToBounds = true
-        iv.backgroundColor = .systemGray5
+        iv.backgroundColor = .clear
         return iv
+    }()
+
+    private let placeholderBackgroundView: UIView = {
+        let view = UIView()
+        view.clipsToBounds = true
+        view.backgroundColor = .systemGray5
+        return view
     }()
 
     private let placeholderImageView: UIImageView = {
         let iv = UIImageView()
-        iv.contentMode = .scaleAspectFill
+        iv.contentMode = .scaleAspectFit
         iv.clipsToBounds = true
-        iv.image = UIImage(named: "manyone")
-        iv.alpha = 0.3
+        iv.backgroundColor = .clear
+        iv.image = UIImage(named: "tweet_icon")
+        iv.alpha = 0.24
         return iv
     }()
 
@@ -48,6 +56,7 @@ class AvatarUIView: UIView {
     }
 
     private func setupViews() {
+        addSubview(placeholderBackgroundView)
         addSubview(placeholderImageView)
         addSubview(imageView)
 
@@ -63,9 +72,11 @@ class AvatarUIView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         imageView.frame = bounds
+        placeholderBackgroundView.frame = bounds
         placeholderImageView.frame = bounds
         let cornerRadius = bounds.width / 2
         imageView.layer.cornerRadius = cornerRadius
+        placeholderBackgroundView.layer.cornerRadius = cornerRadius
         placeholderImageView.layer.cornerRadius = cornerRadius
     }
 
@@ -104,31 +115,35 @@ class AvatarUIView: UIView {
         let userUpdateObserver = NotificationCenter.default.addObserver(
             forName: .userDidUpdate, object: nil, queue: .main
         ) { [weak self, weak user] notification in
-            guard let self, let user,
-                  let userId = notification.userInfo?["userId"] as? String,
-                  userId == user.mid,
-                  user.avatarUrl != nil else { return }
-            // Cancel in-flight request (may be stuck on stale IP timeout)
-            self.loadTask?.cancel()
-            self.loadTask = nil
-            // Only reload if avatar hasn't been displayed yet
-            guard self.imageView.image == nil else { return }
-            self.loadAvatarImage(user: user)
+            let userId = notification.userInfo?["userId"] as? String
+            MainActor.assumeIsolated {
+                guard let self, let user,
+                      userId == user.mid,
+                      user.avatarUrl != nil else { return }
+                // Cancel in-flight request (may be stuck on stale IP timeout)
+                self.loadTask?.cancel()
+                self.loadTask = nil
+                // Only reload if avatar hasn't been displayed yet
+                guard self.imageView.image == nil else { return }
+                self.loadAvatarImage(user: user)
+            }
         }
         notificationObservers.append(userUpdateObserver)
 
         let imageCachedObserver = NotificationCenter.default.addObserver(
             forName: .imageCached, object: nil, queue: .main
         ) { [weak self, weak user] notification in
-            guard let self, let user,
-                  let avatar = user.avatar,
-                  let avatarId = notification.userInfo?["avatarId"] as? String,
-                  avatarId == avatar || avatarId == "avatar_\(avatar)" else { return }
+            let cachedAvatarId = notification.userInfo?["avatarId"] as? String
+            MainActor.assumeIsolated {
+                guard let self, let user,
+                      let avatar = user.avatar,
+                      cachedAvatarId == avatar || cachedAvatarId == "avatar_\(avatar)" else { return }
 
-            let avatarAttachment = MimeiFileType(mid: "avatar_\(avatar)", mediaType: .image)
-            if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
-                self.imageView.image = cached
-                self.placeholderImageView.isHidden = true
+                let avatarAttachment = MimeiFileType(mid: "avatar_\(avatar)", mediaType: .image)
+                if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
+                    self.imageView.image = cached
+                    self.setPlaceholderVisible(false)
+                }
             }
         }
         notificationObservers.append(imageCachedObserver)
@@ -151,7 +166,7 @@ class AvatarUIView: UIView {
         guard let avatarUrl = user.avatarUrl else {
             // No avatar URL - show placeholder
             imageView.image = nil
-            placeholderImageView.isHidden = false
+            setPlaceholderVisible(true)
             return
         }
 
@@ -162,28 +177,28 @@ class AvatarUIView: UIView {
         // Check memory cache first (synchronous, fast)
         if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
             imageView.image = cached
-            placeholderImageView.isHidden = true
+            setPlaceholderVisible(false)
             return
         }
 
         // Show placeholder while loading
-        placeholderImageView.isHidden = false
+        setPlaceholderVisible(true)
 
-        // Load asynchronously
+        // Load asynchronously (detached so disk I/O does not run on main actor)
         loadTask?.cancel()
-        loadTask = Task { [weak self] in
+        loadTask = Task.detached { [weak self] in
             // Check disk cache
             if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
                 await MainActor.run {
                     self?.imageView.image = cached
-                    self?.placeholderImageView.isHidden = true
+                    self?.setPlaceholderVisible(false)
                 }
                 return
             }
 
             // Fetch from network
             guard let url = URL(string: avatarUrl) else {
-                await MainActor.run { self?.placeholderImageView.isHidden = false }
+                await MainActor.run { self?.setPlaceholderVisible(true) }
                 return
             }
 
@@ -194,9 +209,9 @@ class AvatarUIView: UIView {
             await MainActor.run {
                 if let image = result {
                     self?.imageView.image = image
-                    self?.placeholderImageView.isHidden = true
+                    self?.setPlaceholderVisible(false)
                 } else {
-                    self?.placeholderImageView.isHidden = false
+                    self?.setPlaceholderVisible(true)
                 }
             }
         }
@@ -208,10 +223,15 @@ class AvatarUIView: UIView {
         cancellables.removeAll()
         removeNotificationObservers()
         imageView.image = nil
-        placeholderImageView.isHidden = false
+        setPlaceholderVisible(true)
         currentUserId = nil
         currentAvatarId = nil
         onTap = nil
+    }
+
+    private func setPlaceholderVisible(_ isVisible: Bool) {
+        placeholderBackgroundView.isHidden = !isVisible
+        placeholderImageView.isHidden = !isVisible
     }
 
     private func removeNotificationObservers() {
@@ -221,7 +241,10 @@ class AvatarUIView: UIView {
         notificationObservers.removeAll()
     }
 
-    deinit {
+    // isolated deinit (SE-0371): the runtime hops to the main actor if the last
+    // reference is dropped off-main, instead of MainActor.assumeIsolated trapping
+    // (the build-117 crash class).
+    isolated deinit {
         loadTask?.cancel()
         removeNotificationObservers()
     }

@@ -6,6 +6,9 @@
 //
 import SwiftUI
 import Combine
+import OSLog
+
+private let userRowLogger = Logger(subsystem: "com.zz", category: "UserRowView")
 
 actor UserRowLoadGate {
     static let shared = UserRowLoadGate(limit: Constants.USER_VISIBLE_BATCH_SIZE)
@@ -72,8 +75,10 @@ struct UserRowView: View {
     let userId: String
     let cancellationToken: UUID
     let onFollowToggle: ((User) async -> Void)?
+    let onShowLogin: (() -> Void)?
     let onTap: ((User) -> Void)?
     let onLoadFailed: ((String) -> Void)?
+    let onPermanentlyBlacklisted: ((String, TimeInterval) -> Void)?
     @ObservedObject private var user: User
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
@@ -86,20 +91,25 @@ struct UserRowView: View {
     @State private var toastType: ToastView.ToastType = .error
     @State private var isToggling: Bool = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    private let horizontalRowPadding: CGFloat = 8
     
     // MARK: - Initialization
     init(
         userId: String,
         cancellationToken: UUID,
         onFollowToggle: ((User) async -> Void)? = nil,
+        onShowLogin: (() -> Void)? = nil,
         onTap: ((User) -> Void)? = nil,
-        onLoadFailed: ((String) -> Void)? = nil
+        onLoadFailed: ((String) -> Void)? = nil,
+        onPermanentlyBlacklisted: ((String, TimeInterval) -> Void)? = nil
     ) {
         self.userId = userId
         self.cancellationToken = cancellationToken
         self.onFollowToggle = onFollowToggle
+        self.onShowLogin = onShowLogin
         self.onTap = onTap
         self.onLoadFailed = onLoadFailed
+        self.onPermanentlyBlacklisted = onPermanentlyBlacklisted
         self._currentCancellationToken = State(initialValue: cancellationToken)
         // Initialize ObservedObject with singleton instance
         self._user = ObservedObject(wrappedValue: User.getInstance(mid: userId))
@@ -127,6 +137,20 @@ struct UserRowView: View {
         }
         return "@\(username)"
     }
+
+    private var identityText: Text {
+        var text = Text(displayName)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+
+        if let usernameText {
+            text = text + Text(" \(usernameText)")
+                .font(.subheadline)
+                .foregroundColor(.gray)
+        }
+
+        return text
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -138,19 +162,49 @@ struct UserRowView: View {
                         Avatar(user: user, size: 48)
 
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(displayName)
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                if let usernameText {
-                                    Text(usernameText)
-                                        .font(.subheadline)
+                            HStack(alignment: .top, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    identityText
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Text(formatRegistrationDate(user.timestamp))
+                                        .font(.caption)
                                         .foregroundColor(.gray)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                if let onFollowToggle = onFollowToggle, userId != hproseInstance.appUser.mid {
+                                    DebounceButton(
+                                        cooldownDuration: 0.5,
+                                        enableHaptic: false
+                                    ) {
+                                        guard !hproseInstance.appUser.isGuest else {
+                                            onShowLogin?()
+                                            return
+                                        }
+                                        guard !isToggling else { return }
+                                        isToggling = true
+                                        isFollowing.toggle()
+                                        Task {
+                                            await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
+                                            await MainActor.run { isToggling = false }
+                                        }
+                                    } label: {
+                                        Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
+                                            .font(.subheadline)
+                                            .fontWeight(.medium)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 8)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 20)
+                                                    .stroke(isFollowing ? Color.red : XTheme.accentColor, lineWidth: 1)
+                                            )
+                                            .foregroundColor(isFollowing ? .red : XTheme.accentColor)
+                                    }
+                                    .disabled(isToggling)
+                                    .opacity(isToggling ? 0.6 : 1.0)
+                                }
                             }
-                            Text(formatRegistrationDate(user.timestamp))
-                                .font(.caption)
-                                .foregroundColor(.gray)
+
                             if let profile = user.profile, !profile.isEmpty {
                                 Group {
                                     if showFullProfile {
@@ -182,37 +236,9 @@ struct UserRowView: View {
                                 }
                             }
                         }
-                        Spacer()
-                        // Only show follow/unfollow button if app user is not a guest and onFollowToggle is provided
-                        if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest, userId != hproseInstance.appUser.mid {
-                            DebounceButton(
-                                cooldownDuration: 0.5,
-                                enableHaptic: false
-                            ) {
-                                guard !isToggling else { return }
-                                isToggling = true
-                                isFollowing.toggle()
-                                Task {
-                                    await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
-                                    await MainActor.run { isToggling = false }
-                                }
-                            } label: {
-                                Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 20)
-                                            .stroke(isFollowing ? Color.red : XTheme.accentColor, lineWidth: 1)
-                                    )
-                                    .foregroundColor(isFollowing ? .red : XTheme.accentColor)
-                            }
-                            .disabled(isToggling)
-                            .opacity(isToggling ? 0.6 : 1.0)
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, horizontalRowPadding)
                     .padding(.vertical, 8)
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -221,7 +247,7 @@ struct UserRowView: View {
                 }
 
                 Divider()
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, horizontalRowPadding)
             }
         }
         .overlay(
@@ -346,7 +372,7 @@ struct UserRowView: View {
             do {
                 // Check if this task should be cancelled before starting
                 guard taskCancellationToken == currentCancellationToken else {
-                    print("DEBUG: [UserRowView] Task cancelled before starting for user \(userId)")
+                    userRowLogger.debug("User load cancelled before start: \(userId, privacy: .private(mask: .hash))")
                     return
                 }
 
@@ -357,6 +383,23 @@ struct UserRowView: View {
                         self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
                         self.isLoading = false
                     }
+
+                    _ = await hproseInstance.applyReadNodeBaseUrlIfAvailable(for: cachedUser, reason: "user row cached route")
+                    guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
+
+                    do {
+                        _ = try await UserRowLoadGate.shared.withPermit {
+                            guard !Task.isCancelled else {
+                                throw CancellationError()
+                            }
+                            userRowLogger.debug("Refreshing expired cached user if needed: \(userId, privacy: .private(mask: .hash))")
+                            return try await hproseInstance.fetchUser(userId)
+                        }
+                    } catch is CancellationError {
+                        userRowLogger.debug("Cached user refresh cancelled: \(userId, privacy: .private(mask: .hash))")
+                    } catch {
+                        userRowLogger.warning("Cached user refresh failed; retaining row for \(userId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    }
                     return
                 }
                 
@@ -364,7 +407,7 @@ struct UserRowView: View {
                     guard !Task.isCancelled else {
                         throw CancellationError()
                     }
-                    print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
+                    userRowLogger.info("Loading uncached user: \(userId, privacy: .public)")
                     // Keep spinner showing while fetchUser is in progress (includes retries)
                     // fetchUser will retry up to 3 times before returning skeleton on failure
                     return try await hproseInstance.fetchUser(userId, refreshExpiredCacheInBackground: false)
@@ -372,7 +415,7 @@ struct UserRowView: View {
                 
                 // Check if task should be cancelled before processing
                 guard taskCancellationToken == currentCancellationToken else {
-                    print("DEBUG: [UserRowView] Task cancelled during processing for user \(userId)")
+                    userRowLogger.debug("User load cancelled during processing: \(userId, privacy: .private(mask: .hash))")
                     return
                 }
                 
@@ -382,7 +425,7 @@ struct UserRowView: View {
                 // A successful load must include a real name or username.
                 if let fetchedUser = fetchedUser, hasRenderableIdentity(fetchedUser) {
                     // Valid user loaded - hide spinner and show user
-                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid)")
+                    userRowLogger.info("Loaded user row: \(fetchedUser.mid, privacy: .public)")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
@@ -396,9 +439,9 @@ struct UserRowView: View {
                     )
                 }
             } catch is CancellationError {
-                print("DEBUG: [UserRowView] Loading cancelled for user \(userId)")
+                userRowLogger.debug("User load cancelled: \(userId, privacy: .private(mask: .hash))")
             } catch {
-                print("DEBUG: [UserRowView] Error loading user \(userId) after retries: \(error)")
+                userRowLogger.error("User load failed after retries for \(userId, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 await hideAndBlacklistUser(
                     taskCancellationToken: taskCancellationToken,
                     reason: "fetchUser threw after retries"
@@ -413,14 +456,19 @@ struct UserRowView: View {
     }
 
     private func hideAndBlacklistUser(taskCancellationToken: UUID, reason: String) async {
-        print("⚠️ [UserRowView] \(reason) for ID: \(userId) - blacklisting candidate and hiding row")
-        BlackList.shared.recordFailure(userId)
+        userRowLogger.error("Dismissing user row \(userId, privacy: .public): \(reason, privacy: .public)")
+        let permanentFailureStartedAt =
+            BlackList.shared.recordFailure(userId) ??
+            BlackList.shared.permanentFailureStartedAt(userId)
 
         await MainActor.run {
             guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
             self.loadFailed = true
             self.isLoading = false
             self.onLoadFailed?(userId)
+            if let permanentFailureStartedAt {
+                self.onPermanentlyBlacklisted?(userId, permanentFailureStartedAt)
+            }
         }
     }
 
@@ -446,7 +494,7 @@ struct UserRowView: View {
 
             Spacer()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, horizontalRowPadding)
         .padding(.vertical, 8)
     }
 }

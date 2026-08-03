@@ -60,6 +60,7 @@ private struct FeedStyleTruncatedTextView: UIViewRepresentable {
             self.onBodyTap = onBodyTap
         }
 
+        @MainActor
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             guard let label = gesture.view as? UILabel else { return }
             let point = gesture.location(in: label)

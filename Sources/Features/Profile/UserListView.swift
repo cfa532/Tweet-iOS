@@ -1,4 +1,7 @@
 import SwiftUI
+import OSLog
+
+private let userListLogger = Logger(subsystem: "com.zz", category: "UserListView")
 
 // Navigation destination identifier (like Android's NavTweet.Following/Following)
 struct UserListDestination: Hashable {
@@ -11,9 +14,12 @@ struct UserListView: View {
     // MARK: - Properties
     let title: String
     let userId: String // Profile owner whose baseUrl we watch for refresh
-    let userFetcher: @Sendable (Int, Int) async throws -> [String]
+    let userFetcher: @MainActor @Sendable (Int, Int) async throws -> [String]
+    let authoritativeUserFetcher: @MainActor @Sendable () async throws -> [String]
     let onFollowToggle: ((User) async -> Void)?
+    let onShowLogin: (() -> Void)?
     let onUserTap: ((User) -> Void)?
+    let onPermanentlyBlacklisted: ((String, TimeInterval) -> Void)?
 
     @State private var allUserIds: [String] = []
     @State private var displayedUserIds: [String] = []
@@ -41,17 +47,23 @@ struct UserListView: View {
     init(
         title: String,
         userId: String,
-        userFetcher: @escaping @Sendable (Int, Int) async throws -> [String],
+        userFetcher: @escaping @MainActor @Sendable (Int, Int) async throws -> [String],
+        authoritativeUserFetcher: @escaping @MainActor @Sendable () async throws -> [String],
         navigationPath: Binding<NavigationPath>,
         onFollowToggle: ((User) async -> Void)? = nil,
-        onUserTap: ((User) -> Void)? = nil
+        onShowLogin: (() -> Void)? = nil,
+        onUserTap: ((User) -> Void)? = nil,
+        onPermanentlyBlacklisted: ((String, TimeInterval) -> Void)? = nil
     ) {
         self.title = title
         self.userId = userId
         self.userFetcher = userFetcher
+        self.authoritativeUserFetcher = authoritativeUserFetcher
         self._navigationPath = navigationPath
         self.onFollowToggle = onFollowToggle
+        self.onShowLogin = onShowLogin
         self.onUserTap = onUserTap
+        self.onPermanentlyBlacklisted = onPermanentlyBlacklisted
     }
 
     // MARK: - Body
@@ -77,6 +89,7 @@ struct UserListView: View {
                         userId: rowUserId,
                         cancellationToken: cancellationToken,
                         onFollowToggle: onFollowToggle,
+                        onShowLogin: onShowLogin,
                         onTap: { selectedUser in
                             navigationPath.append(selectedUser)
                         },
@@ -85,7 +98,8 @@ struct UserListView: View {
                             allUserIds.removeAll { $0 == failedUserId }
                             nextDisplayIndex = min(nextDisplayIndex, displayedUserIds.count)
                             Task { await loadNextUserToFillGap() }
-                        }
+                        },
+                        onPermanentlyBlacklisted: onPermanentlyBlacklisted
                     )
                     .id(rowUserId)
                 }
@@ -142,36 +156,76 @@ struct UserListView: View {
         refreshTask?.cancel()
         refreshTask = Task {
             await MainActor.run {
-                isLoading = true
+                isLoading = displayedUserIds.isEmpty
                 errorMessage = nil
-                hasMoreUsers = false
-                hasMoreServerPages = false
             }
+
+            // Publish cached relationship IDs immediately. Each row independently
+            // renders its cached user, or a placeholder while that user loads.
             do {
-                let firstPageIds = try await userFetcher(0, pageSize)
-                let filteredUserIds = await filteredUniqueUserIds(from: firstPageIds)
+                let cachedPageIds = try await userFetcher(0, pageSize)
+                let filteredCachedIds = await filteredUniqueUserIds(from: cachedPageIds)
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    allUserIds = filteredUserIds
-                    displayedUserIds = Array(filteredUserIds.prefix(visibleBatchSize))
-                    nextDisplayIndex = displayedUserIds.count
-                    nextPageNumber = 1
-                    hasMoreServerPages = firstPageIds.count >= pageSize
-                    hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
-                    isLoading = false
+
+                if !filteredCachedIds.isEmpty {
+                    await MainActor.run {
+                        publishUserIds(
+                            filteredCachedIds,
+                            minimumVisibleCount: displayedUserIds.count,
+                            hasMoreServerPages: cachedPageIds.count >= pageSize
+                        )
+                        isLoading = false
+                    }
                 }
             } catch is CancellationError {
-                print("DEBUG: [UserListView] Refresh cancelled")
+                return
             } catch {
-                print("Error refreshing users: \(error)")
+                userListLogger.error("Failed to read cached user list: \(error.localizedDescription, privacy: .public)")
+            }
+
+            do {
+                let authoritativeIds = try await authoritativeUserFetcher()
+                let filteredAuthoritativeIds = await filteredUniqueUserIds(from: authoritativeIds)
+                guard !Task.isCancelled else { return }
+
+                await MainActor.run {
+                    publishUserIds(
+                        filteredAuthoritativeIds,
+                        minimumVisibleCount: displayedUserIds.count,
+                        hasMoreServerPages: false
+                    )
+                    isLoading = false
+                    errorMessage = nil
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                userListLogger.error("Failed to refresh user list: \(error.localizedDescription, privacy: .public)")
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     isLoading = false
-                    errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                    if displayedUserIds.isEmpty {
+                        errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                    }
                 }
             }
         }
         await refreshTask?.value
+    }
+
+    @MainActor
+    private func publishUserIds(
+        _ userIds: [String],
+        minimumVisibleCount: Int,
+        hasMoreServerPages: Bool
+    ) {
+        allUserIds = userIds
+        let visibleCount = min(max(minimumVisibleCount, visibleBatchSize), userIds.count)
+        displayedUserIds = Array(userIds.prefix(visibleCount))
+        nextDisplayIndex = displayedUserIds.count
+        nextPageNumber = 1
+        self.hasMoreServerPages = hasMoreServerPages
+        hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
     }
 
     func loadMoreUsers() {
@@ -208,7 +262,7 @@ struct UserListView: View {
                     isLoadingMore = false
                 }
             } catch {
-                print("Error loading more users: \(error)")
+                userListLogger.error("Failed to load more users: \(error.localizedDescription, privacy: .public)")
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     hasMoreUsers = false
@@ -233,16 +287,25 @@ struct UserListView: View {
             Set(hproseInstance.appUser.userBlackList ?? [])
         }
         var seenUserIds = existingUserIds
+        var filteredUserIds: [String] = []
 
-        return userIds.compactMap { userId in
+        for userId in userIds {
             guard !userId.isEmpty,
                   userId != Constants.GUEST_ID,
                   !sociallyBlockedUserIds.contains(userId),
-                  !BlackList.shared.isBlacklisted(userId),
-                  !seenUserIds.contains(userId) else { return nil }
+                  !seenUserIds.contains(userId) else { continue }
+
+            if BlackList.shared.isBlacklisted(userId) {
+                if let failureStartedAt = BlackList.shared.permanentFailureStartedAt(userId) {
+                    onPermanentlyBlacklisted?(userId, failureStartedAt)
+                }
+                continue
+            }
+
             seenUserIds.insert(userId)
-            return userId
+            filteredUserIds.append(userId)
         }
+        return filteredUserIds
     }
 
     private func loadNextUserToFillGap() async {

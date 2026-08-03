@@ -1,6 +1,7 @@
 import Foundation
 
-class Tweet: Identifiable, Codable, ObservableObject {
+@MainActor
+class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     // MARK: - Singleton
     private static var instances: [MimeiId: Tweet] = [:]
     private static let instanceLock = NSLock()
@@ -8,7 +9,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     /// Get or create a Tweet singleton instance
     /// Always use this instead of direct Tweet() initialization to ensure singleton pattern
     static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
-                          originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
+                          originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, parentTweetId: MimeiId? = nil, author: User? = nil,
                           favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
                           downloadable: Bool? = nil) -> Tweet {
@@ -19,6 +20,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
             // Update existing instance with new values
             if let content = content { existingInstance.content = content }
             if let title = title { existingInstance.title = title }
+            if let parentTweetId = parentTweetId { existingInstance.parentTweetId = parentTweetId }
             if let author = author { existingInstance.author = author }
             if let favorites = favorites { existingInstance.favorites = favorites }
             existingInstance.favoriteCount = favoriteCount
@@ -32,7 +34,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         }
         
         let newInstance = Tweet(mid: mid, authorId: authorId, content: content, timestamp: timestamp, title: title,
-                              originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, author: author,
+                              originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, parentTweetId: parentTweetId, author: author,
                               favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
                               retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
                               isPrivate: isPrivate, downloadable: downloadable)
@@ -101,11 +103,12 @@ class Tweet: Identifiable, Codable, ObservableObject {
     
     var originalTweetId: MimeiId? // retweet id of the original tweet
     var originalAuthorId: MimeiId? // authorId of the forwarded tweet
+    var parentTweetId: MimeiId? // immediate parent for comments and replies
         
     // Media attachments
     var attachments: [MimeiFileType]? {
         didSet {
-            // When attachments change, update them to observe the author's baseUrl
+            // When attachments change, snapshot the author's current baseUrl onto them.
             updateAttachmentsAuthor()
         }
     }
@@ -115,7 +118,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     // Display only properties
     @Published var author: User? {
         didSet {
-            // When author changes, update all attachments to observe the new author's baseUrl
+            // When author changes, snapshot the new baseUrl onto all attachments.
             updateAttachmentsAuthor()
         }
     }
@@ -129,8 +132,11 @@ class Tweet: Identifiable, Codable, ObservableObject {
     // Built once in calculateTweetHeight(), reused in TweetBodyUIView.configure()
     var cachedContentAttributedString: NSAttributedString?
     var cachedContentWidth: CGFloat = 0
+    // TRANSIENT: Cached sizeThatFits result to avoid repeated TextKit layout passes
+    var cachedMeasuredTextHeight: CGFloat = -1
+    var cachedMeasuredTextWidth: CGFloat = 0
     
-    /// Update all attachments to observe the current author's baseUrl
+    /// Update all attachments with the current author's baseUrl snapshot.
     private func updateAttachmentsAuthor() {
         guard let author = author else { return }
         attachments?.forEach { attachment in
@@ -203,6 +209,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         case title
         case originalTweetId
         case originalAuthorId
+        case parentTweetId
         // author is NOT saved - always reconstructed from singleton
         case favorites
         case favoriteCount
@@ -223,6 +230,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         title = try container.decodeIfPresent(String.self, forKey: .title)
         originalTweetId = try container.decodeIfPresent(String.self, forKey: .originalTweetId)
         originalAuthorId = try container.decodeIfPresent(String.self, forKey: .originalAuthorId)
+        parentTweetId = try container.decodeIfPresent(String.self, forKey: .parentTweetId)
         // author is NOT decoded - always reconstructed from singleton using authorId
         author = nil
         favorites = try container.decodeIfPresent([Bool].self, forKey: .favorites)
@@ -236,7 +244,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     }
     
     init(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
-         originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
+         originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, parentTweetId: MimeiId? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
          downloadable: Bool? = nil) {
@@ -247,6 +255,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         self.title = title
         self.originalTweetId = originalTweetId
         self.originalAuthorId = originalAuthorId
+        self.parentTweetId = parentTweetId
         self.author = author
         self.favorites = favorites
         self.favoriteCount = favoriteCount
@@ -257,7 +266,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         self.isPrivate = isPrivate
         self.downloadable = downloadable
         
-        // Update attachments to observe author's baseUrl if both are present
+        // Update attachments with the author's baseUrl if both are present.
         if author != nil {
             updateAttachmentsAuthor()
         }
@@ -272,6 +281,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         try container.encodeIfPresent(title, forKey: .title)
         try container.encodeIfPresent(originalTweetId, forKey: .originalTweetId)
         try container.encodeIfPresent(originalAuthorId, forKey: .originalAuthorId)
+        try container.encodeIfPresent(parentTweetId, forKey: .parentTweetId)
         // author is NOT encoded - always reconstructed from singleton using authorId
         try container.encodeIfPresent(favorites, forKey: .favorites)
         try container.encodeIfPresent(favoriteCount, forKey: .favoriteCount)
@@ -293,6 +303,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
             // Update all properties except author
             if let content = other.content { self.content = content }
             if let title = other.title { self.title = title }
+            if let parentTweetId = other.parentTweetId { self.parentTweetId = parentTweetId }
             if let favorites = other.favorites { self.favorites = favorites }
             self.favoriteCount = other.favoriteCount
             self.bookmarkCount = other.bookmarkCount
@@ -378,6 +389,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
             performBatchUpdate {
                 if let content = tempTweet.content { self.content = content }
                 if let title = tempTweet.title { self.title = title }
+                if let parentTweetId = tempTweet.parentTweetId { self.parentTweetId = parentTweetId }
                 if let author = tempTweet.author { self.author = author }
                 if let favorites = tempTweet.favorites { self.favorites = favorites }
                 self.favoriteCount = tempTweet.favoriteCount
@@ -481,9 +493,9 @@ class Tweet: Identifiable, Codable, ObservableObject {
             
 
             
-            return getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
+            let instance = getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
                              timestamp: tweet.timestamp, title: tweet.title,
-                             originalTweetId: tweet.originalTweetId, originalAuthorId: tweet.originalAuthorId,
+                             originalTweetId: tweet.originalTweetId, originalAuthorId: tweet.originalAuthorId, parentTweetId: tweet.parentTweetId,
                              author: tweet.author, favorites: tweet.favorites,
                              favoriteCount: tweet.favoriteCount ?? 0,
                              bookmarkCount: tweet.bookmarkCount ?? 0,
@@ -492,6 +504,8 @@ class Tweet: Identifiable, Codable, ObservableObject {
                              attachments: tweet.attachments,
                              isPrivate: tweet.isPrivate,
                              downloadable: tweet.downloadable)
+            TweetHeightPrewarmer.shared.prewarm(instance)
+            return instance
         } catch {
             print("Error converting dictionary to Tweet: \(error)")
             if let decodingError = error as? DecodingError {
@@ -547,6 +561,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
             title: title ?? self.title,
             originalTweetId: self.originalTweetId,
             originalAuthorId: self.originalAuthorId,
+            parentTweetId: self.parentTweetId,
             author: author ?? self.author,
             favorites: favorites ?? self.favorites,
             favoriteCount: favoriteCount ?? self.favoriteCount ?? 0,
@@ -572,6 +587,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     }
 }
 // MARK: - Tweet Array Extension
+@MainActor
 extension Array where Element == Tweet {
     /// Determines whether `candidate` should appear before `other` in a descending timeline order.
     private func shouldPlace(_ candidate: Tweet, before other: Tweet) -> Bool {
@@ -692,13 +708,13 @@ extension Array where Element == Tweet {
     }
 }
 
-extension Tweet: Equatable {
+extension Tweet: @MainActor Equatable {
     static func == (lhs: Tweet, rhs: Tweet) -> Bool {
         return lhs.mid == rhs.mid
     }
 }
 
-extension Tweet: Hashable {
+extension Tweet: @MainActor Hashable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(mid)
     }

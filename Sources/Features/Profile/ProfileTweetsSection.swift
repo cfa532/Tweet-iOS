@@ -2,7 +2,8 @@ import SwiftUI
 
 // MARK: - ProfileTweetsViewModel
 @available(iOS 16.0, *)
-class ProfileTweetsViewModel: ObservableObject {
+@MainActor
+final class ProfileTweetsViewModel: ObservableObject {
     @Published var tweets: [Tweet] = []
     @Published var isLoading: Bool = false
     private let hproseInstance: HproseInstance
@@ -27,28 +28,18 @@ class ProfileTweetsViewModel: ObservableObject {
         
         // Add back any tweets that are no longer pinned
         let newlyUnpinnedIds = pinnedTweetIds.subtracting(newPinnedTweetIds)
-        if !newlyUnpinnedIds.isEmpty {
+        for tweetId in newlyUnpinnedIds {
+            guard let tweet = Tweet.getInstance(for: tweetId),
+                  !TweetDeletionRegistry.shared.isDeleted(tweetId) else {
+                continue
+            }
+            tweets.mergeTweets([tweet])
         }
         
         pinnedTweetIds = newPinnedTweetIds
     }
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
-        // Wait for app initialization with timeout — don't block forever when server is unreachable
-        if !hproseInstance.isAppInitialized {
-            print("⏳ [PROFILE FETCH] Waiting for app initialization (max 10s)...")
-            var waitCount = 0
-            while !hproseInstance.isAppInitialized && waitCount < 100 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                waitCount += 1
-            }
-            if hproseInstance.isAppInitialized {
-                print("✅ [PROFILE FETCH] App initialization complete")
-            } else {
-                print("⚠️ [PROFILE FETCH] Timed out waiting for app initialization")
-            }
-        }
-        
         do {
             let serverTweets = try await hproseInstance.fetchUserTweets(
                 user: user,
@@ -56,28 +47,18 @@ class ProfileTweetsViewModel: ObservableObject {
                 pageSize: pageSize
             )
             
-            // Filter out pinned tweets from server response
-            let filteredTweets = serverTweets.filter { tweet in
+            // Preserve backend page length for pagination; nil entries are non-renderable.
+            let filteredTweets: [Tweet?] = serverTweets.map { (tweet: Tweet?) -> Tweet? in
                 if let tweet = tweet {
                     guard !TweetDeletionRegistry.shared.isDeleted(tweet.mid) else {
-                        return false
+                        return nil
                     }
                     let isPinned = pinnedTweetIds.contains(tweet.mid)
                     if isPinned {
                     }
-                    return !isPinned
+                    return isPinned ? nil : tweet
                 }
-                return true // Keep nil tweets
-            }
-            
-            
-            await MainActor.run {
-                tweets.mergeTweets(filteredTweets.compactMap{ $0 })
-            }
-            
-            // Cache profile tweets under their authorId (which is user.mid for profile view)
-            for tweet in filteredTweets.compactMap({ $0 }) {
-                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                return nil
             }
             
             return filteredTweets
@@ -103,22 +84,6 @@ class ProfileTweetsViewModel: ObservableObject {
         }
     }
 
-    func mergeResyncedTweets(_ resyncedTweets: [Tweet]) {
-        let visibleTweets = resyncedTweets.filter { tweet in
-            tweet.authorId == user.mid &&
-            !TweetDeletionRegistry.shared.isDeleted(tweet.mid) &&
-            (!(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid) &&
-            !pinnedTweetIds.contains(tweet.mid)
-        }
-
-        guard !visibleTweets.isEmpty else { return }
-        tweets.mergeTweets(visibleTweets)
-
-        for tweet in visibleTweets {
-            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
-        }
-    }
-
     func handleDeletedTweet(_ tweetId: String) {
         TweetDeletionRegistry.shared.markDeleted(tweetId)
         tweets.removeAll { $0.mid == tweetId }
@@ -126,10 +91,6 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func handlePrivacyChange(tweetId: String) {
-        // TweetListView's .tweetPrivacyChanged listener unconditionally removes
-        // the tweet from the bound array before calling this action. For the
-        // appUser's own profile we want to keep it visible (the cell renders the
-        // updated public/private state). Re-insert from the singleton.
         if user.mid == hproseInstance.appUser.mid {
             guard let tweet = Tweet.getInstance(for: tweetId) else { return }
             // Don't add the tweet if it's pinned (pinned section renders separately)
@@ -147,7 +108,7 @@ class ProfileTweetsViewModel: ObservableObject {
 }
 
 private struct TweetListScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
@@ -162,7 +123,7 @@ struct ProfileTweetsSection<Header: View>: View {
     let onUserSelect: (User) -> Void
     let onTweetTap: (Tweet) -> Void
     let onAvatarTapInProfile: ((User) -> Void)?
-    let onPinnedTweetsRefresh: () async -> Void
+    let onProfileRefresh: () async -> Void
     let onScroll: (CGFloat, CGFloat) -> Void  // (offset, delta)
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
@@ -181,7 +142,7 @@ struct ProfileTweetsSection<Header: View>: View {
         onUserSelect: @escaping (User) -> Void,
         onTweetTap: @escaping (Tweet) -> Void,
         onAvatarTapInProfile: ((User) -> Void)? = nil,
-        onPinnedTweetsRefresh: @escaping () async -> Void,
+        onProfileRefresh: @escaping () async -> Void,
         onScroll: @escaping (CGFloat, CGFloat) -> Void,  // (offset, delta)
         onShowLogin: (() -> Void)? = nil,
         onShowToast: ((String, Bool) -> Void)? = nil,
@@ -198,7 +159,7 @@ struct ProfileTweetsSection<Header: View>: View {
         self.onUserSelect = onUserSelect
         self.onTweetTap = onTweetTap
         self.onAvatarTapInProfile = onAvatarTapInProfile
-        self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
+        self.onProfileRefresh = onProfileRefresh
         self.onScroll = onScroll
         self.onShowLogin = onShowLogin
         self.onShowToast = onShowToast
@@ -219,12 +180,22 @@ struct ProfileTweetsSection<Header: View>: View {
             title: "",
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache in
+                let startTime = Date()
                 if isFromCache {
+                    print("📋 [PROFILE CACHE LOAD] Fetching page \(page) from cache for \(user.mid)")
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid, isProfileView: true)
+                    let elapsed = Date().timeIntervalSince(startTime) * 1000
+                    let validCount = cachedTweets.compactMap { $0 }.count
+                    print("✅ [PROFILE CACHE LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms for \(user.mid)")
                     return cachedTweets
                 } else {
-                    return try await viewModel.fetchTweets(page: page, pageSize: size)
+                    print("🌐 [PROFILE SERVER LOAD] Fetching page \(page) from server for \(user.mid)")
+                    let serverTweets = try await viewModel.fetchTweets(page: page, pageSize: size)
+                    let elapsed = Date().timeIntervalSince(startTime) * 1000
+                    let validCount = serverTweets.compactMap { $0 }.count
+                    print("✅ [PROFILE SERVER LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms for \(user.mid)")
+                    return serverTweets
                 }
             },
             showTitle: false,
@@ -254,6 +225,8 @@ struct ProfileTweetsSection<Header: View>: View {
             pinnedTweets: pinnedTweets,
             feedIdentifier: "profile_\(user.mid)",
             externalRefreshToken: routeRefreshToken,
+            profileResyncedTweets: resyncedTweets,
+            profileResyncedTweetsToken: resyncedTweetsToken,
             emptyStateText: LocalizedStringKey("No tweets yet"),
             header: {
                 AnyView(
@@ -275,7 +248,7 @@ struct ProfileTweetsSection<Header: View>: View {
                 )
             },
             headerRefreshToken: headerRefreshToken,
-            onRefreshExtra: onPinnedTweetsRefresh,
+            onRefreshExtra: onProfileRefresh,
             onAvatarTap: { user in
                 // If onAvatarTapInProfile is provided, use it (for scroll-to-top in profile)
                 // Otherwise use onUserSelect for navigation
@@ -295,11 +268,6 @@ struct ProfileTweetsSection<Header: View>: View {
         }
         .onChange(of: pinnedTweetIds) { _, newPinnedTweetIds in
             viewModel.updatePinnedTweetIds(newPinnedTweetIds)
-        }
-        .onChange(of: resyncedTweetsToken) { _, _ in
-            viewModel.mergeResyncedTweets(resyncedTweets)
-        }
-        .onDisappear {
         }
     }
     

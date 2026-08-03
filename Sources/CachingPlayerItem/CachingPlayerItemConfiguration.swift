@@ -11,25 +11,25 @@ import Foundation
 public enum CachingPlayerItemConfiguration {
     /// How much data is downloaded in memory before stored on a file.
     /// MEMORY FIX: Reduced from 128KB to 64KB to minimize memory usage during fast scrolling
-    public static var downloadBufferLimit: Int = 64.KB
+    public static let downloadBufferLimit: Int = 64.KB
 
     /// How much data is allowed to be read in memory at a time.
     /// MEMORY FIX: Reduced from 10MB to 2MB to prevent memory accumulation
     /// With 100 videos during fast scrolling: 100 × 2MB = 200MB instead of 1GB
-    public static var readDataLimit: Int = 2.MB
+    public static let readDataLimit: Int = 2.MB
 
     /// Flag for deciding whether an error should be thrown when URLResponse's expectedContentLength is not equal with the downloaded media file bytes count. Defaults to `false`.
-    public static var shouldVerifyDownloadedFileSize: Bool = false
+    public static let shouldVerifyDownloadedFileSize: Bool = false
 
     /// If set greater than 0, the set value with be compared with the downloaded media size. If the size of the downloaded media is lower, an error will be thrown. Useful when `expectedContentLength` is unavailable.
     /// Default value is `0`.
-    public static var minimumExpectedFileSize: Int = 0
+    public static let minimumExpectedFileSize: Int = 0
 
     /// Flag for deciding whether an `NSFileWriteOutOfSpaceError` should be thrown when there is not enough available disk space left for caching the entire media file. Defaults to `true`.
-    public static var shouldCheckAvailableDiskSpaceBeforeCaching: Bool = true
+    public static let shouldCheckAvailableDiskSpaceBeforeCaching: Bool = true
 
     /// Log level. Defaults to `none`.
-    public static var logLevel: LogLevel = .none
+    public static let logLevel: LogLevel = .none
 }
 
 fileprivate extension Int {

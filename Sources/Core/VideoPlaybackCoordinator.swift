@@ -3,7 +3,7 @@
 //  Tweet
 //
 //  Coordinates video playback across the app
-//  Behavior: Start a video once it is 50% visible; stop the current video once it drops below 70% visible.
+//  Behavior: Start a video once it is visible enough, and stop it once it drops below the same playback threshold.
 //
 import Foundation
 import SwiftUI
@@ -24,6 +24,7 @@ extension Notification.Name {
 // MARK: - Delegate-Based Communication (Phase 3)
 
 /// Protocol for video control communication between VideoPlaybackCoordinator and MediaCell
+@MainActor
 protocol MediaCellDelegate {
     /// Called when a video should start/resume playing
     func shouldPlayVideo(withMid mid: String)
@@ -48,6 +49,10 @@ protocol MediaCellDelegate {
 
     /// Whether the video is actually playing (healthy player with rate > 0)
     var isActuallyPlaying: Bool { get }
+
+    /// True only when foreground recovery has visibly succeeded: playback is rendering
+    /// moving frames, not merely inside a buffering grace period.
+    var isVisiblePlaybackActive: Bool { get }
 
     /// True when the coordinator has commanded this video to play but the AVPlayerItem is still
     /// in .unknown status (item loading from network). Prevents false stall detection during
@@ -142,9 +147,9 @@ struct VideoPlaybackInfo: Equatable {
 /// Behavior:
 /// 1. Play topmost video on screen immediately (no survey phase)
 /// 2. Monitor scroll position during playback
-/// 3. When current video drops below 70% visible, switch to the next 50% visible video if available
+/// 3. When current video drops below the playback threshold, switch to the next playable video if available
 /// 4. When video finishes, move to next visible video
-/// 5. Debounce timer: 0.2s
+/// 5. Moving-viewport primary selection debounce: 0.2s
 @MainActor
 class VideoPlaybackCoordinator: ObservableObject {
     static let shared = VideoPlaybackCoordinator()
@@ -177,14 +182,15 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// until cleared by next scroll update or stopAllVideos
     private var finishedPrimaryIdentifier: String?
     
-    /// Timer for debouncing video playback (0.2s delay)
-    private var playbackDebounceTimer: Timer?
-    /// The video identifier that the pending debounce timer was started for.
-    /// If the top candidate changes, the timer resets; if it stays the same, the timer keeps running.
-    private var pendingPrimaryCandidate: String?
-
     /// Timestamp when primary video was last switched (to prevent immediate re-switching)
     private var lastPrimarySwitchTime: Date?
+
+    /// Identifier + timestamp of the last reassert-on-scroll-stop resend, so overlapping
+    /// scroll-settle triggers (scrollViewDidEndDragging, scrollViewDidEndDecelerating, and
+    /// scheduleVideoVisibilityRefresh's own scroll-stop retry) don't each independently
+    /// re-send a live play command to the same already-playing cell.
+    private var lastReassertedPrimaryId: String?
+    private var lastReassertTime: Date?
 
 
     /// Visible tweet IDs (updated by scroll tracking)
@@ -203,7 +209,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var continuePlaybackMediaCells: Set<String> = []
 
     /// Current primary excluded after it drops below the continue threshold.
-    /// Prevents the 50% start threshold from immediately reselecting the same outgoing video.
+    /// Prevents immediate reselection of the same outgoing video during layout churn.
     private var primaryBelowContinueIdentifier: String?
 
     /// All videos in the app (ordered by feed, then attachmentIndex).
@@ -221,8 +227,12 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Actively tracked directional video preloads — explicitly managed on scroll stop.
     private var activePreloadMids: Set<String> = []
+    private var needsMemoryCleanupAfterScroll = false
+    private var directionalExactFrameWorkItem: DispatchWorkItem?
+    private var directionalExactFrameGeneration = 0
     private var lastDirectionalPreloadRefreshTime: CFTimeInterval = 0
     private let directionalPreloadRefreshInterval = FeedPlaybackTuning.directionalVideoPreloadRefreshInterval
+    private let directionalExactFramePreloadDelay: TimeInterval = 0.35
     var directionalPlayerPreloadCount: Int = FeedPlaybackTuning.directionalVideoPreloadCount {
         didSet {
             if directionalPlayerPreloadCount <= 0 {
@@ -293,7 +303,34 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
     
     /// Debounced restart after an overlay is dismissed.
-    private var overlayUncoverPlaybackTimer: Timer?
+    private nonisolated(unsafe) var overlayUncoverPlaybackTimer: Timer?
+    private nonisolated(unsafe) var primarySelectionWorkItem: DispatchWorkItem?
+    private var primarySelectionGeneration = 0
+    /// Identifier the currently-pending primarySelectionWorkItem was scheduled for, so
+    /// repeated scheduleStartPrimary() calls for the SAME candidate (e.g. one per
+    /// scrollViewDidScroll tick) don't keep resetting its confirmation timer.
+    private var pendingPrimarySelectionIdentifier: String?
+    private let primarySelectionDebounceDelay: TimeInterval = 0.20
+
+    /// Confirmation window used when a primary candidate is identified while the user is
+    /// still actively dragging (finger down), rather than during deceleration-settling or
+    /// a hard scroll-stop. Longer than primarySelectionDebounceDelay because a fast fling
+    /// can cross several videos' visibility thresholds in quick succession — this window
+    /// exists specifically to avoid committing to (playing/preloading/demoting others for)
+    /// a candidate that's about to be scrolled past a moment later.
+    private let primarySelectionActiveDragDelay: TimeInterval = 0.5
+
+    /// Debounced demotion of the active-scroll primary once it appears to have left
+    /// onScreenMediaCells. onScreenMediaCells uses the same ~50% visibility threshold as
+    /// selection, and during a fling a video's measured ratio can flicker across that
+    /// boundary between consecutive throttled viewport updates even though it never truly
+    /// left the screen — demoting (and thus stopping/restarting) on a single observation
+    /// caused the same video to be selected as primary twice in a row moments apart
+    /// (stop → immediately restart), a visible playback hitch. Confirm the miss survives
+    /// one grace window before actually stopping it.
+    private nonisolated(unsafe) var pendingDemotionWorkItem: DispatchWorkItem?
+    private var pendingDemotionIdentifier: String?
+    private let primaryDemotionGraceDelay: TimeInterval = 0.3
 
     /// Cached feed-visible videos (computed from visibleTweetIds + allVideos).
     /// Only includes videos that can actually appear in `MediaGridView` (first 4 attachments).
@@ -345,7 +382,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Stored observer tokens for proper cleanup
-    private var notificationObservers: [NSObjectProtocol] = []
+    private nonisolated(unsafe) var notificationObservers: [NSObjectProtocol] = []
     
     /// Is currently scrolling
     private var isScrolling: Bool = false
@@ -356,9 +393,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Previous content offset to track scroll direction
     private var previousContentOffset: CGFloat = 0
 
-    /// Whether the initial (non-scroll) preload has been triggered after first visibility update
-    private var initialPreloadDone: Bool = false
-    
     /// Table view reference for viewport calculations
     private weak var tableView: UITableView?
     
@@ -371,24 +405,21 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            let videoMid = notification.userInfo?["videoMid"] as? String
+            let videoIdentifier = notification.userInfo?["videoIdentifier"] as? String
             Task { @MainActor in
-                self?.handleVideoFinished(notification)
+                self?.handleVideoFinished(videoMid: videoMid, videoIdentifier: videoIdentifier)
             }
         }
         notificationObservers.append(videoFinishedObserver)
 
-        // Listen for foreground recovery and intelligently decide whether to preserve state
-        let foregroundRecoveryObserver = NotificationCenter.default.addObserver(
-            forName: .reloadVisibleVideosOnly,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            Task { @MainActor in
-                self?.handleForegroundRecovery(notification)
-            }
-        }
-        notificationObservers.append(foregroundRecoveryObserver)
-        
+        // NOTE: .reloadVisibleVideosOnly is intentionally NOT observed here.
+        // The owning TweetTableViewController observes it, refreshes viewport
+        // visibility first, and then calls recoverVisiblePlaybackAfterInterruption.
+        // Subscribing here too made the coordinator recover off stale visibility
+        // (its observer ran before the controller's visibility refresh), racing
+        // the foreground feed refresh and leaving the on-screen video unplayed.
+
         // Listen for overlay coverage changes (fullscreen cover / sheet / login / share).
         // While covered, we must stop and suppress playback decisions for the feed.
         let overlayCoverageObserver = NotificationCenter.default.addObserver(
@@ -396,8 +427,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            let isCovered = notification.userInfo?["isCovered"] as? Bool
+            let source = notification.userInfo?["source"] as? String
             Task { @MainActor in
-                self?.handleOverlayCoverageChanged(notification)
+                self?.handleOverlayCoverageChanged(isCovered: isCovered, source: source)
             }
         }
         notificationObservers.append(overlayCoverageObserver)
@@ -424,25 +457,28 @@ class VideoPlaybackCoordinator: ObservableObject {
         notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
         notificationObservers.removeAll()
 
-        // Invalidate all timers
-        playbackDebounceTimer?.invalidate()
+        // Invalidate timers
         overlayUncoverPlaybackTimer?.invalidate()
+        primarySelectionWorkItem?.cancel()
+        pendingDemotionWorkItem?.cancel()
     }
     
-    @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
-        guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
-        let source = notification.userInfo?["source"] as? String
-                
+    private func handleOverlayCoverageChanged(isCovered: Bool?, source: String?) {
+        guard let isCovered else { return }
+
         isPlaybackSuppressedByOverlay = isCovered
         
         // Cancel any pending "resume after overlay" timer.
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
+        if isCovered {
+            cancelPendingPrimarySelection()
+        }
         
         if isCovered {
-            // Fullscreen media browser borrows the same shared AVPlayer as the feed.
-            // Do not pause it during coverage; ownership is transferring, not stopping.
-            if source != "MediaCellUIView.handleVideoTap" && source != "MediaBrowserView" {
+            // Fullscreen owns playback exclusively. Its video list is captured
+            // before coverage begins, so feed players can be stopped here.
+            if source != "LoginView" {
                 // Hard stop so no audio bleeds under non-media overlays, and so we
                 // don't preserve stale primary state.
                 stopAllVideos()
@@ -508,12 +544,12 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Do NOT insert into onScreenMediaCells here. didMoveToWindow fires for cells that
         // UITableView prefetches below the viewport — they are in the window but NOT visible.
-        // Only updateOnScreenMediaCells (which does geometric 50% visibility checks) should
+        // Only updateOnScreenMediaCells (which does geometric visibility checks) should
         // manage onScreenMediaCells. Otherwise off-screen cells get selected as primary.
         //
         // At app start, cells register AFTER the initial updateVisibleTweetsForVideoPlayback().
-        // Use scheduleStartPrimary (0.3s debounce) to give updateOnScreenMediaCells time to
-        // populate the correct visible set before we attempt primary selection.
+        // Use scheduleStartPrimary so idle feeds start immediately and moving feeds
+        // select after the short primary debounce.
         if phase == .idle {
             scheduleStartPrimary()
         }
@@ -689,7 +725,6 @@ class VideoPlaybackCoordinator: ObservableObject {
 
             // Resolve the tweet that owns attachments.
             let mediaTweet = currentTweets.first(where: { $0.mid == candidate.mediaTweetId })
-                ?? TweetCacheManager.shared.fetchTweetSync(mid: candidate.mediaTweetId)
                 ?? Tweet.getInstance(for: candidate.mediaTweetId)
 
             guard let mediaTweet,
@@ -709,39 +744,36 @@ class VideoPlaybackCoordinator: ObservableObject {
         return nil
     }
 
-    /// Build video list from tweets (including pinned tweets)
-    /// Now runs asynchronously to avoid blocking UI
+    /// Build video list from tweets (including pinned tweets).
+    /// This stays on the main actor because it reads main-actor Tweet models.
     func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = [], completion: (() -> Void)? = nil) {
-        // Run expensive operation in background
-        Task.detached(priority: .userInitiated) {
+        Task(priority: .userInitiated) { @MainActor in
             let videos = await self.buildVideoListAsync(tweets: tweets, pinnedTweets: pinnedTweets)
 
-            // Update state on main actor
-            await MainActor.run {
-                self.setVideoList(videos)
+            self.setVideoList(videos)
 
-                // Clear caches when video list is rebuilt
-                self.cachedVisibilityRatios.removeAll()
-                self.clearPreloadedTracking()
-                self.initialPreloadDone = false
-                self.primaryBelowContinueIdentifier = nil
+            // Clear caches when video list is rebuilt
+            self.cachedVisibilityRatios.removeAll()
+            self.clearPreloadedTracking()
+            self.primaryBelowContinueIdentifier = nil
 
-                // Store tweet list for embedded tweet lookup
-                self.currentTweets = pinnedTweets + tweets
+            // Store tweet list for embedded tweet lookup
+            self.currentTweets = pinnedTweets + tweets
 
-                // Call completion handler BEFORE auto-playback check
-                // This allows caller to update visibleTweetIds first
-                completion?()
+            // Call completion handler BEFORE auto-playback check
+            // This allows caller to update visibleTweetIds first
+            completion?()
 
-                // Trigger playback update after video list is rebuilt if in idle phase and videos are visible
-                if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
-                    self.startPrimaryVideoPlayback()
-                }
-
-                // NOTE: Preloading is NOT triggered here because visibleTweetIds
-                // hasn't been set yet. performPreloadOnScrollStop() is called from
-                // updateViewportVisibility() on the first visibility update (initialPreloadDone).
+            // Trigger playback update after video list is rebuilt if in idle phase and videos are visible.
+            // Clear finished/skipped gates first so a video that played to completion before backgrounding
+            // is not permanently excluded from autoplay selection when the feed returns to foreground.
+            if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
+                self.clearFinishedAutoplayGateForForeground()
+                self.scheduleStartPrimary()
             }
+
+            // NOTE: Directional preloading is intentionally started only after
+            // real scroll-stop events, not during first paint.
         }
     }
     
@@ -912,6 +944,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             continuePlaybackIdentifiers: continuePlaybackIdentifiers
         )
         reconcilePlaybackForCurrentVisibility()
+
+        // Warm covers for visible videos + directional cover preloads. Heavy player
+        // preloads still wait for scroll stop inside refreshDirectionalPreloads.
+        refreshDirectionalPreloads(reason: "viewport", throttle: true)
     }
     
     /// Update which specific media cells are on-screen within the viewport.
@@ -950,11 +986,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         let filteredTweetIds = tweetIds.intersection(feedVisibleVideoTweetIds)
 
         self.visibleTweetIds = filteredTweetIds
-        // On initial feed load (no scroll), trigger preload once as if scroll stopped.
-        if !initialPreloadDone && !filteredTweetIds.isEmpty && !allVideos.isEmpty {
-            initialPreloadDone = true
-            performPreloadOnScrollStop()
-        }
     }
 
     private func updatePlayableMediaCells(
@@ -1004,6 +1035,11 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
+        // While the user is actively scrolling, keep the current primary alive.
+        // (identifyPrimaryVideoDuringActiveScroll handles early candidate identification
+        // separately, without preempting a healthy playing primary — see its doc comment.)
+        guard !isScrolling else { return }
+
         // Stop all videos if none are visible
         if currentVisibleIdentifiers.isEmpty {
             if phase == .primaryPlaying, let primaryId = primaryVideoId {
@@ -1040,12 +1076,18 @@ class VideoPlaybackCoordinator: ObservableObject {
             finishedPrimaryIdentifier = nil
         }
 
+        enforcePrimaryVisibilityThresholdForPlayingDelegates(reason: "visibility")
+
         // Stop videos whose cell left the visible area
         if visibilityChanged {
             let identifiersToStop = previousVisibleIdentifiers.subtracting(currentVisibleIdentifiers)
             if !identifiersToStop.isEmpty {
                 if identifiersToStop.count >= 3 || scrollDirection == false {
-                    SharedAssetCache.shared.forceMemoryCleanup()
+                    if isTableViewScrollIdle {
+                        SharedAssetCache.shared.forceMemoryCleanup()
+                    } else {
+                        needsMemoryCleanupAfterScroll = true
+                    }
                 }
 
                 let stillVisibleMids = Set(visibleVideos.map { $0.videoMid })
@@ -1066,8 +1108,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         }
 
-        // Primary selection: new videos can start at 50%, but the active primary
-        // must remain 70% visible to keep playing.
+        // Primary selection: start and continuation use the same threshold so
+        // startup/layout samples cannot start, stop, then reselect one cell.
         if visibilityChanged && !currentVisibleIdentifiers.isEmpty {
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
@@ -1117,14 +1159,37 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
+    private func enforcePrimaryVisibilityThresholdForPlayingDelegates(reason: String) {
+        pruneReleasedDelegates()
+
+        for (identifier, storage) in Array(mediaCellDelegates) {
+            guard !continuePlaybackMediaCells.contains(identifier),
+                  let delegate = storage.delegate,
+                  delegate.isActuallyPlaying,
+                  let video = allVideos.first(where: { $0.identifier == identifier }) else {
+                continue
+            }
+
+            delegate.shouldStopVideo(withMid: video.videoMid)
+            currentlyPlayingVideoIds.remove(identifier)
+
+            if primaryVideoId == identifier {
+                primaryVideoId = nil
+                phase = .idle
+                primaryBelowContinueIdentifier = onScreenMediaCells.contains(identifier) ? identifier : nil
+                print("🎬 [COORD] \(reason): stopped primary \(shortMID(video.videoMid)) below visibility threshold")
+            } else {
+                print("🎬 [COORD] \(reason): stopped non-primary \(shortMID(video.videoMid)) below visibility threshold")
+            }
+        }
+    }
+
     /// Stop all videos and reset state
     func stopAllVideos() {
-        // Cancel all timers
-        playbackDebounceTimer?.invalidate()
-        playbackDebounceTimer = nil
-        pendingPrimaryCandidate = nil
+        // Cancel timers
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
+        cancelPendingPrimarySelection()
 
         cachedVisibilityRatios.removeAll()
 
@@ -1151,6 +1216,45 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
+    /// Suspend feed playback while detail borrows one cached player. Every distinct
+    /// media player except the borrowed one is stopped, and pending coordinator work
+    /// is cancelled so the hidden feed cannot start another video during the handoff.
+    func suspendForDetailHandoff(preservingVideoMid videoMid: String) {
+        overlayUncoverPlaybackTimer?.invalidate()
+        overlayUncoverPlaybackTimer = nil
+        cancelPendingPrimarySelection()
+        pendingDemotionWorkItem?.cancel()
+        pendingDemotionWorkItem = nil
+        pendingDemotionIdentifier = nil
+        cancelActiveAsyncTasks()
+
+        let preservedIdentifiers = Set(
+            allVideos.lazy
+                .filter { $0.videoMid == videoMid }
+                .map(\.identifier)
+        )
+
+        if let primaryVideoId, preservedIdentifiers.contains(primaryVideoId) {
+            currentlyPlayingVideoIds.formIntersection(preservedIdentifiers)
+            cachedVisibilityRatios = cachedVisibilityRatios.filter { preservedIdentifiers.contains($0.key) }
+        } else {
+            currentlyPlayingVideoIds.removeAll()
+            primaryVideoId = nil
+            phase = .idle
+            cachedVisibilityRatios.removeAll()
+        }
+
+        for video in allVideos where video.videoMid != videoMid {
+            if let delegate = delegate(forIdentifier: video.identifier) {
+                delegate.shouldStopVideo(withMid: video.videoMid)
+            } else {
+                SharedAssetCache.shared.getCachedPlayer(for: video.videoMid)?.pause()
+            }
+        }
+
+        print("🎬 [COORD] Detail handoff preserving \(shortMID(videoMid)); all other feed videos stopped")
+    }
+
     /// Notify coordinator that the primary video has failed (buffering timeout or retries exhausted).
     /// Resets phase to idle and picks a new primary from remaining visible videos.
     /// Won't re-pick the same failed video — prevents infinite retry loops.
@@ -1167,8 +1271,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // becomes visible again after scrolling out.
         failedPrimaryIdentifier = identifier
 
-        // Pick a new primary from remaining visible videos
-        startPrimaryVideoPlayback()
+        // Pick a new primary from remaining visible videos when the scroll lane is quiet.
+        scheduleStartPrimary()
 
         failedPrimaryIdentifier = nil
     }
@@ -1179,7 +1283,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// fires to re-evaluate — the newly-ready video can now become the primary.
     func requestStartPlaybackIfIdle() {
         guard phase == .idle else { return }
-        startPrimaryVideoPlayback()
+        scheduleStartPrimary()
     }
 
     /// Clear the temporary finished gate when the same video is actively playing again.
@@ -1218,13 +1322,37 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Called by media cells when ready. If coordinator is idle, starts playback.
     /// If coordinator thinks primary is playing but it's actually stuck, resets and restarts.
-    func requestStartPlaybackIfStalled() {
+    func requestStartPlaybackIfStalled(requesterIdentifier: String? = nil) {
         if phase == .idle {
-            print("🎬 [COORD] stallCheck: phase is idle, starting primary")
-            startPrimaryVideoPlayback()
+            // While actively scrolling, route through the same active-scroll confirmation
+            // window as identifyPrimaryVideoDuringActiveScroll (0.5s, candidate-deduped)
+            // instead of scheduleStartPrimary's shorter default debounce (0.2s). Before the
+            // fix that lets `phase` correctly go idle mid-scroll when the primary scrolls
+            // fully off-screen, phase was pinned at .primaryPlaying for virtually the whole
+            // gesture, so this "cell became ready, is anyone idle?" safety net rarely mattered
+            // mid-scroll. Now that phase goes idle more readily during scroll, every cell's
+            // player-ready callback landing here would otherwise re-trigger a primary switch
+            // on the shorter, uncoordinated timer — causing more frequent player attach/pause
+            // churn while still actively scrolling than intended.
+            if isScrolling {
+                print("🎬 [COORD] stallCheck: phase is idle (scrolling), deferring to active-scroll selection")
+                identifyPrimaryVideoDuringActiveScroll()
+                return
+            }
+            print("🎬 [COORD] stallCheck: phase is idle, scheduling primary")
+            scheduleStartPrimary()
             return
         }
         guard phase == .primaryPlaying, let primaryId = primaryVideoId else { return }
+
+        if let requesterIdentifier, requesterIdentifier != primaryId {
+            return
+        }
+
+        guard onScreenMediaCells.contains(primaryId),
+              continuePlaybackMediaCells.contains(primaryId) else {
+            return
+        }
 
         // Grace period: don't consider primary stuck if recently selected — it may still be loading
         if let switchTime = lastPrimarySwitchTime, Date().timeIntervalSince(switchTime) < 3.0 {
@@ -1237,7 +1365,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             phase = .idle
             currentlyPlayingVideoIds.removeAll()
             primaryVideoId = nil
-            startPrimaryVideoPlayback()
+            scheduleStartPrimary()
             return
         }
         if delegate.isActuallyPlaying {
@@ -1265,7 +1393,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         phase = .idle
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
-        startPrimaryVideoPlayback()
+        scheduleStartPrimary()
     }
 
     /// Re-issue or rebuild playback for the visible primary when returning to the feed.
@@ -1274,61 +1402,29 @@ class VideoPlaybackCoordinator: ObservableObject {
         recoverVisiblePlaybackAfterInterruption(reason: "feedResume", isForegroundRecovery: false)
     }
 
-    /// Foreground recovery can restore the visible player/layer before playback has
-    /// actually resumed. Re-send the coordinator-owned play command without waiting
-    /// for a scroll event to trigger the normal stall path.
-    func requestForegroundAutoplayRetry(reason: String) {
-        guard AppDelegate.isVideoInfrastructureReady else {
-            print("🎬 [COORD] foreground autoplay retry \(reason): video infrastructure not ready")
-            return
-        }
-        guard !isPlaybackSuppressedByOverlay, isFeedVisible else { return }
+    /// Long background recovery restarts LocalHTTPServer and clears cached players.
+    /// The coordinator object survives, but its primary/preload state can point
+    /// at delegates or players that no longer own a valid AVPlayerItem. Reset just that
+    /// coordinator state; the table view will rebuild the video list and refresh viewport
+    /// visibility before normal primary selection runs again.
+    func resetForForegroundInfrastructureRecovery(reason: String) {
+        print("🎬 [COORD] reset after foreground infrastructure recovery: \(reason)")
+
+        currentlyPlayingVideoIds.removeAll()
+        primaryVideoId = nil
+        failedPrimaryIdentifier = nil
+        finishedPrimaryIdentifier = nil
+        primaryBelowContinueIdentifier = nil
+        phase = .idle
+        cancelPendingPrimarySelection()
 
         clearFinishedAutoplayGateForForeground()
-
-        guard !visibleVideos.isEmpty else {
-            phase = .idle
-            primaryVideoId = nil
-            currentlyPlayingVideoIds.removeAll()
-            return
-        }
-
-        if phase == .primaryPlaying,
-           let primaryId = primaryVideoId,
-           let primary = visibleVideos.first(where: { $0.identifier == primaryId }) {
-            guard onScreenMediaCells.isEmpty || onScreenMediaCells.contains(primary.identifier) else {
-                phase = .idle
-                primaryVideoId = nil
-                currentlyPlayingVideoIds.removeAll()
-                startPrimaryVideoPlayback()
-                return
-            }
-
-            guard let delegate = delegate(forIdentifier: primary.identifier) else {
-                phase = .idle
-                primaryVideoId = nil
-                currentlyPlayingVideoIds.removeAll()
-                startPrimaryVideoPlayback()
-                return
-            }
-
-            if delegate.isActuallyPlaying {
-                refreshDirectionalPreloads(reason: "foreground autoplay healthy", throttle: true)
-                return
-            }
-
-            print("🎬 [COORD] foreground autoplay retry \(reason): reissuing play for \(shortMID(primary.videoMid))")
-            lastPrimarySwitchTime = Date()
-            LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
-            delegate.shouldPlayVideo(withMid: primary.videoMid)
-            refreshDirectionalPreloads(reason: "foreground autoplay retry \(reason)", throttle: false)
-            return
-        }
-
-        phase = .idle
-        primaryVideoId = nil
-        currentlyPlayingVideoIds.removeAll()
-        startPrimaryVideoPlayback()
+        cachedVisibilityRatios.removeAll()
+        previousVisibleIdentifiers.removeAll()
+        clearPreloadedTracking()
+        pruneReleasedDelegates()
+        invalidateVisibleVideoCache()
+        LocalHTTPServer.shared.clearPrimaryRestriction()
     }
 
     // MARK: - Background/Foreground Video Memory Management
@@ -1344,8 +1440,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Release all players via SharedAssetCache
         SharedAssetCache.shared.releaseAllPlayers()
 
-        // Clear player/time references to free memory while preserving finished-video gates.
-        // Playback positions are preserved in PersistentVideoStateManager.
+        // Clear cached AVPlayer references to free memory while preserving resume
+        // metadata and finished-video gates for foreground recovery.
         VideoStateCache.shared.clearPlaybackCacheForMemoryPressure()
 
         print("✅ [VIDEO MEMORY] All video players released for background")
@@ -1440,7 +1536,6 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     private func resolveMediaTweet(_ tweetId: String) -> Tweet? {
         currentTweets.first(where: { $0.mid == tweetId })
-            ?? TweetCacheManager.shared.fetchTweetSync(mid: tweetId)
             ?? Tweet.getInstance(for: tweetId)
     }
 
@@ -1450,61 +1545,96 @@ class VideoPlaybackCoordinator: ObservableObject {
         SharedAssetCache.shared.preloadAsset(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
-    /// Preload video player (asset + AVPlayer) for upcoming video in scroll direction.
-    /// The pre-created player will be instantly available when the cell becomes visible.
-    private func preloadVideoPlayer(_ video: VideoPlaybackInfo) {
+    /// Preload a poster for upcoming video in scroll direction without creating an AVPlayer.
+    private func preloadVideoPoster(_ video: VideoPlaybackInfo, allowNetwork: Bool = true) {
+        guard let resolved = resolveVideoURL(video) else { return }
+        SharedAssetCache.shared.preloadPoster(
+            for: resolved.url,
+            mediaID: resolved.mediaID,
+            tweetId: resolved.tweetId,
+            mediaType: resolved.mediaType,
+            allowNetwork: allowNetwork
+        )
+    }
+
+    /// Upgrade a directional poster to a player-decoded frame after the feed is idle.
+    private func preloadDecodedVideoFrame(_ video: VideoPlaybackInfo) {
         guard let resolved = resolveVideoURL(video) else { return }
         SharedAssetCache.shared.preloadPlayer(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
-    /// Get up to `count` preloadable videos in the scroll direction that are not currently visible.
+    /// Get up to `count` preloadable videos in the scroll direction.
+    /// Prefer the low-threshold near-viewport band (`loadVisibleMediaCells`) before
+    /// looking beyond it, because those are the videos most likely to flicker next.
     private func getNextVideosInScrollDirection(count: Int) -> [VideoPlaybackInfo] {
-        // Use the low-threshold load-visible set so any media already on screen is
-        // treated as foreground work. Preload starts after the farthest visible media,
-        // so the target may be beyond the adjacent tweet if that tweet is still visible.
-        let visibleIndices: [Int]
-        if !loadVisibleMediaCells.isEmpty {
-            visibleIndices = allVideos.enumerated()
-                .filter { loadVisibleMediaCells.contains($0.element.identifier) && $0.element.isInVisibleMediaRange }
-                .map { $0.offset }
-                .sorted()
-        } else if !onScreenMediaCells.isEmpty {
-            visibleIndices = allVideos.enumerated()
-                .filter { onScreenMediaCells.contains($0.element.identifier) && $0.element.isInVisibleMediaRange }
-                .map { $0.offset }
-                .sorted()
-        } else {
-            let visibleVideoSet = visibleTweetIds
-            visibleIndices = allVideos.enumerated()
-                .filter { visibleVideoSet.contains($0.element.cellTweetId) && $0.element.isInVisibleMediaRange }
-                .map { $0.offset }
-                .sorted()
-        }
+        guard count > 0 else { return [] }
 
-        guard !visibleIndices.isEmpty else { return [] }
+        let indexedVideos = allVideos.enumerated()
+            .filter { $0.element.isInVisibleMediaRange }
+            .map { (index: $0.offset, video: $0.element) }
+
+        let onScreenIndices = indexedVideos
+            .filter { onScreenMediaCells.contains($0.video.identifier) }
+            .map(\.index)
+            .sorted()
+
+        let loadVisibleIndices = indexedVideos
+            .filter { loadVisibleMediaCells.contains($0.video.identifier) }
+            .map(\.index)
+            .sorted()
+
+        let tweetVisibleIndices = indexedVideos
+            .filter { visibleTweetIds.contains($0.video.cellTweetId) }
+            .map(\.index)
+            .sorted()
+
+        let boundaryIndices = !onScreenIndices.isEmpty ? onScreenIndices :
+            (!loadVisibleIndices.isEmpty ? loadVisibleIndices : tweetVisibleIndices)
+        guard !boundaryIndices.isEmpty else { return [] }
 
         var result: [VideoPlaybackInfo] = []
         var seenMids = Set<String>()
 
-        func appendIfPreloadable(_ video: VideoPlaybackInfo) {
+        func appendIfPreloadable(_ video: VideoPlaybackInfo, allowLoadVisible: Bool) {
             guard video.isInVisibleMediaRange,
-                  !loadVisibleMediaCells.contains(video.identifier),
+                  (allowLoadVisible || !loadVisibleMediaCells.contains(video.identifier)),
                   !onScreenMediaCells.contains(video.identifier),
                   !seenMids.contains(video.videoMid) else { return }
             result.append(video)
             seenMids.insert(video.videoMid)
         }
 
+        let nearViewportCandidates = indexedVideos.filter {
+            loadVisibleMediaCells.contains($0.video.identifier) &&
+            !onScreenMediaCells.contains($0.video.identifier)
+        }
+
         if scrollDirection {
-            var nextIndex = (visibleIndices.max() ?? 0) + 1
+            let lowerBound = boundaryIndices.max() ?? -1
+            for candidate in nearViewportCandidates.sorted(by: { $0.index < $1.index }) where result.count < count {
+                if candidate.index > lowerBound || onScreenIndices.isEmpty {
+                    appendIfPreloadable(candidate.video, allowLoadVisible: true)
+                }
+            }
+
+            let preloadBoundary = max(loadVisibleIndices.max() ?? lowerBound, lowerBound)
+            var nextIndex = preloadBoundary + 1
             while nextIndex < allVideos.count && result.count < count {
-                appendIfPreloadable(allVideos[nextIndex])
+                appendIfPreloadable(allVideos[nextIndex], allowLoadVisible: false)
                 nextIndex += 1
             }
         } else {
-            var prevIndex = (visibleIndices.min() ?? 0) - 1
+            let upperBound = boundaryIndices.min() ?? allVideos.count
+            for candidate in nearViewportCandidates.sorted(by: { $0.index > $1.index }) where result.count < count {
+                if candidate.index < upperBound || onScreenIndices.isEmpty {
+                    appendIfPreloadable(candidate.video, allowLoadVisible: true)
+                }
+            }
+
+            let preloadBoundary = min(loadVisibleIndices.min() ?? upperBound, upperBound)
+            var prevIndex = preloadBoundary - 1
             while prevIndex >= 0 && result.count < count {
-                appendIfPreloadable(allVideos[prevIndex])
+                appendIfPreloadable(allVideos[prevIndex], allowLoadVisible: false)
                 prevIndex -= 1
             }
         }
@@ -1514,9 +1644,16 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Clear preloaded video tracking (called when video list is rebuilt)
     private func clearPreloadedTracking() {
+        cancelDirectionalExactFramePreload()
         activePreloadMids.removeAll()
         lastDirectionalPreloadRefreshTime = 0
         SharedAssetCache.shared.updateProtectedPreloadMids([])
+    }
+
+    private func cancelDirectionalExactFramePreload() {
+        directionalExactFrameWorkItem?.cancel()
+        directionalExactFrameWorkItem = nil
+        directionalExactFrameGeneration += 1
     }
 
     // MARK: - Private Methods
@@ -1524,33 +1661,99 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Called when scrolling stops
     private func onScrollStopped() {
         isScrolling = false
+        if needsMemoryCleanupAfterScroll {
+            needsMemoryCleanupAfterScroll = false
+            SharedAssetCache.shared.forceMemoryCleanup()
+        }
     }
 
     /// Called when scroll starts (scrollViewWillBeginDragging).
-    /// Directional preloads are started only after scrolling stops, so cancel stale
-    /// off-screen preload work as soon as the user starts moving again.
+    /// Do not cancel directional preloads here: small list nudges often keep the same
+    /// next target, and killing it before the next scroll-stop selection loses useful work.
     func onScrollStarted() {
         isScrolling = true
-        let onScreenMids = currentOnScreenVideoMids()
-        SharedAssetCache.shared.cancelDirectionalPreloadsForScrollStart(except: onScreenMids)
-        activePreloadMids.formIntersection(onScreenMids)
-        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids)
     }
     
     /// Called on scroll stop and initial load.
     /// Tracks only the next videos in the scroll direction so stale preloads are easy to cancel.
     func performPreloadOnScrollStop() {
         onScrollStopped()
+        // Re-evaluate primary from scratch after each scroll gesture. Clearing
+        // primaryBelowContinueIdentifier lets the topmost visible video win after
+        // an explicit scroll stop even if it previously fell below the threshold.
+        primaryBelowContinueIdentifier = nil
         promoteForegroundVisibleMedia(reason: "scroll stop")
+        reconcilePlaybackForCurrentVisibility()
+        if !reassertRetainedPrimaryOnScrollStop(),
+           phase == .idle && !visibleVideos.isEmpty {
+            scheduleStartPrimary()
+        }
         refreshDirectionalPreloads(reason: "scroll stop", throttle: false)
     }
 
-    func canRunDirectionalPreloads() -> Bool {
+    /// Scroll stop is a hard settle point. If the same primary is still qualified,
+    /// re-send its play command so a reused or paused cell can resume immediately.
+    private func reassertRetainedPrimaryOnScrollStop() -> Bool {
         guard AppDelegate.isVideoInfrastructureReady,
-              isScrollStoppedForDirectionalPreload,
+              !isPlaybackSuppressedByOverlay,
+              isFeedVisible,
+              phase == .primaryPlaying,
+              let primaryId = primaryVideoId,
+              onScreenMediaCells.contains(primaryId),
+              continuePlaybackMediaCells.contains(primaryId),
+              let primary = allVideos.first(where: { $0.identifier == primaryId }) else {
+            return false
+        }
+
+        guard let delegate = delegate(forIdentifier: primaryId) else {
+            print("🎬 [COORD] scrollStop: retained primary \(shortIdent(primaryId)) lost delegate; restarting selection")
+            phase = .idle
+            currentlyPlayingVideoIds.removeAll()
+            primaryVideoId = nil
+            scheduleStartPrimary()
+            return true
+        }
+
+        // scrollViewDidEndDragging, scrollViewDidEndDecelerating, and every scroll-stop
+        // retry scheduled by scheduleVideoVisibilityRefresh after a structural table
+        // update (pagination append, trim, etc.) can all land within the same settle
+        // window. Without this guard each one independently re-sends shouldPlayVideo to
+        // the same already-playing cell, which was showing up as a visible glitch/jump.
+        if lastReassertedPrimaryId == primaryId,
+           let lastReassertTime, Date().timeIntervalSince(lastReassertTime) < 0.5 {
+            return true
+        }
+        lastReassertedPrimaryId = primaryId
+        lastReassertTime = Date()
+
+        cancelPendingPrimarySelection()
+        currentlyPlayingVideoIds = [primaryId]
+        cachedVisibilityRatios[primaryId] = 0.7
+        LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
+        delegate.shouldPlayVideo(withMid: primary.videoMid)
+        print("🎬 [COORD] scrollStop: reasserted primary \(shortMID(primary.videoMid))")
+        return true
+    }
+
+    func canRunDirectionalPreloads() -> Bool {
+        canScheduleDirectionalCoverPreloads() && canPreloadCoversWithoutStarvingPrimary()
+    }
+
+    func canRunDirectionalImagePreloads() -> Bool {
+        canScheduleDirectionalCoverPreloads()
+    }
+
+    private func canScheduleDirectionalCoverPreloads() -> Bool {
+        guard AppDelegate.isVideoInfrastructureReady,
               !isPlaybackSuppressedByOverlay,
               isFeedVisible else { return false }
 
+        return true
+    }
+
+    private func canRunDirectionalExactFramePreloads() -> Bool {
+        guard canScheduleDirectionalCoverPreloads() else { return false }
+        guard isTableViewScrollIdle else { return false }
         guard !visibleVideos.isEmpty else { return true }
 
         guard phase == .primaryPlaying,
@@ -1559,24 +1762,42 @@ class VideoPlaybackCoordinator: ObservableObject {
             return false
         }
 
-        return delegate.isActuallyPlaying || delegate.isRecentlyPlaying
+        return delegate.isActuallyPlaying
     }
 
-    private var isScrollStoppedForDirectionalPreload: Bool {
+    private var isTableViewScrollIdle: Bool {
         guard !isScrolling else { return false }
         guard let tableView else { return true }
         return !tableView.isTracking && !tableView.isDragging && !tableView.isDecelerating
     }
 
+    var isFeedScrollIdle: Bool {
+        isTableViewScrollIdle
+    }
+
+    /// Latest scroll velocity (pt/s), pushed by the owning table controller on each
+    /// scroll frame and zeroed at scroll stop.
+    var currentScrollVelocityY: CGFloat = 0
+
+    /// True while the feed is moving faster than AVPlayer creation/attachment can
+    /// afford on the main thread. MediaCellUIView defers eager player acquisition
+    /// while this is true; see FeedPlaybackTuning.playerAcquireMaxScrollVelocity.
+    var isFeedScrollTooFastForPlayerWork: Bool {
+        guard !isTableViewScrollIdle else { return false }
+        return abs(currentScrollVelocityY) > FeedPlaybackTuning.playerAcquireMaxScrollVelocity
+    }
+
     private func refreshDirectionalPreloads(reason: String, throttle: Bool) {
         guard AppDelegate.isVideoInfrastructureReady else { return }
-        guard isScrollStoppedForDirectionalPreload else { return }
         promoteForegroundVisibleMedia(reason: reason)
+        let canCancelStalePreloads = reason.hasPrefix("scroll stop")
 
-        guard canRunDirectionalPreloads() else {
-            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
-            activePreloadMids.removeAll()
-            SharedAssetCache.shared.updateProtectedPreloadMids([])
+        guard canScheduleDirectionalCoverPreloads() else {
+            if canCancelStalePreloads {
+                cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
+                activePreloadMids.removeAll()
+                SharedAssetCache.shared.updateProtectedPreloadMids([])
+            }
             return
         }
 
@@ -1586,32 +1807,155 @@ class VideoPlaybackCoordinator: ObservableObject {
             lastDirectionalPreloadRefreshTime = now
         }
 
-        let preloadCount = max(0, directionalPlayerPreloadCount)
-        guard preloadCount > 0 else {
-            cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
-            activePreloadMids.removeAll()
-            SharedAssetCache.shared.updateProtectedPreloadMids([])
+        let canRunPlayerPreload = isTableViewScrollIdle
+        let allowNetworkPreload = isTableViewScrollIdle
+
+        // Visible videos that still lack a poster get a lightweight cover. While scrolling,
+        // this is cache-only; network-backed poster/player preloads remain idle-only.
+        var visibleWarmupMids = Set<String>()
+        for video in visibleVideosLackingCovers() {
+            preloadVideoPoster(video, allowNetwork: allowNetworkPreload)
+            visibleWarmupMids.insert(video.videoMid)
+        }
+
+        let maxDirectionalTargets = max(
+            1,
+            max(0, directionalPlayerPreloadCount) + max(0, FeedPlaybackTuning.directionalVideoCoverPreloadCount)
+        )
+        let cacheOnlyDirectionalVideos = getNextVideosInScrollDirection(count: maxDirectionalTargets)
+        var cacheOnlyCoverMids = Set<String>()
+        for video in cacheOnlyDirectionalVideos {
+            preloadVideoPoster(video, allowNetwork: false)
+            cacheOnlyCoverMids.insert(video.videoMid)
+        }
+
+        // Don't run off-screen directional preloads while the autoplay primary is struggling
+        // for buffer. Actual visible media is handled above and through MediaCell visibility.
+        guard canPreloadCoversWithoutStarvingPrimary() else {
+            if canCancelStalePreloads {
+                cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: "\(reason).primaryStarved")
+                activePreloadMids.removeAll()
+                SharedAssetCache.shared.updateProtectedPreloadMids([])
+            }
+            if !visibleWarmupMids.isEmpty || !cacheOnlyCoverMids.isEmpty {
+                print("🎬 [COORD] \(reason): \(visibleWarmupMids.count) visible cover(s), \(cacheOnlyCoverMids.count) cache-only directional cover attempt(s), primary not ready")
+            }
             return
         }
 
-        let nextVideos = getNextVideosInScrollDirection(count: preloadCount)
+        let playerPreloadCount = canRunPlayerPreload ? max(0, directionalPlayerPreloadCount) : 0
+        let coverPreloadCount = max(
+            0,
+            FeedPlaybackTuning.directionalVideoCoverPreloadCount + (canRunPlayerPreload ? 0 : max(0, directionalPlayerPreloadCount))
+        )
+
+        guard playerPreloadCount > 0 || coverPreloadCount > 0 else {
+            if canCancelStalePreloads {
+                cancelTrackedPreloads(except: currentOnScreenVideoMids(), reason: reason)
+                activePreloadMids.removeAll()
+                SharedAssetCache.shared.updateProtectedPreloadMids([])
+            }
+            return
+        }
+
+        let nextVideos = getNextVideosInScrollDirection(count: playerPreloadCount + coverPreloadCount)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
 
-        // Keep on-screen work alive, then cancel any older directional preloads.
+        // Keep on-screen work alive, then cancel any older off-screen preloads.
         let onScreenMids = currentOnScreenVideoMids()
         let newAll = newPreloadMids.union(onScreenMids)
-        cancelTrackedPreloads(except: newAll, reason: reason)
+        if canCancelStalePreloads {
+            cancelTrackedPreloads(except: newAll, reason: reason)
+        }
 
         activePreloadMids = newPreloadMids
-        SharedAssetCache.shared.updateProtectedPreloadMids(newPreloadMids)
+        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids)
 
-        for video in nextVideos where SharedAssetCache.shared.getCachedPlayer(for: video.videoMid) == nil {
-            preloadVideoPlayer(video)
+        // First video(s) in the scroll direction get a full player preload (decoded frame +
+        // warm player). The exact-frame upgrade self-gates on canRunDirectionalExactFramePreloads
+        // (primary stable = app not busy) and retries, so it fires once startup settles.
+        let playerCandidates = Array(nextVideos.prefix(playerPreloadCount))
+        if !playerCandidates.isEmpty {
+            // Cached posters were attempted before the primary-health gate. Do not
+            // start a network poster task for the player candidate too: the warm
+            // player owns its decoded cover, and both paths share the same preload slot.
+            scheduleExactFrameUpgradeIfStable(for: playerCandidates)
         }
 
-        if !newPreloadMids.isEmpty {
-            print("🎬 [COORD] \(reason): preloading \(newPreloadMids.count) directional players")
+        // Remaining directional videos get a cover image only (no player).
+        let coverOnlyVideos = Array(nextVideos.dropFirst(playerCandidates.count))
+        for video in coverOnlyVideos {
+            preloadVideoPoster(video, allowNetwork: allowNetworkPreload)
         }
+
+        if !newPreloadMids.isEmpty || !visibleWarmupMids.isEmpty || !cacheOnlyCoverMids.isEmpty {
+            print("🎬 [COORD] \(reason): \(visibleWarmupMids.count) visible cover(s), \(playerCandidates.count) player preload(s), \(coverOnlyVideos.count) directional cover(s), \(cacheOnlyCoverMids.count) cache-only directional cover attempt(s)")
+        }
+    }
+
+    /// Videos in the near-viewport band (`loadVisibleMediaCells` — any positive visibility,
+    /// including a partially-visible non-primary video such as one 20% on screen) that do not
+    /// yet have a cached poster. These are warmed with a lightweight cover (AVAssetImageGenerator)
+    /// and run BEFORE directional off-screen preloads, so a video the user can actually see gets
+    /// its poster ahead of invisible preloads. The autoplay primary is excluded — it captures its
+    /// own cover via playback, so generating a poster for it would only steal its bandwidth.
+    private func visibleVideosLackingCovers() -> [VideoPlaybackInfo] {
+        guard !loadVisibleMediaCells.isEmpty else { return [] }
+        let primaryId = primaryVideoId
+        return allVideos.filter {
+            loadVisibleMediaCells.contains($0.identifier) &&
+            $0.isInVisibleMediaRange &&
+            $0.identifier != primaryId &&
+            SharedAssetCache.shared.cachedThumbnail(for: $0.videoMid) == nil
+        }
+    }
+
+    /// Whether it is safe to spend bandwidth on cover preloads right now. Returns true when
+    /// there is no autoplay primary yet (e.g. initial feed load) or the primary is actually
+    /// playing. While the primary is buffering/stalled, returns false so preloads don't
+    /// compete with it for bandwidth. `isActuallyPlaying` rides out brief HLS buffer gaps via
+    /// its grace window, so only sustained stalls pause preloading.
+    private func canPreloadCoversWithoutStarvingPrimary() -> Bool {
+        guard phase == .primaryPlaying, let primaryId = primaryVideoId else { return true }
+        guard let delegate = delegate(forIdentifier: primaryId) else { return true }
+        return delegate.isActuallyPlaying
+    }
+
+    private func scheduleExactFrameUpgradeIfStable(for nextVideos: [VideoPlaybackInfo]) {
+        cancelDirectionalExactFramePreload()
+        guard let firstVideo = nextVideos.first else { return }
+
+        directionalExactFrameGeneration += 1
+        let generation = directionalExactFrameGeneration
+        scheduleExactFrameUpgrade(firstVideo, generation: generation, attempt: 0)
+    }
+
+    private func scheduleExactFrameUpgrade(_ video: VideoPlaybackInfo, generation: Int, attempt: Int) {
+        let maxAttempts = 6
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.directionalExactFrameGeneration == generation,
+                      self.isDirectionalExactFrameTargetStillRelevant(video),
+                      SharedAssetCache.shared.getCachedPlayer(for: video.videoMid) == nil else { return }
+
+                guard self.canRunDirectionalExactFramePreloads() else {
+                    guard attempt < maxAttempts else { return }
+                    self.scheduleExactFrameUpgrade(video, generation: generation, attempt: attempt + 1)
+                    return
+                }
+
+                self.preloadDecodedVideoFrame(video)
+            }
+        }
+        directionalExactFrameWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + directionalExactFramePreloadDelay, execute: workItem)
+    }
+
+    private func isDirectionalExactFrameTargetStillRelevant(_ video: VideoPlaybackInfo) -> Bool {
+        if activePreloadMids.contains(video.videoMid) { return true }
+        return loadVisibleMediaCells.contains(video.identifier) &&
+            !onScreenMediaCells.contains(video.identifier)
     }
 
     private func currentOnScreenVideoMids() -> Set<String> {
@@ -1647,57 +1991,144 @@ class VideoPlaybackCoordinator: ObservableObject {
         print("🎬 [COORD] \(reason): cancelled \(staleMids.count) stale preloads")
     }
 
-    /// Schedule primary video playback after a short debounce (0.3s).
-    /// Fast path: if the top candidate has a cached ready player, play immediately (no debounce).
-    /// Slow path: start 0.3s timer. Per-candidate: the timer is NOT reset as long as the same
-    /// video remains the top candidate. Only resets when the candidate changes.
-    private func scheduleStartPrimary() {
-        guard let candidate = identifyPrimaryVideo() else { return }
-        let topCandidate = candidate.identifier
+    private func cancelPendingPrimarySelection() {
+        primarySelectionGeneration += 1
+        primarySelectionWorkItem?.cancel()
+        primarySelectionWorkItem = nil
+        pendingPrimarySelectionIdentifier = nil
+    }
 
-        // Fast path: cached ready player → play immediately, skip debounce.
-        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: candidate.videoMid),
-           cachedPlayer.currentItem?.status == .readyToPlay {
-            playbackDebounceTimer?.invalidate()
-            playbackDebounceTimer = nil
-            pendingPrimaryCandidate = nil
-            if phase == .idle {
-                startPrimaryVideoPlayback()
-            }
+    /// Schedule primary video playback.
+    /// Fast path: idle table -> play immediately. While the table is moving, debounce
+    /// candidate selection so a nearly-settled viewport can still pick the right primary.
+    /// `debounceDelay` lets callers use a longer confirmation window (e.g. while the user
+    /// is still actively dragging — see identifyPrimaryVideoDuringActiveScroll) than the
+    /// default deceleration-settling/scroll-stop debounce.
+    private func scheduleStartPrimary(debounceDelay: TimeInterval? = nil) {
+        guard phase == .idle, let candidate = identifyPrimaryVideo() else {
+            cancelPendingPrimarySelection()
             return
         }
 
-        // If the timer is already running for this exact candidate, let it keep ticking.
-        if playbackDebounceTimer != nil && topCandidate == pendingPrimaryCandidate {
+        // If the table is not moving, there is no visibility churn to absorb.
+        // Start immediately so scroll-stop autoplay feels responsive.
+        if isTableViewScrollIdle {
+            cancelPendingPrimarySelection()
+            startPrimaryVideoPlayback()
             return
         }
 
-        // Candidate changed (or no timer running) — restart the clock for the new candidate.
-        playbackDebounceTimer?.invalidate()
-        pendingPrimaryCandidate = topCandidate
-        let timer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.playbackDebounceTimer = nil
-                self.pendingPrimaryCandidate = nil
-                if self.phase == .idle && !self.visibleVideos.isEmpty {
-                    self.startPrimaryVideoPlayback()
+        // Don't reset an already-running confirmation timer for the same candidate.
+        // Callers like identifyPrimaryVideoDuringActiveScroll invoke this on every
+        // scrollViewDidScroll tick during a drag, even when the candidate hasn't
+        // changed — restarting the timer every call would mean it never fires until
+        // motion stops completely for a full debounce window, defeating the point of
+        // identifying a primary mid-drag.
+        if primarySelectionWorkItem != nil, pendingPrimarySelectionIdentifier == candidate.identifier {
+            return
+        }
+
+        pendingPrimarySelectionIdentifier = candidate.identifier
+        primarySelectionGeneration += 1
+        let generation = primarySelectionGeneration
+        primarySelectionWorkItem?.cancel()
+
+        let delay = debounceDelay ?? primarySelectionDebounceDelay
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.primarySelectionGeneration == generation,
+                      self.phase == .idle,
+                      let confirmedCandidate = self.identifyPrimaryVideo(),
+                      confirmedCandidate.identifier == candidate.identifier else {
+                    return
                 }
+                self.primarySelectionWorkItem = nil
+                self.pendingPrimarySelectionIdentifier = nil
+                // identifyPrimaryVideo() only requires onScreenMediaCells membership
+                // (the start threshold). During a fast fling this candidate can have
+                // been picked while still comfortably visible, then by the time this
+                // confirmation timer fires (up to primarySelectionActiveDragDelay
+                // later) already dropped below the continue threshold — starting it
+                // now would just mean an immediate enforcePrimaryVisibilityThreshold
+                // stop the instant scroll settles, i.e. play-then-instantly-stop
+                // right as its cell crosses the viewport edge. Skip; the next
+                // viewport pass will pick a candidate with more margin.
+                guard self.continuePlaybackMediaCells.contains(confirmedCandidate.identifier) else {
+                    return
+                }
+                self.startPrimaryVideoPlayback()
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        playbackDebounceTimer = timer
+        primarySelectionWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    /// Identify a primary candidate as soon as it crosses the visibility threshold during
+    /// ACTIVE dragging (finger still down) instead of waiting for the scroll to stop or
+    /// even settle into deceleration. Only identification happens immediately here —
+    /// starting playback and preloading (in startPrimaryVideoPlayback) are withheld behind
+    /// scheduleStartPrimary's confirmation timer (primarySelectionActiveDragDelay, 0.5s),
+    /// and only committed if the same candidate still qualifies once the timer fires.
+    ///
+    /// Deliberately requires phase == .idle (enforced inside scheduleStartPrimary via its
+    /// own guard): a healthy currently-playing primary is never preempted by a new
+    /// candidate merely crossing the threshold — "keep the current primary alive while
+    /// actively scrolling" (see reconcilePlaybackForCurrentVisibility) still applies, so
+    /// other videos are never demoted to non-primary just because a candidate appeared.
+    /// They're only demoted once this candidate is confirmed and startPrimaryVideoPlayback
+    /// actually runs.
+    func identifyPrimaryVideoDuringActiveScroll() {
+        guard isScrolling, !onScreenMediaCells.isEmpty else { return }
+
+        // reconcilePlaybackForCurrentVisibility — the only thing that would normally
+        // notice the current primary scrolling off-screen and reset phase back to .idle
+        // — is intentionally skipped for the whole gesture while isScrolling is true
+        // ("keep the current primary alive during active scroll"). But once the primary
+        // is genuinely gone (not merely below the continue threshold — fully outside
+        // onScreenMediaCells, so it can't come back this gesture), leaving `phase` stuck
+        // at .primaryPlaying for a now-invisible video blocks this function's own
+        // `phase == .idle` precondition for the rest of the scroll. Demote it (debounced,
+        // see primaryDemotionGraceDelay) so a new candidate can still be identified and
+        // confirmed before the scroll stops.
+        if phase == .primaryPlaying, let primaryId = primaryVideoId {
+            if onScreenMediaCells.contains(primaryId) {
+                if pendingDemotionIdentifier == primaryId {
+                    pendingDemotionWorkItem?.cancel()
+                    pendingDemotionWorkItem = nil
+                    pendingDemotionIdentifier = nil
+                }
+            } else if pendingDemotionIdentifier != primaryId {
+                pendingDemotionWorkItem?.cancel()
+                pendingDemotionIdentifier = primaryId
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.pendingDemotionWorkItem = nil
+                    guard self.pendingDemotionIdentifier == primaryId else { return }
+                    self.pendingDemotionIdentifier = nil
+                    guard self.phase == .primaryPlaying,
+                          self.primaryVideoId == primaryId,
+                          !self.onScreenMediaCells.contains(primaryId) else { return }
+                    print("🎬 [COORD] activeScroll: demoting \(self.shortIdent(primaryId)) (still absent from onScreenMediaCells after \(self.primaryDemotionGraceDelay)s grace)")
+                    self.stopPrimaryVideo(identifier: primaryId)
+                    self.phase = .idle
+                    self.currentlyPlayingVideoIds.removeAll()
+                    self.primaryVideoId = nil
+                    self.scheduleStartPrimary(debounceDelay: self.primarySelectionActiveDragDelay)
+                }
+                pendingDemotionWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + primaryDemotionGraceDelay, execute: workItem)
+            }
+        }
+
+        guard phase == .idle else { return }
+        scheduleStartPrimary(debounceDelay: primarySelectionActiveDragDelay)
     }
 
     /// Start primary video playback — play topmost video immediately.
     /// Fully synchronous: visibility calculations use direct UITableView access.
     /// Delegate existence is validated before committing state to prevent stuck `primaryPlaying`.
     private func startPrimaryVideoPlayback() {
-        // Cancel any pending debounced start — immediate caller wins
-        playbackDebounceTimer?.invalidate()
-        playbackDebounceTimer = nil
-        pendingPrimaryCandidate = nil
-
         guard AppDelegate.isVideoInfrastructureReady else {
             print("🎬 [COORD] startPrimary: video infrastructure not ready")
             return
@@ -1746,18 +2177,36 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         print("🎬 [COORD] startPrimary: selected \(shortMID(primary.videoMid)) (onScreen=\(onScreenCount), visible=\(visibleCount), scrollDown=\(scrollDirection))")
+        cancelPendingPrimarySelection()
 
         // Stop the previous primary video if different
-        if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier {
+        let previousPrimaryId = primaryVideoId
+        if let previousPrimaryId, previousPrimaryId != primary.identifier {
             if let prevDelegate = self.delegate(forIdentifier: previousPrimaryId),
                let previousPrimary = allVideos.first(where: { $0.identifier == previousPrimaryId }) {
                 prevDelegate.shouldStopVideo(withMid: previousPrimary.videoMid)
             }
         }
 
-        // Pause all visible videos except the new primary
-        for video in visibleVideos where video != primary {
+        // Pause all visible videos except the new primary. Also exclude the previous
+        // primary — it was already fully stopped above via shouldStopVideo; routing it
+        // through pauseVideo too would redundantly re-run frame capture
+        // (captureLastFrameIfPossible) and visual-state refresh a second time, plus start
+        // a pointless volume-fade-out animation on a player that was just stopped. With
+        // frequent primary switches during active scroll this doubled cost adds up.
+        for video in visibleVideos where video != primary && video.identifier != previousPrimaryId {
             pauseVideo(video)
+        }
+
+        if delegate.isActuallyPlaying {
+            phase = .primaryPlaying
+            primaryVideoId = primary.identifier
+            currentlyPlayingVideoIds = [primary.identifier]
+            cachedVisibilityRatios[primary.identifier] = 0.7
+            lastPrimarySwitchTime = Date()
+            LocalHTTPServer.shared.setPrimaryMediaID(primary.videoMid)
+            print("🎬 [COORD] startPrimary: adopted already-playing \(shortMID(primary.videoMid))")
+            return
         }
 
         // Set state and play synchronously — no asyncAfter race condition
@@ -1776,7 +2225,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // No need to cancel preload downloads here.
 
         delegate.shouldPlayVideo(withMid: primary.videoMid)
-        refreshDirectionalPreloads(reason: "primary selected", throttle: false)
     }
 
     /// Identify the primary video based on scroll direction.
@@ -1790,18 +2238,24 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
 
-        // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate.
+        // visibleVideos is derived from onScreenMediaCells, the 50% start threshold; pick first candidate with a delegate.
         // Skip failedPrimaryIdentifier and finishedPrimaryIdentifier to avoid re-selecting.
+        var belowContinueFallback: VideoPlaybackInfo?
         for video in candidates {
             guard delegate(forIdentifier: video.identifier) != nil else { continue }
             if video.identifier == failedPrimaryIdentifier { continue }
             if video.identifier == finishedPrimaryIdentifier { continue }
             if VideoStateCache.shared.isVideoFinished(video.identifier) { continue }
-            if video.identifier == primaryBelowContinueIdentifier { continue }
+            if video.identifier == primaryBelowContinueIdentifier {
+                belowContinueFallback = belowContinueFallback ?? video
+                continue
+            }
             return video
         }
 
-        return nil
+        // If layout churn temporarily excluded the previous primary but it is
+        // visible enough again, allow it as a fallback.
+        return belowContinueFallback
     }
 
     /// Pause a specific video
@@ -1843,8 +2297,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Do NOT clear previousVisibleIdentifiers — preserve visibility tracking
         // Do NOT broadcast shouldStopAllVideos — cells keep their players/state
 
-        // Let the debounce timer check for a new visible candidate (e.g. preloaded video appears on scroll)
+        // Let the normal primary selection path check for a new visible candidate.
         scheduleStartPrimary()
+
+        // The just-finished primary may have been the only thing keeping the feed busy; now
+        // that it's idle, warm covers for any visible/near-viewport videos that still lack one
+        // (e.g. a partially-visible non-primary video that never autoplayed) without requiring a scroll.
+        refreshDirectionalPreloads(reason: "primaryFinished", throttle: false)
     }
 
     /// Play next visible video after primary finishes
@@ -1927,12 +2386,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Handle video finished notification.
     /// Match by full identifier (outerTweetId_mediaTweetId_videoMid_attachmentIndex) so the same video in different cells is distinct.
-    @objc private func handleVideoFinished(_ notification: Notification) {
-        guard let videoMid = notification.userInfo?["videoMid"] as? String else {
+    private func handleVideoFinished(videoMid: String?, videoIdentifier: String?) {
+        guard let videoMid else {
             return
         }
-
-        let videoIdentifier = notification.userInfo?["videoIdentifier"] as? String
 
         if phase == .primaryPlaying,
            let primaryId = primaryVideoId {
@@ -1950,18 +2407,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
-    /// Handle foreground recovery after the local video infrastructure is ready.
-    /// The feed may return from detail/fullscreen with unchanged visibility but a
-    /// destroyed AVPlayer, so recovery must re-issue play even when phase says the
-    /// old primary is already playing.
-    @objc private func handleForegroundRecovery(_ notification: Notification) {
-        shouldPreserveStateOnForeground = false
-        recoverVisiblePlaybackAfterInterruption(
-            reason: "reloadVisibleVideosOnly",
-            isForegroundRecovery: true
-        )
-    }
-
+    /// Recover visible playback after an interruption (foreground return, overlay
+    /// dismiss, programmatic list change). The feed may return from detail/fullscreen
+    /// with unchanged visibility but a destroyed AVPlayer, so recovery must re-issue
+    /// play even when phase says the old primary is already playing.
+    ///
+    /// For foreground return this is driven by the owning TweetTableViewController
+    /// AFTER it refreshes viewport visibility, so the target selection below sees a
+    /// fresh visibleVideos / onScreenMediaCells snapshot.
     func recoverVisiblePlaybackAfterInterruption(reason: String, isForegroundRecovery: Bool) {
         guard !isForegroundRecovery || AppDelegate.isVideoInfrastructureReady else {
             print("🎬 [COORD] foreground recovery \(reason): video infrastructure not ready")
@@ -1976,10 +2429,6 @@ class VideoPlaybackCoordinator: ObservableObject {
               isFeedVisible else {
             return
         }
-
-        playbackDebounceTimer?.invalidate()
-        playbackDebounceTimer = nil
-        pendingPrimaryCandidate = nil
 
         guard !visibleVideos.isEmpty else {
             currentlyPlayingVideoIds.removeAll()

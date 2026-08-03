@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import Combine
 import UIKit
 
 @MainActor
@@ -20,38 +21,75 @@ private final class TweetDetailCommentsCache {
 
 // MARK: - Bottom bar scroll tracker
 // Observes scroll view and updates SwiftUI state for bottom bar visibility
-private class BottomBarScrollObserver: NSObject {
+@MainActor
+private final class BottomBarScrollObserver: NSObject {
     private var observation: NSKeyValueObservation?
+    private var idleWorkItem: DispatchWorkItem?
     private var previousOffset: CGFloat = 0
     weak var scrollView: UIScrollView?
-    var onScrollChange: ((CGFloat, CGFloat, Bool) -> Void)? // (currentOffset, delta, isAtBottom)
+    var onScrollChange: ((CGFloat, CGFloat, Bool, Bool) -> Void)?
+    // (currentOffset, delta, isAtBottom, isInteracting)
     
     func attachToScrollView(_ scrollView: UIScrollView) {
         self.scrollView = scrollView
+        previousOffset = scrollView.contentOffset.y
         observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, change in
-            guard let self = self, let y = change.newValue?.y else { return }
-            let delta = y - self.previousOffset
-            self.previousOffset = y
-            
-            // Check if we're at the bottom (within 50pt threshold)
-            let contentHeight = scrollView.contentSize.height
-            let scrollViewHeight = scrollView.bounds.height
-            let contentOffsetY = y
-            let isAtBottom = (contentHeight > 0 && scrollViewHeight > 0) && 
-                            (contentOffsetY + scrollViewHeight >= contentHeight - 50)
-            
-            // Ensure callback runs on main thread for SwiftUI updates
-            DispatchQueue.main.async {
-                self.onScrollChange?(y, delta, isAtBottom)
+            MainActor.assumeIsolated {
+                guard let self = self, let y = change.newValue?.y else { return }
+                let delta = y - self.previousOffset
+                self.previousOffset = y
+
+                // Check if we're at the bottom (within 50pt threshold)
+                let contentHeight = scrollView.contentSize.height
+                let scrollViewHeight = scrollView.bounds.height
+                let contentOffsetY = y
+                let isAtBottom = (contentHeight > 0 && scrollViewHeight > 0) &&
+                                (contentOffsetY + scrollViewHeight >= contentHeight - 50)
+                let isInteracting = scrollView.isTracking
+                    || scrollView.isDragging
+                    || scrollView.isDecelerating
+
+                // Defer the SwiftUI state update off the current view-update cycle:
+                // contentOffset KVO can fire synchronously during a SwiftUI layout pass,
+                // and mutating @State in onScrollChange then triggers
+                // "Modifying state during view update".
+                DispatchQueue.main.async { [weak self] in
+                    self?.onScrollChange?(y, delta, isAtBottom, isInteracting)
+                }
+                self.scheduleIdleReport(for: scrollView)
             }
         }
+    }
+
+    private func scheduleIdleReport(for scrollView: UIScrollView) {
+        // One poll is enough while scrolling; recreating a DispatchWorkItem for every
+        // contentOffset frame adds main-thread churn on the exact path we are protecting.
+        guard idleWorkItem == nil else { return }
+        let workItem = DispatchWorkItem { [weak self, weak scrollView] in
+            guard let self else { return }
+            self.idleWorkItem = nil
+            guard let scrollView else { return }
+            if scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
+                self.scheduleIdleReport(for: scrollView)
+                return
+            }
+
+            let y = scrollView.contentOffset.y
+            let isAtBottom = scrollView.contentSize.height > 0
+                && scrollView.bounds.height > 0
+                && y + scrollView.bounds.height >= scrollView.contentSize.height - 50
+            self.onScrollChange?(y, 0, isAtBottom, false)
+        }
+        idleWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
     }
     
     func reset() {
         previousOffset = 0
     }
     
-    deinit {
+    isolated deinit {
+        idleWorkItem?.cancel()
         observation?.invalidate()
     }
 }
@@ -60,14 +98,16 @@ private class BottomBarScrollObserver: NSObject {
 // Uses a real UIView for the nav bar to bypass SwiftUI rendering pipeline entirely.
 // KVO on UIScrollView.contentOffset drives the UIView transform directly.
 
-private class LargeHitButton: UIButton {
+@MainActor
+private final class LargeHitButton: UIButton {
     var hitInset: UIEdgeInsets = UIEdgeInsets(top: -12, left: -16, bottom: -12, right: -24)
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         bounds.inset(by: hitInset).contains(point)
     }
 }
 
-private class NavBarUIView: UIView {
+@MainActor
+private final class NavBarUIView: UIView {
     private let titleLabel = UILabel()
     private let backButton = LargeHitButton(type: .system)
     private var onBack: (() -> Void)?
@@ -117,8 +157,10 @@ private class NavBarUIView: UIView {
     func attachToScrollView(_ scrollView: UIScrollView) {
         self.scrollView = scrollView
         observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, change in
-            guard let self = self, let y = change.newValue?.y else { return }
-            self.handleScroll(y, scrollView: scrollView)
+            MainActor.assumeIsolated {
+                guard let self = self, let y = change.newValue?.y else { return }
+                self.handleScroll(y, scrollView: scrollView)
+            }
         }
     }
 
@@ -216,7 +258,7 @@ private class BottomBarScrollCoordinator: NSObject {
 
 // UIViewRepresentable wrapper for bottom bar scroll tracking
 private struct BottomBarScrollTracker: UIViewRepresentable {
-    let onScrollChange: (CGFloat, CGFloat, Bool) -> Void // (currentOffset, delta, isAtBottom)
+    let onScrollChange: (CGFloat, CGFloat, Bool, Bool) -> Void
     
     func makeCoordinator() -> BottomBarScrollCoordinator {
         BottomBarScrollCoordinator()
@@ -234,9 +276,11 @@ private struct BottomBarScrollTracker: UIViewRepresentable {
         return view
     }
     
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.observer?.onScrollChange = onScrollChange
+    }
     
-    private static func findAndAttach(view: UIView, coordinator: BottomBarScrollCoordinator, onScrollChange: @escaping (CGFloat, CGFloat, Bool) -> Void) {
+    private static func findAndAttach(view: UIView, coordinator: BottomBarScrollCoordinator, onScrollChange: @escaping (CGFloat, CGFloat, Bool, Bool) -> Void) {
         var current: UIView? = view.superview
         while let ancestor = current {
             if let scrollView = findScrollView(in: ancestor) {
@@ -418,7 +462,8 @@ struct DetailMediaCell: View {
                         mid: attachment.mid,
                         mediaType: attachment.type,
                         aspectRatio: attachment.aspectRatio,
-                        shouldLoad: shouldLoadVideo
+                        shouldLoad: shouldLoadVideo,
+                        shouldMountNativePlaybackSurface: true
                     )
                 case .audio:
                     // Show audio player with SimpleAudioPlayer
@@ -553,11 +598,13 @@ struct DetailMediaCell: View {
             object: nil,
             queue: .main
         ) { _ in
-            // Only reload if image was released
-            guard self.image == nil, self.attachment.type == .image else { return }
-            
-            print("DEBUG: [DetailMediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
-            self.loadImage()
+            Task { @MainActor in
+                // Only reload if image was released
+                guard self.image == nil, self.attachment.type == .image else { return }
+
+                print("DEBUG: [DetailMediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
+                self.loadImage()
+            }
         }
     }
 
@@ -570,9 +617,12 @@ struct DetailMediaCell: View {
             object: nil,
             queue: .main
         ) { notification in
-            guard notification.userInfo?["avatarId"] as? String == self.attachment.mid else { return }
-            if self.image == nil || self.loading {
-                self.updateImageFromMemoryCache()
+            let avatarId = notification.userInfo?["avatarId"] as? String
+            MainActor.assumeIsolated {
+                guard avatarId == self.attachment.mid else { return }
+                if self.image == nil || self.loading {
+                    self.updateImageFromMemoryCache()
+                }
             }
         }
     }
@@ -693,6 +743,9 @@ private struct DetailSingletonVideoPlayerView: View {
     /// Retained for call-site compatibility but no longer used for autoplay.
     /// Playback is driven by CommentsVideoPlaybackCoordinator notifications via DetailVideoManager.
     let shouldLoad: Bool
+    /// Defers only the heavyweight native controller while a detail push is animating.
+    /// Player loading and handoff continue immediately behind the cached thumbnail.
+    let shouldMountNativePlaybackSurface: Bool
 
     @ObservedObject private var manager = DetailVideoManager.shared
     @State private var handoffThumbnail: UIImage?
@@ -741,7 +794,8 @@ private struct DetailSingletonVideoPlayerView: View {
     }
 
     private var shouldShowPlaceholder: Bool {
-        didThisVideoFailToLoad
+        isNativePlaybackSurfaceDeferred
+            || didThisVideoFailToLoad
             || !isThisVideoLoaded
             || isThisVideoPreparing
             || (manager.currentVideoMid == mid
@@ -750,15 +804,31 @@ private struct DetailSingletonVideoPlayerView: View {
                 && !didThisVideoFailToLoad)
     }
 
+    private var requiresLayerBackedPlaybackSurface: Bool {
+#if targetEnvironment(macCatalyst)
+        true
+#else
+        ProcessInfo.processInfo.isiOSAppOnMac
+#endif
+    }
+
+    private var isNativePlaybackSurfaceDeferred: Bool {
+        !requiresLayerBackedPlaybackSurface && !shouldMountNativePlaybackSurface
+    }
+
     var body: some View {
         ZStack {
             Color.black
 
             if isThisVideoLoaded, let player = manager.currentPlayer {
-                DetailAVPlayerView(
-                    player: player
-                )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Group {
+                    if requiresLayerBackedPlaybackSurface {
+                        DetailLayerVideoPlayerView(player: player)
+                    } else if shouldMountNativePlaybackSurface {
+                        DetailAVPlayerView(player: player)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if shouldShowPlaceholder {
@@ -839,21 +909,212 @@ private struct DetailSingletonVideoPlayerView: View {
 
 }
 
+// MARK: - Layer-backed detail player for iPad apps running on Mac
+
+/// AVPlayerViewController installs a UITransitionView for its native controls. The
+/// iPad-on-Mac runtime can recursively invalidate that view's dynamic corner layout
+/// guides when a LazyVStack hands the singleton player between cells. A plain
+/// AVPlayerLayer has no transition controller or dynamic layout guides.
+@MainActor
+private struct DetailLayerVideoPlayerView: View {
+    let player: AVPlayer
+
+    @ObservedObject private var manager = DetailVideoManager.shared
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 1
+    @State private var isSeeking = false
+    @State private var shouldResumeAfterSeek = false
+
+    private let playbackClock = Timer.publish(
+        every: 0.25,
+        on: .main,
+        in: .common
+    ).autoconnect()
+
+    var body: some View {
+        ZStack {
+            LightweightVideoPlayer(player: player)
+
+            VStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        manager.togglePlayback()
+                    } label: {
+                        Image(systemName: manager.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white)
+                    .accessibilityLabel(manager.isPlaying ? "Pause video" : "Play video")
+
+                    Slider(
+                        value: Binding(
+                            get: { currentTime },
+                            set: { currentTime = $0 }
+                        ),
+                        in: 0...max(duration, 1),
+                        onEditingChanged: handleSeeking
+                    )
+                    .tint(.white)
+
+                    Text("\(formattedTime(currentTime)) / \(formattedTime(duration))")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                        .frame(width: 92, alignment: .trailing)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.black.opacity(0.65))
+            }
+        }
+        .onAppear {
+            refreshPlaybackTime()
+        }
+        .onReceive(playbackClock) { _ in
+            refreshPlaybackTime()
+        }
+    }
+
+    private func refreshPlaybackTime() {
+        guard !isSeeking else { return }
+
+        let playerTime = player.currentTime().seconds
+        if playerTime.isFinite {
+            currentTime = max(0, playerTime)
+        }
+
+        if let itemDuration = player.currentItem?.duration.seconds,
+           itemDuration.isFinite,
+           itemDuration > 0 {
+            duration = itemDuration
+        }
+    }
+
+    private func handleSeeking(_ editing: Bool) {
+        if editing {
+            isSeeking = true
+            shouldResumeAfterSeek = manager.isPlaying
+            player.pause()
+            return
+        }
+
+        let target = CMTime(seconds: currentTime, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        isSeeking = false
+
+        if shouldResumeAfterSeek {
+            player.play()
+        }
+        shouldResumeAfterSeek = false
+    }
+
+    private func formattedTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let totalSeconds = Int(seconds)
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}
+
 // MARK: - Detail AVPlayerViewController Wrapper
 
 private struct DetailAVPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        weak var player: AVPlayer?
+        private var wasPlayingBeforeSurfaceTap = false
+
+        func attach(player: AVPlayer) {
+            self.player = player
+        }
+
+        @objc func handleSurfaceTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            let shouldPreservePlayback = wasPlayingBeforeSurfaceTap
+            wasPlayingBeforeSurfaceTap = false
+
+            // AVPlayerViewController handles the same tap first to reveal its controls.
+            // Restore only an already-playing video; a paused video stays paused.
+            guard shouldPreservePlayback else { return }
+            DispatchQueue.main.async { [weak player] in
+                guard let player,
+                      player.timeControlStatus == .paused,
+                      player.rate == 0 else { return }
+                player.play()
+            }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldReceive touch: UITouch) -> Bool {
+            guard !touchTargetsControl(touch.view, within: gestureRecognizer.view) else {
+                wasPlayingBeforeSurfaceTap = false
+                return false
+            }
+
+            if let player {
+                wasPlayingBeforeSurfaceTap = player.rate > 0
+                    || player.timeControlStatus == .playing
+                    || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            } else {
+                wasPlayingBeforeSurfaceTap = false
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
+        }
+
+        private func touchTargetsControl(_ touchedView: UIView?, within rootView: UIView?) -> Bool {
+            var candidate = touchedView
+            while let view = candidate {
+                if view is UIControl {
+                    return true
+                }
+                if view === rootView {
+                    break
+                }
+                candidate = view.superview
+            }
+            return false
+        }
+    }
+
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
+        // Inline autoplay pauses frequently and does not expose frame-analysis actions.
+        // Avoid starting Visual Look Up work that would immediately be cancelled by the
+        // next cell handoff on platforms where the native controller remains in use.
+        vc.allowsVideoFrameAnalysis = false
         vc.player = player
         vc.showsPlaybackControls = true
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
+
+        let coordinator = context.coordinator
+        coordinator.attach(player: player)
+        let surfaceTap = UITapGestureRecognizer(
+            target: coordinator,
+            action: #selector(Coordinator.handleSurfaceTap(_:))
+        )
+        surfaceTap.cancelsTouchesInView = false
+        surfaceTap.delaysTouchesBegan = false
+        surfaceTap.delaysTouchesEnded = false
+        surfaceTap.delegate = coordinator
+        vc.view.addGestureRecognizer(surfaceTap)
+
         return vc
     }
 
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        context.coordinator.attach(player: player)
         if vc.player !== player {
             vc.player = player
         }
@@ -862,8 +1123,51 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         }
     }
 
-    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: ()) {
+    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
         vc.player = nil
+    }
+}
+
+/// Gives every detail attachment a concrete width and height in the same pass that
+/// sizes the media column. This avoids both AVPlayerViewController's responsive-layout
+/// invalidation loop and a second SwiftUI transaction that inserts media after scrolling
+/// has already been positioned.
+@available(iOS 16.0, *)
+private struct DetailMediaColumnLayout: Layout {
+    let aspectRatios: [CGFloat]
+    var spacing: CGFloat = 1
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let width = max(0, proposal.width ?? 0)
+        let itemCount = min(subviews.count, aspectRatios.count)
+        let contentHeight = (0..<itemCount).reduce(CGFloat.zero) { result, index in
+            result + width / max(0.01, aspectRatios[index])
+        }
+        let spacingHeight = CGFloat(max(0, itemCount - 1)) * spacing
+        return CGSize(width: width, height: contentHeight + spacingHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let itemCount = min(subviews.count, aspectRatios.count)
+        var y = bounds.minY
+        for index in 0..<itemCount {
+            let height = bounds.width / max(0.01, aspectRatios[index])
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: height)
+            )
+            y += height + spacing
+        }
     }
 }
 
@@ -873,6 +1177,9 @@ struct TweetDetailView: View {
     @ObservedObject var tweet: Tweet
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
+    @State private var shouldMountNativePlaybackSurface = false
+    @State private var nativePlaybackMountDelayElapsed = false
+    @State private var isDetailScrollInteractionActive = false
     @State private var showLoginSheet = false
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -881,7 +1188,6 @@ struct TweetDetailView: View {
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
-    @State private var failedCommentIds: Set<String> = []
     // Flipped to true on the first real user pan, detected via the
     // BottomBarScrollTracker observing the parent UIScrollView. Used by
     // CommentListView to suppress the open-time auto-probe's flash.
@@ -889,10 +1195,18 @@ struct TweetDetailView: View {
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var menuShareItems: ShareSheetData?
+    @State private var showMenuFilterSheet = false
+    @State private var showMenuReportSheet = false
+    @State private var showMenuDeleteConfirmation = false
+    @State private var pendingMenuDeleteAction: (() -> Void)?
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
     @State private var hasServedCachedCommentsForCurrentParentTweet = false
     @State private var currentCommentsParentTweetId = ""
+    @State private var initialLoadParentTweetId = ""
+    @State private var selectedEmbeddedTweetForNavigation: Tweet?
+    @State private var selectedCommentUserForNavigation: User?
+    @State private var commentProfileNavigationPath = NavigationPath()
 
     // Bottom navigation bar scroll tracking
     @State private var isNavigationBarVisible = true
@@ -1019,7 +1333,13 @@ struct TweetDetailView: View {
                     }
                     .overlay(alignment: .top) {
                         // Bottom bar scroll tracker — placed outside ScrollView to properly find it
-                        BottomBarScrollTracker { offset, delta, isAtBottom in
+                        BottomBarScrollTracker { offset, delta, isAtBottom, isInteracting in
+                            if isDetailScrollInteractionActive != isInteracting {
+                                isDetailScrollInteractionActive = isInteracting
+                                if !isInteracting {
+                                    mountNativePlaybackSurfaceIfReady()
+                                }
+                            }
                             handleScrollOffsetChange(offset, delta: delta, isAtBottom: isAtBottom)
                         }
                         .frame(width: 0, height: 0)
@@ -1038,7 +1358,11 @@ struct TweetDetailView: View {
                     },
                     initialExpanded: shouldShowExpandedReply
                 )
-                .padding(.bottom, isNavigationBarVisible ? 48 : 8) // Move down when tab bar is hidden
+                // Reserve a constant footprint so showing/hiding the bottom bar cannot resize
+                // the ScrollView during an active gesture. Offset preserves the previous visual
+                // position without changing layout or the visible tweet's content offset.
+                .padding(.bottom, 48)
+                .offset(y: isNavigationBarVisible ? 0 : 40)
                 .animation(.easeInOut(duration: 0.25), value: isNavigationBarVisible)
             }
                 }
@@ -1055,8 +1379,56 @@ struct TweetDetailView: View {
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
+        .sheet(isPresented: $showMenuFilterSheet) {
+            ContentFilterView(tweet: displayTweet)
+        }
+        .sheet(isPresented: $showMenuReportSheet) {
+            ReportTweetView(tweet: displayTweet)
+        }
+        .alert(
+            NSLocalizedString("Delete Tweet?", comment: "Delete tweet confirmation title"),
+            isPresented: $showMenuDeleteConfirmation
+        ) {
+            Button(NSLocalizedString("Delete Tweet", comment: "Confirm tweet deletion"), role: .destructive) {
+                let deleteAction = pendingMenuDeleteAction
+                pendingMenuDeleteAction = nil
+                deleteAction?()
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel tweet deletion"), role: .cancel) {
+                pendingMenuDeleteAction = nil
+            }
+        } message: {
+            Text(
+                NSLocalizedString(
+                    "This tweet will be permanently deleted. This action cannot be undone.",
+                    comment: "Delete tweet confirmation message"
+                )
+            )
+        }
         .sheet(item: $menuShareItems) { data in
             ShareSheetView(items: data.items)
+        }
+        .navigationDestination(item: $selectedEmbeddedTweetForNavigation) { embeddedTweet in
+            if embeddedTweet.originalTweetId != nil,
+               (embeddedTweet.content?.isEmpty ?? true),
+               (embeddedTweet.attachments?.isEmpty ?? true) {
+                CommentDetailViewWithParent(comment: embeddedTweet)
+            } else {
+                TweetDetailView(tweet: embeddedTweet)
+            }
+        }
+        .navigationDestination(item: $selectedCommentUserForNavigation) { user in
+            ProfileView(
+                user: user,
+                onLogout: nil,
+                navigationPath: $commentProfileNavigationPath,
+                onShowLogin: { showLoginSheet = true },
+                onShowToast: { message, isError in
+                    toastMessage = message
+                    toastIsError = isError
+                    showToast = true
+                }
+            )
         }
         .overlay(alignment: .top) {
             if showToast {
@@ -1095,6 +1467,17 @@ struct TweetDetailView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 commentsVideoCoordinator.refreshVisiblePlaybackAfterForeground(reason: "didBecomeActive")
             }
+        }
+        // AVPlayerViewController creates its complete controls/KVO/PiP hierarchy synchronously.
+        // Keep that work out of the navigation transaction while player borrowing and loading
+        // continue immediately behind the cached handoff thumbnail.
+        .task(id: tweet.mid) {
+            shouldMountNativePlaybackSurface = false
+            nativePlaybackMountDelayElapsed = false
+            try? await Task.sleep(for: .milliseconds(380))
+            guard !Task.isCancelled else { return }
+            nativePlaybackMountDelayElapsed = true
+            mountNativePlaybackSurfaceIfReady()
         }
         // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
         // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
@@ -1143,9 +1526,7 @@ struct TweetDetailView: View {
             // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
             DetailVideoManager.shared.activateForDetail()
 
-            // Prevent audible playback during the push transition while still allowing
-            // immediate player attachment (avoids black flicker on open).
-            DetailVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
+            DetailVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
             if let initialVideo = firstMainTweetVideoToAutoplay {
                 DetailVideoManager.shared.loadVideo(
                     url: initialVideo.url,
@@ -1180,16 +1561,19 @@ struct TweetDetailView: View {
         .onChange(of: displayTweet.mid) { _, _ in
             configureCommentCacheContextIfNeeded()
         }
-            .onDisappear {
+        .onDisappear {
+            // Ensure a retained detail view cannot remount the native controller synchronously
+            // when it reappears after a nested push. Its task will enable the surface again.
+            shouldMountNativePlaybackSurface = false
+            nativePlaybackMountDelayElapsed = false
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
 
-            // Deactivate manager first so feed resume cannot race detail's observer
-            // teardown/state save while both surfaces point at the shared AVPlayer.
-            DetailVideoManager.shared.deactivate()
-
-            // Mark detail view as inactive only after handoff state is established.
-            NavigationStateManager.shared.setDetailViewActive(false)
+            // Keep feed autoplay suppressed until the outgoing player's fade and
+            // handoff are complete.
+            DetailVideoManager.shared.deactivate(audioFadeDuration: 0.35) {
+                NavigationStateManager.shared.setDetailViewActive(false)
+            }
 
             // Deactivate comments video playback coordinator
             commentsVideoCoordinator.deactivate()
@@ -1229,9 +1613,11 @@ struct TweetDetailView: View {
                !attachments.isEmpty {
                 let audioAttachments = attachments.filter { $0.type == .audio }
                 let mediaAttachments = attachments.filter { isMediaType($0.type) }
+                let mediaAspectRatios = mediaAttachments.indices.map { index in
+                    CGFloat(aspectRatio(for: mediaAttachments[index], at: index))
+                }
 
                 if !audioAttachments.isEmpty || !mediaAttachments.isEmpty {
-                    let cellWidth = UIScreen.main.bounds.width
                     LazyVStack(spacing: 1) {
                         if !audioAttachments.isEmpty {
                             CompactAudioPlaylistPlayer(
@@ -1242,49 +1628,56 @@ struct TweetDetailView: View {
                             .padding(.vertical, 8)
                         }
 
-                        ForEach(mediaAttachments.indices, id: \.self) { idx in
-                            let attachment = mediaAttachments[idx]
-                            let origIdx = attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? idx
-                            let ar = CGFloat(aspectRatio(for: attachment, at: idx))
-                            let cellHeight = cellWidth / ar
+                        if !mediaAttachments.isEmpty {
+                            DetailMediaColumnLayout(aspectRatios: mediaAspectRatios) {
+                                ForEach(mediaAttachments.indices, id: \.self) { idx in
+                                    let attachment = mediaAttachments[idx]
+                                    let origIdx = attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? idx
+                                    let ar = mediaAspectRatios[idx]
 
-                            Group {
-                                if attachment.type == .video || attachment.type == .hls_video {
-                                    if let baseUrl = displayTweet.author?.baseUrl,
-                                       let url = attachment.getUrl(baseUrl) {
-                                        DetailSingletonVideoPlayerView(
-                                            url: url,
-                                            mid: attachment.mid,
-                                            mediaType: attachment.type,
-                                            aspectRatio: attachment.aspectRatio,
-                                            shouldLoad: attachment.mid == firstMainTweetVideoToAutoplay?.mid
-                                        )
-                                        .trackAttachmentVideoVisibility(
-                                            attachmentIndex: origIdx,
-                                            videoMid: attachment.mid,
-                                            coordinator: commentsVideoCoordinator,
-                                            scrollCoordinateSpace: "commentsScroll"
-                                        )
+                                    Group {
+                                        if attachment.type == .video || attachment.type == .hls_video {
+                                            if let baseUrl = displayTweet.author?.baseUrl,
+                                               let url = attachment.getUrl(baseUrl) {
+                                                DetailSingletonVideoPlayerView(
+                                                    url: url,
+                                                    mid: attachment.mid,
+                                                    mediaType: attachment.type,
+                                                    aspectRatio: attachment.aspectRatio,
+                                                    shouldLoad: attachment.mid == firstMainTweetVideoToAutoplay?.mid,
+                                                    shouldMountNativePlaybackSurface: shouldMountNativePlaybackSurface
+                                                )
+                                                .trackAttachmentVideoVisibility(
+                                                    attachmentIndex: origIdx,
+                                                    videoMid: attachment.mid,
+                                                    coordinator: commentsVideoCoordinator,
+                                                    scrollCoordinateSpace: "commentsScroll"
+                                                )
+                                            }
+                                        } else {
+                                            DetailMediaCell(
+                                                parentTweet: displayTweet,
+                                                attachmentIndex: origIdx,
+                                                aspectRatio: Float(ar),
+                                                shouldLoadVideo: false,
+                                                showMuteButton: false
+                                            )
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                selectedMediaIndex = origIdx
+                                                showBrowser = true
+                                            }
+                                        }
                                     }
-                                } else {
-                                    DetailMediaCell(
-                                        parentTweet: displayTweet,
-                                        attachmentIndex: origIdx,
-                                        aspectRatio: Float(ar),
-                                        shouldLoadVideo: false,
-                                        showMuteButton: false
-                                    )
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        selectedMediaIndex = origIdx
-                                        showBrowser = true
-                                    }
+                                    // The custom layout gives the player a stable concrete proposal.
+                                    // AVPlayerViewController's dynamic layout guides can otherwise form
+                                    // an invalidation loop on the iPad-on-Mac runtime.
+                                    .background(Color.black)
                                 }
                             }
-                            .frame(width: cellWidth, height: cellHeight)
-                            .background(Color.black)
                         }
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -1346,6 +1739,13 @@ struct TweetDetailView: View {
                             menuShareItems = ShareSheetData(items: items)
                         }
                     }
+                },
+                onShowLogin: { showLoginSheet = true },
+                onFilterTap: { showMenuFilterSheet = true },
+                onReportTap: { showMenuReportSheet = true },
+                onDeleteTap: { deleteAction in
+                    pendingMenuDeleteAction = deleteAction
+                    showMenuDeleteConfirmation = true
                 }
             )
             .padding(.trailing, -20)
@@ -1375,17 +1775,22 @@ struct TweetDetailView: View {
                         EmbeddedTweetView(
                             tweet: orig,
                             isPinned: false,
-                            onTap: nil, // NavigationLink to quoted tweet detail
+                            onTap: { selectedEmbeddedTweetForNavigation = $0 },
                             isEmbedded: true
                         )
                     }
                     .padding(.horizontal)
                     .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
                 } else {
-                    Text("Loading quoted tweet...")
+                    Text(NSLocalizedString("Loading quoted tweet...", comment: ""))
                         .foregroundColor(XTheme.secondaryTextColor)
-                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
                         .padding(.vertical, 8)
+                        .background(Color(uiColor: XTheme.quotedTweetSurface))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .padding(.horizontal)
+                        .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
                 }
             }
         }
@@ -1396,7 +1801,8 @@ struct TweetDetailView: View {
             tweet: displayTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
-            }
+            },
+            isInDetailView: true
         )
         .frame(height: 30)
         .padding(.leading, 16)
@@ -1406,9 +1812,9 @@ struct TweetDetailView: View {
     }
     
     private var commentsListView: some View {
-        CommentListView(
-            title: "Comments",
+        CommentListUIKitView(
             comments: $comments,
+            parentTweet: displayTweet,
             commentFetcher: { page, size in
                 let parentTweet = await MainActor.run { displayTweet }
 
@@ -1426,7 +1832,7 @@ struct TweetDetailView: View {
                     }
                 }
 
-                let (fetched, failed) = try await hproseInstance.fetchComments(
+                let fetched = try await hproseInstance.fetchComments(
                     parentTweet,
                     pageNumber: page,
                     pageSize: size
@@ -1437,12 +1843,8 @@ struct TweetDetailView: View {
                         TweetDetailCommentsCache.shared.setComments(fetched.compactMap { $0 }, for: parentTweet.mid)
                     }
                 }
-                if !failed.isEmpty {
-                    await MainActor.run { failedCommentIds.formUnion(failed) }
-                }
                 return fetched
             },
-            showTitle: false,
             notifications: [
                 CommentListNotification(
                     name: .newCommentAdded,
@@ -1466,31 +1868,18 @@ struct TweetDetailView: View {
                     }
                 )
             ],
-            isEmbedded: true, // Embedded in TweetDetailView's ScrollView, avoid nested scrolling
             hasUserScrolled: $hasUserScrolledComments,
-            rowView: { comment in
-                CommentVideoTrackingWrapper(
-                    parentTweet: displayTweet,
-                    comment: comment,
-                    coordinator: commentsVideoCoordinator,
-                    scrollCoordinateSpace: "commentsScroll"
-                )
-                .environment(\.videoListProvider, { videoMid, outerTweetId, mediaTweetId, attachmentIndex in
-                    let list = commentsVideoCoordinator.getVideoListForFullscreen()
-                    guard !list.isEmpty else { return nil }
-                    let startIndex = list.firstIndex(where: {
-                        $0.videoMid == videoMid &&
-                        $0.contextTweetId == outerTweetId &&
-                        $0.mediaTweetId == mediaTweetId &&
-                        $0.attachmentIndex == attachmentIndex
-                    }) ?? list.firstIndex(where: {
-                        $0.videoMid == videoMid &&
-                        $0.contextTweetId == displayTweet.mid &&
-                        $0.mediaTweetId == mediaTweetId &&
-                        $0.attachmentIndex == attachmentIndex
-                    }) ?? 0
-                    return (list, startIndex)
-                })
+            commentsVideoCoordinator: commentsVideoCoordinator,
+            onAvatarTap: { user in
+                selectedCommentUserForNavigation = user
+            },
+            onShowLogin: {
+                showLoginSheet = true
+            },
+            onShowToast: { message, isError in
+                toastMessage = message
+                toastIsError = isError
+                showToast = true
             }
         )
     }
@@ -1498,47 +1887,53 @@ struct TweetDetailView: View {
     private func setupInitialData() {
         configureCommentCacheContextIfNeeded()
 
-        // READ tweet on appear (comments handled by CommentListView.task)
-        Task { await doReadTweet() }
-
-        // SYNC: if nodes differ, resync tweet + any already-known failed comments
-        let hostIds = displayTweet.author?.hostIds ?? []
-        if hostIds.count >= 2 && hostIds[0] != hostIds[1] {
-            Task { await doResyncTweet() }
-            Task { await syncMissingComments() }
+        // The server syncs the tweet and its comments when this detail-view read
+        // completes. Keep one owner for the ordered read so comments are fetched
+        // exactly once, after that sync opportunity.
+        if initialLoadParentTweetId != displayTweet.mid {
+            initialLoadParentTweetId = displayTweet.mid
+            Task { await loadInitialServerData() }
         }
 
-        // 5-min tick: resync if nodes differ
+        // Periodically reload the current provider without triggering a cross-node sync.
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
-                let ids = displayTweet.author?.hostIds ?? []
-                guard ids.count >= 2, ids[0] != ids[1] else { return }
-                Task { await doResyncTweet() }
-                await syncMissingComments()
+                await doReadTweet(isInitialLoad: false)
             }
         }
     }
 
-    // READ: get_tweet on hostIds[1] (author's read node), bypasses cache
-    private func doReadTweet() async {
+    private func loadInitialServerData() async {
+        await doReadTweet(isInitialLoad: true)
+        // A failed tweet read must not prevent a best-effort comments refresh.
+        await refreshComments()
+    }
+
+    // READ: get_tweet on hostIds[1] (author's read node), bypasses cache.
+    // fromDetailView (server-side DHT provider sync) only needs to fire once per
+    // detail-view open (isInitialLoad), not on every pull-to-refresh — except for
+    // the embedded/quoted original tweet, which always gets it since it isn't
+    // covered by any other "opened from feed" sync.
+    private func doReadTweet(isInitialLoad: Bool) async {
         if let originalTweetId = tweet.originalTweetId,
            let originalAuthorId = tweet.originalAuthorId {
             let isPureRetweet = (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)
             if isPureRetweet {
+                // The original tweet is the only thing displayed (as the embedded card).
                 if let refreshed = try? await hproseInstance.getTweet(
-                    tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true
+                    tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true
                 ) {
                     await MainActor.run { originalTweet = refreshed }
                 }
             } else {
-                async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true)
-                async let originalResult = hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true)
+                async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad)
+                async let originalResult = hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true)
                 if let refreshed = try? await tweetResult { await MainActor.run { try? tweet.update(from: refreshed) } }
                 if let refreshedOriginal = try? await originalResult { await MainActor.run { originalTweet = refreshedOriginal } }
             }
         } else {
             if let refreshed = try? await hproseInstance.getTweet(
-                tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true
+                tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad
             ) {
                 await MainActor.run { try? tweet.update(from: refreshed) }
             }
@@ -1571,20 +1966,13 @@ struct TweetDetailView: View {
         }
     }
 
-    // Pull-to-refresh: READ tweet + comments on hostIds[1], then fire background sync for failed comments
+    // Pull-to-refresh: sync the latest tweet state, then reload comments.
     private func refreshTweetAndComments() async {
-        async let tweetRead: Void = doReadTweet()
-        async let commentsRead: Void = refreshComments()
-        await tweetRead
-        await commentsRead
-
-        let hostIds = displayTweet.author?.hostIds ?? []
-        if hostIds.count >= 2 && hostIds[0] != hostIds[1] && !failedCommentIds.isEmpty {
-            Task { await syncMissingComments() }
-        }
+        await doResyncTweet()
+        await refreshComments()
     }
 
-    // READ comments page-by-page on hostIds[1] until overlap or end; collects failedIds
+    // READ comments page-by-page on hostIds[1] until overlap or end.
     private func refreshComments() async {
         do {
             var allNewComments: [Tweet] = []
@@ -1593,10 +1981,9 @@ struct TweetDetailView: View {
             var hasOverlap = false
 
             while !hasOverlap {
-                let (freshComments, failed) = try await hproseInstance.fetchComments(
+                let freshComments = try await hproseInstance.fetchComments(
                     displayTweet, pageNumber: currentPage, pageSize: pageSize
                 )
-                await MainActor.run { failedCommentIds.formUnion(failed) }
 
                 let validComments = freshComments.compactMap { $0 }
                 if validComments.isEmpty { break }
@@ -1618,24 +2005,6 @@ struct TweetDetailView: View {
         } catch {}
     }
 
-    // SYNC: for each failed comment not blacklisted, call node_update_mid_by_score then retry
-    private func syncMissingComments() async {
-        let pending = Array(failedCommentIds).filter { !BlackList.shared.isBlacklisted($0) }
-        for commentId in pending {
-            if let comment = await hproseInstance.syncComment(commentId: commentId, parentTweet: displayTweet) {
-                await MainActor.run {
-                    failedCommentIds.remove(commentId)
-                    guard !comments.contains(where: { $0.mid == comment.mid }) else { return }
-                    NotificationCenter.default.post(
-                        name: .commentSynced,
-                        object: nil,
-                        userInfo: ["comment": comment, "parentTweetId": displayTweet.mid]
-                    )
-                }
-            }
-        }
-    }
-
     private func configureCommentCacheContextIfNeeded() {
         let parentTweetId = displayTweet.mid
         if currentCommentsParentTweetId == parentTweetId {
@@ -1644,7 +2013,7 @@ struct TweetDetailView: View {
 
         currentCommentsParentTweetId = parentTweetId
         hasServedCachedCommentsForCurrentParentTweet = false
-
+        initialLoadParentTweetId = ""
         if let cachedComments = TweetDetailCommentsCache.shared.comments(for: parentTweetId) {
             comments = cachedComments
             hasServedCachedCommentsForCurrentParentTweet = true
@@ -1718,6 +2087,13 @@ struct TweetDetailView: View {
     }
     
     /// Handle scroll offset changes to show/hide bottom navigation bar
+    private func mountNativePlaybackSurfaceIfReady() {
+        guard nativePlaybackMountDelayElapsed,
+              !isDetailScrollInteractionActive,
+              !shouldMountNativePlaybackSurface else { return }
+        shouldMountNativePlaybackSurface = true
+    }
+
     @MainActor
     private func handleScrollOffsetChange(_ offset: CGFloat, delta: CGFloat, isAtBottom: Bool) {
         // Threshold for scroll detection (prevents jittery behavior)

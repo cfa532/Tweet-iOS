@@ -6,6 +6,7 @@ struct ContentView: View {
     @StateObject private var hproseInstance = HproseInstance.shared
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @StateObject private var uploadProgressManager = UploadProgressManager.shared
+    @StateObject private var followingsTweetViewModel = FollowingsTweetViewModel.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
@@ -24,6 +25,11 @@ struct ContentView: View {
     @State private var showCloudDriveLimitAlert = false
     @State private var showLoginSheet = false
     @State private var notificationObservers: [NSObjectProtocol] = []
+    @State private var didClearStartupNewTweetsBanner = false
+    @State private var isHandlingDeeplink = false
+    @State private var isHomeNavigationReady = false
+    @State private var deeplinkNavigationTask: Task<Void, Never>?
+    @State private var deeplinkNavigationID = UUID()
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -52,6 +58,12 @@ struct ContentView: View {
                                 }
                             }
                         )
+                    }
+                    .onAppear {
+                        isHomeNavigationReady = true
+                    }
+                    .onDisappear {
+                        isHomeNavigationReady = false
                     }
                 } else if selectedTab == 1 {
                     NavigationStack(path: $chatNavigationPath) {
@@ -210,6 +222,20 @@ struct ContentView: View {
             .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: isNavigationVisible)
             .animation(animateNavigationVisibility ? .easeInOut(duration: 0.25) : nil, value: shouldHideHeight)
         }
+
+        if isHandlingDeeplink {
+            DeeplinkLoadingPlaceholderView()
+                .ignoresSafeArea()
+                .zIndex(3000)
+        }
+        }
+        .overlay(alignment: .top) {
+            if shouldShowMainFeedNewTweetsBanner {
+                NewTweetsBannerOverlay(viewModel: followingsTweetViewModel) {
+                    openMainFeedAndShowNewTweets()
+                }
+                .zIndex(1500)
+            }
         }
         .background(XTheme.backgroundColor)
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -290,8 +316,15 @@ struct ContentView: View {
             }
         )
         .onAppear {
+            if !didClearStartupNewTweetsBanner {
+                didClearStartupNewTweetsBanner = true
+                Task { @MainActor in
+                    followingsTweetViewModel.clearPendingNewTweetsBanner(reason: "app start")
+                }
+            }
             checkForPendingUpload()
             setupNotificationObservers()
+            handlePendingDeeplinks()
         }
         .onDisappear {
             cleanupNotificationObservers()
@@ -301,6 +334,31 @@ struct ContentView: View {
     }
     
     // MARK: - Notification Observer Management
+
+    private var shouldShowMainFeedNewTweetsBanner: Bool {
+        !isHandlingDeeplink
+            && !hproseInstance.appUser.isGuest
+            && selectedTab == 0
+            && navigationPath.isEmpty
+    }
+
+    private func openMainFeedAndShowNewTweets() {
+        selectedTab = 0
+        if !navigationPath.isEmpty {
+            navigationPath.removeLast(navigationPath.count)
+        }
+        isInChatScreen = false
+        isInProfileFromChat = false
+        isNavigationVisible = true
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .scrollToTop,
+                object: nil,
+                userInfo: ["scrollTarget": "firstRegularTweet"]
+            )
+        }
+    }
     
     private func setupNotificationObservers() {
         cleanupNotificationObservers()
@@ -308,17 +366,34 @@ struct ContentView: View {
         // 1. Tweet submitted
         notificationObservers.append(
             NotificationCenter.default.addObserver(
+                forName: .showMainFeedNewTweets,
+                object: nil,
+                queue: .main
+            ) { _ in
+                MainActor.assumeIsolated {
+                    self.openMainFeedAndShowNewTweets()
+                }
+            }
+        )
+
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
                 forName: .tweetSubmitted,
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                MainActor.assumeIsolated {
+                    if let message {
                     self.toastMessage = message
                     self.toastType = .success
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -331,15 +406,20 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String,
-                   let typeString = notification.userInfo?["type"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                let typeString = notification.userInfo?["type"] as? String
+                MainActor.assumeIsolated {
+                    if let message, let typeString {
                     self.toastMessage = message
                     self.toastType = typeString == "error" ? .error : .success
                     self.showToast = true
                     
                     let delay = typeString == "error" ? 5.0 : 2.0
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -352,12 +432,14 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let isVisible = notification.userInfo?["isVisible"] as? Bool {
+                let isVisible = notification.userInfo?["isVisible"] as? Bool
+                let hideHeight = notification.userInfo?["hideHeight"] as? Bool ?? false
+                let animated = notification.userInfo?["animated"] as? Bool ?? true
+                MainActor.assumeIsolated {
+                    if let isVisible {
                     guard self.isNavigationVisible != isVisible else { return }
                     
                     // Check if TweetDetailView wants height hidden (only affects TweetDetailView)
-                    let hideHeight = notification.userInfo?["hideHeight"] as? Bool ?? false
-                    let animated = notification.userInfo?["animated"] as? Bool ?? true
                     
                     print("[ContentView] Navigation visibility changed to: \(isVisible), hideHeight: \(hideHeight)")
                     if animated {
@@ -375,8 +457,11 @@ struct ContentView: View {
                             self.shouldHideHeight = hideHeight && !isVisible // Only hide height when hidden and flag is set
                         }
                         DispatchQueue.main.async {
-                            self.animateNavigationVisibility = true
+                            MainActor.assumeIsolated {
+                                self.animateNavigationVisibility = true
+                            }
                         }
+                    }
                     }
                 }
             }
@@ -389,13 +474,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if notification.userInfo?["tweet"] is Tweet {
+                let hasTweet = notification.userInfo?["tweet"] is Tweet
+                MainActor.assumeIsolated {
+                    if hasTweet {
                     self.toastMessage = NSLocalizedString("Tweet posted successfully", comment: "Tweet upload success")
                     self.toastType = .success
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -408,13 +498,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if notification.userInfo?["comment"] is Tweet {
+                let hasComment = notification.userInfo?["comment"] is Tweet
+                MainActor.assumeIsolated {
+                    if hasComment {
                     self.toastMessage = NSLocalizedString("Comment posted successfully", comment: "Comment upload success")
                     self.toastType = .success
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -427,13 +522,58 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let error = notification.userInfo?["error"] as? Error {
-                    self.toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                let errorMessage = (notification.userInfo?["error"] as? Error).map {
+                    ErrorMessageHelper.userFriendlyMessage(from: $0)
+                }
+                MainActor.assumeIsolated {
+                    if let errorMessage {
+                    self.toastMessage = errorMessage
                     self.toastType = .error
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
+                    }
+                }
+            }
+        )
+
+        // 6a. Tweet action failed
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .errorOccurred,
+                object: nil,
+                queue: .main
+            ) { notification in
+                let actionError: (message: String, type: ToastView.ToastType)?
+                if let error = notification.object as? NSError {
+                    switch error.domain {
+                    case "TweetDeletion":
+                        actionError = (ErrorMessageHelper.userFriendlyMessage(from: error), .error)
+                    case "PinToggle":
+                        actionError = (ErrorMessageHelper.userFriendlyMessage(from: error), .warning)
+                    default:
+                        actionError = nil
+                    }
+                } else {
+                    actionError = nil
+                }
+                MainActor.assumeIsolated {
+                    guard let actionError else {
+                        return
+                    }
+
+                    self.toastMessage = actionError.message
+                    self.toastType = actionError.type
+                    self.showToast = true
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
                     }
                 }
             }
@@ -446,13 +586,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                MainActor.assumeIsolated {
+                    if let message {
                     self.toastMessage = message
                     self.toastType = .warning
                     self.showToast = true
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -465,13 +610,18 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let message = notification.userInfo?["message"] as? String {
+                let message = notification.userInfo?["message"] as? String
+                MainActor.assumeIsolated {
+                    if let message {
                     self.toastMessage = message
                     self.toastType = .warning
                     self.showToast = true
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -484,8 +634,10 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                if let memoryMB = notification.userInfo?["memoryMB"] as? UInt64,
-                   let severity = notification.userInfo?["severity"] as? String {
+                let memoryMB = notification.userInfo?["memoryMB"] as? UInt64
+                let severity = notification.userInfo?["severity"] as? String
+                MainActor.assumeIsolated {
+                    if let memoryMB, let severity {
                     
                     let memoryGB = String(format: "%.1f", Double(memoryMB) / 1024.0)
                     
@@ -499,7 +651,10 @@ struct ContentView: View {
                     self.showToast = true
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                        withAnimation { self.showToast = false }
+                        MainActor.assumeIsolated {
+                            withAnimation { self.showToast = false }
+                        }
+                    }
                     }
                 }
             }
@@ -512,8 +667,10 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { _ in
-                self.isNavigationVisible = true
-                self.checkForPendingUpload()
+                Task { @MainActor in
+                    self.isNavigationVisible = true
+                    self.checkForPendingUpload()
+                }
             }
         )
         
@@ -524,13 +681,16 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { _ in
-                guard self.hproseInstance.appUser.isGuest else { return }
-                guard self.navigationPath.isEmpty else { return }
-                guard let alphaId = Gadget.getAlphaIds().first else { return }
-                let alphaUser = User.getInstance(mid: alphaId)
-                guard alphaUser.username != nil else { return }
-                self.selectedTab = 0
-                self.navigationPath.append(alphaUser)
+                MainActor.assumeIsolated {
+                    guard self.hproseInstance.appUser.isGuest else { return }
+                    guard !self.isHandlingDeeplink else { return }
+                    guard self.navigationPath.isEmpty else { return }
+                    guard let alphaId = Gadget.getAlphaIds().first else { return }
+                    let alphaUser = User.getInstance(mid: alphaId)
+                    guard alphaUser.username != nil else { return }
+                    self.selectedTab = 0
+                    self.navigationPath.append(alphaUser)
+                }
             }
         )
 
@@ -541,48 +701,38 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { notification in
-                print("[ContentView] ✅ Received deeplink notification")
-                if let url = notification.userInfo?["url"] as? URL {
-                    print("[ContentView] URL from notification: \(url.absoluteString)")
-                    self.handleDeeplink(url)
-                } else {
-                    print("[ContentView] ⚠️ No URL found in notification userInfo")
-                }
-            }
-        )
-        
-        // 11. Deeplink tweet not found
-        notificationObservers.append(
-            NotificationCenter.default.addObserver(
-                forName: .deeplinkTweetNotFound,
-                object: nil,
-                queue: .main
-            ) { notification in
-                if let message = notification.userInfo?["message"] as? String {
-                    self.toastMessage = message
-                    self.toastType = .error
-                    self.showToast = true
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        withAnimation { self.showToast = false }
+                let url = notification.userInfo?["url"] as? URL
+                MainActor.assumeIsolated {
+                    print("[ContentView] ✅ Received deeplink notification")
+                    if let url {
+                        print("[ContentView] URL from notification: \(url.absoluteString)")
+                        guard DeeplinkDelivery.shared.startHandling(url) else {
+                            print("[ContentView] Skipping duplicate/in-flight deeplink notification: \(url.absoluteString)")
+                            return
+                        }
+                        self.handleDeeplink(url)
+                    } else {
+                        print("[ContentView] ⚠️ No URL found in notification userInfo")
                     }
                 }
             }
         )
         
-        // 12. After successful login, return to the main (home) screen
+        // 11. After successful login, return to the main (home) screen
         notificationObservers.append(
             NotificationCenter.default.addObserver(
                 forName: .userDidLogin,
                 object: nil,
                 queue: .main
             ) { _ in
-                self.selectedTab = 0
-                self.navigationPath = NavigationPath()
-                self.chatNavigationPath = NavigationPath()
-                self.isInChatScreen = false
-                self.isInProfileFromChat = false
-                NotificationCenter.default.post(name: .scrollToTop, object: nil)
+                MainActor.assumeIsolated {
+                    self.selectedTab = 0
+                    self.navigationPath = NavigationPath()
+                    self.chatNavigationPath = NavigationPath()
+                    self.isInChatScreen = false
+                    self.isInProfileFromChat = false
+                    NotificationCenter.default.post(name: .scrollToTop, object: nil)
+                }
             }
         )
     }
@@ -619,8 +769,8 @@ struct ContentView: View {
     // MARK: - Pending Upload Handling
     
     private func checkForPendingUpload() {
-        // Don't check if dialog is already showing or if actively uploading
-        guard !showPendingUploadDialog && !uploadProgressManager.isUploading else {
+        // Don't recover while the foreground upload queue is still handling work.
+        guard !showPendingUploadDialog && !uploadProgressManager.hasActiveOrQueuedUploads else {
             return
         }
         
@@ -709,36 +859,121 @@ struct ContentView: View {
     }
     
     // MARK: - Deeplink Handling
+
+    private func handlePendingDeeplinks() {
+        let urls = DeeplinkDelivery.shared.consumePendingURLs()
+        guard !urls.isEmpty else { return }
+
+        print("[ContentView] Handling \(urls.count) pending deeplink(s)")
+        for url in urls {
+            handleDeeplink(url)
+        }
+    }
     
     private func handleDeeplink(_ url: URL) {
         print("[ContentView] Handling deeplink: \(url.absoluteString)")
         
         // Parse the URL
         let deeplinkType = DeeplinkManager.shared.parseURL(url)
-        
-        // Switch to home tab if needed (for navigation)
-        // Use a small delay to ensure tab switch completes before navigation
-        if selectedTab != 0 {
+        guard case .unknown = deeplinkType else {
+            isHandlingDeeplink = true
             selectedTab = 0
-            // Wait a bit for tab switch animation
-            Task {
-                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
-                await DeeplinkManager.shared.handleDeeplink(
+
+            deeplinkNavigationTask?.cancel()
+            let navigationID = UUID()
+            deeplinkNavigationID = navigationID
+            deeplinkNavigationTask = Task { @MainActor in
+                guard await waitForDeeplinkNavigationReadiness() else {
+                    DeeplinkDelivery.shared.finishHandling(url, succeeded: true)
+                    return
+                }
+
+                let succeeded = await DeeplinkManager.shared.handleDeeplink(
                     deeplinkType,
                     navigationPath: $navigationPath,
                     hproseInstance: hproseInstance
                 )
+                guard !Task.isCancelled else {
+                    DeeplinkDelivery.shared.finishHandling(url, succeeded: true)
+                    return
+                }
+
+                let completion = DeeplinkDelivery.shared.finishHandling(url, succeeded: succeeded)
+                guard deeplinkNavigationID == navigationID else { return }
+
+                deeplinkNavigationTask = nil
+                switch completion {
+                case .succeeded:
+                    print("[ContentView] ✅ Deeplink destination replaced the loading placeholder")
+                    isHandlingDeeplink = false
+                case .retryScheduled:
+                    print("[ContentView] Deeplink resolution failed; keeping placeholder for the single retry")
+                    // Keep the placeholder visible while cold-start recovery retries.
+                    break
+                case .failed:
+                    print("[ContentView] ❌ Deeplink resolution failed after the retry")
+                    isHandlingDeeplink = false
+                    showDeeplinkFailureToast()
+                }
             }
-        } else {
-            // Already on home tab, navigate immediately
-            Task {
-                await DeeplinkManager.shared.handleDeeplink(
-                    deeplinkType,
-                    navigationPath: $navigationPath,
-                    hproseInstance: hproseInstance
-                )
+            return
+        }
+
+        print("[ContentView] Ignoring unknown deeplink: \(url.absoluteString)")
+        DeeplinkDelivery.shared.finishHandling(url, succeeded: true)
+        showDeeplinkFailureToast()
+    }
+
+    private func waitForDeeplinkNavigationReadiness() async -> Bool {
+        // A universal link can arrive during willEnterForeground, before SwiftUI has
+        // remounted the Home NavigationStack. Installing a cached destination in that
+        // window can leave the path populated without presenting its destination.
+        while UIApplication.shared.applicationState != .active || !isHomeNavigationReady {
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return false
             }
         }
+
+        // Give the newly mounted stack one update cycle to bind to navigationPath.
+        await Task.yield()
+        return !Task.isCancelled
+    }
+
+    private func showDeeplinkFailureToast() {
+        toastMessage = NSLocalizedString(
+            "Couldn’t open this link. The content may be unavailable, or there may be a connection problem.",
+            comment: "Deeplink loading failure"
+        )
+        toastType = .error
+        showToast = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            withAnimation { showToast = false }
+        }
+    }
+}
+
+@available(iOS 17.0, *)
+private struct DeeplinkLoadingPlaceholderView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+                .tint(XTheme.accentColor)
+
+            Text(NSLocalizedString("Opening link…", comment: "Deeplink loading title"))
+                .font(.headline)
+                .foregroundColor(XTheme.textColor)
+
+            Text(NSLocalizedString("This may take a moment.", comment: "Deeplink loading subtitle"))
+                .font(.subheadline)
+                .foregroundColor(XTheme.secondaryTextColor)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(XTheme.backgroundColor)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -748,4 +983,161 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
             .environmentObject(ThemeManager.shared)
     }
-} 
+}
+
+@available(iOS 16.0, *)
+private struct NewTweetsBannerOverlay: View {
+    @ObservedObject var viewModel: FollowingsTweetViewModel
+    let onTap: () -> Void
+
+    private struct AvatarClusterItem: Identifiable {
+        let id: String
+        let user: User?
+        let opacity: Double
+    }
+
+    private var pendingTweets: [Tweet] {
+        viewModel.visiblePendingNewTweets
+    }
+
+    var body: some View {
+        VStack {
+            if viewModel.showNewTweetsBanner && !pendingTweets.isEmpty {
+                Button(action: {
+                    viewModel.applyPendingNewTweets()
+                    onTap()
+                }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 13, weight: .semibold))
+
+                        avatarCluster
+                            .padding(.leading, -2)
+                            .padding(.trailing, 5)
+
+                        if shouldShowTitle {
+                            Text(title)
+                                .font(.system(size: 15, weight: .regular))
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .padding(.leading, 12)
+                    .padding(.trailing, 14)
+                    .frame(height: 44)
+                    .background(
+                        Capsule()
+                            .fill(bannerBackgroundColor)
+                    )
+                    .clipShape(Capsule())
+                    .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 3)
+                }
+                .buttonStyle(.plain)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            Spacer()
+        }
+        .padding(.top, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(viewModel.showNewTweetsBanner && !pendingTweets.isEmpty)
+        .animation(.easeOut(duration: 0.22), value: viewModel.showNewTweetsBanner)
+    }
+
+    private var title: String {
+        let count = pendingTweets.count
+        let format = count == 1
+            ? NSLocalizedString("new_tweets_banner_one", comment: "New tweet floating pill title")
+            : NSLocalizedString("new_tweets_banner_many", comment: "New tweets floating pill title")
+        return String(format: format, count > 9 ? "9+" : "\(count)")
+    }
+
+    private var shouldShowTitle: Bool {
+        avatarClusterItems(from: distinctAuthors).count <= 3
+    }
+
+    private var bannerBackgroundColor: Color {
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard XTheme.accent.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
+            return XTheme.accentColor
+        }
+
+        return Color(uiColor: UIColor(
+            hue: hue,
+            saturation: saturation * 0.86,
+            brightness: brightness,
+            alpha: 1.0
+        ))
+    }
+
+    private var distinctAuthors: [User] {
+        pendingTweets.reduce(into: [User]()) { result, tweet in
+            let author = tweet.author ?? User.getInstance(mid: tweet.authorId)
+            guard !result.contains(where: { $0.mid == author.mid }) else { return }
+            result.append(author)
+        }
+    }
+
+    private var avatarCluster: some View {
+        let items = avatarClusterItems(from: distinctAuthors)
+        let avatarCount = max(1, items.count)
+        let avatarSize: CGFloat = 32
+        let trailingReveal: CGFloat = 7
+        let width = avatarSize + CGFloat(avatarCount - 1) * trailingReveal
+
+        return ZStack(alignment: .leading) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                avatarView(for: item, size: avatarSize)
+                    .offset(x: CGFloat(index) * trailingReveal)
+                    .zIndex(Double(avatarCount - index))
+            }
+        }
+        .frame(width: width, height: avatarSize)
+    }
+
+    private func avatarClusterItems(from authors: [User]) -> [AvatarClusterItem] {
+        if authors.isEmpty {
+            return [AvatarClusterItem(id: "default-0", user: nil, opacity: 1.0)]
+        }
+
+        if authors.count <= 5 {
+            return authors.map { author in
+                AvatarClusterItem(id: author.mid, user: author, opacity: 1.0)
+            }
+        }
+
+        let firstAuthors = authors.prefix(2).map { author in
+            AvatarClusterItem(id: author.mid, user: author, opacity: 1.0)
+        }
+        let placeholders = [
+            AvatarClusterItem(id: "default-more-0", user: nil, opacity: 0.42),
+            AvatarClusterItem(id: "default-more-1", user: nil, opacity: 0.42)
+        ]
+        let lastAuthor = authors[authors.count - 1]
+        return firstAuthors + placeholders + [
+            AvatarClusterItem(id: lastAuthor.mid, user: lastAuthor, opacity: 1.0)
+        ]
+    }
+
+    @ViewBuilder
+    private func avatarView(for item: AvatarClusterItem, size: CGFloat) -> some View {
+        if let user = item.user {
+            Avatar(user: user, size: size)
+                .frame(width: size, height: size)
+        } else {
+            Circle()
+                .fill(XTheme.secondaryBackgroundColor)
+                .overlay(
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(XTheme.secondaryTextColor)
+                )
+                .frame(width: size, height: size)
+                .opacity(item.opacity)
+        }
+    }
+
+}

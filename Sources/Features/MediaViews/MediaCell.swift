@@ -8,9 +8,70 @@
 import SwiftUI
 import AVFoundation
 import Combine
+import QuartzCore
+
+// MARK: - Shared Display Link Manager
+
+@MainActor
+class SharedDisplayLinkManager: NSObject {
+    static let shared = SharedDisplayLinkManager()
+
+    private var displayLink: CADisplayLink?
+    private var observers: [UUID: (CADisplayLink) -> Void] = [:]
+    private(set) var isRunning = false
+
+    var preferredFramesPerSecond: Int = 30 {
+        didSet {
+            guard isRunning else { return }
+            stop()
+            start()
+        }
+    }
+
+    private override init() {
+        super.init()
+        displayLink = CADisplayLink(target: self, selector: #selector(displayLinkFired))
+        displayLink?.preferredFramesPerSecond = preferredFramesPerSecond
+    }
+
+    func addObserver(id: UUID, callback: @escaping (CADisplayLink) -> Void) {
+        let shouldStart = observers.isEmpty
+        observers[id] = callback
+        if shouldStart {
+            start()
+        }
+    }
+
+    func removeObserver(id: UUID) {
+        observers[id] = nil
+        if observers.isEmpty {
+            stop()
+        }
+    }
+
+    private func start() {
+        guard !isRunning, let displayLink else { return }
+        displayLink.preferredFramesPerSecond = preferredFramesPerSecond
+        displayLink.add(to: .main, forMode: .common)
+        isRunning = true
+    }
+
+    private func stop() {
+        guard isRunning, let displayLink else { return }
+        displayLink.remove(from: .main, forMode: .common)
+        isRunning = false
+    }
+
+    @objc private func displayLinkFired(_ link: CADisplayLink) {
+        for callback in observers.values {
+            callback(link)
+        }
+    }
+}
 
 // Global video visibility manager
-class VideoVisibilityManager: ObservableObject {
+@MainActor
+final class VideoVisibilityManager: ObservableObject {
     static let shared = VideoVisibilityManager()
     
     private init() {}
@@ -29,7 +90,7 @@ class VideoVisibilityManager: ObservableObject {
 
 /// Closure type for providing a video list for fullscreen navigation.
 /// Parameters: (videoMid, outerTweetId, mediaTweetId, attachmentIndex) → (list, startIndex)?
-typealias VideoListProvider = (_ videoMid: String, _ outerTweetId: String, _ mediaTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
+typealias VideoListProvider = @MainActor @Sendable (_ videoMid: String, _ outerTweetId: String, _ mediaTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
 
 private struct VideoListProviderKey: EnvironmentKey {
     static let defaultValue: VideoListProvider? = nil
@@ -43,7 +104,7 @@ extension EnvironmentValues {
 }
 
 // MARK: - MediaCell
-struct MediaCell: View, Equatable, MediaCellDelegate {
+struct MediaCell: View, @MainActor Equatable, @MainActor MediaCellDelegate {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
@@ -54,6 +115,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     
     @State private var image: UIImage?
     @State private var isLoading = false
+    @State private var imageLoadFailed = false
     @State private var showFullScreen = false
     @State private var isVisible = false
     @State private var isOpeningFullScreen = false
@@ -277,8 +339,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             }
         }
         
-        // Phase 3: Using delegate-based communication for pause/stop commands
-        // Keeping notification listener for play commands from SharedVideoPlayerManager
+        // Phase 3: Using delegate-based communication for pause/stop commands.
+        // Keep notification listener for legacy coordinator play commands.
         .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in
             // Extract notification data
             guard let videoMid = notification.userInfo?["videoMid"] as? String,
@@ -347,18 +409,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         .onChange(of: showFullScreen) { _, newValue in
             if newValue {
                 // Video is going into full-screen mode
-                // Pause all MediaCell videos to avoid multiple videos playing
-                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-
-                VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
-                OverlayVisibilityCoordinator.shared.beginOverlay(
-                    id: "mediaBrowserFullScreen",
-                    source: "MediaCell"
-                )
-                // Reset loading state once fullscreen is presented
-                isOpeningFullScreen = false
-
-                // Set video list for fullscreen navigation if provider is available (e.g. comments)
+                // Set video list before stopping inline players so fullscreen can
+                // continue autoplaying through the current feed/comment list.
                 if isVideoAttachment,
                    let provider = videoListProvider,
                    let (list, startIndex) = provider(
@@ -369,6 +421,17 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                    ) {
                     FullScreenVideoManager.shared.setVideoList(list, startIndex: startIndex)
                 }
+
+                // Pause all MediaCell videos to avoid multiple videos playing
+                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+
+                VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
+                OverlayVisibilityCoordinator.shared.beginOverlay(
+                    id: "mediaBrowserFullScreen",
+                    source: "MediaCell"
+                )
+                // Reset loading state once fullscreen is presented
+                isOpeningFullScreen = false
             } else {
                 // Video is exiting full-screen mode
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
@@ -453,10 +516,12 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             object: nil,
             queue: .main
         ) { _ in
-            // Only reload if cell is visible and image was released
-            guard self.isVisible, self.image == nil, self.attachment.type == .image else { return }
-            
-            self.loadImage()
+            Task { @MainActor in
+                // Only reload if cell is visible and image was released
+                guard self.isVisible, self.image == nil, self.attachment.type == .image else { return }
+
+                self.loadImage()
+            }
         }
     }
     
@@ -464,14 +529,18 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         guard let url = attachment.getUrl(effectiveBaseUrl) else {
             // If no URL, ensure isLoading is false
             isLoading = false
+            imageLoadFailed = true
             return
         }
+
+        imageLoadFailed = false
 
         // First, try to get cached image from memory only (fastest, no I/O)
         if let cachedImage = imageCache.getCompressedImageFromMemory(for: attachment) {
             print("DEBUG: [MediaCell] Found image in memory cache for \(attachment.mid)")
             self.image = cachedImage
             self.isLoading = false
+            self.imageLoadFailed = false
             return
         }
 
@@ -502,6 +571,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 if let cachedImage = cachedImage {
                     self.image = cachedImage
                     self.isLoading = false
+                    self.imageLoadFailed = false
                 } else {
                     print("DEBUG: [MediaCell] No cached image found, starting network load for \(attachmentCopy.mid)")
                     // If no cached image at all, visible cells outrank preload/background image work.
@@ -515,10 +585,22 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                               self.attachment.mid == attachmentCopy.mid else { return }
                         self.image = loadedImage
                         self.isLoading = false
+                        self.imageLoadFailed = loadedImage == nil
                     }
                 }
             }
         }
+    }
+
+    private func retryImageLoad() {
+        guard attachment.type == .image else { return }
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        image = nil
+        imageLoadFailed = false
+        isLoading = true
+        GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
+        loadImage()
     }
     
     
@@ -538,14 +620,35 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         } else if isLoading {
             // Loading - show placeholder with spinner
             ZStack {
-                Color.gray.opacity(0.2)
+                Color(.systemGray6)
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle())
             }
             .frame(width: width, height: height, alignment: .center)
+        } else if imageLoadFailed {
+            ZStack {
+                Color(.systemGray6)
+                Button {
+                    retryImageLoad()
+                } label: {
+                    Image(systemName: "arrow.clockwise.circle")
+                        .font(.system(size: 30, weight: .medium))
+                        .foregroundColor(Color(.label).opacity(0.72))
+                        .frame(width: 52, height: 52)
+                        .background(Color(.systemBackground).opacity(0.86))
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle().stroke(Color(.separator), lineWidth: 1)
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Retry image"))
+            }
+            .frame(width: width, height: height, alignment: .center)
         } else {
             // No image and not loading - just show placeholder
-            Color.gray.opacity(0.2)
+            Color(.systemGray6)
                 .frame(width: width, height: height, alignment: .center)
         }
     }
@@ -649,7 +752,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     
     // Preference key to track video frame changes
     private struct VideoFramePreferenceKey: PreferenceKey {
-        static var defaultValue: CGRect = .zero
+        static let defaultValue: CGRect = .zero
         static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
             value = nextValue()
         }
@@ -808,6 +911,7 @@ extension MediaCell {
     }
 
     var isActuallyPlaying: Bool { false }
+    var isVisiblePlaybackActive: Bool { false }
     var isLoadingForCoordinator: Bool { false }
     var isRecentlyPlaying: Bool { false }
 }

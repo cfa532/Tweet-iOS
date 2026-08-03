@@ -20,6 +20,7 @@ struct ChatScreen: View {
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var selectedDocuments: [DocumentFile] = []
     @State private var showDocumentPicker = false
+    @State private var showLoginSheet = false
     @State private var isLongPressingAttachment = false
     @State private var attachmentItemData: HproseInstance.PendingTweetUpload.ItemData?
     @State private var isProcessingAttachment = false
@@ -147,6 +148,9 @@ struct ChatScreen: View {
                     allowsMultipleSelection: false
                 )
             }
+            .sheet(isPresented: $showLoginSheet) {
+                LoginView()
+            }
             .onChange(of: selectedDocuments) { oldDocuments, newDocuments in
                 guard !newDocuments.isEmpty, !isProcessingAttachment else {
                     return
@@ -249,24 +253,25 @@ struct ChatScreen: View {
                 .padding()
             }
             .defaultScrollAnchor(.bottom)
+            .defaultScrollAnchor(.top, for: .alignment)
             .onChange(of: shouldScrollToBottom) { _, newValue in
                 guard newValue, let lastMessage = messages.last else { return }
 
                 if shouldAnimateScroll {
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        proxy.scrollTo(lastMessage.id)
                     }
                 } else {
-                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    proxy.scrollTo(lastMessage.id)
                 }
                 shouldScrollToBottom = false
                 shouldAnimateScroll = true
             }
             .onChange(of: keyboardHeight) { _, newHeight in
-                // Scroll to bottom when keyboard appears
+                // Keep the latest message visible when the keyboard appears.
                 if newHeight > 0, let lastMessage = messages.last {
                     withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        proxy.scrollTo(lastMessage.id)
                     }
                 }
             }
@@ -462,6 +467,7 @@ struct ChatScreen: View {
     }
     
     private func sendMessage() {
+        guard requireAuthenticatedForWrite() else { return }
         guard canSendMessage else { return }
         
         // Check if message has attachments
@@ -477,6 +483,7 @@ struct ChatScreen: View {
     }
     
     private func resendMessage(_ failedMessage: ChatMessage) {
+        guard requireAuthenticatedForWrite() else { return }
         print("[ChatScreen] Attempting to resend message: \(failedMessage.id)")
         
         // Check if message has attachments
@@ -584,6 +591,16 @@ struct ChatScreen: View {
                 }
             }
         }
+    }
+
+    private func requireAuthenticatedForWrite() -> Bool {
+        guard HproseInstance.shared.appUser.isGuest else { return true }
+        if let onShowLogin {
+            onShowLogin()
+        } else {
+            showLoginSheet = true
+        }
+        return false
     }
     
     private func sendTextMessageDirectly() {

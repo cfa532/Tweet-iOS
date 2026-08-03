@@ -1,5 +1,5 @@
 import Foundation
-import hprose
+@preconcurrency import hprose
 
 enum UserCacheStatus: String {
     case unknown
@@ -9,7 +9,8 @@ enum UserCacheStatus: String {
     case refreshFailed
 }
 
-class User: ObservableObject, Codable, Identifiable, Hashable {
+@MainActor
+class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @MainActor Hashable {
     // MARK: - Singleton Dictionary
     private static var userInstances: [MimeiId: User] = [:]
     static let userInstancesQueue = DispatchQueue(label: "user.instances.queue")
@@ -18,31 +19,22 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var mid: MimeiId
     @Published var baseUrl: URL? {
         didSet {
-            let userId = mid
-            Task { @MainActor in
-                if baseUrl != oldValue {
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if baseUrl != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var writableUrl: URL?
-    /// When writableUrl was last resolved. Used for the 5-minute TTL cache.
+    /// Last resolution time for diagnostics only. Writable URLs are not reused
+    /// across calls; writes resolve hostIds[0] fresh before creating a client.
     var writableUrlResolvedAt: Date?
     @Published var name: String?
     @Published var username: String?
     @Published var password: String?
     @Published var avatar: MimeiId? {
         didSet {
-            let userId = mid
-            Task { @MainActor in
-                if avatar != oldValue {
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if avatar != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
@@ -55,121 +47,41 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var tweetCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = tweetCount, count < 0 {
-                tweetCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when tweetCount changes
-                if let newValue = tweetCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.tweetCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = tweetCount, count < 0 { tweetCount = 0; return }
+            if tweetCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var followingCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = followingCount, count < 0 {
-                followingCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when followingCount changes
-                if let newValue = followingCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.followingCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = followingCount, count < 0 { followingCount = 0; return }
+            if followingCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var followersCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = followersCount, count < 0 {
-                followersCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when followersCount changes
-                if let newValue = followersCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.followersCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = followersCount, count < 0 { followersCount = 0; return }
+            if followersCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var bookmarksCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = bookmarksCount, count < 0 {
-                bookmarksCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when bookmarksCount changes
-                if let newValue = bookmarksCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.bookmarksCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = bookmarksCount, count < 0 { bookmarksCount = 0; return }
+            if bookmarksCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var favoritesCount: Int? {
         didSet {
-            // Ensure count never goes below zero
-            if let count = favoritesCount, count < 0 {
-                favoritesCount = 0
-                return
-            }
-            
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when favoritesCount changes
-                if let newValue = favoritesCount, newValue != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.favoritesCount = newValue
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if let count = favoritesCount, count < 0 { favoritesCount = 0; return }
+            if favoritesCount != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
@@ -184,7 +96,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     @Published var hostIds: [MimeiId]? // hostIds[0]=writable host, hostIds[1]=best access node
-    /// For read RPCs: prefer hostIds[1] (best access node from provider resolution), fall back to hostIds[0].
+    /// For read RPCs, hostIds[1] is the access node. Single-host users store the
+    /// same node in hostIds[0] and hostIds[1].
     var accessHostId: MimeiId? { hostIds.flatMap { $0.count > 1 ? $0[1] : $0.first } }
     @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
     @Published var publicKey: String?
@@ -192,39 +105,37 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     public var hproseClient: HproseClient? {
         get {
-            guard let baseUrl = baseUrl else { 
-                return nil 
+            guard let baseUrl = baseUrl else {
+                return nil
             }
-            
-            let client = HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            
-            // Configure timeout for regular operations (15 seconds - fast fail for bad servers)
-            client.timeout = 15  // 15 seconds (detect slow/dead servers quickly)
-            
-            return client
+
+            // 15s timeout for regular operations (detect slow/dead servers quickly).
+            // Clients are shared per (URL, timeout) — never mutate the returned client.
+            return HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
         }
     }
-    
+
     /// Hprose client targeting the user's writable node. Use for any RPC that
     /// mutates server-side data (uploads, toggles, edits, deletes) so the
     /// request lands directly on the writable host instead of being delegated.
     /// Returns nil when the writable URL hasn't been resolved yet — callers
     /// should treat that as an error.
+    ///
+    /// Default timeout: 10s (fast-fail on bad servers; file uploads use URLSession
+    /// with its own 10-minute timeout). Clients are shared per (URL, timeout) —
+    /// callers needing a longer timeout must use `writableClient(timeout:)` instead
+    /// of mutating the returned client.
     public var writableClient: HproseClient? {
-        get {
-            guard let writableUrl = writableUrl else {
-                return nil
-            }
+        return writableClient(timeout: 10)
+    }
 
-            let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
-
-            // Default timeout: 10s. Fast-fail on bad servers. Long-running mutations
-            // (e.g. file uploads use URLSession with its own 10-minute timeout;
-            // toggle operations override this per-call to ~30s).
-            client.timeout = 10
-
-            return client
+    /// Writable-node client with a specific timeout class (e.g. extended timeouts
+    /// for slow toggle/delete/edit mutations).
+    public func writableClient(timeout: TimeInterval) -> HproseClient? {
+        guard let writableUrl = writableUrl else {
+            return nil
         }
+        return HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: timeout)
     }
     
     @MainActor
@@ -246,37 +157,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var followingList: [MimeiId]? // List of MimeiId
     @Published var bookmarkedTweets: [MimeiId]? {
         didSet {
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when bookmarkedTweets changes
-                if bookmarkedTweets != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.bookmarkedTweets = bookmarkedTweets
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if bookmarkedTweets != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
     @Published var favoriteTweets: [MimeiId]? {
         didSet {
-            let userId = mid  // Capture mid before Task to avoid race conditions
-            Task { @MainActor in
-                // Update cached version when favoriteTweets changes
-                if favoriteTweets != oldValue {
-                    // Update the singleton instance in the cache (thread-safe)
-                    User.userInstancesQueue.sync {
-                        User.userInstances[userId]?.favoriteTweets = favoriteTweets
-                    }
-                    // Also update Core Data cache if this is the app user
-                    if userId == HproseInstance.shared.appUser.mid {
-                        TweetCacheManager.shared.saveUser(self)
-                    }
-                }
+            if favoriteTweets != oldValue && mid == HproseInstance.shared.appUser.mid {
+                schedulePersistIfAppUser()
             }
         }
     }
@@ -292,7 +181,27 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     var id: String { mid }  // Computed property that returns mid
-    
+
+    /// Coalesces persistence of property changes into a single deferred `saveUser`.
+    ///
+    /// `mergeUserData` sets many @Published fields in one synchronous batch. Calling
+    /// `saveUser` inline from every didSet ran JSONEncoder + NSManagedObjectContext.perform
+    /// re-entrantly in each setter on the @MainActor, starving UI input and the video
+    /// coordinator during feed/appUser refresh. This defers the save to the next run-loop
+    /// tick and collapses a whole batch of property changes into a single cache write.
+    /// Only the app user is persisted (matches the previous guard).
+    private var persistScheduled = false
+    private func schedulePersistIfAppUser() {
+        guard mid == HproseInstance.shared.appUser.mid else { return }
+        guard !persistScheduled else { return }
+        persistScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.persistScheduled = false
+            TweetCacheManager.shared.saveUser(self)
+        }
+    }
+
     // MARK: - Initialization
     init(
         mid: MimeiId = Constants.GUEST_ID,
@@ -402,7 +311,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             // which is resolved via getProviderIP(user.mid), not from hostId
             let instance = getInstance(mid: decodedUser.mid)
             decodedUser.baseUrl = instance.baseUrl  // Preserve provider IP, ignore backend baseUrl
-            decodedUser.writableUrl = instance.writableUrl
             
             updateUserInstance(with: decodedUser, nilFieldsToClear: explicitNullFields)
             return userInstancesQueue.sync {
@@ -427,7 +335,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
     }
 
-    static func sanitizedAvatarId(_ value: String?) -> MimeiId? {
+    nonisolated static func sanitizedAvatarId(_ value: String?) -> MimeiId? {
         guard let value else { return nil }
 
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -514,10 +422,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         if shouldUpdateBaseUrl, let newBaseUrl = user.baseUrl {
             instance.baseUrl = newBaseUrl
         }
-        if let newWritableUrl = user.writableUrl {
-            instance.writableUrl = newWritableUrl
-        }
-
         if let v = user.tweetCount {
             if instance.tweetCount != v {
                 print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(v) for user \(instance.mid)")
@@ -578,7 +482,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         
         mid = try container.decode(String.self, forKey: .mid)
         baseUrl = try container.decodeIfPresent(URL.self, forKey: .baseUrl)
-        writableUrl = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
+        _ = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
+        writableUrl = nil
         name = try container.decodeIfPresent(String.self, forKey: .name)
         username = try container.decodeIfPresent(String.self, forKey: .username)
         password = try container.decodeIfPresent(String.self, forKey: .password)
@@ -700,20 +605,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     /// network resolution.
     private var resolveWritableUrlTask: Task<URL, Error>?
 
-    /// Returns the writable URL for the user, resolving via hostIds if needed.
-    /// Follows NodePool pattern: check pool -> resolve fresh -> update pool on success.
+    /// Returns the writable URL for the user, resolving hostIds[0] fresh.
     /// Throws if no host ID is configured or the writable host can't be reached;
     /// otherwise always returns a valid URL.
     @MainActor
     func resolveWritableUrl() async throws -> URL {
-        // Return cached URL if it was resolved within the last 5 minutes.
-        let ttl: TimeInterval = 5 * 60
-        if let url = writableUrl, let resolvedAt = writableUrlResolvedAt,
-           Date().timeIntervalSince(resolvedAt) < ttl {
-            print("DEBUG: [resolveWritableUrl] Using cached writableUrl (age \(Int(Date().timeIntervalSince(resolvedAt)))s): \(url.absoluteString)")
-            return url
-        }
-
         // Coalesce concurrent callers onto a single in-flight Task.
         if let inFlight = resolveWritableUrlTask {
             print("DEBUG: [resolveWritableUrl] Awaiting in-flight resolve Task")

@@ -2,7 +2,7 @@ import Foundation
 
 /// Manages blacklisted resources to avoid repeated failed access attempts
 /// Once a resource fails 14+ times over 1+ week, it's permanently blacklisted and never tried again
-class BlackList {
+final class BlackList: @unchecked Sendable {
     static let shared = BlackList()
     private let queue = DispatchQueue(label: "com.zz.BlackList", attributes: .concurrent)
     
@@ -13,7 +13,7 @@ class BlackList {
     // MARK: - Data Structures
     
     /// Entry in the candidate list with failure tracking
-    struct CandidateEntry {
+    struct CandidateEntry: Sendable {
         let mimeiId: MimeiId
         let failureCount: Int
         let firstFailureTimestamp: TimeInterval
@@ -32,21 +32,39 @@ class BlackList {
     
     /// Resources that are permanently blacklisted
     private var blacklist: Set<MimeiId> = []
+    /// Failure-streak starts retained for relationship cleanup and race checks.
+    /// This is separate from candidates because promotion removes the candidate
+    /// before a follower/following screen can observe it.
+    private var permanentFailureStarts: [MimeiId: TimeInterval] = [:]
 
     private let sessionBlockFailureCount = 2
+    /// How long a 2-strike session block lasts before the resource is retried.
+    private let sessionBlockDuration: TimeInterval = 30
 
     /// Process-local failure guard. This resets when the app process restarts.
     private var sessionFailureCounts: [MimeiId: Int] = [:]
-    private var sessionBlockedResources: Set<MimeiId> = []
+    /// Resources temporarily blocked this session, keyed by the time they were blocked.
+    /// Auto-expires after `sessionBlockDuration` (checked in isBlacklisted).
+    private var sessionBlockedResources: [MimeiId: Date] = [:]
     private var lastFailureRecordedAt: [MimeiId: TimeInterval] = [:]
     private let failureDedupWindow: TimeInterval = 20
-    
+    private let permanentFailureCount = 14
+    private let permanentFailureAge: TimeInterval = 7 * 24 * 60 * 60
+
     // MARK: - Public Methods
-    
+
     /// Check if a resource is blacklisted
     func isBlacklisted(_ mimeiId: MimeiId) -> Bool {
         queue.sync {
-            sessionBlockedResources.contains(mimeiId) || blacklist.contains(mimeiId)
+            if blacklist.contains(mimeiId) { return true }
+            // Session block auto-expires after `sessionBlockDuration`. Expired entries
+            // are left in place (harmless — they read as not-blocked) and get overwritten
+            // on the next block or cleared by recordSuccess.
+            if let blockedAt = sessionBlockedResources[mimeiId],
+               Date().timeIntervalSince(blockedAt) < sessionBlockDuration {
+                return true
+            }
+            return false
         }
     }
     
@@ -55,7 +73,7 @@ class BlackList {
         queue.sync(flags: .barrier) {
             let wasInCandidates = candidates.removeValue(forKey: mimeiId) != nil
             sessionFailureCounts.removeValue(forKey: mimeiId)
-            sessionBlockedResources.remove(mimeiId)
+            sessionBlockedResources.removeValue(forKey: mimeiId)
             lastFailureRecordedAt.removeValue(forKey: mimeiId)
             
             if wasInCandidates {
@@ -69,22 +87,26 @@ class BlackList {
         }
     }
     
-    /// Record a failed access to a resource
-    func recordFailure(_ mimeiId: MimeiId) {
+    /// Records a failed access. Returns the uninterrupted streak's start time
+    /// only when this call newly promotes the resource to the permanent list.
+    @discardableResult
+    func recordFailure(_ mimeiId: MimeiId) -> TimeInterval? {
         queue.sync(flags: .barrier) {
+            guard !blacklist.contains(mimeiId) else { return nil }
+
             let now = Date().timeIntervalSince1970
             if let lastFailure = lastFailureRecordedAt[mimeiId],
                now - lastFailure < failureDedupWindow {
-                return
+                return nil
             }
             lastFailureRecordedAt[mimeiId] = now
 
             let sessionFailureCount = (sessionFailureCounts[mimeiId] ?? 0) + 1
             sessionFailureCounts[mimeiId] = sessionFailureCount
-            if sessionFailureCount >= sessionBlockFailureCount,
-               !sessionBlockedResources.contains(mimeiId) {
-                sessionBlockedResources.insert(mimeiId)
-                print("[BlackList] Temporarily blocked \(mimeiId) for this session after \(sessionFailureCount) failures")
+            if sessionFailureCount >= sessionBlockFailureCount {
+                // (Re)start the 30s session-block window. Each subsequent failure refreshes it.
+                sessionBlockedResources[mimeiId] = Date()
+                print("[BlackList] Temporarily blocked \(mimeiId) for \(Int(sessionBlockDuration))s after \(sessionFailureCount) failures")
             }
             
             if let existingEntry = candidates[mimeiId] {
@@ -102,6 +124,8 @@ class BlackList {
                 // Check if it should be moved to blacklist (14+ failures over 1+ week)
                 if shouldMoveToBlacklist(newEntry) {
                     moveToBlacklist(mimeiId)
+                    saveToStorageLocked()
+                    return newEntry.firstFailureTimestamp
                 }
             } else {
                 // Create new candidate entry
@@ -115,6 +139,7 @@ class BlackList {
             }
             
             saveToStorageLocked()
+            return nil
         }
     }
     
@@ -142,38 +167,65 @@ class BlackList {
             (candidates: candidates.count, blacklisted: blacklist.count)
         }
     }
+
+    func permanentFailureStartedAt(_ mimeiId: MimeiId) -> TimeInterval? {
+        queue.sync {
+            permanentFailureStarts[mimeiId]
+        }
+    }
+
+    /// A relationship newer than the failure streak proves that the server row
+    /// is not the stale row this blacklist decision was based on.
+    func restoreAfterNewerRelationship(_ mimeiId: MimeiId) {
+        queue.sync(flags: .barrier) {
+            blacklist.remove(mimeiId)
+            candidates.removeValue(forKey: mimeiId)
+            permanentFailureStarts.removeValue(forKey: mimeiId)
+            sessionFailureCounts.removeValue(forKey: mimeiId)
+            sessionBlockedResources.removeValue(forKey: mimeiId)
+            lastFailureRecordedAt.removeValue(forKey: mimeiId)
+            saveToStorageLocked()
+        }
+    }
     
     // MARK: - Private Methods
     
     /// Check if a candidate should be moved to blacklist
     private func shouldMoveToBlacklist(_ entry: CandidateEntry) -> Bool {
-        let oneWeekAgo = Date().timeIntervalSince1970 - (7 * 24 * 60 * 60)
-        
-        // Move to blacklist if:
-        // 1. More than 1 week old AND
-        // 2. 14 or more failures
-        return entry.firstFailureTimestamp < oneWeekAgo && entry.failureCount >= 14
+        let failureAge = Date().timeIntervalSince1970 - entry.firstFailureTimestamp
+        return failureAge >= permanentFailureAge &&
+            entry.failureCount >= permanentFailureCount
     }
     
     /// Move a resource from candidates to blacklist (permanent - never tried again)
     private func moveToBlacklist(_ mimeiId: MimeiId) {
+        if let failureStartedAt = candidates[mimeiId]?.firstFailureTimestamp {
+            permanentFailureStarts[mimeiId] = failureStartedAt
+        }
         candidates.removeValue(forKey: mimeiId)
         sessionFailureCounts.removeValue(forKey: mimeiId)
-        sessionBlockedResources.remove(mimeiId)
+        sessionBlockedResources.removeValue(forKey: mimeiId)
+        lastFailureRecordedAt.removeValue(forKey: mimeiId)
         blacklist.insert(mimeiId)
         print("[BlackList] Permanently blacklisted \(mimeiId) - will never be tried again")
     }
     
     // MARK: - Persistence
+
+    private func iCloudStoreIfAvailable() -> NSUbiquitousKeyValueStore? {
+        // The target currently has no KVS entitlement. Initializing
+        // NSUbiquitousKeyValueStore without it logs a client bug during launch.
+        nil
+    }
     
     /// Load blacklist data preferring UserDefaults, with iCloud as backup
     /// UserDefaults is the source of truth; iCloud is only a secondary backup
     private func loadFromStorage() {
         let localStore = UserDefaults.standard
-        let iCloudStore = NSUbiquitousKeyValueStore.default
+        let iCloudStore = iCloudStoreIfAvailable()
         
         // Sync iCloud in background; we still read local first
-        iCloudStore.synchronize()
+        iCloudStore?.synchronize()
         
         // Load blacklist - prefer UserDefaults, fallback to iCloud
         if let blacklistData = localStore.data(forKey: "BlackList.blacklist"),
@@ -182,7 +234,7 @@ class BlackList {
                 blacklist = Set(blacklistArray.map { MimeiId($0) })
                 print("[BlackList] Loaded \(blacklist.count) blacklisted items from UserDefaults")
             }
-        } else if let blacklistData = iCloudStore.data(forKey: "BlackList.blacklist"),
+        } else if let blacklistData = iCloudStore?.data(forKey: "BlackList.blacklist"),
                   let blacklistArray = try? JSONDecoder().decode([String].self, from: blacklistData) {
             queue.sync(flags: .barrier) {
                 blacklist = Set(blacklistArray.map { MimeiId($0) })
@@ -197,38 +249,58 @@ class BlackList {
                 candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
                 print("[BlackList] Loaded \(candidates.count) candidates from UserDefaults")
             }
-        } else if let candidatesData = iCloudStore.data(forKey: "BlackList.candidates"),
+        } else if let candidatesData = iCloudStore?.data(forKey: "BlackList.candidates"),
                   let candidatesArray = try? JSONDecoder().decode([CandidateEntry].self, from: candidatesData) {
             queue.sync(flags: .barrier) {
                 candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
                 print("[BlackList] Loaded \(candidates.count) candidates from iCloud (local missing)")
             }
         }
+
+        if let cleanupData = localStore.data(forKey: "BlackList.permanentFailureStarts"),
+           let cleanupEntries = try? JSONDecoder().decode([String: TimeInterval].self, from: cleanupData) {
+            queue.sync(flags: .barrier) {
+                permanentFailureStarts = cleanupEntries
+            }
+        }
     }
     
-    /// Save blacklist data to UserDefaults first, then mirror to iCloud as backup
-    /// UserDefaults is the authoritative store; iCloud is best-effort backup
+    /// Save blacklist data to UserDefaults first, then mirror to iCloud as backup.
+    /// UserDefaults is the authoritative store; iCloud is best-effort backup.
+    ///
+    /// Snapshots are taken under the caller's barrier (cheap, consistent), then the
+    /// encode + UserDefaults write run on a utility queue. Previously the encode and
+    /// UserDefaults.set ran synchronously while holding the reader/writer barrier;
+    /// once the UI stopped freezing, video/image loads began firing recordFailure
+    /// from many threads at once, contending that lock and trapping
+    /// (EXC_BREAKPOINT) inside UserDefaults.set.
+    /// Persist blacklist + candidates to UserDefaults.
+    ///
+    /// The encode + write MUST run on the main thread. A previous version ran them on a
+    /// background `@Sendable` `DispatchQueue.global` queue; once the feed stopped freezing
+    /// and video/image loads began firing `recordFailure` from many threads, that
+    /// background write trapped with `EXC_BREAKPOINT` inside `UserDefaults.set`. This was
+    /// not heap corruption (Address/Thread Sanitizer found nothing; disabling persistence
+    /// fully fixed the app with no other crashes) — empirically a background-thread
+    /// `UserDefaults` write in this Swift 6 target. Main-thread writes are stable and are
+    /// the canonical pattern. Snapshots are still taken under the caller's reader/writer
+    /// barrier so the encoded view is consistent.
     private func saveToStorageLocked() {
         let blacklistArray = Array(blacklist).map { $0 }
         let candidatesArray = Array(candidates.values)
-        
-        // Encode data
-        guard let blacklistData = try? JSONEncoder().encode(blacklistArray),
-              let candidatesData = try? JSONEncoder().encode(candidatesArray) else {
-            print("[BlackList] Failed to encode data for storage")
-            return
+        let cleanupEntries = permanentFailureStarts
+
+        DispatchQueue.main.async {
+            guard let blacklistData = try? JSONEncoder().encode(blacklistArray),
+                  let candidatesData = try? JSONEncoder().encode(candidatesArray),
+                  let cleanupData = try? JSONEncoder().encode(cleanupEntries) else {
+                print("[BlackList] Failed to encode data for storage")
+                return
+            }
+            UserDefaults.standard.set(blacklistData, forKey: "BlackList.blacklist")
+            UserDefaults.standard.set(candidatesData, forKey: "BlackList.candidates")
+            UserDefaults.standard.set(cleanupData, forKey: "BlackList.permanentFailureStarts")
         }
-        
-        // Save to UserDefaults first (authoritative)
-        let localStore = UserDefaults.standard
-        localStore.set(blacklistData, forKey: "BlackList.blacklist")
-        localStore.set(candidatesData, forKey: "BlackList.candidates")
-        
-        // Mirror to iCloud as backup (best-effort; survives reinstallation)
-        let iCloudStore = NSUbiquitousKeyValueStore.default
-        iCloudStore.set(blacklistData, forKey: "BlackList.blacklist")
-        iCloudStore.set(candidatesData, forKey: "BlackList.candidates")
-        iCloudStore.synchronize()
     }
 }
 

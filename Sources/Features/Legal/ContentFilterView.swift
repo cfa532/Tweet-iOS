@@ -8,6 +8,8 @@ struct ContentFilterView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
+    @State private var showLoginSheet = false
+    @State private var showBlockConfirmation = false
     
     // Filter options
     @State private var blockUser = false
@@ -16,6 +18,18 @@ struct ContentFilterView: View {
     @State private var filterProfanity = false
     @State private var filterViolence = false
     @State private var filterAdultContent = false
+
+    private var blockUserDisplayName: String {
+        if let username = tweet.author?.username?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !username.isEmpty {
+            return "@\(username)"
+        }
+        if let name = tweet.author?.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty {
+            return name
+        }
+        return NSLocalizedString("this user", comment: "Fallback name in block confirmation")
+    }
     
     var body: some View {
         NavigationView {
@@ -120,7 +134,11 @@ struct ContentFilterView: View {
                     dismiss()
                 },
                 trailing: Button(LocalizedStringKey("Apply Filters")) {
-                    applyFilters()
+                    if blockUser {
+                        showBlockConfirmation = true
+                    } else {
+                        applyFilters()
+                    }
                 }
                 .fontWeight(.semibold)
             )
@@ -137,9 +155,38 @@ struct ContentFilterView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
+        }
+        .alert(
+            String(
+                format: NSLocalizedString("Block %@?", comment: "Content filter block confirmation title"),
+                blockUserDisplayName
+            ),
+            isPresented: $showBlockConfirmation
+        ) {
+            Button(NSLocalizedString("Block and Apply Filters", comment: "Confirm blocking from content filters"), role: .destructive) {
+                applyFilters()
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel content filter block"), role: .cancel) { }
+        } message: {
+            Text(
+                String(
+                    format: NSLocalizedString(
+                        "Applying these filters will also block %@ and hide their posts.",
+                        comment: "Content filter block confirmation message"
+                    ),
+                    blockUserDisplayName
+                )
+            )
+        }
     }
     
     private func applyFilters() {
+        guard !hproseInstance.appUser.isGuest else {
+            showLoginSheet = true
+            return
+        }
         Task {
             do {
                 // Apply user blocking

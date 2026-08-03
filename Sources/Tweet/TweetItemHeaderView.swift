@@ -43,6 +43,8 @@ struct AdminTweetContentEditSheet: View {
                                             // uses the new content immediately.
                                             tweet.cachedContentAttributedString = nil
                                             tweet.cachedContentWidth = 0
+                                            tweet.cachedMeasuredTextHeight = -1
+                                            tweet.cachedMeasuredTextWidth = 0
                                             tweet.cachedHeight = nil
                                         }
                                         if let singleton = Tweet.getInstance(for: tweet.mid), singleton !== tweet {
@@ -50,6 +52,8 @@ struct AdminTweetContentEditSheet: View {
                                                 singleton.content = text
                                                 singleton.cachedContentAttributedString = nil
                                                 singleton.cachedContentWidth = 0
+                                                singleton.cachedMeasuredTextHeight = -1
+                                                singleton.cachedMeasuredTextWidth = 0
                                                 singleton.cachedHeight = nil
                                             }
                                         }
@@ -126,10 +130,16 @@ struct TweetItemHeaderView: View {
 
 @available(iOS 16.0, *)
 struct TweetMenu: View {
+    typealias DeleteConfirmationPresenter = (@escaping () -> Void) -> Void
+
     @ObservedObject var tweet: Tweet
     let isPinned: Bool
     let showDeleteButton: Bool
     let onShareTap: (() -> Void)?
+    let onShowLogin: (() -> Void)?
+    let onFilterTap: (() -> Void)?
+    let onReportTap: (() -> Void)?
+    let onDeleteTap: DeleteConfirmationPresenter?
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -138,18 +148,148 @@ struct TweetMenu: View {
     @State private var showReportSheet = false
     @State private var showFilterSheet = false
     @State private var showAdminEditSheet = false
+    @State private var showDeleteConfirmation = false
     
-    init(tweet: Tweet, isPinned: Bool, showDeleteButton: Bool = false, onShareTap: (() -> Void)? = nil) {
+    init(
+        tweet: Tweet,
+        isPinned: Bool,
+        showDeleteButton: Bool = false,
+        onShareTap: (() -> Void)? = nil,
+        onShowLogin: (() -> Void)? = nil,
+        onFilterTap: (() -> Void)? = nil,
+        onReportTap: (() -> Void)? = nil,
+        onDeleteTap: DeleteConfirmationPresenter? = nil
+    ) {
         self.tweet = tweet
         self.isPinned = isPinned
         self.showDeleteButton = showDeleteButton
         self.onShareTap = onShareTap
+        self.onShowLogin = onShowLogin
+        self.onFilterTap = onFilterTap
+        self.onReportTap = onReportTap
+        self.onDeleteTap = onDeleteTap
         self._isCurrentlyPinned = State(initialValue: isPinned)
+    }
+
+    private var immediateActions: [UIAction] {
+        var actions = [UIAction(title: truncatedTweetId(tweet.mid), image: UIImage(systemName: "doc.on.clipboard")) { _ in
+            UIPasteboard.general.string = tweet.mid
+        }]
+        actions.append(UIAction(title: NSLocalizedString("Share", comment: "Menu item"), image: UIImage(systemName: "square.and.arrow.up")) { _ in
+            onShareTap?()
+        })
+        actions.append(UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"), image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { _ in
+            guard requireAuthenticatedForWrite() else { return }
+            if let onFilterTap {
+                onFilterTap()
+            } else {
+                showFilterSheet = true
+            }
+        })
+        if tweet.authorId != appUser.mid {
+            actions.append(UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"), image: UIImage(systemName: "flag")) { _ in
+                guard requireAuthenticatedForWrite() else { return }
+                if let onReportTap {
+                    onReportTap()
+                } else {
+                    showReportSheet = true
+                }
+            })
+        }
+        if Gadget.isResearchAdminUser(appUser) {
+            actions.append(UIAction(title: NSLocalizedString("Edit content (admin)", comment: "Admin research menu"), image: UIImage(systemName: "pencil.line")) { _ in
+                showAdminEditSheet = true
+            })
+        }
+        if tweet.authorId == appUser.mid {
+            let pinTitle = isCurrentlyPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
+            actions.append(UIAction(title: pinTitle, image: UIImage(systemName: isCurrentlyPinned ? "pin.slash" : "pin")) { _ in
+                togglePin()
+            })
+            let privacyTitle = tweet.isPrivate == true ? NSLocalizedString("Make Public", comment: "Menu item") : NSLocalizedString("Make Private", comment: "Menu item")
+            actions.append(UIAction(title: privacyTitle, image: UIImage(systemName: tweet.isPrivate == true ? "globe" : "lock")) { _ in
+                togglePrivacy()
+            })
+        }
+        if showDeleteButton {
+            actions.append(UIAction(title: NSLocalizedString("Delete", comment: "Menu item"), image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+                guard requireAuthenticatedForWrite() else { return }
+                if let onDeleteTap {
+                    onDeleteTap {
+                        Task { try? await deleteTweet(tweet) }
+                    }
+                } else {
+                    showDeleteConfirmation = true
+                }
+            })
+        }
+        return actions
+    }
+
+    private func togglePin() {
+        guard requireAuthenticatedForWrite() else { return }
+        let previousPinStatus = isCurrentlyPinned
+        let intendedPinStatus = !previousPinStatus
+        isCurrentlyPinned = intendedPinStatus
+        NotificationCenter.default.post(
+            name: .tweetPinStatusChanged,
+            object: nil,
+            userInfo: ["tweetId": tweet.mid, "isPinned": intendedPinStatus]
+        )
+
+        Task {
+            do {
+                guard let pinned = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) else {
+                    throw NSError(
+                        domain: "PinToggle",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")]
+                    )
+                }
+                if pinned != intendedPinStatus {
+                    await MainActor.run {
+                        isCurrentlyPinned = pinned
+                        NotificationCenter.default.post(
+                            name: .tweetPinStatusChanged,
+                            object: nil,
+                            userInfo: ["tweetId": tweet.mid, "isPinned": pinned]
+                        )
+                    }
+                }
+            } catch {
+                let message = ErrorMessageHelper.userFriendlyMessage(from: error)
+                await MainActor.run {
+                    isCurrentlyPinned = previousPinStatus
+                    NotificationCenter.default.post(
+                        name: .tweetPinStatusChanged,
+                        object: nil,
+                        userInfo: ["tweetId": tweet.mid, "isPinned": previousPinStatus]
+                    )
+                    NotificationCenter.default.post(
+                        name: .errorOccurred,
+                        object: NSError(domain: "PinToggle", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+                    )
+                }
+            }
+        }
+    }
+
+    private func togglePrivacy() {
+        guard requireAuthenticatedForWrite() else { return }
+        Task {
+            guard let isPrivate = try? await hproseInstance.toggleTweetPrivacy(tweetId: tweet.mid) else { return }
+            await MainActor.run {
+                tweet.isPrivate = isPrivate
+                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                NotificationCenter.default.post(name: .tweetPrivacyChanged, object: nil, userInfo: ["tweetId": tweet.mid])
+            }
+        }
     }
     
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Menu {
+            if false {
+                Menu {
                 Button(action: {
                     UIPasteboard.general.string = tweet.mid
                 }) {
@@ -164,6 +304,7 @@ struct TweetMenu: View {
                 
                 // Content filtering option
                 Button(action: {
+                    guard requireAuthenticatedForWrite() else { return }
                     showFilterSheet = true
                 }) {
                     Label(LocalizedStringKey("Filter Content"), systemImage: "line.3.horizontal.decrease.circle")
@@ -172,6 +313,7 @@ struct TweetMenu: View {
                 // Report tweet option (only show for tweets not authored by current user)
                 if tweet.authorId != appUser.mid {
                     Button(action: {
+                        guard requireAuthenticatedForWrite() else { return }
                         showReportSheet = true
                     }) {
                         Label(LocalizedStringKey("Report Tweet"), systemImage: "flag")
@@ -293,19 +435,12 @@ struct TweetMenu: View {
                 }
                 if showDeleteButton {
                     Button(role: .destructive) {
-                        // Start deletion in background
-                        Task {
-                            do {
-                                try await deleteTweet(tweet)
-                            } catch {
-                                print("Tweet deletion failed. \(tweet)")
-                                await MainActor.run {
-                                    NotificationCenter.default.post(
-                                        name: .errorOccurred,
-                                        object: error
-                                    )
-                                }
+                        if let onDeleteTap {
+                            onDeleteTap {
+                                Task { try? await deleteTweet(tweet) }
                             }
+                        } else {
+                            showDeleteConfirmation = true
                         }
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -332,7 +467,13 @@ struct TweetMenu: View {
                     .accessibilityLabel("Tweet options")
                     .accessibilityHint("Double tap to open tweet menu")
             }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
+            } else {
+                ImmediateMenuButtonView(actions: immediateActions)
+                    .frame(width: 44, height: 44)
+                    .accessibilityLabel("Tweet options")
+                    .accessibilityHint("Double tap to open tweet menu")
+            }
         }
         .sheet(isPresented: $showFilterSheet) {
             ContentFilterView(tweet: tweet)
@@ -344,9 +485,26 @@ struct TweetMenu: View {
             AdminTweetContentEditSheet(tweet: tweet)
                 .environmentObject(hproseInstance)
         }
+        .alert(
+            NSLocalizedString("Delete Tweet?", comment: "Delete tweet confirmation title"),
+            isPresented: $showDeleteConfirmation
+        ) {
+            Button(NSLocalizedString("Delete Tweet", comment: "Confirm tweet deletion"), role: .destructive) {
+                Task { try? await deleteTweet(tweet) }
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel tweet deletion"), role: .cancel) { }
+        } message: {
+            Text(
+                NSLocalizedString(
+                    "This tweet will be permanently deleted. This action cannot be undone.",
+                    comment: "Delete tweet confirmation message"
+                )
+            )
+        }
     }
     
     private func deleteTweet(_ tweet: Tweet) async throws {
+        guard requireAuthenticatedForWrite() else { return }
         print("DEBUG: [TweetItemHeaderView] Starting tweet deletion for: \(tweet.mid)")
         
         // Post notification for optimistic UI update
@@ -359,37 +517,33 @@ struct TweetMenu: View {
         
         // Attempt actual deletion
         do {
-            if let tweetId = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId) {
-                print("DEBUG: [TweetItemHeaderView] Successfully deleted tweet: \(tweetId)")
-                
-                // Note: tweetCount is updated by refreshAppUserFromServer() inside deleteTweet()
-                
-                if let originalTweetId = tweet.originalTweetId,
-                   let originalAuthorId = tweet.originalAuthorId,
-                   let originalTweet = try? await hproseInstance.getTweet(
-                    tweetId: originalTweetId,
-                    authorId: originalAuthorId)
-                {
-                    // originalTweet is loaded in cache, which is visible to user.
-                    let currentCount = originalTweet.retweetCount ?? 0
-                    originalTweet.retweetCount = max(0, currentCount - 1)
-                    if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false) {
-                        // Cache the updated original tweet with its authorId as the cache key
-                        TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
-                        
-                        // Refresh original tweet from server to ensure all views get the updated count
-                        if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
-                            await MainActor.run {
-                                if let existingTweet = Tweet.getInstance(for: originalTweetId) {
-                                    try? existingTweet.update(from: refreshedTweet)
-                                }
+            let tweetId = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId)
+            print("DEBUG: [TweetItemHeaderView] Successfully deleted tweet: \(tweetId)")
+
+            // Note: tweetCount is updated by refreshAppUserFromServer() inside deleteTweet()
+
+            if let originalTweetId = tweet.originalTweetId,
+               let originalAuthorId = tweet.originalAuthorId,
+               let originalTweet = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId)
+            {
+                // originalTweet is loaded in cache, which is visible to user.
+                let currentCount = originalTweet.retweetCount ?? 0
+                originalTweet.retweetCount = max(0, currentCount - 1)
+                if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false) {
+                    // Cache the updated original tweet with its authorId as the cache key
+                    TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
+
+                    // Refresh original tweet from server to ensure all views get the updated count
+                    if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                        await MainActor.run {
+                            if let existingTweet = Tweet.getInstance(for: originalTweetId) {
+                                try? existingTweet.update(from: refreshedTweet)
                             }
                         }
                     }
                 }
-            } else {
-                print("DEBUG: [TweetItemHeaderView] deleteTweet returned nil for: \(tweet.mid)")
-                throw NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server returned nil"])
             }
         } catch {
             print("DEBUG: [TweetItemHeaderView] Tweet deletion failed for \(tweet.mid): \(error)")
@@ -421,6 +575,12 @@ struct TweetMenu: View {
                 )
             }
         }
+    }
+
+    private func requireAuthenticatedForWrite() -> Bool {
+        guard appUser.isGuest else { return true }
+        onShowLogin?()
+        return false
     }
     
     /// Truncates a tweet ID to show first 8 and last 4 characters with ellipsis in the middle

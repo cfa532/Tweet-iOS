@@ -434,6 +434,7 @@ struct ReplyEditorView: View {
             timestamp: Date(),
             originalTweetId: isQuoting ? parentTweet.mid : nil,
             originalAuthorId: isQuoting ? parentTweet.authorId : nil,
+            parentTweetId: parentTweet.mid,
             author: hproseInstance.appUser
         )
         

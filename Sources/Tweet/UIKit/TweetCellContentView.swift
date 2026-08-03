@@ -21,6 +21,7 @@ class TweetCellContentView: UIView {
         let isPrivate: Bool
         let isOwnTweet: Bool
         let showsAdminEdit: Bool
+        let commentParentTweetId: String?
     }
 
     // MARK: - Subviews
@@ -97,10 +98,23 @@ class TweetCellContentView: UIView {
     private var cachedMenu: UIMenu?
     private var currentTweetId: String?
     private weak var currentTweet: Tweet?
+    private weak var commentParentTweet: Tweet?
     private weak var parentViewController: UIViewController?
 
     /// Per-feed video coordinator (set by TweetTableViewCell)
     weak var videoCoordinator: VideoPlaybackCoordinator?
+    var cellHorizontalPadding: CGFloat = 16 {
+        didSet {
+            bodyView.cellHorizontalPadding = cellHorizontalPadding
+            embeddedTweetView.cellHorizontalPadding = cellHorizontalPadding
+        }
+    }
+    var rowWidth: CGFloat? {
+        didSet {
+            bodyView.rowWidth = rowWidth
+            embeddedTweetView.rowWidth = rowWidth
+        }
+    }
 
     // Callbacks (set by cell / controller)
     var onAvatarTap: ((User) -> Void)?
@@ -108,6 +122,10 @@ class TweetCellContentView: UIView {
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)?
     var onContentExpanded: (() -> Void)?
+    /// Called when async content loads and may have changed cell height (retweet/embedded tweet).
+    var onContentDidChangeHeightAsync: (() -> Void)?
+    /// Called only when a pure retweet's original is unavailable from both cache and server.
+    var onRetweetUnavailable: ((String) -> Void)?
 
     // MARK: - Init
 
@@ -167,7 +185,7 @@ class TweetCellContentView: UIView {
         contentColumn.addArrangedSubview(embeddedTweetWrapper)
         contentColumn.addArrangedSubview(actionBar)
 
-        contentColumn.setCustomSpacing(0, after: headerView)  // Space between header and body content
+        contentColumn.setCustomSpacing(2, after: headerView)  // 2pt here + bodyView's 2pt top inset
         contentColumn.setCustomSpacing(12, after: bodyView)
         contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
 
@@ -332,15 +350,17 @@ class TweetCellContentView: UIView {
     }
 
     private func navigateToTweetDetail(_ tweet: Tweet, source: String) {
+        let videoMid = Self.firstVideoAttachmentMid(tweet)
         NavigationStateManager.shared.markDetailNavigationPending(
             source: source,
-            preserveFeedPlayback: Self.hasVideoAttachment(tweet)
+            preserveFeedPlayback: videoMid != nil,
+            videoMid: videoMid
         )
         onTweetTap?(tweet)
     }
 
-    private static func hasVideoAttachment(_ tweet: Tweet) -> Bool {
-        tweet.attachments?.contains { $0.type == .video || $0.type == .hls_video } == true
+    private static func firstVideoAttachmentMid(_ tweet: Tweet) -> String? {
+        tweet.attachments?.first { $0.type == .video || $0.type == .hls_video }?.mid
     }
 
     // MARK: - Configure
@@ -348,9 +368,12 @@ class TweetCellContentView: UIView {
     func configure(tweet: Tweet, hproseInstance: HproseInstance,
                    isPinned: Bool, isLastItem: Bool,
                    parentViewController: UIViewController,
-                   allowDeleteAll: Bool = false) {
+                   allowDeleteAll: Bool = false,
+                   commentParentTweet: Tweet? = nil,
+                   savedParentTweetId: String? = nil) {
         self.parentViewController = parentViewController
         self.currentTweet = tweet
+        self.commentParentTweet = commentParentTweet
 
         // Propagate per-feed coordinator to subviews
         bodyView.videoCoordinator = videoCoordinator
@@ -358,19 +381,31 @@ class TweetCellContentView: UIView {
 
         // Forward content expansion callback (set before early return so it's always current)
         bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
+        bodyView.onContentDidChangeHeightAsync = { [weak self] in
+            self?.onContentDidChangeHeightAsync?()
+        }
+        embeddedTweetView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
-        let showDelete = Gadget.canShowTweetDeleteMenu(
-            appUser: hproseInstance.appUser,
-            tweetAuthorId: tweet.authorId,
-            allowDeleteAll: allowDeleteAll
-        )
         separatorView.isHidden = isLastItem
-        applyTweetMenuIfNeeded(
-            tweet: tweet,
-            isPinned: isPinned,
-            showDelete: showDelete,
-            hproseInstance: hproseInstance
-        )
+        if let commentParentTweet {
+            applyCommentMenuIfNeeded(
+                comment: tweet,
+                parentTweet: commentParentTweet,
+                hproseInstance: hproseInstance
+            )
+        } else {
+            let showDelete = Gadget.canShowTweetDeleteMenu(
+                appUser: hproseInstance.appUser,
+                tweetAuthorId: tweet.authorId,
+                allowDeleteAll: allowDeleteAll
+            )
+            applyTweetMenuIfNeeded(
+                tweet: tweet,
+                isPinned: isPinned,
+                showDelete: showDelete,
+                hproseInstance: hproseInstance
+            )
+        }
 
         // Skip if same tweet
         if currentTweetId == tweet.mid { return }
@@ -380,12 +415,46 @@ class TweetCellContentView: UIView {
         cancellables.removeAll()
 
         let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil
+        let savedParentTweet = savedParentTweetId.flatMap { Tweet.getInstance(for: $0) }
 
         // Determine which tweet's content to show
         if isRetweet {
             configureAsRetweet(tweet: tweet, hproseInstance: hproseInstance,
                                isPinned: isPinned, parentViewController: parentViewController,
                                allowDeleteAll: allowDeleteAll)
+        } else if let savedParentTweetId {
+            configureQuotedTweet(
+                tweet: tweet,
+                embeddedTweet: savedParentTweet,
+                originalTweetId: savedParentTweetId,
+                originalAuthorId: savedParentTweet?.authorId ?? "",
+                hproseInstance: hproseInstance,
+                isPinned: isPinned,
+                parentViewController: parentViewController,
+                allowDeleteAll: allowDeleteAll,
+                allowNetworkLoad: false
+            )
+
+            if savedParentTweet == nil {
+                retweetLoadTask = Task { [weak self] in
+                    guard let loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: savedParentTweetId),
+                          !Task.isCancelled else { return }
+                    await MainActor.run {
+                        guard let self, self.currentTweetId == tweet.mid else { return }
+                        self.configureQuotedTweet(
+                            tweet: tweet,
+                            embeddedTweet: loadedTweet,
+                            originalTweetId: savedParentTweetId,
+                            originalAuthorId: loadedTweet.authorId,
+                            hproseInstance: hproseInstance,
+                            isPinned: isPinned,
+                            parentViewController: parentViewController,
+                            allowDeleteAll: allowDeleteAll
+                        )
+                        self.onContentDidChangeHeightAsync?()
+                    }
+                }
+            }
         } else {
             configureAsRegularTweet(tweet: tweet, hproseInstance: hproseInstance,
                                     isPinned: isPinned, parentViewController: parentViewController,
@@ -396,8 +465,8 @@ class TweetCellContentView: UIView {
         loadAuthorIfNeeded(tweet: tweet, hproseInstance: hproseInstance)
 
         // Also load original tweet's author for retweets/quoted tweets
-        if isRetweet, let originalId = tweet.originalTweetId,
-           let originalTweet = Tweet.getInstance(for: originalId),
+        if let embeddedId = tweet.originalTweetId ?? savedParentTweetId,
+           let originalTweet = Tweet.getInstance(for: embeddedId),
            originalTweet.author == nil || originalTweet.author?.username == nil {
             loadAuthorIfNeeded(tweet: originalTweet, hproseInstance: hproseInstance)
         }
@@ -441,14 +510,17 @@ class TweetCellContentView: UIView {
         headerView.configure(tweet: tweet)
 
         // Body
-        bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
-                           parentViewController: parentViewController)
+        StallLog.measure("bodyView.configure(regular)", "tweetId=\(tweet.mid)") {
+            bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
+                               parentViewController: parentViewController)
+        }
         bodyView.onTweetBodyTap = { [weak self] in self?.navigateToTweetDetail(tweet, source: "bodyMoreTap") }
         updateBodyToActionSpacing()
 
         // Action bar
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
+        actionBar.parentTweet = commentParentTweet
         // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
@@ -474,33 +546,40 @@ class TweetCellContentView: UIView {
                                   parentViewController: parentViewController,
                                   allowDeleteAll: allowDeleteAll)
         } else if !hasOwnContent {
-            if let cachedEmbeddedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
-                configurePureRetweet(tweet: tweet, originalTweet: cachedEmbeddedTweet,
-                                      hproseInstance: hproseInstance, isPinned: isPinned,
-                                      parentViewController: parentViewController,
-                                      allowDeleteAll: allowDeleteAll)
-            } else {
-                configureQuotedTweet(tweet: tweet, embeddedTweet: nil,
-                                      originalTweetId: originalTweetId,
-                                      originalAuthorId: originalAuthorId,
-                                      hproseInstance: hproseInstance, isPinned: isPinned,
-                                      parentViewController: parentViewController,
-                                      allowDeleteAll: allowDeleteAll)
+            // Keep one authoritative loader for pure retweets so success promotes the
+            // original into the cell and failure can remove the retweet entirely.
+            configureQuotedTweet(tweet: tweet, embeddedTweet: nil,
+                                  originalTweetId: originalTweetId,
+                                  originalAuthorId: originalAuthorId,
+                                  hproseInstance: hproseInstance, isPinned: isPinned,
+                                  parentViewController: parentViewController,
+                                  allowDeleteAll: allowDeleteAll,
+                                  allowNetworkLoad: false)
 
-                retweetLoadTask = Task { [weak self] in
-                    guard let loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId),
-                          !Task.isCancelled else { return }
-                    await MainActor.run {
-                        guard let self, self.currentTweetId == tweet.mid else { return }
-                        self.configurePureRetweet(
-                            tweet: tweet,
-                            originalTweet: loadedTweet,
-                            hproseInstance: hproseInstance,
-                            isPinned: isPinned,
-                            parentViewController: parentViewController,
-                            allowDeleteAll: allowDeleteAll
-                        )
+            retweetLoadTask = Task { [weak self] in
+                var loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
+                if loadedTweet == nil, !Task.isCancelled {
+                    loadedTweet = try? await hproseInstance.getTweet(
+                        tweetId: originalTweetId,
+                        authorId: originalAuthorId
+                    )
+                }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.currentTweetId == tweet.mid else { return }
+                    guard let loadedTweet else {
+                        self.onRetweetUnavailable?(tweet.mid)
+                        return
                     }
+                    self.configurePureRetweet(
+                        tweet: tweet,
+                        originalTweet: loadedTweet,
+                        hproseInstance: hproseInstance,
+                        isPinned: isPinned,
+                        parentViewController: parentViewController,
+                        allowDeleteAll: allowDeleteAll
+                    )
+                    self.onContentDidChangeHeightAsync?()
                 }
             }
         } else {
@@ -562,6 +641,7 @@ class TweetCellContentView: UIView {
         // Action bar on original tweet
         actionBar.configure(tweet: originalTweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
+        actionBar.parentTweet = commentParentTweet
         // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
@@ -571,7 +651,8 @@ class TweetCellContentView: UIView {
                                        originalTweetId: String, originalAuthorId: String,
                                        hproseInstance: HproseInstance, isPinned: Bool,
                                        parentViewController: UIViewController,
-                                       allowDeleteAll: Bool = false) {
+                                       allowDeleteAll: Bool = false,
+                                       allowNetworkLoad: Bool = true) {
         // Hide retweet banner
         showRetweetBanner(false)
 
@@ -610,7 +691,7 @@ class TweetCellContentView: UIView {
         if let embeddedTweet {
             embeddedTweetView.configure(tweet: embeddedTweet, quotingTweetId: tweet.mid,
                                          parentViewController: parentViewController)
-        } else {
+        } else if allowNetworkLoad {
             embeddedTweetView.loadEmbeddedTweet(
                 originalTweetId: originalTweetId,
                 originalAuthorId: originalAuthorId,
@@ -618,12 +699,16 @@ class TweetCellContentView: UIView {
                 hproseInstance: hproseInstance,
                 parentViewController: parentViewController
             )
+        } else {
+            embeddedTweetView.showPlaceholder()
         }
         embeddedTweetView.onTap = { [weak self] t in self?.navigateToTweetDetail(t, source: "embeddedTweetTap") }
+        embeddedTweetView.onAsyncConfigured = { [weak self] in self?.onContentDidChangeHeightAsync?() }
 
         // Action bar on quoting tweet
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
+        actionBar.parentTweet = commentParentTweet
         // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
@@ -671,6 +756,9 @@ class TweetCellContentView: UIView {
     private func requestAuthorRefreshIfNeeded(authorId: String, hproseInstance: HproseInstance) {
         guard Self.beginAuthorRefresh(authorId) else { return }
         Task(priority: .background) {
+            // Yield before the first @MainActor hop so the initial render frame
+            // and UIKit event processing can complete before background refreshes pile on.
+            await Task.yield()
             _ = try? await hproseInstance.fetchUser(authorId)
             Self.endAuthorRefresh(authorId)
         }
@@ -724,7 +812,8 @@ class TweetCellContentView: UIView {
             showDelete: showDelete,
             isPrivate: tweet.isPrivate == true,
             isOwnTweet: tweet.authorId == hproseInstance.appUser.mid,
-            showsAdminEdit: showsAdminEdit
+            showsAdminEdit: showsAdminEdit,
+            commentParentTweetId: nil
         )
 
         if currentMenuKey != key {
@@ -743,6 +832,28 @@ class TweetCellContentView: UIView {
         }
     }
 
+    private func presentDeleteConfirmation(
+        title: String,
+        message: String,
+        confirmTitle: String,
+        from viewController: UIViewController,
+        onConfirm: @escaping () -> Void
+    ) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(
+            UIAlertAction(
+                title: NSLocalizedString("Cancel", comment: "Cancel deletion"),
+                style: .cancel
+            )
+        )
+        alert.addAction(
+            UIAlertAction(title: confirmTitle, style: .destructive) { _ in
+                onConfirm()
+            }
+        )
+        viewController.present(alert, animated: true)
+    }
+
     private func createTweetMenu(tweet: Tweet, isPinned: Bool, showDelete: Bool, showsAdminEdit: Bool,
                                   hproseInstance: HproseInstance) -> UIMenu {
         var actions: [UIAction] = []
@@ -756,9 +867,17 @@ class TweetCellContentView: UIView {
 
         // Filter Content
         let filterAction = UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"),
-                                     image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { _ in
-            // TODO: Show filter sheet
-            print("Filter content tapped")
+                                     image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { [weak self] _ in
+            guard !hproseInstance.appUser.isGuest else {
+                self?.onShowLogin?()
+                return
+            }
+            guard let self, let parentViewController = self.parentViewController else { return }
+            let sheet = UIHostingController(
+                rootView: ContentFilterView(tweet: tweet).environmentObject(hproseInstance)
+            )
+            sheet.modalPresentationStyle = .pageSheet
+            parentViewController.present(sheet, animated: true)
         }
         actions.append(filterAction)
 
@@ -781,9 +900,17 @@ class TweetCellContentView: UIView {
         if tweet.authorId != hproseInstance.appUser.mid {
             let reportAction = UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"),
                                         image: UIImage(systemName: "flag"),
-                                        attributes: .destructive) { _ in
-                // TODO: Show report sheet
-                print("Report tapped")
+                                        attributes: .destructive) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
+                guard let self, let parentViewController = self.parentViewController else { return }
+                let sheet = UIHostingController(
+                    rootView: ReportTweetView(tweet: tweet).environmentObject(hproseInstance)
+                )
+                sheet.modalPresentationStyle = .pageSheet
+                parentViewController.present(sheet, animated: true)
             }
             actions.append(reportAction)
         }
@@ -792,18 +919,58 @@ class TweetCellContentView: UIView {
         if tweet.authorId == hproseInstance.appUser.mid {
             let pinTitle = isPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
             let pinIcon = isPinned ? "pin.slash" : "pin"
-            let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { _ in
+            let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
+                let intendedPinStatus = !isPinned
+                NotificationCenter.default.post(
+                    name: .tweetPinStatusChanged,
+                    object: nil,
+                    userInfo: ["tweetId": tweet.mid, "isPinned": intendedPinStatus]
+                )
+
                 Task {
                     do {
                         if let newPinStatus = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
+                            if newPinStatus != intendedPinStatus {
+                                NotificationCenter.default.post(
+                                    name: .tweetPinStatusChanged,
+                                    object: nil,
+                                    userInfo: ["tweetId": tweet.mid, "isPinned": newPinStatus]
+                                )
+                            }
+                        } else {
                             NotificationCenter.default.post(
                                 name: .tweetPinStatusChanged,
                                 object: nil,
-                                userInfo: ["tweetId": tweet.mid, "isPinned": newPinStatus]
+                                userInfo: ["tweetId": tweet.mid, "isPinned": isPinned]
+                            )
+                            NotificationCenter.default.post(
+                                name: .errorOccurred,
+                                object: NSError(
+                                    domain: "PinToggle",
+                                    code: -1,
+                                    userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")]
+                                )
                             )
                         }
                     } catch {
                         print("Pin toggle failed: \(error)")
+                        NotificationCenter.default.post(
+                            name: .tweetPinStatusChanged,
+                            object: nil,
+                            userInfo: ["tweetId": tweet.mid, "isPinned": isPinned]
+                        )
+                        NotificationCenter.default.post(
+                            name: .errorOccurred,
+                            object: NSError(
+                                domain: "PinToggle",
+                                code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: ErrorMessageHelper.userFriendlyMessage(from: error)]
+                            )
+                        )
                     }
                 }
             }
@@ -814,7 +981,11 @@ class TweetCellContentView: UIView {
                 NSLocalizedString("Make Public", comment: "Menu item") :
                 NSLocalizedString("Make Private", comment: "Menu item")
             let privacyIcon = tweet.isPrivate == true ? "globe" : "lock"
-            let privacyAction = UIAction(title: privacyTitle, image: UIImage(systemName: privacyIcon)) { _ in
+            let privacyAction = UIAction(title: privacyTitle, image: UIImage(systemName: privacyIcon)) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
                 Task {
                     do {
                         let newPrivacy = try await hproseInstance.toggleTweetPrivacy(tweetId: tweet.mid)
@@ -840,34 +1011,149 @@ class TweetCellContentView: UIView {
         if showDelete {
             let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: "Menu item"),
                                         image: UIImage(systemName: "trash"),
-                                        attributes: .destructive) { _ in
-                // Optimistic UI update — remove immediately
-                NotificationCenter.default.post(
-                    name: .tweetDeleted,
-                    object: nil,
-                    userInfo: ["tweetId": tweet.mid]
-                )
-                Task {
-                    do {
-                        _ = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId)
-                    } catch {
-                        print("DEBUG: [TweetCellContentView] deleteTweet FAILED — raw error: \(error) | localizedDescription: \(error.localizedDescription)")
-                        // Restore tweet on failure
-                        TweetDeletionRegistry.shared.unmarkDeleted(tweet.mid)
-                        NotificationCenter.default.post(
-                            name: .tweetRestored,
-                            object: nil,
-                            userInfo: ["tweetId": tweet.mid]
-                        )
-                        NotificationCenter.default.post(
-                            name: .errorOccurred,
-                            object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
-                        )
+                                        attributes: .destructive) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
+                guard let self, let parentViewController = self.parentViewController else { return }
+                self.presentDeleteConfirmation(
+                    title: NSLocalizedString("Delete Tweet?", comment: "Delete tweet confirmation title"),
+                    message: NSLocalizedString(
+                        "This tweet will be permanently deleted. This action cannot be undone.",
+                        comment: "Delete tweet confirmation message"
+                    ),
+                    confirmTitle: NSLocalizedString("Delete Tweet", comment: "Confirm tweet deletion"),
+                    from: parentViewController
+                ) {
+                    // Optimistic UI update — remove immediately after confirmation.
+                    NotificationCenter.default.post(
+                        name: .tweetDeleted,
+                        object: nil,
+                        userInfo: ["tweetId": tweet.mid]
+                    )
+                    Task {
+                        do {
+                            _ = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId)
+                        } catch {
+                            print("DEBUG: [TweetCellContentView] deleteTweet FAILED — raw error: \(error) | localizedDescription: \(error.localizedDescription)")
+                            // Restore tweet on failure
+                            TweetDeletionRegistry.shared.unmarkDeleted(tweet.mid)
+                            NotificationCenter.default.post(
+                                name: .tweetRestored,
+                                object: nil,
+                                userInfo: ["tweetId": tweet.mid]
+                            )
+                            NotificationCenter.default.post(
+                                name: .errorOccurred,
+                                object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                            )
+                        }
                     }
                 }
             }
             actions.append(deleteAction)
         }
+
+        return UIMenu(title: "", children: actions)
+    }
+
+    private func applyCommentMenuIfNeeded(
+        comment: Tweet,
+        parentTweet: Tweet,
+        hproseInstance: HproseInstance
+    ) {
+        let canDelete = comment.authorId == hproseInstance.appUser.mid
+            || parentTweet.authorId == hproseInstance.appUser.mid
+            || Gadget.isResearchAdminUser(hproseInstance.appUser)
+        let key = MenuCacheKey(
+            tweetId: comment.mid,
+            isPinned: false,
+            showDelete: canDelete,
+            isPrivate: comment.isPrivate == true,
+            isOwnTweet: comment.authorId == hproseInstance.appUser.mid,
+            showsAdminEdit: false,
+            commentParentTweetId: parentTweet.mid
+        )
+
+        if currentMenuKey != key {
+            cachedMenu = createCommentMenu(
+                comment: comment,
+                parentTweet: parentTweet,
+                canDelete: canDelete,
+                hproseInstance: hproseInstance
+            )
+            currentMenuKey = key
+        }
+
+        if let cachedMenu {
+            headerView.setMenu(cachedMenu)
+        }
+    }
+
+    private func createCommentMenu(
+        comment: Tweet,
+        parentTweet: Tweet,
+        canDelete: Bool,
+        hproseInstance: HproseInstance
+    ) -> UIMenu {
+        var actions: [UIAction] = []
+
+        let truncatedId = String(comment.mid.prefix(8)) + "..."
+        actions.append(UIAction(title: truncatedId, image: UIImage(systemName: "doc.on.clipboard")) { _ in
+            UIPasteboard.general.string = comment.mid
+        })
+
+        guard canDelete else {
+            return UIMenu(title: "", children: actions)
+        }
+
+        let deleteAction = UIAction(
+            title: NSLocalizedString("Delete", comment: "Menu item"),
+            image: UIImage(systemName: "trash"),
+            attributes: .destructive
+        ) { [weak self] _ in
+            guard !hproseInstance.appUser.isGuest else {
+                self?.onShowLogin?()
+                return
+            }
+            guard let self, let parentViewController = self.parentViewController else { return }
+            self.presentDeleteConfirmation(
+                title: NSLocalizedString("Delete Comment?", comment: "Delete comment confirmation title"),
+                message: NSLocalizedString(
+                    "This comment will be permanently deleted. This action cannot be undone.",
+                    comment: "Delete comment confirmation message"
+                ),
+                confirmTitle: NSLocalizedString("Delete Comment", comment: "Confirm comment deletion"),
+                from: parentViewController
+            ) {
+                NotificationCenter.default.post(
+                    name: .commentDeleted,
+                    object: nil,
+                    userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
+                )
+                parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
+
+                Task {
+                    if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
+                       let count = response["count"] as? Int {
+                        await MainActor.run {
+                            parentTweet.commentCount = count
+                        }
+                    } else {
+                        NotificationCenter.default.post(
+                            name: .commentRestored,
+                            object: nil,
+                            userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
+                        )
+                        await MainActor.run {
+                            parentTweet.commentCount = (parentTweet.commentCount ?? 0) + 1
+                        }
+                    }
+                }
+            }
+        }
+        actions.append(deleteAction)
 
         return UIMenu(title: "", children: actions)
     }
@@ -926,10 +1212,10 @@ class TweetCellContentView: UIView {
         }
     }
 
-    func prepareVideosForBackground() {
-        bodyView.mediaGridView.prepareVideosForBackground()
+    func prepareMediaForBackground(aggressive: Bool = false) {
+        bodyView.mediaGridView.prepareMediaForBackground(aggressive: aggressive)
         if !embeddedTweetWrapper.isHidden {
-            embeddedTweetView.prepareVideosForBackground()
+            embeddedTweetView.prepareMediaForBackground(aggressive: aggressive)
         }
     }
 
@@ -943,6 +1229,7 @@ class TweetCellContentView: UIView {
         cachedMenu = nil
         currentTweetId = nil
         currentTweet = nil
+        commentParentTweet = nil
 
         avatarView.prepareForReuse()
         headerView.prepareForReuse()
@@ -961,5 +1248,7 @@ class TweetCellContentView: UIView {
         onShowLogin = nil
         onShowToast = nil
         onContentExpanded = nil
+        onContentDidChangeHeightAsync = nil
+        onRetweetUnavailable = nil
     }
 }

@@ -10,6 +10,7 @@ import UIKit
 import Combine
 
 class MediaGridUIView: UIView {
+    private static let containerTrailingInset: CGFloat = 2
 
     // MARK: - State
 
@@ -25,6 +26,7 @@ class MediaGridUIView: UIView {
     private var cellTweetId: String?
     private var shouldLoadVideo: Bool = true
     private weak var parentViewController: UIViewController?
+    var cellHorizontalPadding: CGFloat = 16
 
     /// Per-feed video coordinator (set by TweetBodyUIView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
@@ -74,7 +76,15 @@ class MediaGridUIView: UIView {
         parentViewController: UIViewController
     ) {
         let isSameGrid = currentTweetId == tweet.mid &&
-            self.attachments.map(\.mid) == attachments.map(\.mid)
+            self.attachments.elementsEqual(attachments) { current, updated in
+                current.mid == updated.mid &&
+                    current.type.rawValue == updated.type.rawValue &&
+                    current.size == updated.size &&
+                    current.fileName == updated.fileName &&
+                    current.timestamp == updated.timestamp &&
+                    current.aspectRatio == updated.aspectRatio &&
+                    current.url == updated.url
+            }
         if isSameGrid {
             self.isEmbedded = isEmbedded
             self.cellTweetId = cellTweetId
@@ -88,7 +98,7 @@ class MediaGridUIView: UIView {
                     parentTweet: tweet,
                     attachmentIndex: originalAttachmentIndex(i),
                     aspectRatio: cellView.bounds.height > 0 ? Float(cellView.bounds.width / cellView.bounds.height) : 1.0,
-                    shouldLoadVideo: shouldLoadVideo,
+                    shouldAcquirePlayer: shouldLoadVideo,
                     isEmbedded: isEmbedded,
                     cellTweetId: cellTweetId,
                     isSingleMedia: attachments.count == 1,
@@ -123,16 +133,18 @@ class MediaGridUIView: UIView {
             cellView.frame = .zero
 
             // Aspect ratio will be updated in layoutSubviews with correct dimensions
-            cellView.configure(
-                parentTweet: tweet,
-                attachmentIndex: originalAttachmentIndex(i),
-                aspectRatio: 1.0,  // Placeholder, will be updated in layoutSubviews
-                shouldLoadVideo: shouldLoadVideo,
-                isEmbedded: isEmbedded,
-                cellTweetId: cellTweetId,
-                isSingleMedia: attachments.count == 1,
-                parentViewController: parentViewController
-            )
+            StallLog.measure("MediaCellUIView.configure(new grid)", "tweetId=\(tweet.mid) idx=\(i)") {
+                cellView.configure(
+                    parentTweet: tweet,
+                    attachmentIndex: originalAttachmentIndex(i),
+                    aspectRatio: 1.0,  // Placeholder, will be updated in layoutSubviews
+                    shouldAcquirePlayer: shouldLoadVideo,
+                    isEmbedded: isEmbedded,
+                    cellTweetId: cellTweetId,
+                    isSingleMedia: attachments.count == 1,
+                    parentViewController: parentViewController
+                )
+            }
 
         }
 
@@ -169,8 +181,7 @@ class MediaGridUIView: UIView {
               !cellViews.isEmpty else { return }
 
         let gridWidth = bounds.width
-        let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-        let gridHeight = ceil(max(10, gridWidth / gridAspectRatio))
+        let gridHeight = calculatedGridHeight(forWidth: gridWidth)
 
         // Notify Auto Layout of the new height so the parent container self-sizes correctly.
         // This is the UIKit equivalent of Compose's fillMaxWidth() — no hardcoded offsets needed.
@@ -198,7 +209,7 @@ class MediaGridUIView: UIView {
                     parentTweet: parentTweet,
                     attachmentIndex: originalAttachmentIndex(i),
                     aspectRatio: cellAspectRatio,
-                    shouldLoadVideo: shouldLoadVideo,
+                    shouldAcquirePlayer: shouldLoadVideo,
                     isEmbedded: isEmbedded,
                     cellTweetId: cellTweetId,
                     isSingleMedia: attachments.count == 1,
@@ -225,12 +236,61 @@ class MediaGridUIView: UIView {
                height: computedGridHeight > 0 ? computedGridHeight : UIView.noIntrinsicMetric)
     }
 
+    override func systemLayoutSizeFitting(
+        _ targetSize: CGSize,
+        withHorizontalFittingPriority horizontalFittingPriority: UILayoutPriority,
+        verticalFittingPriority: UILayoutPriority
+    ) -> CGSize {
+        guard !attachments.isEmpty else {
+            return super.systemLayoutSizeFitting(
+                targetSize,
+                withHorizontalFittingPriority: horizontalFittingPriority,
+                verticalFittingPriority: verticalFittingPriority
+            )
+        }
+
+        let fittingWidth: CGFloat
+        if targetSize.width.isFinite, targetSize.width > 0 {
+            fittingWidth = targetSize.width
+        } else if bounds.width > 0 {
+            fittingWidth = bounds.width
+        } else {
+            fittingWidth = estimatedGridWidth(isEmbedded: isEmbedded)
+        }
+
+        let fittingHeight = calculatedGridHeight(forWidth: fittingWidth)
+        if computedGridHeight <= 0 || abs(fittingHeight - computedGridHeight) > 0.5 {
+            computedGridHeight = fittingHeight
+        }
+
+        return CGSize(width: fittingWidth, height: fittingHeight)
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        guard !attachments.isEmpty else { return .zero }
+        let fittingWidth = size.width.isFinite && size.width > 0
+            ? size.width
+            : (bounds.width > 0 ? bounds.width : estimatedGridWidth(isEmbedded: isEmbedded))
+        return CGSize(width: fittingWidth, height: calculatedGridHeight(forWidth: fittingWidth))
+    }
+
+    private func calculatedGridHeight(forWidth width: CGFloat) -> CGFloat {
+        ceil(MediaGridViewModel.calculateHeight(for: attachments, gridWidth: max(10, width)))
+    }
+
     private func seedIntrinsicHeightIfNeeded(for attachments: [MimeiFileType], isEmbedded: Bool) {
         guard !attachments.isEmpty else { return }
 
-        let knownWidth = bounds.width > 0 ? bounds.width : superview?.bounds.width ?? 0
+        let knownWidth: CGFloat
+        if bounds.width > 0 {
+            knownWidth = bounds.width
+        } else if let containerWidth = superview?.bounds.width, containerWidth > 0 {
+            knownWidth = max(10, containerWidth - Self.containerTrailingInset)
+        } else {
+            knownWidth = 0
+        }
         let estimatedWidth = knownWidth > 0 ? knownWidth : estimatedGridWidth(isEmbedded: isEmbedded)
-        let estimatedHeight = ceil(MediaGridViewModel.calculateHeight(for: attachments, gridWidth: estimatedWidth))
+        let estimatedHeight = calculatedGridHeight(forWidth: estimatedWidth)
         guard estimatedHeight > 0, abs(estimatedHeight - computedGridHeight) > 1.0 else { return }
 
         computedGridHeight = estimatedHeight
@@ -238,12 +298,10 @@ class MediaGridUIView: UIView {
     }
 
     private func estimatedGridWidth(isEmbedded: Bool) -> CGFloat {
-        let screenWidth = UIScreen.main.bounds.width
-        let containerWidth = isEmbedded
-            ? max(10, screenWidth - 79)
-            : max(10, screenWidth - 32 - 34)
-        // TweetBodyUIView pins the grid 2pt inside its media container.
-        return max(10, containerWidth - 2)
+        MediaGridViewModel.defaultGridWidth(
+            isEmbedded: isEmbedded,
+            cellHorizontalPadding: cellHorizontalPadding
+        )
     }
 
     // MARK: - Frame Calculations
@@ -450,6 +508,32 @@ class MediaGridUIView: UIView {
         hasInitialized = true
     }
 
+    /// Marks non-video (image) cells visible so they start loading, for callers with
+    /// no scroll-based visibility tracker of their own. The feed drives per-cell
+    /// visibility precisely via TweetTableViewController's
+    /// mediaVisibilityIdentifiers()/setVisible() on every scroll pass; isGridVisible
+    /// alone was never enough to load images — it only flips this grid's own flag,
+    /// never MediaCellUIView.isVisible, so images sat blank with no spinner in
+    /// SwiftUI-only contexts (e.g. comments) that just set isGridVisible on appear.
+    /// Video cells are intentionally skipped: comments drive video visibility
+    /// separately via CommentsVideoPlaybackCoordinator, and mixing this in would
+    /// double up on that flow.
+    func markImageCellsVisibleIfNeeded() {
+        guard isGridVisible else { return }
+        // Video cells are normally left invisible here — this SwiftUI wrapper has no
+        // scroll tracker, so video loading/autoplay is meant to stay driven by the
+        // feed's VideoPlaybackCoordinator (see comment on `isEmbedded` at the call
+        // site). But an embedded/quoted tweet rendered inside TweetDetailView never
+        // gets registered with that coordinator (it's feed-only), so without this its
+        // video would never load at all. Match the existing embeddedDetail precedent
+        // (SimpleVideoPlayer/NavigationStateManager.isDetailViewActive) and let it
+        // load + autoplay independently while a detail view is on screen.
+        let autoplayEmbeddedVideoInDetail = isEmbedded && NavigationStateManager.shared.isDetailViewActive
+        for cellView in cellViews where !cellView.isVideoAttachment || autoplayEmbeddedVideoInDetail {
+            cellView.setVisible(true)
+        }
+    }
+
     private func handleBecameInvisible() {
         guard let parentTweet else { return }
         let hasVideos = attachments.contains { $0.type == .video || $0.type == .hls_video }
@@ -481,26 +565,34 @@ class MediaGridUIView: UIView {
     }
 
     /// Updates per-media visibility.
-    /// `loadVisible` treats any positive on-screen intersection as visible so partially
-    /// visible media can start loading a cover frame/player.
-    /// `continuePlayback` is stricter than `playable`: the current feed video stops once it drops below this threshold.
-    /// `playable` keeps the 50% threshold used by the video coordinator for new autoplay candidates.
+    /// `loadVisible` uses a near-viewport band so media can start attaching/warming
+    /// shortly before it scrolls on screen.
+    /// `playable` starts autoplay at 50%; `continuePlayback` keeps the active
+    /// primary only while it remains at the playback visibility threshold.
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
         var loadVisible: [String] = []
         var continuePlayback: [String] = []
         var playable: [String] = []
+        let loadPrewarmMargin = max(240, visibleRect.height * 0.75)
+        let loadVisibleRect = visibleRect.insetBy(dx: 0, dy: -loadPrewarmMargin)
         let displayCount = min(cellViews.count, attachments.count, 4)
         for cellView in cellViews.prefix(displayCount) {
             let cellFrame = cellView.convert(cellView.bounds, to: coordinateSpace)
             let intersection = cellFrame.intersection(visibleRect)
+            let loadIntersection = cellFrame.intersection(loadVisibleRect)
             let cellArea = cellFrame.width * cellFrame.height
             let visibleArea = max(0, intersection.width) * max(0, intersection.height)
+            let loadVisibleArea = max(0, loadIntersection.width) * max(0, loadIntersection.height)
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
-            let isLoadVisible = isGridVisible && visibleArea > 0
+            let isLoadVisible = isGridVisible && loadVisibleArea > 0
+            let isActuallyVisible = isGridVisible && visibleArea > 0
+            let shouldWarmPlayer = ratio > 0 && ratio >= FeedPlaybackTuning.videoWarmVisibilityRatio
+            let isPlayable = ratio >= FeedPlaybackTuning.videoStartVisibilityRatio
+            let shouldMarkCellVisible = cellView.isVideoAttachment ? isActuallyVisible : isLoadVisible
             cellView.setVisible(
-                isLoadVisible,
-                shouldAcquirePlayer: isLoadVisible && AppDelegate.isVideoInfrastructureReady
+                shouldMarkCellVisible,
+                shouldAcquirePlayer: shouldWarmPlayer && AppDelegate.isVideoInfrastructureReady
             )
 
             guard cellView.isVideoAttachment,
@@ -511,14 +603,14 @@ class MediaGridUIView: UIView {
             if ratio >= playbackContinueVisibilityThreshold {
                 continuePlayback.append(identifier)
             }
-            if ratio >= FeedPlaybackTuning.videoStartVisibilityRatio {
+            if isPlayable {
                 playable.append(identifier)
             }
         }
         return (loadVisible, continuePlayback, playable)
     }
 
-    /// Updates per-media visibility and returns video identifiers whose frames are at least 50% visible.
+    /// Updates per-media visibility and returns video identifiers eligible for primary playback.
     func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
         mediaVisibilityIdentifiers(visibleRect: visibleRect, coordinateSpace: coordinateSpace).playable
     }
@@ -529,9 +621,9 @@ class MediaGridUIView: UIView {
         }
     }
 
-    func prepareVideosForBackground() {
+    func prepareMediaForBackground(aggressive: Bool = false) {
         for cell in cellViews {
-            cell.prepareVideoForBackground()
+            cell.prepareForBackground(aggressive: aggressive)
         }
     }
 

@@ -3,8 +3,8 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct ProfileHeaderSection: View {
     @ObservedObject var user: User
+    @ObservedObject var headerState: ProfileHeaderState
     let isCurrentUser: Bool
-    let isFollowing: Bool
     let onEditTap: () -> Void
     let onFollowToggle: () -> Void
     let onAvatarTap: () -> Void
@@ -12,8 +12,8 @@ struct ProfileHeaderSection: View {
     var body: some View {
         ProfileHeaderView(
             user: user,
+            headerState: headerState,
             isCurrentUser: isCurrentUser,
-            isFollowing: isFollowing,
             onEditTap: onEditTap,
             onFollowToggle: onFollowToggle,
             onAvatarTap: onAvatarTap

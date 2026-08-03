@@ -9,7 +9,7 @@
 import SwiftUI
 import UIKit
 
-struct MediaGridView: View, Equatable {
+struct MediaGridView: View, @MainActor Equatable {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
     let isEmbedded: Bool // Flag to indicate this is an embedded tweet (prevents video loading)
@@ -103,9 +103,7 @@ private struct UIKitMediaGridRepresentable: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: MediaGridUIView, context: Context) -> CGSize? {
-        let fallbackWidth = isEmbedded
-            ? max(10, UIScreen.main.bounds.width - 80)
-            : max(10, UIScreen.main.bounds.width - 64)
+        let fallbackWidth = MediaGridViewModel.defaultGridWidth(isEmbedded: isEmbedded)
         let width = proposal.width ?? fallbackWidth
         let height = ceil(MediaGridViewModel.calculateHeight(for: attachments, gridWidth: width))
         return CGSize(width: width, height: max(10, height))
@@ -121,6 +119,14 @@ private struct UIKitMediaGridRepresentable: UIViewRepresentable {
             parentViewController: parentViewController
         )
         uiView.isGridVisible = isVisible
+        // This SwiftUI wrapper has no scroll-based visibility tracker of its own
+        // (unlike the feed's TweetTableViewController), so nothing else ever flips
+        // MediaCellUIView.isVisible for image cells here — without this, images in
+        // contexts like TweetDetailView's comment list never load and never show a
+        // spinner. Safe to call every configure(): setVisible(true) on an already-
+        // visible cell is a cheap no-op (see MediaCellUIView.setVisible's early-return
+        // guard).
+        uiView.markImageCellsVisibleIfNeeded()
         uiView.setNeedsLayout()
     }
 }
@@ -246,15 +252,44 @@ struct MediaGridViewModel {
 
     /// Calculate precise height for MediaGrid given attachments and whether it's embedded
     /// This uses screen-width-based estimates - prefer the gridWidth variant when actual width is known
-    static func calculateHeight(for attachments: [MimeiFileType], isEmbedded: Bool) -> CGFloat {
+    @MainActor
+    static func calculateHeight(
+        for attachments: [MimeiFileType],
+        isEmbedded: Bool,
+        cellHorizontalPadding: CGFloat = 16
+    ) -> CGFloat {
         guard !attachments.isEmpty else { return 0 }
 
-        let screenWidth = UIScreen.main.bounds.width
-        let gridWidth = isEmbedded
-            ? max(10, screenWidth - 79)   // bodyView spans full contentStack (no avatar beside it): cell(16)+mainLeading(3)+avatar(42)+spacing(4)+embInsets(8+8)+mediaTrailing(2) = 79
-            : max(10, screenWidth - 32 - 34)  // Regular width (32+32 cell padding + 2 trailing inset)
+        return calculateHeight(
+            for: attachments,
+            gridWidth: defaultGridWidth(
+                isEmbedded: isEmbedded,
+                cellHorizontalPadding: cellHorizontalPadding
+            )
+        )
+    }
 
-        return calculateHeight(for: attachments, gridWidth: gridWidth)
+    @MainActor
+    static func defaultGridWidth(
+        isEmbedded: Bool,
+        cellHorizontalPadding: CGFloat = 16
+    ) -> CGFloat {
+        let screenWidth = UIScreen.main.bounds.width
+        let regularContentColumnWidth = screenWidth
+            - cellHorizontalPadding
+            - 3  // mainStack leading
+            - 42 // avatar
+            - 4  // avatar/content spacing
+        let mediaTrailingInset: CGFloat = 2
+
+        if isEmbedded {
+            // Embedded media sits inside the embedded tweet content stack:
+            // regular content column + embedded wrapper extension (4)
+            // - embedded content insets (8 + 8) - media trailing inset.
+            return max(10, regularContentColumnWidth + 4 - 16 - mediaTrailingInset)
+        }
+
+        return max(10, regularContentColumnWidth - mediaTrailingInset)
     }
 
     /// Get aspect ratio for an attachment, detecting from cached image if nil

@@ -22,25 +22,28 @@ private actor LocalHTTPServerReadinessRecovery {
 }
 
 // MARK: - Streaming Download Delegate
-private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
+private final class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let connection: NWConnection
     private let mediaID: String
     private let cacheStart: Int64
     private let cacheFileHandle: FileHandle?
     private let cacheFilePath: String?
     private let initialCachedSize: Int64
-    private let contiguousSizeUpdate: (Int64) -> Void
-    private let sessionCleanup: () -> Void
-    private let buildHeaders: (Int, [String: String]) -> Data
-    private let onTotalSizeKnown: ((Int64) -> Void)?
+    private let contiguousSizeUpdate: @Sendable (Int64) -> Void
+    private let sessionCleanup: @Sendable () -> Void
+    private let buildHeaders: @Sendable (Int, [String: String]) -> Data
+    private let onTotalSizeKnown: (@Sendable (Int64) -> Void)?
+    private let sendsResponseHeaders: Bool
     /// Called once when AVPlayer closes the proxy connection (either normally or mid-stream).
     /// Used to release the NodeConnectionPool slot early so subsequent downloads aren't blocked.
-    var onConnectionDead: (() -> Void)?
+    private var onConnectionDead: (@Sendable () -> Void)?
 
     private var sentBytesCount: Int64 = 0
     private var cachedBytesCount: Int64
     private let maxCacheSize: Int64 = 50 * 1024 * 1024  // 50MB safety cap
     private let writeLock = NSLock()
+    private let connectionStateLock = NSLock()
+    private var clientConnectionDead = false
     private var lastPersistedContiguousSize: Int64
     private let persistInterval: Int64 = 512 * 1024
 
@@ -51,10 +54,11 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         cacheFileHandle: FileHandle?,
         cacheFilePath: String?,
         initialCachedSize: Int64,
-        contiguousSizeUpdate: @escaping (Int64) -> Void,
-        sessionCleanup: @escaping () -> Void,
-        buildHeaders: @escaping (Int, [String: String]) -> Data,
-        onTotalSizeKnown: ((Int64) -> Void)?
+        contiguousSizeUpdate: @escaping @Sendable (Int64) -> Void,
+        sessionCleanup: @escaping @Sendable () -> Void,
+        buildHeaders: @escaping @Sendable (Int, [String: String]) -> Data,
+        onTotalSizeKnown: (@Sendable (Int64) -> Void)?,
+        sendsResponseHeaders: Bool = true
     ) {
         self.connection = connection
         self.mediaID = mediaID
@@ -67,7 +71,34 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         self.sessionCleanup = sessionCleanup
         self.buildHeaders = buildHeaders
         self.onTotalSizeKnown = onTotalSizeKnown
+        self.sendsResponseHeaders = sendsResponseHeaders
         self.lastPersistedContiguousSize = initialCachedSize
+    }
+
+    private func markClientConnectionDead() {
+        var release: (@Sendable () -> Void)?
+        connectionStateLock.lock()
+        if !clientConnectionDead {
+            clientConnectionDead = true
+            release = onConnectionDead
+            onConnectionDead = nil
+        }
+        connectionStateLock.unlock()
+        release?()
+    }
+
+    private func shouldSendToClient() -> Bool {
+        connectionStateLock.lock()
+        let dead = clientConnectionDead
+        connectionStateLock.unlock()
+        guard !dead else { return false }
+        switch connection.state {
+        case .cancelled, .failed:
+            markClientConnectionDead()
+            return false
+        default:
+            return true
+        }
     }
 
     // Forward IPFS response headers to AVPlayer, fixing only Content-Type.
@@ -94,6 +125,11 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                 onTotalSizeKnown?(size)
             }
         }
+        guard sendsResponseHeaders else {
+            completionHandler(.allow)
+            return
+        }
+
         let headerData = buildHeaders(httpResponse.statusCode, headers)
         // Queue headers; NWConnection delivers them before subsequent data sends.
         // Guard: skip if AVPlayer already closed this connection (adaptive bitrate switch).
@@ -115,22 +151,22 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 
             let writeOffset = cacheStart + sentBytesCount
 
-            // Stream chunk to AVPlayer immediately; on send failure the connection is dead —
-            // release the pool slot so primary video is no longer blocked.
-            switch connection.state {
-            case .cancelled, .failed:
-                let release = self.onConnectionDead
-                self.onConnectionDead = nil
-                release?()
+            // Stream to AVPlayer while the local socket is alive. If AVPlayer closes
+            // the socket, keep cache-writer downloads running so partial MP4 cache
+            // can continue growing for the next attempt.
+            let canSendToClient = shouldSendToClient()
+            let canStillGrowContiguousCache = cacheFileHandle != nil &&
+                cachedBytesCount < maxCacheSize &&
+                writeOffset <= cachedBytesCount
+            if canSendToClient {
+                connection.send(content: data, completion: .contentProcessed { [weak self] error in
+                    guard let self, error != nil else { return }
+                    self.markClientConnectionDead()
+                })
+            } else if !canStillGrowContiguousCache {
+                dataTask.cancel()
                 return
-            default: break
             }
-            connection.send(content: data, completion: .contentProcessed { [weak self] error in
-                guard let self = self, error != nil else { return }
-                let release = self.onConnectionDead
-                self.onConnectionDead = nil
-                release?()
-            })
             sentBytesCount += chunkLength
 
             // Write chunk to disk cache (only if a cache file handle was provided)
@@ -209,6 +245,7 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 
             if let size = finalSizeToPersist { contiguousSizeUpdate(size) }
             sessionCleanup()
+            session.finishTasksAndInvalidate()
         }
 
         let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
@@ -241,61 +278,20 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 }
 
 // MARK: - Active Downloads Actor (Swift 6 Concurrency-Safe)
-/// Tracks which segment downloads are in progress using a simple Set.
-/// Waiters poll with Task.sleep — no CheckedContinuation, no leak risk.
+/// Tracks media IDs whose preloads were cancelled so stale AVPlayer retries can be rejected.
 private actor ActiveDownloadsActor {
-    private var activeDownloads: Set<String> = []
-
-    /// MediaIDs whose players have been cleared.  Any pending dedup waiter or background
-    /// retry for these mediaIDs should be skipped immediately rather than retried.
+    /// MediaIDs whose players have been cleared. Background retries for these mediaIDs should
+    /// be skipped immediately rather than restarted.
     /// Cleared when a new player is registered for the same mediaID (fresh start).
     private var cancelledMediaIDs: Set<String> = []
 
-    func hasDownload(for key: String) -> Bool {
-        return activeDownloads.contains(key)
-    }
-
-    func markDownloadStarted(for key: String) {
-        activeDownloads.insert(key)
-    }
-
-    /// Atomically checks if a download is in flight and, if not, marks it as started.
-    /// Returns true if the caller should proceed as the downloader (key was not in-flight).
-    /// Returns false if another task is already downloading this key (caller should poll).
-    /// Eliminates the TOCTOU race between a separate hasDownload check and markDownloadStarted.
-    func startIfNotInFlight(for key: String) -> Bool {
-        if activeDownloads.contains(key) { return false }
-        activeDownloads.insert(key)
-        return true
-    }
-
-    func markDownloadCompleted(for key: String) {
-        activeDownloads.remove(key)
-    }
-
     func cancelAllTasks() {
-        activeDownloads.removeAll()
+        cancelledMediaIDs.removeAll()
     }
 
-    /// Remove all active download keys containing the given mediaID
-    /// and mark it as cancelled so in-flight URLSession completions don't retry.
+    /// Mark this mediaID as cancelled so stale AVPlayer retries do not start fresh downloads.
     func cancelTasks(for mediaID: String) {
         cancelledMediaIDs.insert(mediaID)
-        activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
-    }
-
-    /// Remove active download keys for this mediaID without marking it as permanently
-    /// cancelled. Used when a video becomes primary — clears stale preload dedup entries
-    /// so the primary player's segment requests start immediately without waiting.
-    func releaseStalledDownloads(for mediaID: String) {
-        activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
-    }
-
-    /// Remove all active download keys EXCEPT those matching any of the given (protected) mediaIDs.
-    func cancelTasksExcept(keepMediaIDs: Set<String>) {
-        activeDownloads = activeDownloads.filter { key in
-            keepMediaIDs.contains(where: { key.contains($0) })
-        }
     }
 
     /// Returns true if the player for this mediaID was cleared while a download was in-flight.
@@ -333,7 +329,18 @@ public class LocalHTTPServer: @unchecked Sendable {
     fileprivate static let verboseLogsEnabled = false
 #endif
 
-    private var listener: NWListener?
+    // `listener` is read/written from several unsynchronized contexts: the concurrent
+    // `queue`, the listener's own `listenerQueue` (via stateUpdateHandler), and the
+    // cooperative pool via Task hops. Guard it with a dedicated lock (same pattern as
+    // stateLock/_isRunning below) to prevent a retain/release race that could crash or
+    // wedge every video load. All accesses are quick and synchronous, so no lock is held
+    // across an await (no deadlock risk).
+    private var _listener: NWListener?
+    private let listenerLock = NSLock()
+    private var listener: NWListener? {
+        get { listenerLock.lock(); defer { listenerLock.unlock() }; return _listener }
+        set { listenerLock.lock(); defer { listenerLock.unlock() }; _listener = newValue }
+    }
     public private(set) var port: UInt16 = 8080  // Public read, private write
     private var mediaCache: [String: String] = [:] // mediaID -> cachePath
     /// Truncate a mediaID to 8 chars for log readability.
@@ -433,17 +440,25 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
     private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
+    private let minimumPartialProgressiveCacheHitBytes: Int64 = 512 * 1024
+    private let minimumProgressiveCacheSeedRequestBytes: Int64 = 128 * 1024
 
-    // Log deduplication: suppress duplicate progressive cache decision logs for same mediaID+range within 3s
+    // Log coalescing: suppress duplicate progressive cache decision logs for same mediaID+range within 3s
     private var recentProgressiveCacheLogs: [String: Date] = [:]
     private let progressiveCacheLogLock = NSLock()
 
-    // Primary video tracking — used to set isPrimary when acquiring NodeConnectionPool slots.
+    // Playback priority tracking — used to classify NodeConnectionPool slots.
     private var currentPrimaryMediaID: String?
+    private var currentPrimaryBufferSatisfied = false
     private let primaryMediaIDLock = NSLock()
+    private let primaryPreloadGateBufferSeconds: Double = 30.0
+    private let visiblePreloadGateBufferSeconds: Double = 3.0
+    private var visibleMediaIDs: Set<String> = []
+    private var visibleBufferSatisfiedByMediaID: [String: Bool] = [:]
+    private let visibleMediaIDsLock = NSLock()
 
-    // Tracks which mediaID_offset combos are actively writing to the disk cache.
-    // Only one writer per starting offset is allowed; parallel connections skip disk write.
+    // Tracks which media IDs are actively writing to the progressive disk cache.
+    // Only one writer per media is allowed; parallel connections skip disk write.
     private var progressiveCacheWriters: Set<String> = []
     private let progressiveCacheWritersLock = NSLock()
     
@@ -455,6 +470,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     private let networkFailureLock = NSLock()
     private var _consecutiveNetworkFailures: Int = 0
     private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
+    private let initializationSnapshotLock = NSLock()
+    private var appInitializedSnapshot = false
+    private var appUserBaseHostSnapshot: String?
     private var connectionPool: URLSession {
         connectionPoolLock.lock()
         defer { connectionPoolLock.unlock() }
@@ -492,9 +510,21 @@ public class LocalHTTPServer: @unchecked Sendable {
             print("🔄 [LocalHTTPServer] Refreshed upstream connection pool for retry (\(reason)) mediaID=\(mediaID)")
         }
     }
+
+    func updateInitializationSnapshot(isAppInitialized: Bool, appUserBaseURL: URL?) {
+        initializationSnapshotLock.lock()
+        appInitializedSnapshot = isAppInitialized
+        appUserBaseHostSnapshot = appUserBaseURL?.host
+        initializationSnapshotLock.unlock()
+    }
     
     private func canBypassInitialization(for mediaID: String? = nil, url: URL? = nil) -> Bool {
-        if HproseInstance.shared.isAppInitialized {
+        initializationSnapshotLock.lock()
+        let isInitialized = appInitializedSnapshot
+        let appUserBaseHost = appUserBaseHostSnapshot
+        initializationSnapshotLock.unlock()
+
+        if isInitialized {
             return true
         }
         
@@ -514,7 +544,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        if let baseHost = HproseInstance.shared.appUser.baseUrl?.host,
+        if let baseHost = appUserBaseHost,
            !baseHost.isEmpty {
             return true
         }
@@ -562,6 +592,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         )
     }
     
+    @MainActor
     @objc private func handleWillResignActive() {
         didEnterBackground = false
         
@@ -574,6 +605,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
+    @MainActor
     @objc private func handleDidEnterBackground() {
         didEnterBackground = true
         // Once the app is truly backgrounded, AppDelegate performs a deterministic
@@ -581,13 +613,20 @@ public class LocalHTTPServer: @unchecked Sendable {
         endBackgroundTask()
     }
     
+    @MainActor
     @objc private func handleDidBecomeActive() {
-        let _ = !didEnterBackground  // Track if this was screen lock vs background
-        
         // End background task - no longer needed
         endBackgroundTask()
-        
-        // Check server health and restart if needed
+
+        // AppDelegate drives all foreground infrastructure recovery when
+        // isVideoInfrastructureReady == false.  Running verifyServerHealth concurrently
+        // creates a double-restart race: both paths serialise through the server queue,
+        // causing an unnecessary stop→start→stop→start sequence that delays playback
+        // and can make AppDelegate's isHealthyAsync() check return false mid-restart.
+        guard AppDelegate.isVideoInfrastructureReady else { return }
+
+        // Check server health and restart if needed (only when AppDelegate is not
+        // already managing a recovery cycle).
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.verifyServerHealth()
         }
@@ -595,8 +634,11 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func endBackgroundTask() {
         if backgroundTaskID != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            let taskID = backgroundTaskID
             backgroundTaskID = .invalid
+            Task { @MainActor in
+                UIApplication.shared.endBackgroundTask(taskID)
+            }
         }
     }
     
@@ -662,43 +704,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         endBackgroundTask()
     }
     
-    /// Start the server synchronously and WAIT until it's ready
-    /// ⚠️ DEPRECATED: Use startAndWaitAsync() instead to avoid blocking main thread
-    /// This method is kept for backwards compatibility but should not be used
-    public func startAndWait() {
-        print("[LocalHTTPServer] ⚠️ startAndWait() DEPRECATED - use startAndWaitAsync() instead!")
-        
-        // If already running, return immediately
-        if isRunning {
-            print("[LocalHTTPServer] Already running on port \(port)")
-            return
-        }
-        
-        // DON'T block with semaphore - just start async
-        queue.async { [weak self] in
-            Task {
-                guard let self = self else { return }
-
-                if !self.isRunning {
-                    await self.startServer()
-                }
-            }
-        }
-        
-        // Give it a moment to start (don't block with semaphore!)
-        // NOTE: This is still using Thread.sleep because this is a deprecated sync method
-        // Users should migrate to startAndWaitAsync() instead
-        Thread.sleep(forTimeInterval: 0.1)
-        
-        if isRunning {
-            print("[LocalHTTPServer] ✅ Server started")
-        } else {
-            print("[LocalHTTPServer] ⚠️ Server starting in background...")
-        }
-    }
-    
     /// Start the server asynchronously and WAIT until it's ready (non-blocking)
-    /// Use this instead of startAndWait() to avoid blocking the main thread
     public func startAndWaitAsync() async {
         print("[LocalHTTPServer] startAndWaitAsync() called")
         
@@ -739,50 +745,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             print("[LocalHTTPServer] ✅ startAndWaitAsync() SUCCESS - Server ready on port \(port)")
         } else {
             print("[LocalHTTPServer] ❌ startAndWaitAsync() FAILED - Server not running")
-        }
-    }
-    
-    public func start() {
-        // If already running, return immediately
-        if isRunning {
-            return
-        }
-
-        // Use a dispatch group to wait for server startup
-        let group = DispatchGroup()
-        group.enter()
-
-        queue.async { [weak self] in
-            guard let self = self else {
-                group.leave()
-                return
-            }
-
-            Task {
-                // If currently stopping, wait for it to finish
-                if self.isStopping {
-                    var waitCount = 0
-                    while self.isStopping && waitCount < 10 {
-                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                        waitCount += 1
-                    }
-                }
-
-                // Don't start if already running or starting
-                if self.isRunning || self.isStarting {
-                    group.leave()
-                    return
-                }
-
-                await self.startServer()
-                group.leave()
-            }
-        }
-
-        // Wait for server to start (with timeout)
-        let result = group.wait(timeout: .now() + 2.0) // 2 second timeout
-        if result == .timedOut {
-            print("⚠️ [LocalHTTPServer] start() timed out waiting for server to start")
         }
     }
     
@@ -857,12 +819,14 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// Stop the server during app backgrounding without leaving cleanup queued behind
     /// suspended media work. Use this only from lifecycle cleanup, not normal playback paths.
     public func stopImmediatelyForBackground() {
+        resetAllConnectionsImmediately()
+        clearPrimaryRestriction()
+
         // Preserve mediaID -> real URL registrations across background suspension.
         // Existing AVPlayerItems may still hold localhost URLs when the app resumes;
         // if this map is cleared, those requests return 404 before the player has a
         // chance to recreate/register itself.
         stopInternal(clearMediaRegistration: false)
-        NodePoolRegistry.shared.resetAllPools()
         isStopping = false
     }
     
@@ -902,10 +866,26 @@ public class LocalHTTPServer: @unchecked Sendable {
         streamingSessionLastProgress.removeAll()
         streamingSessionsLock.unlock()
 
-        // 3. Fire-and-forget: cancel tracked active downloads
+        // 3. Cancel tracked HLS segment tasks and drop strong task references.
+        hlsDataTasksLock.lock()
+        let hlsTasks = hlsDataTasks.values.flatMap { $0.values }
+        hlsDataTasks.removeAll()
+        hlsDataTasksLock.unlock()
+        hlsTasks.forEach { $0.cancel() }
+
+        // 4. Release progressive cache writer bookkeeping and log coalescing state.
+        progressiveCacheWritersLock.lock()
+        progressiveCacheWriters.removeAll()
+        progressiveCacheWritersLock.unlock()
+
+        progressiveCacheLogLock.lock()
+        recentProgressiveCacheLogs.removeAll()
+        progressiveCacheLogLock.unlock()
+
+        // 5. Fire-and-forget: cancel tracked active downloads
         Task { await activeDownloadsActor.cancelAllTasks() }
 
-        // 4. Reset per-node connection pools: clears stale slot counts and resumes
+        // 6. Reset per-node connection pools: clears stale slot counts and resumes
         //    any suspended preload continuations so they are not permanently leaked.
         NodePoolRegistry.shared.resetAllPools()
     }
@@ -943,15 +923,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     /// Cancel all active downloads (HLS segment tasks + progressive streaming sessions)
     /// for a specific mediaID.  Call this before deleting the media's disk cache so that
-    /// in-flight writes don't fail with "file not found" and pending dedup waiters don't
-    /// spawn untracked background retries.
+    /// in-flight writes don't fail with "file not found" and stale AVPlayer retries don't
+    /// spawn fresh background downloads after cancellation.
     public func cancelDownloads(for mediaID: String) {
-        // 1. Cancel tracked HLS segment download tasks
-        Task { await activeDownloadsActor.cancelTasks(for: mediaID) }
-        hlsDataTasksLock.lock()
-        let tasksToCancel = hlsDataTasks.removeValue(forKey: mediaID).map { Array($0.values) } ?? []
-        hlsDataTasksLock.unlock()
-        tasksToCancel.forEach { $0.cancel() }
+        cancelHLSSegmentDownloads(for: mediaID)
 
         // 2. Cancel progressive streaming sessions for this mediaID
         streamingSessionsLock.lock()
@@ -969,13 +944,22 @@ public class LocalHTTPServer: @unchecked Sendable {
         progressiveCacheWritersLock.unlock()
     }
 
+    /// Cancel only HLS segment tasks for a mediaID. Progressive streams are deliberately
+    /// left alone so partial MP4 cache can continue growing after a preload/player is released.
+    public func cancelHLSSegmentDownloads(for mediaID: String) {
+        Task { await activeDownloadsActor.cancelTasks(for: mediaID) }
+        hlsDataTasksLock.lock()
+        let tasksToCancel = hlsDataTasks.removeValue(forKey: mediaID).map { Array($0.values) } ?? []
+        hlsDataTasksLock.unlock()
+        tasksToCancel.forEach { $0.cancel() }
+    }
+
     /// Clear stale preload cancellation state when a media cell becomes visible.
     /// Visible cells own their own loading path; they must not inherit a cancelled
     /// directional-preload marker from before they entered the viewport.
     public func resumeVisibleDownloads(for mediaID: String) {
         Task {
             await activeDownloadsActor.clearCancelledMediaID(mediaID)
-            await activeDownloadsActor.releaseStalledDownloads(for: mediaID)
         }
     }
 
@@ -989,6 +973,59 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         let cachedSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
         return cachedSize >= totalSize && isValidProgressiveCache(fileURL: cacheFileURL)
+    }
+
+    public func progressiveCacheFileForThumbnailIfAvailable(for mediaID: String, minimumContiguousBytes: Int64 = 2 * 1024 * 1024) -> URL? {
+        let cacheFileURL = progressiveCacheFileURL(for: mediaID)
+        guard FileManager.default.fileExists(atPath: cacheFileURL.path) else { return nil }
+
+        let cachedSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
+        let requiredSize: Int64
+        if let totalSize = loadProgressiveTotalSize(mediaID: mediaID), totalSize > 0 {
+            if cachedSize >= totalSize {
+                return cacheFileURL
+            }
+            requiredSize = min(totalSize, minimumContiguousBytes)
+        } else {
+            requiredSize = minimumContiguousBytes
+        }
+
+        guard cachedSize >= requiredSize,
+              progressiveCacheHasMoovInPrefix(fileURL: cacheFileURL) else {
+            return nil
+        }
+
+        return cacheFileURL
+    }
+
+    private func progressiveCacheHasMoovInPrefix(fileURL: URL) -> Bool {
+        do {
+            let fileHandle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? fileHandle.close() }
+
+            let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let fileSize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+            let maxScanBytes = Int(min(max(fileSize, 0), 4 * 1024 * 1024))
+            guard maxScanBytes > 0 else { return false }
+
+            let chunkSize = 128 * 1024
+            var buffer = Data(capacity: maxScanBytes)
+            while buffer.count < maxScanBytes {
+                let remaining = maxScanBytes - buffer.count
+                let toRead = min(chunkSize, remaining)
+                guard let chunk = try fileHandle.read(upToCount: toRead), !chunk.isEmpty else {
+                    break
+                }
+                buffer.append(chunk)
+
+                if buffer.range(of: Data([0x6D, 0x6F, 0x6F, 0x76])) != nil {
+                    return true
+                }
+            }
+            return false
+        } catch {
+            return false
+        }
     }
 
     private func trackHLSDataTask(_ task: URLSessionTask, mediaID: String, taskKey: UUID) {
@@ -1047,12 +1084,83 @@ public class LocalHTTPServer: @unchecked Sendable {
         relativeHLSPath(from: url, mediaID: mediaID) ?? url.lastPathComponent
     }
 
+    private func duplicateSegmentWaitAttempts(for priority: NodeDownloadPriority) -> Int {
+        switch priority {
+        case .primary:
+            return 1200 // 5 minutes, matching the URLSession resource timeout.
+        case .visible:
+            return 240 // 60 seconds: visible video should not fail from normal IPFS slowness.
+        case .preload:
+            return 40 // 10 seconds: keep preload cheap.
+        }
+    }
+
+    private func duplicateSegmentUpstreamLimit(for priority: NodeDownloadPriority) -> Int {
+        switch priority {
+        case .primary:
+            return 2
+        case .visible, .preload:
+            return 1
+        }
+    }
+
+    private func activeHLSSegmentDownloadCount(for mediaID: String, relativePath: String) -> Int {
+        hlsDataTasksLock.lock()
+        defer { hlsDataTasksLock.unlock() }
+        return hlsDataTasks[mediaID]?.values.filter { task in
+            relativeHLSSegmentPath(for: task, mediaID: mediaID) == relativePath
+        }.count ?? 0
+    }
+
+    private func waitForActiveHLSSegmentToCache(
+        mediaID: String,
+        relativePath: String,
+        cachePath: String,
+        connection: NWConnection,
+        method: String,
+        waitAttempts: Int,
+        reason: String
+    ) async -> (served: Bool, stillActive: Bool) {
+        for _ in 0..<waitAttempts {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            switch connection.state { case .cancelled, .failed: return (true, true); default: break }
+
+            if isUsableCachedFile(atPath: cachePath) {
+                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(relativePath) after waiting for \(reason)")
+                autoreleasepool {
+                    serveFile(path: cachePath, connection: connection, method: method)
+                }
+                return (true, false)
+            }
+
+            if !hasActiveHLSSegmentDownload(for: mediaID, relativePath: relativePath) {
+                return (false, false)
+            }
+        }
+
+        return (false, hasActiveHLSSegmentDownload(for: mediaID, relativePath: relativePath))
+    }
+
     private func hasActiveHLSSegmentDownload(for mediaID: String, relativePath: String) -> Bool {
         hlsDataTasksLock.lock()
         defer { hlsDataTasksLock.unlock() }
         return hlsDataTasks[mediaID]?.values.contains { task in
             relativeHLSSegmentPath(for: task, mediaID: mediaID) == relativePath
         } ?? false
+    }
+
+    private func hasActiveHLSDownload(for mediaID: String, relativePath: String) -> Bool {
+        hlsDataTasksLock.lock()
+        defer { hlsDataTasksLock.unlock() }
+        return hlsDataTasks[mediaID]?.values.contains { task in
+            relativeHLSPath(from: task.currentRequest?.url ?? task.originalRequest?.url, mediaID: mediaID) == relativePath
+        } ?? false
+    }
+
+    private func hasActiveProgressiveCacheWriter(for mediaID: String) -> Bool {
+        progressiveCacheWritersLock.lock()
+        defer { progressiveCacheWritersLock.unlock() }
+        return progressiveCacheWriters.contains(mediaID)
     }
 
     /// Returns the relative paths of all in-flight HLS segments for a mediaID (e.g. ["480p/segment001.ts"]).
@@ -1088,35 +1196,28 @@ public class LocalHTTPServer: @unchecked Sendable {
         primaryMediaIDLock.lock()
         let previousPrimary = currentPrimaryMediaID
         currentPrimaryMediaID = mediaID
+        if mediaID != previousPrimary {
+            currentPrimaryBufferSatisfied = false
+        }
         primaryMediaIDLock.unlock()
         if let mediaID {
             // Clear cancelled state so a preloaded-then-cancelled player can download once primary.
             Task { await activeDownloadsActor.clearCancelledMediaID(mediaID) }
-            // Only clear dedup entries + pool slots when the primary actually changes.
-            // Re-selecting the same primary (e.g., coordinator scroll-stop re-confirms) must NOT
-            // clear its in-flight download keys — the background IPFS download is still writing
-            // to disk cache, and clearing the key causes a cancel-retry storm where AVPlayer
-            // passes startIfNotInFlight, hits streamingSessions duplicate, and cycles.
             if mediaID != previousPrimary {
-                // Clear stale dedup entries from any in-flight preload downloads for this mediaID.
-                // This ensures the primary player's segment requests always see a clean slate in
-                // startIfNotInFlight — no 120s poll wait for a preload that was downloading the
-                // same segment. The preload's URLSession continues to disk in the background;
-                // the primary just starts its own download in parallel.
-                Task { await activeDownloadsActor.releaseStalledDownloads(for: mediaID) }
-                // Force-release all non-primary pool slots. Old IPFS downloads continue to disk
-                // cache but no longer count toward the 3-slot cap. Without this, primary bypass
-                // slots accumulate (total=7+) and preloads can never acquire (totalActive >= max).
-                NodePoolRegistry.shared.forceReleaseNonPrimary(primaryMediaID: mediaID)
+                NodePoolRegistry.shared.forceReleaseLowerPriority(primaryMediaID: mediaID)
             }
         }
+        recomputePreloadPermission()
     }
 
     /// Clear primary restriction so all videos can download (e.g., when all playback stops).
     public func clearPrimaryRestriction() {
         primaryMediaIDLock.lock()
         currentPrimaryMediaID = nil
+        currentPrimaryBufferSatisfied = false
         primaryMediaIDLock.unlock()
+        NodePoolRegistry.shared.forceReleaseLowerPriority(primaryMediaID: nil)
+        recomputePreloadPermission()
     }
 
     /// Clear the cancelled state for a mediaID so the proxy serves fresh downloads.
@@ -1131,6 +1232,87 @@ public class LocalHTTPServer: @unchecked Sendable {
         defer { primaryMediaIDLock.unlock() }
         guard let primary = currentPrimaryMediaID else { return false }
         return mediaID == primary
+    }
+
+    public func updateMediaBufferHealth(mediaID: String, bufferedAhead: Double) {
+        var changed = false
+        primaryMediaIDLock.lock()
+        if currentPrimaryMediaID == mediaID {
+            let satisfied = bufferedAhead >= primaryPreloadGateBufferSeconds
+            if currentPrimaryBufferSatisfied != satisfied {
+                currentPrimaryBufferSatisfied = satisfied
+                changed = true
+                print("🎰 [POOL] primary \(shortMID(mediaID)) preloadGate=\(satisfied) buffered=\(String(format: "%.1f", bufferedAhead))s")
+            }
+        }
+        primaryMediaIDLock.unlock()
+
+        visibleMediaIDsLock.lock()
+        if visibleMediaIDs.contains(mediaID) {
+            let satisfied = bufferedAhead >= visiblePreloadGateBufferSeconds
+            if visibleBufferSatisfiedByMediaID[mediaID] != satisfied {
+                visibleBufferSatisfiedByMediaID[mediaID] = satisfied
+                changed = true
+                print("🎰 [POOL] visible \(shortMID(mediaID)) preloadGate=\(satisfied) buffered=\(String(format: "%.1f", bufferedAhead))s")
+            }
+        }
+        visibleMediaIDsLock.unlock()
+
+        if changed {
+            recomputePreloadPermission()
+        }
+    }
+
+    public func markMediaVisible(_ mediaID: String) {
+        visibleMediaIDsLock.lock()
+        visibleMediaIDs.insert(mediaID)
+        visibleBufferSatisfiedByMediaID[mediaID] = false
+        visibleMediaIDsLock.unlock()
+        Task { await activeDownloadsActor.clearCancelledMediaID(mediaID) }
+        recomputePreloadPermission()
+    }
+
+    public func markMediaNotVisible(_ mediaID: String) {
+        visibleMediaIDsLock.lock()
+        visibleMediaIDs.remove(mediaID)
+        visibleBufferSatisfiedByMediaID.removeValue(forKey: mediaID)
+        visibleMediaIDsLock.unlock()
+        recomputePreloadPermission()
+    }
+
+    private func isMediaVisible(_ mediaID: String) -> Bool {
+        visibleMediaIDsLock.lock()
+        defer { visibleMediaIDsLock.unlock() }
+        return visibleMediaIDs.contains(mediaID)
+    }
+
+    private func downloadPriority(for mediaID: String) -> NodeDownloadPriority {
+        if isCurrentPrimary(mediaID) {
+            return .primary
+        }
+        if isMediaVisible(mediaID) {
+            return .visible
+        }
+        return .preload
+    }
+
+    private func recomputePreloadPermission() {
+        primaryMediaIDLock.lock()
+        let primary = currentPrimaryMediaID
+        let primarySatisfied = currentPrimaryBufferSatisfied
+        primaryMediaIDLock.unlock()
+
+        visibleMediaIDsLock.lock()
+        let visible = visibleMediaIDs
+        let visibleSatisfiedByMediaID = visibleBufferSatisfiedByMediaID
+        visibleMediaIDsLock.unlock()
+
+        let visibleNonPrimary = visible.filter { $0 != primary }
+        let visibleNonPrimarySatisfied = visibleNonPrimary.allSatisfy {
+            visibleSatisfiedByMediaID[$0] == true
+        }
+        let preloadsAllowed = (primary == nil || primarySatisfied) && visibleNonPrimarySatisfied
+        NodePoolRegistry.shared.setPreloadsAllowed(preloadsAllowed)
     }
 
     /// Thread-safe lookup of a registered real URL — safe to call from async contexts.
@@ -1230,13 +1412,28 @@ public class LocalHTTPServer: @unchecked Sendable {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
 
-            // Use a flag to ensure continuation is only resumed once
-            var hasResumed = false
-            let resumeOnce: (Bool) -> Void = { result in
-                guard !hasResumed else { return }
-                hasResumed = true
-                continuation.resume(returning: result)
+            // NWListener and the timeout task can race; resume the continuation exactly once.
+            final class ResumeOnceBox: @unchecked Sendable {
+                private let lock = NSLock()
+                private var hasResumed = false
+                private let continuation: CheckedContinuation<Bool, Never>
+
+                init(_ continuation: CheckedContinuation<Bool, Never>) {
+                    self.continuation = continuation
+                }
+
+                func resume(_ result: Bool) {
+                    lock.lock()
+                    guard !hasResumed else {
+                        lock.unlock()
+                        return
+                    }
+                    hasResumed = true
+                    lock.unlock()
+                    continuation.resume(returning: result)
+                }
             }
+            let resumeOnce = ResumeOnceBox(continuation)
 
             do {
                 let listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
@@ -1271,7 +1468,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 listener.stateUpdateHandler = { [weak self] state in
                     guard let self = self else {
                         timeoutTaskBox.cancel()
-                        resumeOnce(false)
+                        resumeOnce.resume(false)
                         return
                     }
 
@@ -1280,22 +1477,24 @@ public class LocalHTTPServer: @unchecked Sendable {
                         timeoutTaskBox.cancel()
                         self.isRunning = true
                         // Save successful port to preferences
-                        self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
+                        Task { @MainActor in
+                            PreferenceHelper().setLocalHTTPServerPort(tryPort)
+                        }
                         // Store the listener
                         self.listener = listener
-                        resumeOnce(true)
+                        resumeOnce.resume(true)
                     case .failed, .cancelled:
                         timeoutTaskBox.cancel()
                         self.isRunning = false
                         listener.cancel()
-                        resumeOnce(false)
+                        resumeOnce.resume(false)
                     case .waiting, .setup:
                         break
                     @unknown default:
                         timeoutTaskBox.cancel()
                         self.isRunning = false
                         listener.cancel()
-                        resumeOnce(false)
+                        resumeOnce.resume(false)
                     }
                 }
 
@@ -1312,7 +1511,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         try await Task.sleep(nanoseconds: 1_000_000_000) // 1s timeout
                         // If we get here, timeout occurred - cancel listener
                         listener.cancel()
-                        resumeOnce(false)
+                        resumeOnce.resume(false)
                     } catch {
                         // Task was cancelled, ignore
                     }
@@ -1320,7 +1519,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 timeoutTaskBox.set(timeoutTask)
 
             } catch {
-                resumeOnce(false)
+                resumeOnce.resume(false)
             }
         }
     }
@@ -1330,83 +1529,79 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: queue)
-        Task {
-            await receiveNextRequest(connection: connection)
-        }
+        receiveNextRequest(connection: connection)
     }
-    
-    private func receiveNextRequest(connection: NWConnection) async {
-        await withCheckedContinuation { continuation in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-                guard let self = self else {
-                    continuation.resume()
-                    return
-                }
 
-                if let error = error {
-                    let nwCode = (error as NSError).code
-                    // Only count non-benign errors toward emergency cleanup.
-                    // Code 54 (connection reset) and 89 (cancelled) are normal
-                    // when AVPlayer closes/reopens local connections.
-                    let isBenign = (nwCode == 54 || nwCode == 89 || nwCode == NSURLErrorCancelled)
-                    if !isBenign {
-                        var shouldCleanup = false
-                        self.networkFailureLock.lock()
-                        self._consecutiveNetworkFailures += 1
-                        let count = self._consecutiveNetworkFailures
-                        if count >= self.maxConsecutiveFailures {
-                            shouldCleanup = true
-                            self._consecutiveNetworkFailures = 0
-                        }
-                        self.networkFailureLock.unlock()
+    // Purely callback-based — no withCheckedContinuation, no cooperative thread blocked.
+    // When stopInternal() cancels the listener, outstanding NWConnection receive callbacks
+    // fire with an error and fall through to connection.cancel(); nothing can be leaked.
+    private func receiveNextRequest(connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self else {
+                connection.cancel()
+                return
+            }
 
-                        print("DEBUG: [LocalHTTPServer] Network failure count: \(count)/\(self.maxConsecutiveFailures)")
-                        if shouldCleanup {
-                            print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
-                            self.handleNetworkFailureCleanup()
-                        }
-                    }
-
-                    // Only log unexpected errors (suppress connection-reset 54 and operation-canceled 89)
-                    if nwCode != 54 && nwCode != 89 {
-                        print("DEBUG: [LocalHTTPServer] Receive error (code \(nwCode)): \(error)")
-                    }
-                } else {
-                    // Reset network failure counter on successful receive
+            if let error = error {
+                let nwCode = (error as NSError).code
+                // Only count non-benign errors toward emergency cleanup.
+                // Code 54 (connection reset) and 89 (cancelled) are normal
+                // when AVPlayer closes/reopens local connections.
+                let isBenign = (nwCode == 54 || nwCode == 89 || nwCode == NSURLErrorCancelled)
+                if !isBenign {
+                    var shouldCleanup = false
                     self.networkFailureLock.lock()
-                    self._consecutiveNetworkFailures = 0
+                    self._consecutiveNetworkFailures += 1
+                    let count = self._consecutiveNetworkFailures
+                    if count >= self.maxConsecutiveFailures {
+                        shouldCleanup = true
+                        self._consecutiveNetworkFailures = 0
+                    }
                     self.networkFailureLock.unlock()
-                }
 
-                if let data = data, !data.isEmpty {
-                    let request = String(data: data, encoding: .utf8) ?? ""
-
-                    // Handle the request
-                    Task {
-                        await self.handleRequest(request, connection: connection) {
-                            // With Connection: close, each NWConnection handles exactly one
-                            // request-response cycle. Synchronous handlers (sendResponse /
-                            // serveFile) already send TCP FIN. Progressive range streams
-                            // manage connection lifecycle themselves.
-                            // Do NOT cancel here — it kills progressive streams mid-flight.
-                        }
-                        continuation.resume()
-                    }
-                } else if isComplete || error != nil {
-                    connection.cancel()
-                    continuation.resume()
-                } else {
-                    // No data yet, keep waiting
-                    Task {
-                        await self.receiveNextRequest(connection: connection)
-                        continuation.resume()
+                    print("DEBUG: [LocalHTTPServer] Network failure count: \(count)/\(self.maxConsecutiveFailures)")
+                    if shouldCleanup {
+                        print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
+                        self.handleNetworkFailureCleanup()
                     }
                 }
+
+                // Only log unexpected errors (suppress connection-reset 54 and operation-canceled 89)
+                if nwCode != 54 && nwCode != 89 {
+                    print("DEBUG: [LocalHTTPServer] Receive error (code \(nwCode)): \(error)")
+                }
+            } else {
+                // Reset network failure counter on successful receive
+                self.networkFailureLock.lock()
+                self._consecutiveNetworkFailures = 0
+                self.networkFailureLock.unlock()
+            }
+
+            if let data = data, !data.isEmpty {
+                let request = String(data: data, encoding: .utf8) ?? ""
+                // Dispatch async request handling without holding a continuation.
+                // With Connection: close each NWConnection is one request-response cycle;
+                // sendResponse/serveFile/stream handlers manage their own TCP FIN.
+                Task {
+                    await self.handleRequest(request, connection: connection) { }
+                }
+            } else if isComplete || error != nil {
+                connection.cancel()
+            } else {
+                // No data yet — register next read without recursing on the stack.
+                // This call returns immediately; the callback fires later on queue.
+                self.receiveNextRequest(connection: connection)
             }
         }
     }
     
     private func handleRequest(_ request: String, connection: NWConnection, completion: @escaping () -> Void) async {
+        guard isRunning else {
+            connection.cancel()
+            completion()
+            return
+        }
+
         let lines = request.components(separatedBy: .newlines)
         guard let firstLine = lines.first else {
             completion()
@@ -1572,7 +1767,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // Check if this is a playlist (.m3u8), segment (.ts), or progressive video
         if relativePath.hasSuffix(".m3u8") {
-            handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
+            await handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
         } else if relativePath.hasSuffix(".ts") {
             await handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
@@ -1584,29 +1779,37 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
 
-    private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
+    private func serveCachedPlaylistIfAvailable(cachePath: String, mediaID: String, baseURL: URL, logPath: String, connection: NWConnection) -> Bool {
+        guard isUsableCachedFile(atPath: cachePath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: cachePath)),
+              let playlistString = String(data: data, encoding: .utf8) else {
+            return false
+        }
+
+        let modifiedPlaylist = rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: baseURL)
+        guard let modifiedData = modifiedPlaylist.data(using: .utf8) else {
+            return false
+        }
+
+        let headers: [String: String] = [
+            "Content-Type": "application/vnd.apple.mpegurl",
+            "Content-Length": "\(modifiedData.count)",
+            "Accept-Ranges": "bytes"
+        ]
+        print("📄 [HLS LOCAL] \(shortMID(mediaID)) served cached \(logPath) (\(modifiedData.count) bytes)")
+        sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
+        return true
+    }
+
+    private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
         let isCached = isUsableCachedFile(atPath: cachePath)
         let logPath = hlsLogPath(for: fullRealURL, mediaID: mediaID)
 
         // Check cache first
         if isCached {
-            // Removed repetitive cache hit log
-            
-            // Read, rewrite URLs, and serve
-            if let data = try? Data(contentsOf: URL(fileURLWithPath: cachePath)),
-               let playlistString = String(data: data, encoding: .utf8) {
-                let modifiedPlaylist = rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: fullRealURL)
-                if let modifiedData = modifiedPlaylist.data(using: .utf8) {
-                    let headers: [String: String] = [
-                        "Content-Type": "application/vnd.apple.mpegurl",
-                        "Content-Length": "\(modifiedData.count)",
-                        "Accept-Ranges": "bytes"
-                    ]
-                    print("📄 [HLS LOCAL] \(shortMID(mediaID)) served cached \(logPath) (\(modifiedData.count) bytes)")
-                    sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
-                    return
-                }
+            if serveCachedPlaylistIfAvailable(cachePath: cachePath, mediaID: mediaID, baseURL: fullRealURL, logPath: logPath, connection: connection) {
+                return
             }
             
             // Fallback: cache file is unreadable (corrupted or filesystem error).
@@ -1615,8 +1818,21 @@ public class LocalHTTPServer: @unchecked Sendable {
             fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
             return
         }
+
+        if hasActiveHLSDownload(for: mediaID, relativePath: logPath) {
+            for _ in 0..<40 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                switch connection.state { case .cancelled, .failed: return; default: break }
+                if serveCachedPlaylistIfAvailable(cachePath: cachePath, mediaID: mediaID, baseURL: fullRealURL, logPath: logPath, connection: connection) {
+                    return
+                }
+                if !hasActiveHLSDownload(for: mediaID, relativePath: logPath) {
+                    break
+                }
+            }
+        }
         
-        // Not cached - fetch from real server (no deduplication for non-.ts files)
+        // Not cached - fetch from real server.
         print("📄 [HLS LOCAL] \(shortMID(mediaID)) fetching \(logPath) from upstream")
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
     }
@@ -1655,67 +1871,27 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
 
-        let downloadKey = cachePath
-        var isPrimary = isCurrentPrimary(mediaID)
+        var requestPriority = downloadPriority(for: mediaID)
 
-        // Deduplicate segment requests for every player. When a media becomes
-        // primary, setPrimaryMediaID clears stale preload dedup entries first, so
-        // this only makes duplicate primary requests wait for the active fetch.
-        let requestedSegmentPath = relativeHLSSegmentPath(from: fullRealURL, mediaID: mediaID) ?? fullRealURL.lastPathComponent
-        let hasMatchingSegmentTask = hasActiveHLSSegmentDownload(for: mediaID, relativePath: requestedSegmentPath)
-        var shouldWaitForInFlightDownload = false
-        if hasMatchingSegmentTask {
-            shouldWaitForInFlightDownload = true
-        } else {
-            let didStartDownload = await activeDownloadsActor.startIfNotInFlight(for: downloadKey)
-            shouldWaitForInFlightDownload = !didStartDownload
-        }
-
-        if shouldWaitForInFlightDownload {
-            let maxPolls = 240
-            switch connection.state {
-            case .cancelled, .failed: return
-            default: break
-            }
-
-            let pollInterval: UInt64 = 500_000_000 // 0.5s
-            for _ in 0..<maxPolls {
-                try? await Task.sleep(nanoseconds: pollInterval)
-
-                if isUsableCachedFile(atPath: cachePath) {
-                    print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(logPath) after waiting for in-flight download")
-                    autoreleasepool { serveFile(path: cachePath, connection: connection, method: method) }
-                    return
-                }
-                // Download removed from active set — failed without writing to disk
-                if !(await activeDownloadsActor.hasDownload(for: downloadKey)),
-                   !hasActiveHLSSegmentDownload(for: mediaID, relativePath: requestedSegmentPath) { break }
-                if await activeDownloadsActor.isMediaIDCancelled(mediaID) { connection.cancel(); return }
-                switch connection.state {
-                case .cancelled, .failed: return
-                default: break
-                }
-            }
-
-            if await activeDownloadsActor.isMediaIDCancelled(mediaID) { connection.cancel(); return }
-            switch connection.state {
-            case .cancelled, .failed: return
-                default: break
-            }
-
-            let stillMarkedActive = await activeDownloadsActor.hasDownload(for: downloadKey)
-            let stillHasMatchingSegmentTask = hasActiveHLSSegmentDownload(for: mediaID, relativePath: requestedSegmentPath)
-            if stillMarkedActive || stillHasMatchingSegmentTask {
-                connection.cancel()
+        if activeHLSSegmentDownloadCount(for: mediaID, relativePath: logPath) >= duplicateSegmentUpstreamLimit(for: requestPriority) {
+            // AVPlayer can legitimately open duplicate requests for the same segment.
+            // Primary may race two upstream fetches for the same segment; lower-priority
+            // work coalesces after one so preloads cannot multiply IPFS pressure.
+            let waitResult = await waitForActiveHLSSegmentToCache(
+                mediaID: mediaID,
+                relativePath: logPath,
+                cachePath: cachePath,
+                connection: connection,
+                method: method,
+                waitAttempts: duplicateSegmentWaitAttempts(for: requestPriority),
+                reason: "duplicate fetch"
+            )
+            if waitResult.served {
                 return
             }
 
-            // Previous downloader failed without caching; try to claim as new downloader.
-            if stillMarkedActive {
-                await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
-            }
-
-            guard await activeDownloadsActor.startIfNotInFlight(for: downloadKey) else {
+            if waitResult.stillActive {
+                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) closed duplicate \(logPath) after waiting for active fetch")
                 connection.cancel()
                 return
             }
@@ -1725,23 +1901,41 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Primary bypasses the preload cap, but still honors its own segment cap.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
-        isPrimary = isCurrentPrimary(mediaID)
-        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 3)
+        requestPriority = downloadPriority(for: mediaID)
+        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 3)
+        var acquiredPriority: NodeDownloadPriority? = slotAcquired ? requestPriority : nil
         // Poll when the cap is full. Primary bypasses the preload cap, but still honors
         // its own HLS segment cap so startup cannot launch parallel segment downloads.
+        // Visible non-primary video gets more patience than off-screen preload so
+        // AVPlayer does not treat normal backpressure as a corrupt HLS segment.
         if !slotAcquired {
             for attempt in 0..<240 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 switch connection.state { case .cancelled, .failed: return; default: break }
-                isPrimary = isCurrentPrimary(mediaID)
-                slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 3)
-                if slotAcquired { break }
-                if !isPrimary && attempt >= 9 { break }
+                requestPriority = downloadPriority(for: mediaID)
+                slotAcquired = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 3)
+                if slotAcquired {
+                    acquiredPriority = requestPriority
+                    break
+                }
+                let shouldStopWaiting: Bool
+                switch requestPriority {
+                case .primary:
+                    shouldStopWaiting = false
+                case .visible:
+                    shouldStopWaiting = attempt >= 59
+                case .preload:
+                    shouldStopWaiting = attempt >= 9
+                }
+                if shouldStopWaiting { break }
             }
         }
         guard slotAcquired else {
-            await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
             print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(logPath) because no download slot was available")
+            connection.cancel()
+            return
+        }
+        guard let acquiredPriority else {
             connection.cancel()
             return
         }
@@ -1749,13 +1943,35 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Another independent primary request may have populated the cache while
         // this request waited for the segment slot. Re-check before going upstream.
         if isUsableCachedFile(atPath: cachePath) {
-            await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
-            await pool.releaseSlot(mediaID: mediaID)
+            await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
             print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(logPath) after waiting for segment slot")
             autoreleasepool {
                 serveFile(path: cachePath, connection: connection, method: method)
             }
             return
+        }
+
+        requestPriority = downloadPriority(for: mediaID)
+        if activeHLSSegmentDownloadCount(for: mediaID, relativePath: logPath) >= duplicateSegmentUpstreamLimit(for: requestPriority) {
+            let waitResult = await waitForActiveHLSSegmentToCache(
+                mediaID: mediaID,
+                relativePath: logPath,
+                cachePath: cachePath,
+                connection: connection,
+                method: method,
+                waitAttempts: duplicateSegmentWaitAttempts(for: requestPriority),
+                reason: "segment slot wait"
+            )
+            if waitResult.served {
+                await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+                return
+            }
+            if waitResult.stillActive {
+                await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+                print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) closed duplicate \(logPath) after segment slot wait")
+                connection.cancel()
+                return
+            }
         }
 
         // SlotReleaseGuard prevents a double-release: both onConnectionDead (NWConnection closes
@@ -1765,20 +1981,24 @@ public class LocalHTTPServer: @unchecked Sendable {
         let slotGuard = SlotReleaseGuard()
 
         print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) fetching \(logPath) from upstream")
-        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method,
-                      onConnectionDead: slotAcquired ? {
-                          Task { if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) } }
-                      } : nil) {
+        let releaseSegmentSlot: @Sendable () -> Void = {
             Task {
-                await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey)
-                if slotAcquired {
-                    if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) }
+                if await slotGuard.tryRelease() {
+                    await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
                 }
             }
         }
+        fetchAndServe(
+            url: fullRealURL,
+            cachePath: cachePath,
+            connection: connection,
+            method: method,
+            onConnectionDead: releaseSegmentSlot,
+            completion: releaseSegmentSlot
+        )
     }
     
-    private func fetchHEADWithRetry(url: URL, mediaID: String, attempt: Int = 1, maxAttempts: Int = 3, completion: @escaping (HTTPURLResponse?) -> Void) {
+    private func fetchHEADWithRetry(url: URL, mediaID: String, attempt: Int = 1, maxAttempts: Int = 3, completion: @escaping @Sendable (HTTPURLResponse?) -> Void) {
         var headRequest = URLRequest(url: url)
         headRequest.httpMethod = "HEAD"
         headRequest.timeoutInterval = 10
@@ -1865,24 +2085,38 @@ public class LocalHTTPServer: @unchecked Sendable {
         ) {
             return
         }
-        
+        // The cache couldn't serve the full requested range (checked above), and a writer may
+        // still be filling it. Do NOT poll-then-cancel: AVPlayer rejects partial responses, and
+        // holding the connection without data times it out (NSURLErrorDomain -1001). Instead
+        // fall through to the live backend fetch below, which streams the COMPLETE requested
+        // range to AVPlayer. The fetch path skips re-caching while a writer is active
+        // (shouldCache is false), so the existing writer still owns the cache file.
+
         // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
         // Primary bypasses the preload cap, but still honors its own range cap.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         // Progressive video can use 2 parallel range requests; HLS segments are sequential (cap=1).
-        var isPrimary = isCurrentPrimary(mediaID)
-        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
+        var requestPriority = downloadPriority(for: mediaID)
+        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 2)
+        var acquiredPriority: NodeDownloadPriority? = slotAcquired ? requestPriority : nil
         if !slotAcquired {
             for _ in 0..<20 {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 switch connection.state { case .cancelled, .failed: return; default: break }
-                isPrimary = isCurrentPrimary(mediaID)
-                slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
-                if slotAcquired { break }
+                requestPriority = downloadPriority(for: mediaID)
+                slotAcquired = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 2)
+                if slotAcquired {
+                    acquiredPriority = requestPriority
+                    break
+                }
             }
         }
         guard slotAcquired else {
+            connection.cancel()
+            return
+        }
+        guard let acquiredPriority else {
             connection.cancel()
             return
         }
@@ -1891,27 +2125,29 @@ public class LocalHTTPServer: @unchecked Sendable {
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
-            if slotAcquired { await pool.releaseSlot(mediaID: mediaID) }
+            await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
             return
         }
         
         let requestedStart = rangeStart ?? 0
         let shortId = shortMID(mediaID)
 
-        // Only the first connection at each starting offset writes to disk cache.
-        // Parallel connections for the same range just stream without caching.
-        let cacheKey = "\(mediaID)_\(requestedStart)"
-        let shouldCache = progressiveCacheWritersLock.withLock {
-            let isNew = !progressiveCacheWriters.contains(cacheKey)
-            if isNew { progressiveCacheWriters.insert(cacheKey) }
-            return isNew
-        }
-
         // Set up disk cache file handle for the writer connection
         var cacheFileHandle: FileHandle? = nil
         var cacheFilePath: String? = nil
         let cacheFileURL = progressiveCacheFileURL(for: mediaID)
         let initialCachedSize = min(cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL), progressiveDiskCacheLimit)
+        let cacheKey = mediaID
+        let requestedLengthForCacheSeed = rangeEnd.map { max(Int64(0), $0 - requestedStart + 1) } ?? Int64.max
+        let canSeedOrExtendUsefulCache = initialCachedSize > 0 || requestedLengthForCacheSeed >= minimumProgressiveCacheSeedRequestBytes
+        let canExtendContiguousCache = canSeedOrExtendUsefulCache &&
+            requestedStart <= initialCachedSize &&
+            initialCachedSize < progressiveDiskCacheLimit
+        let shouldCache = canExtendContiguousCache && progressiveCacheWritersLock.withLock {
+            let isNew = !progressiveCacheWriters.contains(cacheKey)
+            if isNew { progressiveCacheWriters.insert(cacheKey) }
+            return isNew
+        }
 
         if shouldCache {
             let cacheDir = progressiveCacheDirectory(for: mediaID)
@@ -1928,7 +2164,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
 
-        let contiguousUpdate: (Int64) -> Void = { [weak self] newSize in
+        let contiguousUpdate: @Sendable (Int64) -> Void = { [weak self] newSize in
             guard let self = self else { return }
             self.queue.async {
                 self.storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: newSize)
@@ -1937,7 +2173,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Use a unique session key per connection so parallel connections don't clobber each other
         let sessionKey = "\(mediaID)_\(requestedStart)_\(ObjectIdentifier(connection).hashValue)"
-        let sessionCleanup: () -> Void = { [weak self] in
+        let sessionCleanup: @Sendable () -> Void = { [weak self] in
             guard let self = self else { return }
             self.streamingSessionsLock.lock()
             self.streamingSessions.removeValue(forKey: sessionKey)
@@ -1949,7 +2185,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 self.progressiveCacheWritersLock.unlock()
             }
             // Release node connection pool slot so the next preload (or primary) can proceed.
-            if slotAcquired { Task { await pool.releaseSlot(mediaID: mediaID) } }
+            Task { await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority) }
         }
 
         let delegate = StreamingDownloadDelegate(
@@ -1969,12 +2205,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         )
         // Hold the pool slot until the IPFS download completes (or is cancelled).
-        // Unlike HLS segments (which must release early on NWConnection close to allow same-segment
-        // retries through duplicate-detection), progressive range requests are unique by byte offset —
-        // no duplicate detection exists, so early release causes AVPlayer's many parallel range
-        // requests to each get a slot sequentially, then all continue as background downloads
-        // simultaneously (7×4MB downloads observed = timeout). Holding until completion caps
-        // concurrent IPFS downloads to the pool limit (3 total).
+        // Holding until completion keeps AVPlayer's parallel range requests bounded by the
+        // connection pool instead of letting closed proxy sockets leave background downloads
+        // running without a slot.
         // sessionCleanup (above) releases the slot on completion or cancellation.
 
         // Forward AVPlayer's request directly to IPFS and pipe back the response.
@@ -2070,7 +2303,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return stored
             }
             storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: inferred)
-            print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) recovered contiguous metadata: stored=\(stored), inferred=\(inferred)")
             return inferred
         }
 
@@ -2080,7 +2312,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: inferred)
-        print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) restored missing contiguous metadata: inferred=\(inferred)")
         return inferred
     }
     
@@ -2101,6 +2332,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             defer { try? handle.close() }
             
             let chunkSize = 256 * 1024
+            let sparseBlockSize = 4 * 1024
             var contiguous: Int64 = 0
             while contiguous < cappedSize {
                 let remaining = cappedSize - contiguous
@@ -2122,6 +2354,17 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if chunk.allSatisfy({ $0 == 0 }) {
                     break
                 }
+
+                var blockOffset = 0
+                while blockOffset < chunk.count {
+                    let blockLength = min(sparseBlockSize, chunk.count - blockOffset)
+                    let blockEnd = blockOffset + blockLength
+                    let block = chunk[blockOffset..<blockEnd]
+                    if block.allSatisfy({ $0 == 0 }) {
+                        return contiguous + Int64(blockOffset)
+                    }
+                    blockOffset = blockEnd
+                }
                 
                 contiguous += Int64(chunk.count)
                 
@@ -2130,12 +2373,38 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
             }
             
-            if contiguous > 0 {
-            }
             return contiguous
         } catch {
             print("⚠️ [PROGRESSIVE CACHE] Failed to infer contiguous size for \(mediaID): \(error.localizedDescription)")
             return nil
+        }
+    }
+
+    private func repairProgressiveCacheAfterZeroRange(mediaID: String, cacheFileURL: URL, failingStart: Int64) {
+        let repairedSize = max(0, min(failingStart, progressiveDiskCacheLimit))
+
+        // Stop older streams that may still believe the previous contiguous size is valid.
+        cancelDownloads(for: mediaID)
+
+        do {
+            let directory = cacheFileURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: cacheFileURL.path) {
+                FileManager.default.createFile(atPath: cacheFileURL.path, contents: nil)
+            }
+
+            let handle = try FileHandle(forUpdating: cacheFileURL)
+            defer { try? handle.close() }
+            if #available(iOS 13.0, *) {
+                try handle.truncate(atOffset: UInt64(repairedSize))
+            } else {
+                handle.truncateFile(atOffset: UInt64(repairedSize))
+            }
+            storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: repairedSize)
+            print("📼 [PROGRESSIVE CACHE] \(shortMID(mediaID)) repaired sparse cache at \(failingStart), contiguous=\(repairedSize)")
+        } catch {
+            storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: repairedSize)
+            print("⚠️ [PROGRESSIVE CACHE] Failed to truncate sparse cache for \(mediaID): \(error.localizedDescription)")
         }
     }
     
@@ -2180,8 +2449,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         reason: String
     ) {
         // AVPlayer may request cached progressive data in many tiny ranges.
-        // Logging every cached subrange hides the state-machine logs we need.
-        if decision == "HIT", reason == "cached-range", start > 0 {
+        // Logging every routine subrange hides the state-machine logs we need.
+        let isRoutineCachedRange = decision == "HIT" && reason == "cached-range"
+        let isRoutineMiss = decision == "MISS" && (reason == "range-beyond-cache" || reason == "partial-explicit-range")
+        if isRoutineCachedRange || isRoutineMiss {
             return
         }
 
@@ -2317,6 +2588,20 @@ public class LocalHTTPServer: @unchecked Sendable {
         if let end = end {
             // Explicit range request - honor it fully if available
             let rangeLength = end - start + 1
+            guard availableLength >= rangeLength else {
+                logProgressiveCacheDecision(
+                    mediaID: mediaID,
+                    rangeHeader: rangeHeader,
+                    start: start,
+                    end: end,
+                    cachedSize: cachedSize,
+                    fileSize: fileSize,
+                    totalSize: totalSize,
+                    decision: "MISS",
+                    reason: "partial-explicit-range"
+                )
+                return false
+            }
             requestedLength = min(availableLength, rangeLength)
         } else {
             // Open-ended request - return all available cached data
@@ -2354,6 +2639,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 hasRealData = probeData.contains { $0 != 0 }
             }
             if !hasRealData {
+                repairProgressiveCacheAfterZeroRange(mediaID: mediaID, cacheFileURL: cacheFileURL, failingStart: start)
                 logProgressiveCacheDecision(
                     mediaID: mediaID,
                     rangeHeader: rangeHeader,
@@ -2383,13 +2669,13 @@ public class LocalHTTPServer: @unchecked Sendable {
             return false
         }
 
-        // Serve a cached prefix only for open-ended requests. For explicit finite
-        // ranges (e.g. bytes=0-2281145), AVPlayer expects that exact range; sending
-        // only the currently cached prefix can make the item fail immediately.
-        let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
-        let isPartialPrefix = actualEnd < requestedEnd
-        let canServeCachedPrefix = rangeHeader != nil && end == nil
-        if isPartialPrefix && !canServeCachedPrefix {
+        let requestedEnd = end ?? totalSize.map { $0 - 1 }
+        let isPartialCachedResponse = requestedEnd.map { actualEnd < $0 } ?? true
+
+        // Without a Range request, a short cached prefix would have to be sent as
+        // 200 OK, which lies about the object length. Only ranged requests can
+        // honestly return a smaller cached subrange with 206 + Content-Range.
+        if rangeHeader == nil && isPartialCachedResponse {
             logProgressiveCacheDecision(
                 mediaID: mediaID,
                 rangeHeader: rangeHeader,
@@ -2399,12 +2685,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                 fileSize: fileSize,
                 totalSize: totalSize,
                 decision: "MISS",
-                reason: "partial-explicit-range"
+                reason: "partial-cache-without-range"
             )
             return false
         }
-        let minimumUsefulCachedPrefix: Int64 = 128 * 1024
-        if isPartialPrefix && requestedLength < minimumUsefulCachedPrefix {
+
+        if isPartialCachedResponse && requestedLength < minimumPartialProgressiveCacheHitBytes {
             logProgressiveCacheDecision(
                 mediaID: mediaID,
                 rangeHeader: rangeHeader,
@@ -2414,7 +2700,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 fileSize: fileSize,
                 totalSize: totalSize,
                 decision: "MISS",
-                reason: "tiny-cached-prefix"
+                reason: "tiny-partial-cache"
             )
             return false
         }
@@ -2460,7 +2746,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             fileSize: fileSize,
             totalSize: totalSize,
             decision: "HIT",
-            reason: actualEnd < requestedEnd ? "cached-prefix" : "cached-range"
+            reason: isPartialCachedResponse ? "partial-cached-range" : "cached-range"
         )
         sendHeadersAndStreamRange(
             connection: connection,
@@ -2472,7 +2758,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         )
         return true
     }
-    
+
     private func sendHeadersAndStreamRange(
         connection: NWConnection,
         statusCode: Int,
@@ -2480,7 +2766,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         fileURL: URL,
         offset: Int64,
         length: Int64,
-        completion: (() -> Void)? = nil
+        completion: (@Sendable () -> Void)? = nil
     ) {
         switch connection.state {
         case .cancelled, .failed:
@@ -2500,6 +2786,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         print("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
                     }
                     try? fileHandle.close()
+                    completion?()
                     return
                 }
                 
@@ -2512,6 +2799,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             })
         } catch {
             print("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
+            completion?()
         }
     }
     
@@ -2519,7 +2807,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         connection: NWConnection,
         fileHandle: FileHandle,
         remaining: Int64,
-        completion: (() -> Void)? = nil
+        completion: (@Sendable () -> Void)? = nil
     ) {
         guard remaining > 0 else {
             try? fileHandle.close()
@@ -2566,7 +2854,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         fileURL: URL,
         offset: Int64,
         length: Int64,
-        completion: (() -> Void)? = nil
+        completion: (@Sendable () -> Void)? = nil
     ) {
         guard length > 0 else {
             completion?()
@@ -2613,7 +2901,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         return mediaDir.appendingPathComponent(filename).path
     }
     
-    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, onConnectionDead: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
+    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, onConnectionDead: (@Sendable () -> Void)? = nil, completion: (@Sendable () -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
         guard canBypassInitialization(url: url) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
@@ -2646,7 +2934,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
 
     /// Download and cache file without serving (for background downloads when connection is closing)
-    private func downloadAndCacheOnly(url: URL, cachePath: String, completion: (() -> Void)? = nil) {
+    private func downloadAndCacheOnly(url: URL, cachePath: String, completion: (@Sendable () -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
         guard canBypassInitialization(url: url) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing download for \(url.path)")
@@ -2664,7 +2952,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     /// Download and cache without serving (used when connection is closing)
-    private func downloadWithRetry(url: URL, cachePath: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
+    private func downloadWithRetry(url: URL, cachePath: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (@Sendable () -> Void)?) {
         let taskKey = UUID()
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else {
@@ -2763,10 +3051,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                         return
                     }
                     do {
+                        self.removeCachedFileCompleteMarker(atPath: cachePath)
                         try dataToCache.write(to: cacheURL, options: .atomic)
                         if cachePath.hasSuffix(".ts") {
                             try? FileManager.default.removeItem(atPath: "\(cachePath).part")
                         }
+                        self.markCachedFileCompleteIfNeeded(atPath: cachePath)
                     } catch {
                         print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
                     }
@@ -2791,8 +3081,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         mediaID: String,
         attempt: Int,
         maxAttempts: Int,
-        onConnectionDead: (() -> Void)?,
-        completion: (() -> Void)?
+        onConnectionDead: (@Sendable () -> Void)?,
+        completion: (@Sendable () -> Void)?
     ) {
         let taskKey = UUID()
         let logPath = hlsLogPath(for: url, mediaID: mediaID)
@@ -2923,6 +3213,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
 
             do {
+                self.removeCachedFileCompleteMarker(atPath: cachePath)
                 try? FileManager.default.removeItem(at: cacheURL)
                 do {
                     try FileManager.default.moveItem(at: tempURL, to: cacheURL)
@@ -2935,6 +3226,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
                 guard fileSize > 0 else {
                     try? FileManager.default.removeItem(at: cacheURL)
+                    self.removeCachedFileCompleteMarker(atPath: cachePath)
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
                     }
@@ -2944,6 +3236,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
 
                 try? FileManager.default.removeItem(atPath: "\(cachePath).part")
+                self.markCachedFileCompleteIfNeeded(atPath: cachePath)
 
                 if !mediaID.isEmpty {
                     BlackList.shared.recordSuccess(mediaID)
@@ -2978,7 +3271,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         task.resume()
     }
 
-    private func fetchWithRetry(url: URL, cachePath: String, connection: NWConnection, method: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
+    private func fetchWithRetry(url: URL, cachePath: String, connection: NWConnection, method: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (@Sendable () -> Void)?) {
 
         let taskKey = UUID()
         let isPlaylist = cachePath.hasSuffix(".m3u8")
@@ -3094,7 +3387,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
 
                 // CRITICAL FIX: Write synchronously so file exists when fetchAndServe returns
-                // This ensures deduplication polling finds the file immediately
+                // and the next AVPlayer request can use the cache immediately.
                 // autoreleasepool still protects memory during write
                 let cacheURL = URL(fileURLWithPath: cachePath)
                 // Skip silently if the parent directory was deleted (clearPlayerForMediaID)
@@ -3104,10 +3397,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                         return
                     }
                     do {
+                        self.removeCachedFileCompleteMarker(atPath: cachePath)
                         try dataToCache.write(to: cacheURL, options: .atomic)
                         if cachePath.hasSuffix(".ts") {
                             try? FileManager.default.removeItem(atPath: "\(cachePath).part")
                         }
+                        self.markCachedFileCompleteIfNeeded(atPath: cachePath)
                     } catch {
                         print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
                     }
@@ -3154,11 +3449,41 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         guard size.int64Value > 0 else {
             try? FileManager.default.removeItem(atPath: path)
+            removeCachedFileCompleteMarker(atPath: path)
             print("⚠️ [LocalHTTPServer] Removed zero-byte cached file: \(URL(fileURLWithPath: path).lastPathComponent)")
             return false
         }
 
+        if requiresCompleteMarker(atPath: path),
+           !FileManager.default.fileExists(atPath: completeMarkerPath(for: path)) {
+            return false
+        }
+
         return true
+    }
+
+    private func requiresCompleteMarker(atPath path: String) -> Bool {
+        path.hasSuffix(".ts")
+    }
+
+    private func completeMarkerPath(for path: String) -> String {
+        "\(path).complete"
+    }
+
+    private func markCachedFileCompleteIfNeeded(atPath path: String) {
+        guard requiresCompleteMarker(atPath: path) else { return }
+        let markerURL = URL(fileURLWithPath: completeMarkerPath(for: path))
+        do {
+            try FileManager.default.createDirectory(at: markerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("complete".utf8).write(to: markerURL, options: .atomic)
+        } catch {
+            print("⚠️ [LocalHTTPServer] Failed to write complete marker for \(URL(fileURLWithPath: path).lastPathComponent): \(error.localizedDescription)")
+        }
+    }
+
+    private func removeCachedFileCompleteMarker(atPath path: String) {
+        guard requiresCompleteMarker(atPath: path) else { return }
+        try? FileManager.default.removeItem(atPath: completeMarkerPath(for: path))
     }
 
     private func serveFile(path: String, connection: NWConnection, method: String) {
@@ -3222,8 +3547,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         fileURL: URL,
         fileSize: Int64,
         method: String,
-        onConnectionDead: (() -> Void)? = nil,
-        completion: (() -> Void)? = nil
+        onConnectionDead: (@Sendable () -> Void)? = nil,
+        completion: (@Sendable () -> Void)? = nil
     ) {
         switch connection.state {
         case .cancelled, .failed:
@@ -3403,7 +3728,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         return response.data(using: .utf8) ?? Data()
     }
     
-    private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (() -> Void)? = nil) {
+    private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (@Sendable () -> Void)? = nil) {
         // Guard: skip send on dead connections to avoid NWConnection
         // "Socket is not connected" warnings from the network framework.
         switch connection.state {

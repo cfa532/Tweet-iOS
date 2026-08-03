@@ -1,0 +1,148 @@
+/**
+ * dtweet.com deep-link worker
+ *
+ * - /.well-known/apple-app-site-association  -> iOS Universal Links
+ * - /.well-known/assetlinks.json             -> Android App Links
+ * - everything else                          -> reverse-proxied to the nginx
+ *   origin serving TweetWeb, so users without the app see the real web page.
+ *   (/user/* and /profile/* are rewritten to TweetWeb's /author/* route.)
+ *
+ * Users WITH the app never reach this worker for /tweet/* links: the OS
+ * verifies the well-known files and opens the app directly.
+ */
+
+const IOS_TEAM_ID = "96LBXG78A7";
+const IOS_BUNDLE_IDS = ["com.example.Tweet", "com.example.Tweet.debug"];
+const ANDROID_APPS = [
+  {
+    package: "us.fireshare.tweet",
+    sha256: [
+      // Google Play App Signing key (Play Store installs)
+      "8A:D4:2F:4C:0C:83:10:4C:22:B6:35:11:35:CE:67:11:53:98:09:D9:96:C2:EE:CB:E6:F4:82:E8:0C:60:36:6E",
+      // Local upload key tweet_keystore.jks (sideloaded release builds, play + full flavors)
+      "42:B9:90:AF:10:57:F6:2B:14:02:F2:14:BC:C1:F8:87:57:64:FA:AC:9C:8A:15:D2:B7:16:02:77:6B:F2:37:39",
+    ],
+  },
+];
+
+const APP_STORE_ID = "6751131431";
+
+// ksbox via nginx (port 80): dl.dtweet.com is a same-zone DNS record pointing
+// at the server; nginx's dtweet.com.conf (*.dtweet.com) proxies to Leither :8080
+// preserving the Host header, so Leither domain routing can take over later.
+const ORIGIN = "http://dl.dtweet.com";
+const STATIC_ASSETS = new Set([
+  "/index_entry.js",
+  "/hprose.js",
+  "/popper.min.js",
+  "/bootstrap.min.js",
+  "/gtag.js",
+  "/ic_splash.png",
+]);
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (url.hostname === "www.dtweet.com") {
+      url.hostname = "dtweet.com";
+      return Response.redirect(url.toString(), 301);
+    }
+
+    const path = url.pathname;
+
+    if (request.method === "GET" && STATIC_ASSETS.has(path)) {
+      const asset = await env.ASSETS.fetch(request);
+      const response = new Response(asset.body, asset);
+      response.headers.set("x-dtweet-static-asset", path);
+      return response;
+    }
+
+    // Keep dl.dtweet.com on HTTPS. Modern browsers upgrade HTTP navigations,
+    // so redirecting HTTPS back to HTTP creates an upgrade/downgrade loop.
+    // Proxy through Cloudflare instead; subrequests to the HTTP origin skip
+    // this route and reach nginx directly.
+    if (url.hostname === "dl.dtweet.com") {
+      if (path === "/.well-known/apple-app-site-association" || path === "/apple-app-site-association") {
+        return json(appleAppSiteAssociation());
+      }
+      if (path === "/.well-known/assetlinks.json") {
+        return json(assetLinks());
+      }
+      if (isHtmlNavigation(request)) {
+        return env.ASSETS.fetch(request);
+      }
+      const originUrl = ORIGIN + path + url.search;
+      return fetch(originUrl, new Request(originUrl, request));
+    }
+
+    if (path === "/.well-known/apple-app-site-association" || path === "/apple-app-site-association") {
+      return json(appleAppSiteAssociation());
+    }
+    if (path === "/.well-known/assetlinks.json") {
+      return json(assetLinks());
+    }
+
+    return proxyToTweetWeb(request, url, env);
+  },
+};
+
+function json(obj) {
+  return new Response(JSON.stringify(obj, null, 2), {
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "public, max-age=3600",
+    },
+  });
+}
+
+function appleAppSiteAssociation() {
+  return {
+    applinks: {
+      details: [
+        {
+          appIDs: IOS_BUNDLE_IDS.map((b) => `${IOS_TEAM_ID}.${b}`),
+          components: [
+            { "/": "/tweet/*" },
+            { "/": "/user/*" },
+            { "/": "/profile/*" },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function assetLinks() {
+  return ANDROID_APPS.map((app) => ({
+    relation: [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds",
+    ],
+    target: {
+      namespace: "android_app",
+      package_name: app.package,
+      sha256_cert_fingerprints: app.sha256,
+    },
+  }));
+}
+
+function isHtmlNavigation(request) {
+  return request.method === "GET" &&
+    (request.headers.get("accept") || "").includes("text/html");
+}
+
+async function proxyToTweetWeb(request, url, env) {
+  // App deep-link paths use /user|/profile; TweetWeb's route is /author
+  const path = url.pathname.replace(/^\/(user|profile)(\/|$)/, "/author$2");
+
+  // Keep the fallback on HTTPS. dl.dtweet.com proxies the HTTP-only Leither
+  // origin, including /webapi/, without exposing mixed content to browsers.
+  // App users never get here — the OS opens the app before any HTTP happens.
+  if (isHtmlNavigation(request)) {
+    return env.ASSETS.fetch(request);
+  }
+
+  // Non-navigation requests (e.g. stray /webapi/ RPC posts): proxy to Leither.
+  const originUrl = ORIGIN + path + url.search;
+  return fetch(originUrl, new Request(originUrl, request));
+}

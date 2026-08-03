@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-final class TweetDeletionRegistry {
+final class TweetDeletionRegistry: @unchecked Sendable {
     static let shared = TweetDeletionRegistry()
 
     private let lock = NSLock()
@@ -62,8 +62,6 @@ extension Notification.Name {
     
     /// Posted when a tweet's privacy status is successfully updated (for toast notification)
     static let tweetPrivacyUpdated = Notification.Name("TweetPrivacyUpdated")
-    /// Posted when the main feed's periodic foreground refresh completes.
-    static let mainFeedPeriodicRefreshCompleted = Notification.Name("MainFeedPeriodicRefreshCompleted")
 
     /// Posted when a new comment is added by the current user
     static let newCommentAdded = Notification.Name("newCommentAdded")
@@ -87,6 +85,8 @@ extension Notification.Name {
     static let popToRoot = Notification.Name("PopToRoot")
     /// Posted to scroll to top of a view
     static let scrollToTop = Notification.Name("ScrollToTop")
+    /// Posted after tapping the new-tweets banner outside the main feed.
+    static let showMainFeedNewTweets = Notification.Name("ShowMainFeedNewTweets")
     /// Posted when navigation visibility changes (for scroll-based hiding/showing)
     static let navigationVisibilityChanged = Notification.Name("NavigationVisibilityChanged")
     /// Posted to show navigation bars without animation during scroll-up correction.
@@ -95,8 +95,6 @@ extension Notification.Name {
     static let showBarsAfterScrollEnd = Notification.Name("ShowBarsAfterScrollEnd")
     /// Posted when a deeplink URL is received
     static let deeplinkReceived = Notification.Name("DeeplinkReceived")
-    /// Posted when a deeplink tweet is not found
-    static let deeplinkTweetNotFound = Notification.Name("DeeplinkTweetNotFound")
     
     // MARK: - System Errors
     static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")
@@ -127,6 +125,10 @@ extension Notification.Name {
     // MARK: - App Lifecycle
     /// Posted when the app becomes active (returns from background)
     static let appDidBecomeActive = Notification.Name("AppDidBecomeActive")
+    /// Posted synchronously from AppDelegate's main-actor background cleanup before
+    /// global cache release. Aggressive observers must release view-owned media before
+    /// returning so the app cannot be suspended with player resources still attached.
+    static let prepareVisibleVideosForBackground = Notification.Name("PrepareVisibleVideosForBackground")
     /// Posted when the app startup phase has ended and deferred operations can proceed
     static let startupPhaseEnded = Notification.Name("StartupPhaseEnded")
     
@@ -163,6 +165,10 @@ extension Notification.Name {
     /// Posted when a shared AVPlayer keeps its identity but receives a new AVPlayerItem.
     /// userInfo: ["mediaID": String]
     static let videoPlayerItemReplaced = Notification.Name("VideoPlayerItemReplaced")
+    /// Posted when a visible feed cell should discard its current player shell and
+    /// rebuild from the local proxy/disk cache.
+    /// userInfo: ["mediaID": String, "source": String?]
+    static let feedVideoShouldRebuildFromProxyCache = Notification.Name("FeedVideoShouldRebuildFromProxyCache")
     
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast

@@ -7,16 +7,15 @@
 import SwiftUI
 
 // MARK: - Global Mute State
+@MainActor
 class MuteState: ObservableObject {
     static let shared = MuteState()
     @Published var isMuted: Bool = true { // Default to muted (matches PreferenceHelper default)
         didSet {
-            Task { @MainActor in
-                // Save to preferences whenever the mute state changes
-                if oldValue != isMuted {
-                    HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
-                    print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
-                }
+            // Save to preferences whenever the mute state changes
+            if oldValue != isMuted {
+                HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
+                print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
             }
         }
     }
@@ -40,7 +39,20 @@ class MuteState: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
     
-    @objc private func userDefaultsDidChange() {
+    // NotificationCenter invokes selector-based observers synchronously on whatever
+    // thread posts the notification. UserDefaults.didChangeNotification can be posted
+    // from a background thread (e.g. PencilKit's Scribble setup on iPad calling
+    // -[NSUserDefaults registerDefaults:] lazily off-main), which would trip Swift's
+    // main-actor isolation check on this @objc method and crash. Stay nonisolated here
+    // and hop to the main actor explicitly for the actual work.
+    @objc private nonisolated func userDefaultsDidChange() {
+        Task { @MainActor in
+            self.syncMuteStateFromUserDefaults()
+        }
+    }
+
+    @MainActor
+    private func syncMuteStateFromUserDefaults() {
         // Check for changes to the speakerMuted key
         // CRITICAL: Always try preferenceHelper first, but fall back to direct UserDefaults read
         let newMuteState: Bool
@@ -55,12 +67,10 @@ class MuteState: ObservableObject {
                 newMuteState = UserDefaults.standard.bool(forKey: "speakerMuted")
             }
         }
-        
+
         if self.isMuted != newMuteState {
-            DispatchQueue.main.async {
-                self.isMuted = newMuteState
-                print("DEBUG: [MUTE STATE] Synced from UserDefaults change: \(newMuteState)")
-            }
+            self.isMuted = newMuteState
+            print("DEBUG: [MUTE STATE] Synced from UserDefaults change: \(newMuteState)")
         }
     }
     

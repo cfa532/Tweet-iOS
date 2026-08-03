@@ -11,6 +11,18 @@ import SwiftUI
 import Combine
 import AVFoundation
 
+/// Which URL a share action embeds — see DEEPLINKING.md for the policy.
+enum TweetShareLinkStyle {
+    /// `http://dtweet.com/tweet/{mid}/{authorId}` — standard deep-link format;
+    /// the OS opens the app when installed (feed share button)
+    case deeplink
+    /// Domain delivered by the backend's `check_upgrade`
+    /// (`hproseInstance.domainToShare`) — detail-view share button
+    case webDomain
+    /// The tweet author's provider-IP entry URL — detail-view dropdown menu
+    case providerIP
+}
+
 class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     // MARK: - Action Buttons
@@ -57,6 +69,9 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     // Context
     var isInDetailView = false
+    /// Overrides the default style (feed → .deeplink, detail → .webDomain);
+    /// set to .providerIP by buildDetailShareItems for the dropdown menu
+    var shareLinkStyleOverride: TweetShareLinkStyle?
     weak var parentTweet: Tweet?       // For comments: the parent tweet this is a comment on
     weak var commentsVMParentTweet: Tweet?  // Fallback: commentsVM?.parentTweet
 
@@ -334,6 +349,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
         let originalFavoriteCount = tweet.favoriteCount ?? 0
         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
+        let originalAppUserFavoriteTweets = hproseInstance.appUser.favoriteTweets
         let originalFavorites = tweet.favorites
 
         // Optimistic update
@@ -342,10 +358,26 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         tweet.favorites = newFavorites
         tweet.favoriteCount = originalFavoriteCount + (wasFavorite ? -1 : 1)
         hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
+        if wasFavorite {
+            hproseInstance.appUser.favoriteTweets?.removeAll { $0 == tweet.mid }
+        } else {
+            var favoriteTweets = hproseInstance.appUser.favoriteTweets ?? []
+            favoriteTweets.removeAll { $0 == tweet.mid }
+            favoriteTweets.insert(tweet.mid, at: 0)
+            hproseInstance.appUser.favoriteTweets = favoriteTweets
+        }
+        NotificationCenter.default.post(
+            name: wasFavorite ? .favoriteRemoved : .favoriteAdded,
+            object: nil,
+            userInfo: ["tweet": tweet, "optimistic": true]
+        )
 
         Task {
             do {
-                let (updatedTweet, updatedUser) = try await hproseInstance.toggleFavorite(tweet)
+                let (updatedTweet, updatedUser) = try await hproseInstance.toggleFavorite(
+                    tweet,
+                    isFavorite: !wasFavorite
+                )
 
                 if let updatedUser {
                     await MainActor.run {
@@ -358,9 +390,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                         tweet.favorites = updatedTweet.favorites
                         tweet.favoriteCount = updatedTweet.favoriteCount
                     }
-                    let notificationName: Notification.Name = wasFavorite ? .favoriteRemoved : .favoriteAdded
-                    NotificationCenter.default.post(name: notificationName, object: nil,
-                                                     userInfo: ["tweet": updatedTweet])
                 }
             } catch {
                 print("DEBUG: [handleLike] toggleFavorite failed: \(error)")
@@ -368,6 +397,12 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                     tweet.favorites = originalFavorites
                     tweet.favoriteCount = originalFavoriteCount
                     hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
+                    hproseInstance.appUser.favoriteTweets = originalAppUserFavoriteTweets
+                    NotificationCenter.default.post(
+                        name: wasFavorite ? .favoriteAdded : .favoriteRemoved,
+                        object: nil,
+                        userInfo: ["tweet": tweet, "rollback": true]
+                    )
                     let msg = wasFavorite
                         ? NSLocalizedString("Failed to remove favorite. Please try again.", comment: "")
                         : NSLocalizedString("Failed to add favorite. Please try again.", comment: "")
@@ -389,6 +424,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
         let originalBookmarkCount = tweet.bookmarkCount ?? 0
         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
+        let originalAppUserBookmarkedTweets = hproseInstance.appUser.bookmarkedTweets
         let originalFavorites = tweet.favorites
 
         // Optimistic update
@@ -397,10 +433,26 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         tweet.favorites = newFavorites
         tweet.bookmarkCount = originalBookmarkCount + (wasBookmarked ? -1 : 1)
         hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount + (wasBookmarked ? -1 : 1)
+        if wasBookmarked {
+            hproseInstance.appUser.bookmarkedTweets?.removeAll { $0 == tweet.mid }
+        } else {
+            var bookmarkedTweets = hproseInstance.appUser.bookmarkedTweets ?? []
+            bookmarkedTweets.removeAll { $0 == tweet.mid }
+            bookmarkedTweets.insert(tweet.mid, at: 0)
+            hproseInstance.appUser.bookmarkedTweets = bookmarkedTweets
+        }
+        NotificationCenter.default.post(
+            name: wasBookmarked ? .bookmarkRemoved : .bookmarkAdded,
+            object: nil,
+            userInfo: ["tweet": tweet, "optimistic": true]
+        )
 
         Task {
             do {
-                let (updatedTweet, updatedUser) = try await hproseInstance.toggleBookmark(tweet)
+                let (updatedTweet, updatedUser) = try await hproseInstance.toggleBookmark(
+                    tweet,
+                    isBookmarked: !wasBookmarked
+                )
 
                 if let updatedUser {
                     await MainActor.run {
@@ -413,9 +465,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                         tweet.favorites = updatedTweet.favorites
                         tweet.bookmarkCount = updatedTweet.bookmarkCount
                     }
-                    let notificationName: Notification.Name = wasBookmarked ? .bookmarkRemoved : .bookmarkAdded
-                    NotificationCenter.default.post(name: notificationName, object: nil,
-                                                     userInfo: ["tweet": updatedTweet])
                 }
             } catch {
                 print("DEBUG: [handleBookmark] toggleBookmark failed: \(error)")
@@ -423,6 +472,12 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                     tweet.favorites = originalFavorites
                     tweet.bookmarkCount = originalBookmarkCount
                     hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
+                    hproseInstance.appUser.bookmarkedTweets = originalAppUserBookmarkedTweets
+                    NotificationCenter.default.post(
+                        name: wasBookmarked ? .bookmarkAdded : .bookmarkRemoved,
+                        object: nil,
+                        userInfo: ["tweet": tweet, "rollback": true]
+                    )
                     let msg = wasBookmarked
                         ? NSLocalizedString("Failed to remove bookmark. Please try again.", comment: "")
                         : NSLocalizedString("Failed to add bookmark. Please try again.", comment: "")
@@ -456,11 +511,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
         Task {
             print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
-
-            // If sharing from detail view, resolve IPv4 for better compatibility
-            if isInDetailView {
-                _ = await Self.getIPv4PreferredBaseUrl(for: tweet, hproseInstance: hprose)
-            }
 
             // Load attachment preview if available
             if attachmentPreviewImage == nil {
@@ -519,7 +569,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// Build share items with rich preview
     private func buildShareItems(for tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
         let effectiveParentTweet = parentTweet ?? commentsVMParentTweet
-        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, isInDetailView: isInDetailView, parentTweet: effectiveParentTweet)
+        // Only plain feed tweet rows use the deep-link format; detail views and
+        // comment shares keep the check_upgrade web domain (DEEPLINKING.md)
+        let style = shareLinkStyleOverride ?? ((isInDetailView || effectiveParentTweet != nil) ? .webDomain : .deeplink)
+        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, style: style, parentTweet: effectiveParentTweet)
         let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
 
         var items: [Any] = [customItem]
@@ -535,10 +588,14 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return items
     }
 
+    /// Share items for the detail view's dropdown menu (TweetMenu): uses the
+    /// author's provider-IP entry URL (`.providerIP`), reachable even without
+    /// the dtweet.com / check_upgrade domains. See DEEPLINKING.md.
     @MainActor
     static func buildDetailShareItems(tweet: Tweet, hproseInstance: HproseInstance, parentTweet: Tweet? = nil) async -> [Any] {
         let helper = TweetActionBarView(frame: .zero)
         helper.isInDetailView = true
+        helper.shareLinkStyleOverride = .providerIP
         helper.parentTweet = parentTweet
 
         let preferredBaseUrl = await Self.getIPv4PreferredBaseUrl(for: tweet, hproseInstance: hproseInstance)
@@ -550,8 +607,15 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return await helper.buildShareItems(for: tweet, hproseInstance: hproseInstance)
     }
 
-    /// Build share text for a tweet
-    static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false, parentTweet: Tweet? = nil) -> String {
+    /// Build share text for a tweet.
+    ///
+    /// Share-URL policy (see DEEPLINKING.md):
+    /// - `.deeplink`   feed share button — `http://dtweet.com/tweet/{mid}/{authorId}`;
+    ///                 the OS opens the app when installed, browsers land on the web app.
+    /// - `.webDomain`  detail-view share button — domain delivered by the backend's
+    ///                 `check_upgrade` (`hproseInstance.domainToShare`).
+    /// - `.providerIP` detail-view dropdown menu — the author's provider-IP entry URL.
+    static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, style: TweetShareLinkStyle, parentTweet: Tweet? = nil) -> String {
         var shareText = ""
 
         // Priority: title > content > attachment types
@@ -571,31 +635,26 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             shareText += "\n\n"
         }
 
-        // Add URL - compose based on context (comment vs regular tweet, detail view vs feed)
+        // Add URL according to the requested link style
         let urlText: String
+        let commentParams = parentTweet.map { "?fromComment=true&parentTweetId=\($0.mid)&parentAuthorId=\($0.authorId)" } ?? ""
 
-        if let parent = parentTweet, isInDetailView {
-            // Comment in detail view: use entry format with query params in hash fragment
-            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
-            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
-        } else if let parent = parentTweet {
-            // Comment in feed/list: use traditional format with query parameters
+        switch style {
+        case .deeplink:
+            // Standard deep-link format: OS opens the app when installed
+            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+        case .webDomain:
+            // Domain delivered by the backend's check_upgrade
             var domain = hproseInstance.domainToShare
             if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
                 domain = "http://" + domain
             }
-            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
-        } else if isInDetailView {
-            // Regular tweet in detail view: use author's baseUrl with entry format
+            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+        case .providerIP:
+            // Author's provider-IP entry URL (hash-router format); the caller is
+            // expected to have refreshed tweet.author.baseUrl to a reachable IP
             let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
-            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
-        } else {
-            // Regular tweet in feed/grid: use traditional format
-            var domain = hproseInstance.domainToShare
-            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
-                domain = "http://" + domain
-            }
-            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)"
+            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         }
 
         if !shareText.isEmpty {
@@ -607,7 +666,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return shareText
     }
 
-    /// Get an IPv4-preferred baseUrl for sharing from detail view
+    /// Get an IPv4-preferred baseUrl for sharing from detail view.
+    /// Only a domain name or a sound public IPv4 is acceptable in a shared
+    /// link — private/Tailscale (RFC 6598) addresses and IPv6 trigger a fresh
+    /// public-IPv4 resolution instead.
     private static func getIPv4PreferredBaseUrl(for tweet: Tweet, hproseInstance: HproseInstance) async -> String {
         guard let author = tweet.author else {
             return AppConfig.baseUrl
@@ -615,12 +677,21 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
         let currentBaseUrl = author.baseUrl?.absoluteString ?? AppConfig.baseUrl
 
-        // Quick check: if already IPv4, use it
-        if !currentBaseUrl.contains("[") && currentBaseUrl.filter({ $0 == ":" }).count <= 1 {
-            return currentBaseUrl
+        if let host = URL(string: currentBaseUrl)?.host, !Gadget.isIPv6Address(host) {
+            let looksLikeIPv4 = host.range(of: #"^(\d{1,3}\.){3}\d{1,3}$"#, options: .regularExpression) != nil
+            if !looksLikeIPv4 {
+                // Domain name — fine to share as-is
+                return currentBaseUrl
+            }
+            if Gadget.isValidPublicIpAddress(host) {
+                // Sound public IPv4 — use it
+                return currentBaseUrl
+            }
+            // Private/Tailscale IPv4 — fall through to re-resolve
         }
 
-        // IPv6 detected - resolve IPv4 via getProviderIP
+        // IPv6 or non-public IPv4 - resolve a public IPv4 via getProviderIP
+        // (its result list is already filtered by Gadget.isValidPublicIpAddress)
         do {
             if let ipv4 = try await hproseInstance.getProviderIP(author.mid, v4Only: true) {
                 let ipv4BaseUrl = "http://\(ipv4)"
@@ -633,7 +704,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             }
         } catch {}
 
-        return currentBaseUrl
+        // Never leak a private/Tailscale IP into a shared link
+        return AppConfig.baseUrl
     }
 
     /// Load attachment preview image (first image or video thumbnail)
@@ -856,9 +928,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             let mediaType: MediaType = isHLS ? .hls_video : .video
             let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mediaID, tweetId: tweet.mid, mediaType: mediaType)
 
-            async let durationLoad = asset.load(.duration)
-            async let tracksLoad = asset.load(.tracks)
-            let (duration, tracks) = try await (durationLoad, tracksLoad)
+            let duration = try await asset.load(.duration)
+            let tracks = try await asset.load(.tracks)
             let durationSeconds = CMTimeGetSeconds(duration)
 
             guard durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite else { return nil }

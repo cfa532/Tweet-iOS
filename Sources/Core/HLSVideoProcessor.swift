@@ -8,11 +8,10 @@
 import Foundation
 import AVFoundation
 import UIKit
-import ffmpegkit
 
 /// HLSVideoProcessor provides video metadata extraction for backend-based video processing
 /// Since video conversion is now handled on the backend, this class focuses on aspect ratio detection
-public class HLSVideoProcessor {
+public final class HLSVideoProcessor: Sendable {
     
     public static let shared = HLSVideoProcessor()
     

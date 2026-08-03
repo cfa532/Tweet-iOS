@@ -9,9 +9,9 @@
 import UIKit
 import SwiftUI
 
-/// Thread-safe tweet height calculator that pre-calculates heights to eliminate scroll jumps
-/// NOT @MainActor to allow background calculation, but uses locks for thread safety
-class TweetHeightCalculator {
+/// Tweet height calculator that pre-calculates heights from main-actor Tweet models.
+@MainActor
+final class TweetHeightCalculator {
     static let shared = TweetHeightCalculator()
     
     // Cache of calculated heights
@@ -170,4 +170,3 @@ class TweetHeightCalculator {
         return ceil(height)
     }
 }
-

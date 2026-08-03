@@ -19,7 +19,7 @@ enum Constants {
     
     // Cache Configuration - RESTORED to original limits for better performance
     static let MAX_ASSET_CACHE_SIZE = 40
-    static let MAX_PLAYER_CACHE_SIZE = 10 // number of players to cache (players released on background)
+    static let MAX_PLAYER_CACHE_SIZE = 8 // number of players to cache (players released on background)
     static let MAX_CONCURRENT_PLAYER_CREATIONS = 2 // Conservative: 1 slot reserved for visible content, preloads only when idle
     static let CACHE_EXPIRATION_SECONDS: TimeInterval = 300 // 5 minutes - reasonable balance of memory vs performance
     
@@ -27,7 +27,7 @@ enum Constants {
     static let MAX_FILE_SIZE = 512 * 1024 * 1024 // 512MB in bytes - applies to all file types
     
     // Video Processing Thresholds
-    static let PROGRESSIVE_VIDEO_THRESHOLD_BYTES: Int64 = 32 * 1024 * 1024  // 32MB
+    static let PROGRESSIVE_VIDEO_THRESHOLD_BYTES: Int64 = 50 * 1024 * 1024  // 50MB
     
     // Image Loading Timeout
     static let IMAGE_LOAD_TIMEOUT: TimeInterval = 15.0  // 15 seconds for all image loading requests
@@ -36,6 +36,8 @@ enum Constants {
 enum FeedPlaybackTuning {
     // Directional preloading
     static let directionalVideoPreloadCount = 1
+    /// Cover-image-only preloads (AVAssetImageGenerator) beyond the player-preloaded video.
+    static let directionalVideoCoverPreloadCount = 3
     static let directionalImagePreloadRowCount = 2
     static let oppositeStopImagePreloadRowCount = 1
     static let maxDirectionalImagePreloadsInFlight = 4
@@ -46,12 +48,27 @@ enum FeedPlaybackTuning {
     static let tweetVisibleRatio: CGFloat = 0.50
 
     // Video playback visibility
+    /// Any positively-visible video acquires a player (was 0.50). Overload is bounded by
+    /// MAX_PLAYER_CACHE_SIZE (8, LRU-evicts oldest non-visible/non-primary) and
+    /// MAX_CONCURRENT_PLAYER_CREATIONS (2). Autoplay still requires videoStartVisibilityRatio.
+    static let videoWarmVisibilityRatio: CGFloat = 0
     static let videoStartVisibilityRatio: CGFloat = 0.50
-    static let videoContinueVisibilityRatio: CGFloat = 0.70
+    /// Keep the active primary at the same threshold used to start it. A higher
+    /// continuation threshold causes startup/layout samples around 50-70% visible
+    /// to start, stop, then restart the same onscreen video.
+    static let videoContinueVisibilityRatio: CGFloat = 0.50
 
     // Overlay/layout settling
     static let overlayDismissSettleDelay: TimeInterval = 0.35
     static let barAppearanceCompensationTimeout: TimeInterval = 0.15
+
+    /// Above this scroll speed (pt/s), visible video cells defer AVPlayer creation and
+    /// AVPlayerLayer attachment until the deceleration slows — player setup on the main
+    /// thread mid-fling costs 100–350ms and visibly hitches the scroll. The
+    /// coordinator-selected primary (coordinatorWantsToPlay) is exempt, so slow-scroll
+    /// autoplay is unaffected. Deferred cells self-recover: the throttled visibility
+    /// passes re-enter setVisible → schedulePlayerAcquireIfNeeded as velocity decays.
+    static let playerAcquireMaxScrollVelocity: CGFloat = 800
 }
 
 enum UserContentType: String {

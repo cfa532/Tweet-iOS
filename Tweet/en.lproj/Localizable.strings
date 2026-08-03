@@ -202,6 +202,7 @@
 
 // MARK: - Loading States
 "Loading tweets..." = "Loading tweets...";
+"Loading quoted tweet..." = "Loading quoted tweet...";
 "No tweet yet" = "No tweet yet";
 "Timeline" = "Home";
 
@@ -449,6 +450,17 @@
 // MARK: - Content Moderation
 "Filter Content" = "Filter Content";
 "Report Tweet" = "Report Tweet";
+"Block %@?" = "Block %@?";
+"this user" = "this user";
+"This will remove %@ from your following list and hide their content." = "This will remove %@ from your following list and hide their content.";
+"Block and Apply Filters" = "Block and Apply Filters";
+"Applying these filters will also block %@ and hide their posts." = "Applying these filters will also block %@ and hide their posts.";
+"Submit this report?" = "Submit this report?";
+"This report will be sent for review and the tweet will be hidden from your current view." = "This report will be sent for review and the tweet will be hidden from your current view.";
+"Delete Tweet?" = "Delete Tweet?";
+"This tweet will be permanently deleted. This action cannot be undone." = "This tweet will be permanently deleted. This action cannot be undone.";
+"Delete Comment?" = "Delete Comment?";
+"This comment will be permanently deleted. This action cannot be undone." = "This comment will be permanently deleted. This action cannot be undone.";
 "Content Filtering" = "Content Filtering";
 "Control what content you see on your timeline" = "Control what content you see on your timeline";
 "User Actions" = "User Actions";
@@ -589,6 +601,8 @@
 "Video conversion failed" = "Video conversion failed";
 "Chat message upload failed" = "Chat message upload failed";
 "Profile update failed" = "Profile update failed";
+"Host ID updated. Please log in on the new host." = "Host ID updated. Please log in on the new host.";
+"Host ID update timed out. Log in again to verify the result." = "Host ID update timed out. Log in again to verify the result.";
 "Success" = "Success";
 "Processing..." = "Processing...";
 "Invalid response format from server" = "Invalid response format from server";
@@ -653,6 +667,10 @@
 "App ID mismatch" = "App ID mismatch";
 
 // MARK: - Cloud Drive Limit
+"%d new tweet" = "%d new tweet";
+"%d new tweets" = "%d new tweets";
+"new_tweets_banner_one" = "%@ new tweet";
+"new_tweets_banner_many" = "%@ new tweets";
 "Tweet Limit Reached" = "Tweet Limit Reached";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.";
 "Learn More" = "Learn More";

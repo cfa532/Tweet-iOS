@@ -10,32 +10,37 @@ class AppState: ObservableObject {
     @Published var canShowCachedContent = false  // Allow showing cached content immediately
     
     func initialize() async {
-        isLoading = true  // Set loading state at start
-        
         // Initialize basic components first (no network calls)
-        // Initialize preference helper and basic app user (no network calls)
         HproseInstance.shared.preferenceHelper = PreferenceHelper()
+
+        // Cache screen width for background tweet height pre-warming.
+        // Formula: screenWidth - 8(leading) - 8(trailing) - 3 - 42(avatar) - 4 = screenWidth - 65.
+        TweetHeightPrewarmer.shared.standardContentWidth = UIScreen.main.bounds.width - 65
+
+        // Must complete before canShowCachedContent so the feed loads with the
+        // real appUser (correct cache key, non-guest path, correct pagination).
         await HproseInstance.shared.initializeAppUser()
-        
-        // Allow showing cached content immediately
+
+        // Let SwiftUI paint cached content immediately. Network initialization
+        // continues below without holding the launch screen.
         canShowCachedContent = true
         isLoading = false
-        
-        // Continue with full network initialization in background
-        Task.detached(priority: .background) {
+
+        // Yield so SwiftUI can process the isLoading=false state change and paint
+        // ContentView before initAppEntry starts making @MainActor calls (fetchUser
+        // hops back to @MainActor repeatedly and would otherwise delay the first paint).
+        await Task.yield()
+
+        // Continue with full network initialization off the first paint path.
+        Task.detached(priority: .userInitiated) {
             do {
                 try await HproseInstance.shared.initAppEntry()
                 await MainActor.run {
                     self.isInitialized = true
                 }
                 
-                // Chat sessions will be loaded lazily when chat screens are accessed
-                // Check for new messages (only updates badge, no notifications)
-                await ChatSessionManager.shared.checkBackendForNewMessages(suppressNotifications: true)
-                print("[TweetApp] ✅ Initial message check completed after app initialization")
-                
                 // Refresh mute state from preferences after HproseInstance is ready
-                MuteState.shared.refreshFromPreferences()
+                await MuteState.shared.refreshFromPreferences()
                 
                 // Refresh theme state from preferences after HproseInstance is ready
                 await ThemeManager.shared.refreshFromPreferences()
@@ -173,12 +178,7 @@ struct TweetApp: App {
                 print("[TweetApp] ✅ SwiftUI onOpenURL received: \(url.absoluteString)")
                 print("[TweetApp] URL scheme: \(url.scheme ?? "nil"), host: \(url.host ?? "nil"), path: \(url.path)")
                 
-                // Post notification for ContentView to handle
-                NotificationCenter.default.post(
-                    name: .deeplinkReceived,
-                    object: nil,
-                    userInfo: ["url": url]
-                )
+                DeeplinkDelivery.shared.deliver(url)
             }
         }
     }

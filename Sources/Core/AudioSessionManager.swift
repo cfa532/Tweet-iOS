@@ -10,7 +10,8 @@ import AVFoundation
 
 /// Centralized audio session manager to ensure proper audio routing
 /// and prevent interference with incoming calls in communication apps
-class AudioSessionManager {
+@MainActor
+final class AudioSessionManager {
     static let shared = AudioSessionManager()
 
     private var isUsingPlaybackCategory = false
