@@ -887,11 +887,19 @@ class TweetCellContentView: UIView {
                 image: UIImage(systemName: "pencil.line")
             ) { [weak self] _ in
                 guard let self, let pvc = self.parentViewController else { return }
-                let sheet = UIHostingController(
-                    rootView: AdminTweetContentEditSheet(tweet: tweet).environmentObject(hproseInstance)
-                )
-                sheet.modalPresentationStyle = .pageSheet
-                pvc.present(sheet, animated: true)
+                Task { @MainActor [weak self, weak pvc] in
+                    guard let self, let pvc else { return }
+                    let editTweet = await self.resolveEditTweet(
+                        for: tweet,
+                        hproseInstance: hproseInstance
+                    )
+                    let sheet = UIHostingController(
+                        rootView: AdminTweetContentEditSheet(tweet: editTweet)
+                            .environmentObject(hproseInstance)
+                    )
+                    sheet.modalPresentationStyle = .pageSheet
+                    pvc.present(sheet, animated: true)
+                }
             }
             actions.append(editAction)
         }
@@ -1056,6 +1064,23 @@ class TweetCellContentView: UIView {
         }
 
         return UIMenu(title: "", children: actions)
+    }
+
+    @MainActor
+    private func resolveEditTweet(for tweet: Tweet, hproseInstance: HproseInstance) async -> Tweet {
+        guard let originalTweetId = tweet.originalTweetId,
+              let originalAuthorId = tweet.originalAuthorId else {
+            return tweet
+        }
+
+        if let originalTweet = Tweet.getInstance(for: originalTweetId) {
+            return originalTweet
+        }
+
+        return (try? await hproseInstance.getTweet(
+            tweetId: originalTweetId,
+            authorId: originalAuthorId
+        )) ?? tweet
     }
 
     private func applyCommentMenuIfNeeded(

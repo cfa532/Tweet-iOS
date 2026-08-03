@@ -133,6 +133,7 @@ struct TweetMenu: View {
     typealias DeleteConfirmationPresenter = (@escaping () -> Void) -> Void
 
     @ObservedObject var tweet: Tweet
+    let editTweet: Tweet?
     let isPinned: Bool
     let showDeleteButton: Bool
     let onShareTap: (() -> Void)?
@@ -152,6 +153,7 @@ struct TweetMenu: View {
     
     init(
         tweet: Tweet,
+        editTweet: Tweet? = nil,
         isPinned: Bool,
         showDeleteButton: Bool = false,
         onShareTap: (() -> Void)? = nil,
@@ -161,6 +163,7 @@ struct TweetMenu: View {
         onDeleteTap: DeleteConfirmationPresenter? = nil
     ) {
         self.tweet = tweet
+        self.editTweet = editTweet
         self.isPinned = isPinned
         self.showDeleteButton = showDeleteButton
         self.onShareTap = onShareTap
@@ -482,7 +485,7 @@ struct TweetMenu: View {
             ReportTweetView(tweet: tweet)
         }
         .sheet(isPresented: $showAdminEditSheet) {
-            AdminTweetContentEditSheet(tweet: tweet)
+            AdminTweetContentEditSheet(tweet: editTweet ?? tweet)
                 .environmentObject(hproseInstance)
         }
         .alert(
