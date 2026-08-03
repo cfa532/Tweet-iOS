@@ -216,6 +216,9 @@ class EmbeddedTweetUIView: UIView {
         bodyView.onContentExpanded = { [weak self] in
             self?.onContentExpanded?()
         }
+        bodyView.onContentDidChangeHeightAsync = { [weak self] in
+            self?.onAsyncConfigured?()
+        }
 
         // Keep a real inset below embedded media so rounded borders do not clip the content.
         contentStackBottomConstraint.constant = -Self.contentBottomPadding
@@ -357,6 +360,7 @@ class EmbeddedTweetUIView: UIView {
         loadedTweet = nil
         onTap = nil
         onContentExpanded = nil
+        onAsyncConfigured = nil
         avatarView.prepareForReuse()
         headerView.prepareForReuse()
         bodyView.prepareForReuse()

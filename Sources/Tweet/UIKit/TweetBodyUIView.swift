@@ -96,13 +96,18 @@ class TweetBodyUIView: UIView {
     // Audio playlist hosting
     private var audioHostingController: UIHostingController<AnyView>?
     private let audioContainerView = UIView()
+    private var audioContainerHeightConstraint: NSLayoutConstraint!
 
     // Document attachments hosting (keeps SwiftUI, but reuses one host per cell)
     private var documentHostingController: UIHostingController<AnyView>?
     private let documentContainerView = UIView()
+    private var documentContainerHeightConstraint: NSLayoutConstraint!
 
     var onTweetBodyTap: (() -> Void)?
     var onContentExpanded: (() -> Void)?
+    /// The observed tweet changed after initial configuration and may need a new row height.
+    /// Kept separate from `onContentExpanded`, which represents a user tapping "More...".
+    var onContentDidChangeHeightAsync: (() -> Void)?
     /// Per-feed video coordinator (set by TweetCellContentView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
     var cellHorizontalPadding: CGFloat = 16 {
@@ -171,6 +176,9 @@ class TweetBodyUIView: UIView {
         contentStack.addArrangedSubview(mediaContainerView)
         contentStack.addArrangedSubview(captionLabel)
         contentStack.addArrangedSubview(documentContainerView)
+
+        audioContainerHeightConstraint = audioContainerView.heightAnchor.constraint(equalToConstant: 0)
+        documentContainerHeightConstraint = documentContainerView.heightAnchor.constraint(equalToConstant: 0)
 
         // Set initial spacing (will be adjusted per tweet)
         contentStack.setCustomSpacing(4, after: contentLabel)  // text → attachments gap
@@ -340,9 +348,23 @@ class TweetBodyUIView: UIView {
                 DispatchQueue.main.async { [weak self] in
                     guard let self,
                           self.observedTweet === tweet,
-                          self.bodyRenderSignature != BodyRenderSignature(tweet),
                           let parentViewController = self.parentViewController else {
                         return
+                    }
+
+                    let previousSignature = self.bodyRenderSignature
+                    let newSignature = BodyRenderSignature(tweet)
+                    guard previousSignature != newSignature else { return }
+
+                    if previousSignature?.content != newSignature.content {
+                        tweet.cachedContentAttributedString = nil
+                        tweet.cachedContentWidth = 0
+                        tweet.cachedMeasuredTextHeight = -1
+                        tweet.cachedMeasuredTextWidth = 0
+                        tweet.cachedHeight = nil
+                        tweet.cachedHeightWidth = 0
+                        TweetHeightCache.shared.removeHeight(for: tweet.mid)
+                        TweetHeightPrewarmer.shared.invalidate(tweetId: tweet.mid)
                     }
 
                     self.configure(
@@ -353,7 +375,7 @@ class TweetBodyUIView: UIView {
                     )
                     self.setNeedsLayout()
                     self.superview?.setNeedsLayout()
-                    self.onContentExpanded?()
+                    self.onContentDidChangeHeightAsync?()
                 }
             }
     }
@@ -408,6 +430,8 @@ class TweetBodyUIView: UIView {
         // --- Audio playlist ---
         if hasAudio {
             audioContainerView.isHidden = false
+            audioContainerHeightConstraint.constant = Self.audioPlaylistHeight
+            audioContainerHeightConstraint.isActive = true
             let audioView = CompactAudioPlaylistPlayer(
                 parentTweet: tweet,
                 attachments: audioAttachments
@@ -420,6 +444,7 @@ class TweetBodyUIView: UIView {
             contentStack.setCustomSpacing(contentLabel.isHidden ? 4 : 8, after: contentLabel)
             contentStack.setCustomSpacing(hasMedia ? 8 : 0, after: audioContainerView)
         } else {
+            audioContainerHeightConstraint.isActive = false
             audioContainerView.isHidden = true
             audioHostingController?.rootView = AnyView(EmptyView())
             contentStack.setCustomSpacing(0, after: audioContainerView)
@@ -474,6 +499,8 @@ class TweetBodyUIView: UIView {
         // --- Documents ---
         if hasDocuments {
             documentContainerView.isHidden = false
+            documentContainerHeightConstraint.constant = Self.documentAttachmentsHeight(for: documentAttachments)
+            documentContainerHeightConstraint.isActive = true
 
             // Reuse one hosting controller per cell instead of recreating it on every configure.
             let docView = DocumentAttachmentsView(
@@ -495,6 +522,7 @@ class TweetBodyUIView: UIView {
                 contentStack.setCustomSpacing(8, after: contentLabel)
             }
         } else {
+            documentContainerHeightConstraint.isActive = false
             documentContainerView.isHidden = true
             documentHostingController?.rootView = AnyView(EmptyView())
         }
@@ -518,9 +546,12 @@ class TweetBodyUIView: UIView {
         currentFullContent = nil
         onTweetBodyTap = nil
         onContentExpanded = nil
+        onContentDidChangeHeightAsync = nil
         mediaGridView.prepareForReuse()
+        audioContainerHeightConstraint.isActive = false
         audioContainerView.isHidden = true
         audioHostingController?.rootView = AnyView(EmptyView())
+        documentContainerHeightConstraint.isActive = false
         documentContainerView.isHidden = true
         documentHostingController?.rootView = AnyView(EmptyView())
 
@@ -655,6 +686,30 @@ class TweetBodyUIView: UIView {
         default:
             return false
         }
+    }
+
+    /// Fixed feed height of CompactAudioPlaylistPlayer. Every constituent view has a fixed
+    /// height except the Dynamic Type caption line, which is included explicitly here.
+    static var audioPlaylistHeight: CGFloat {
+        ceil(16 + 40 + 8 + 48 + 8 + 8 + 5 + UIFont.preferredFont(forTextStyle: .caption1).lineHeight)
+    }
+
+    /// Fixed feed height of DocumentAttachmentsView(maxDocuments: 2). The hosting view is
+    /// constrained to this same value so the row calculator and renderer cannot disagree.
+    static func documentAttachmentsHeight(for documents: [MimeiFileType]) -> CGFloat {
+        let displayed = Array(documents.prefix(2))
+        let titleLineHeight = ceil(UIFont.systemFont(ofSize: 14).lineHeight)
+        let metadataLineHeight = ceil(UIFont.preferredFont(forTextStyle: .caption2).lineHeight)
+        let rowHeights = displayed.map { document -> CGFloat in
+            let textHeight = titleLineHeight + (document.size == nil ? 0 : 2 + metadataLineHeight)
+            return max(24, textHeight) + 8
+        }
+        let rowSpacing = CGFloat(max(0, displayed.count - 1)) * 2
+        let moreHeight: CGFloat = documents.count > 2
+            ? 2 + ceil(max(UIFont.systemFont(ofSize: 20, weight: .bold).lineHeight,
+                           UIFont.systemFont(ofSize: 13).lineHeight))
+            : 0
+        return 8 + rowHeights.reduce(0, +) + rowSpacing + moreHeight
     }
 
     // MARK: - Truncation with "More>>" indicator

@@ -1476,8 +1476,18 @@ class TweetTableViewController: UITableViewController {
 
         embeddedTweetPrefetchInFlight.insert(originalTweetId)
         Task(priority: .utility) { [weak self] in
-            _ = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
-            self?.embeddedTweetPrefetchInFlight.remove(originalTweetId)
+            let loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
+            guard let self else { return }
+            self.embeddedTweetPrefetchInFlight.remove(originalTweetId)
+
+            // The original may have arrived after the outer rows were first prewarmed. Warm
+            // every quote that uses it now, before those rows approach the viewport.
+            if loadedTweet != nil {
+                let relatedQuotes = (self.pinnedTweets + self.tweets).filter {
+                    $0.originalTweetId == originalTweetId
+                }
+                self.scheduleHeightPrewarm(for: relatedQuotes)
+            }
         }
     }
     
@@ -1621,6 +1631,7 @@ class TweetTableViewController: UITableViewController {
         // Handle initial load
         if oldCount == 0 && newTweets.count > 0 {
             prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds)
+            scheduleHeightPrewarm(for: newTweets)
             isTableViewUpdating = true
             tableView.reloadData()
             isTableViewUpdating = false
@@ -2402,11 +2413,6 @@ class TweetTableViewController: UITableViewController {
         let isLastItem = indexPath.row == totalRows - 1
         let isLastPinnedTweet = !pinnedTweets.isEmpty && indexPath.row == pinnedTweets.count - 1
 
-        cell.shouldDeferHeightOverflowCheck = { [weak self] in
-            guard let self else { return false }
-            return self.isUserDragging || self.isDecelerating
-        }
-
         if let hprose = hproseInstance {
             cell.configure(
                 with: tweet,
@@ -2442,86 +2448,33 @@ class TweetTableViewController: UITableViewController {
         // re-measures the cell at expanded height instead of using the cached truncated value.
         cell.onContentExpanded = { [weak self, weak cell] in
             guard let self, let cell,
-                  let indexPath = self.tableView.indexPath(for: cell) else { return }
-            let tweet: Tweet
-            if indexPath.row < self.pinnedTweets.count {
-                tweet = self.pinnedTweets[indexPath.row]
-            } else {
-                let idx = indexPath.row - self.pinnedTweets.count
-                guard idx < self.tweets.count else { return }
-                tweet = self.tweets[idx]
-            }
+                  let indexPath = self.tableView.indexPath(for: cell),
+                  let tweet = self.tweetForRow(indexPath.row) else { return }
 
             self.expandedTweetIds.insert(tweet.mid)
             self.clearCachedHeight(for: tweet)
 
-            let expectedCount = self.pinnedTweets.count + self.tweets.count
-            let currentCount = self.tableView.numberOfRows(inSection: 0)
-            if expectedCount == currentCount {
-                UIView.performWithoutAnimation {
-                    self.isTableViewUpdating = true
-                    self.tableView.beginUpdates()
-                    self.tableView.endUpdates()
-                    self.isTableViewUpdating = false
-                }
+            if self.isScrollInteractionActive {
+                self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
+            } else {
+                self.performPendingHeightRelayout(include: tweet.mid)
             }
         }
 
-        // Height change callback for embedded tweets that load asynchronously
-        // When the embedded tweet loads, the cell expands and the table must re-layout.
-        //
-        // Only wired up for retweets/quotes: that's the ONLY case where a tweet's height
-        // can legitimately change after the deterministic calculateTweetHeight/willDisplay
-        // pass (the embedded original tweet's author/content arriving later). Plain tweets
-        // (text/image/video, no originalTweetId) have no async height dependency — their
-        // media height comes from server-provided aspectRatio metadata, not runtime player
-        // state — so leaving onHeightChanged nil here means shouldCheckForHeightOverflow()
-        // short-circuits before ever calling the expensive systemLayoutSizeFitting.
-        // Measured cost matters: that call can spike into the hundreds of ms (not its usual
-        // single-digit ms) when it runs on a cell whose video player is mid-attach, because
-        // it forces Auto Layout to synchronously query the AVPlayerLayer-backed view. Since
-        // runDeferredHeightOverflowChecksForVisibleCells() forces this check — bypassing the
-        // isUserDragging/isDecelerating defer — for every visible cell right at scroll-stop,
-        // an unlucky video cell there was blocking the main thread long enough to freeze the
-        // fling and make UIScrollView's momentum physics "teleport" once unblocked (the
-        // stop-then-catch-up-jump users saw). Restricting this to retweets/quotes removes the
-        // check for the vast majority of cells while keeping the one case it exists for.
-        if effectiveEmbeddedTweetId != nil {
-            cell.onHeightChanged = { [weak self, weak cell] desiredHeight in
-                guard let self, let cell,
-                      let indexPath = self.tableView.indexPath(for: cell) else { return }
-                // Use Auto Layout's fitting height directly. calculateTweetHeight is a
-                // manual estimate that can disagree with the cell's actual content
-                // (esp. when an embedded tweet finishes loading after first render).
-                let tweet: Tweet
-                if indexPath.row < self.pinnedTweets.count {
-                    tweet = self.pinnedTweets[indexPath.row]
-                } else {
-                    let idx = indexPath.row - self.pinnedTweets.count
-                    guard idx < self.tweets.count else { return }
-                    tweet = self.tweets[idx]
-                }
-                let isSavedCommentContext = tweet.originalTweetId == nil
-                    && self.effectiveEmbeddedTweetId(for: tweet) != nil
-#if DEBUG
-                let oldCachedHeight = self.cachedHeight(for: tweet, width: cell.bounds.width)
-                print("🧭 [SCROLL JUMP TRACE] height-request " +
-                      "feed=\(self.feedIdentifier) tweet=\(tweet.mid) row=\(indexPath.row) " +
-                      "oldHeight=\(oldCachedHeight.map(String.init(describing:)) ?? "nil") " +
-                      "requestedHeight=\(desiredHeight) offset=\(self.tableView.contentOffset.y) " +
-                      "contentHeight=\(self.tableView.contentSize.height) " +
-                      "dragging=\(self.isUserDragging) decelerating=\(self.isDecelerating) " +
-                      "savedCommentContext=\(isSavedCommentContext)")
-#endif
-                if !isSavedCommentContext {
-                    self.setCachedHeight(desiredHeight, for: tweet, width: cell.bounds.width)
-                }
+        // Live content/title/attachment updates are not user expansion. Recalculate the
+        // deterministic row height, but defer table mutation until momentum stops and use
+        // the anchor-preserving relayout path so rows above the viewport cannot cause a jump.
+        cell.onContentDidChangeHeightAsync = { [weak self, weak cell] in
+            guard let self, let cell,
+                  let indexPath = self.tableView.indexPath(for: cell),
+                  let tweet = self.tweetForRow(indexPath.row) else { return }
 
-                if self.isUserDragging || self.isDecelerating {
-                    self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
-                } else {
-                    self.performPendingHeightRelayout(include: tweet.mid)
-                }
+            self.expandedTweetIds.remove(tweet.mid)
+            self.clearCachedHeight(for: tweet)
+            if self.isScrollInteractionActive {
+                self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
+            } else {
+                self.performPendingHeightRelayout(include: tweet.mid)
             }
         }
 
@@ -2611,18 +2564,12 @@ class TweetTableViewController: UITableViewController {
                 && embeddedTweet.cachedMeasuredTextWidth == embeddedWidth
         }
         if textCacheWarm {
-            if displayTweet.cachedContentAttributedString == nil || displayTweet.cachedContentWidth != contentWidth {
-                print("⚠️ [HEIGHT CACHE MISS] mid=\(displayTweet.mid) textCacheWarm=true but cachedContentAttributedString stale: " +
-                      "attrStringNil=\(displayTweet.cachedContentAttributedString == nil) " +
-                      "cachedContentWidth=\(displayTweet.cachedContentWidth) contentWidth=\(contentWidth) " +
-                      "cachedMeasuredTextWidth=\(displayTweet.cachedMeasuredTextWidth)")
-            }
             return Self.calculateTweetHeight(for: tweet, rowWidth: layoutWidth, cellHorizontalPadding: padding)
                 + dividerHeight
         }
 
-        // Pre-warm path: background task has measured text height via boundingRect — better than
-        // char-count but doesn't replace UILabel-accurate measurement in calculateTweetHeight.
+        // A prewarm normally publishes the same numeric height to the Tweet first. This lookup
+        // covers the brief fallback where the background estimate exists without a live instance.
         let prewarmTextH = TweetHeightPrewarmer.shared.get(tweetId: displayTweet.mid, width: contentWidth)
 
         // Cold path: use a sub-millisecond character-count heuristic to avoid CoreText layout.
@@ -2632,6 +2579,56 @@ class TweetTableViewController: UITableViewController {
                                         rowWidth: layoutWidth, contentWidth: contentWidth,
                                         cellHorizontalPadding: padding,
                                         prewarmTextHeight: prewarmTextH) + dividerHeight
+    }
+
+    /// Adds every fixed attachment component using the same metrics that TweetBodyUIView
+    /// applies to its arranged subviews. Text height is supplied separately because that is
+    /// the only expensive measurement and is prewarmed off the main thread.
+    @discardableResult
+    private static func addAttachmentHeights(
+        for tweet: Tweet,
+        contentWidth: CGFloat,
+        hasTextContent: Bool,
+        to bodyHeight: inout CGFloat
+    ) -> Bool {
+        let attachments = tweet.attachments ?? []
+        let audioAttachments = attachments.filter { $0.type == .audio }
+        let mediaAttachments = attachments.filter { TweetBodyUIView.isMediaType($0.type) }
+        let documentAttachments = attachments.filter { TweetBodyUIView.isDocumentType($0.type) }
+
+        if !audioAttachments.isEmpty {
+            bodyHeight += hasTextContent ? 8 : 4
+            bodyHeight += TweetBodyUIView.audioPlaylistHeight
+        }
+
+        var hasCaptionLabel = false
+        if !mediaAttachments.isEmpty {
+            bodyHeight += 8
+            bodyHeight += MediaGridViewModel.calculateHeight(
+                for: mediaAttachments,
+                gridWidth: max(10, contentWidth - 2)
+            )
+            if mediaAttachments.count == 1 {
+                let attachment = mediaAttachments[0]
+                if attachment.type == .video || attachment.type == .hls_video {
+                    let hasTitle = tweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    let hasFileName = attachment.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    if hasTitle || (hasFileName && !hasTextContent) {
+                        bodyHeight += 2 + ceil(UIFont.systemFont(ofSize: 14).lineHeight)
+                        hasCaptionLabel = true
+                    }
+                }
+            }
+        }
+
+        if !documentAttachments.isEmpty {
+            if hasTextContent || !audioAttachments.isEmpty || !mediaAttachments.isEmpty {
+                bodyHeight += 8
+            }
+            bodyHeight += TweetBodyUIView.documentAttachmentsHeight(for: documentAttachments)
+        }
+
+        return hasCaptionLabel
     }
 
     /// Height estimate for tweets whose UILabel-accurate text height is not yet in cache.
@@ -2673,33 +2670,12 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
-        let mediaAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
-        var hasCaptionLabel = false
-        if !mediaAttachments.isEmpty {
-            let mediaGridWidth = max(10, contentWidth - 2)
-            bodyHeight += 8
-            bodyHeight += MediaGridViewModel.calculateHeight(for: mediaAttachments, gridWidth: mediaGridWidth)
-            if mediaAttachments.count == 1 {
-                let att = mediaAttachments[0]
-                if att.type == .video || att.type == .hls_video {
-                    let hasTitle = displayTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                    let hasFileName = att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                    if hasTitle || (hasFileName && !hasTextContent) {
-                        bodyHeight += 2 + 17
-                        hasCaptionLabel = true
-                    }
-                }
-            }
-        }
-
-        let documentAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isDocumentType($0.type) } ?? []
-        if !documentAttachments.isEmpty {
-            let docCount = min(documentAttachments.count, 2)
-            let rowsHeight = CGFloat(docCount) * 32 + (docCount > 1 ? CGFloat(docCount - 1) * 2 : 0)
-            let ellipsisHeight: CGFloat = documentAttachments.count > 2 ? 24 : 0
-            if hasTextContent || !mediaAttachments.isEmpty { bodyHeight += 8 }
-            bodyHeight += rowsHeight + 8 + ellipsisHeight
-        }
+        let hasCaptionLabel = addAttachmentHeights(
+            for: displayTweet,
+            contentWidth: contentWidth,
+            hasTextContent: hasTextContent,
+            to: &bodyHeight
+        )
 
         height += bodyHeight
         height += isRetweet && hasOwnContent ? 12 : (hasCaptionLabel ? 4 : 10)
@@ -2714,19 +2690,35 @@ class TweetTableViewController: UITableViewController {
                 var embeddedBodyH: CGFloat = 2
                 if hasEmbeddedText {
                     let embeddedWidth = embeddedContentWidth
-                    let charsPerLine = max(1, Int(embeddedWidth / 8.5))
-                    let lineCount = max(1, min(TweetBodyUIView.maxContentLines,
-                                               ((embeddedTweet.content?.count ?? 0) + charsPerLine - 1) / charsPerLine))
-                    embeddedBodyH += ceil(CGFloat(lineCount) * TweetBodyUIView.contentFont.lineHeight)
+                    if embeddedTweet.cachedMeasuredTextWidth == embeddedWidth,
+                       embeddedTweet.cachedMeasuredTextHeight >= 0 {
+                        embeddedBodyH += ceil(embeddedTweet.cachedMeasuredTextHeight)
+                    } else if let prewarmHeight = TweetHeightPrewarmer.shared.get(
+                        tweetId: embeddedTweet.mid,
+                        width: embeddedWidth
+                    ) {
+                        embeddedBodyH += ceil(prewarmHeight)
+                    } else {
+                        let charsPerLine = max(1, Int(embeddedWidth / 8.5))
+                        let lineCount = max(1, min(TweetBodyUIView.maxContentLines,
+                                                   ((embeddedTweet.content?.count ?? 0) + charsPerLine - 1) / charsPerLine))
+                        embeddedBodyH += ceil(CGFloat(lineCount) * TweetBodyUIView.contentFont.lineHeight)
+                    }
                 }
-                let embeddedMedia = embeddedTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
-                if !embeddedMedia.isEmpty {
-                    let embeddedMediaGridWidth = max(10, contentWidth - 14)
-                    embeddedBodyH += 8
-                    embeddedBodyH += MediaGridViewModel.calculateHeight(for: embeddedMedia, gridWidth: embeddedMediaGridWidth)
-                }
-                // Embedded header: single-line estimate (24pt).
-                let embeddedHeight: CGFloat = 8 + max(32, 24 + 4 + embeddedBodyH) + EmbeddedTweetUIView.contentBottomPadding
+                _ = addAttachmentHeights(
+                    for: embeddedTweet,
+                    contentWidth: embeddedContentWidth,
+                    hasTextContent: hasEmbeddedText,
+                    to: &embeddedBodyH
+                )
+                let embeddedHeaderHeight = max(
+                    CGFloat(32),
+                    TweetHeaderUIView.measuredHeaderHeight(
+                        for: embeddedTweet,
+                        availableWidth: embeddedContentWidth - 32 - 6
+                    )
+                )
+                let embeddedHeight: CGFloat = 8 + embeddedHeaderHeight + 4 + embeddedBodyH + EmbeddedTweetUIView.contentBottomPadding
                 height += embeddedHeight
             } else {
                 height += 60
@@ -2831,50 +2823,12 @@ class TweetTableViewController: UITableViewController {
             bodyHeight += ceil(measuredTextHeight)
         }
 
-        // Media attachments (filter to media-only, matching TweetBodyUIView)
-        let mediaAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
-        var hasCaptionLabel = false
-        if !mediaAttachments.isEmpty {
-            let mediaGridWidth = max(10, contentWidth - 2) // mediaGridView.trailing = mediaContainer - 2
-            let mediaHeight = MediaGridViewModel.calculateHeight(
-                for: mediaAttachments,
-                gridWidth: mediaGridWidth
-            )
-            bodyHeight += 8 // spacing above media
-            bodyHeight += mediaHeight
-
-            // Video caption for single-video tweets
-            if mediaAttachments.count == 1 {
-                let att = mediaAttachments[0]
-                if att.type == .video || att.type == .hls_video {
-                    let hasTitle = displayTweet.title != nil &&
-                        !(displayTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                    let hasFileName = att.fileName != nil &&
-                        !(att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                    // fileName caption only shown when tweet has no text (matches singleVideoCaption)
-                    if hasTitle || (hasFileName && !hasTextContent) {
-                        bodyHeight += 2 // customSpacing(after: mediaContainerView)
-                        bodyHeight += 17 // caption label height (14pt font, single line)
-                        hasCaptionLabel = true
-                    }
-                }
-            }
-        }
-
-        // Document attachments (PDFs, etc.) — hosted via SwiftUI DocumentAttachmentsView
-        let documentAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isDocumentType($0.type) } ?? []
-        if !documentAttachments.isEmpty {
-            let docCount = min(documentAttachments.count, 2) // maxDocuments: 2 in feed cells
-            // Each DocumentRowView: ~32pt (14pt font + caption2 + vertical padding + background)
-            // Outer VStack: 4pt padding top/bottom, 2pt spacing between rows
-            let rowsHeight = CGFloat(docCount) * 32 + (docCount > 1 ? CGFloat(docCount - 1) * 2 : 0)
-            let ellipsisHeight: CGFloat = documentAttachments.count > 2 ? 24 : 0
-            let docHeight = rowsHeight + 8 + ellipsisHeight // 8pt = outer VStack padding (4+4)
-            if hasTextContent || !mediaAttachments.isEmpty {
-                bodyHeight += 8 // spacing before document container
-            }
-            bodyHeight += docHeight
-        }
+        let hasCaptionLabel = addAttachmentHeights(
+            for: displayTweet,
+            contentWidth: contentWidth,
+            hasTextContent: hasTextContent,
+            to: &bodyHeight
+        )
 
         height += bodyHeight
 
@@ -2902,25 +2856,8 @@ class TweetTableViewController: UITableViewController {
                 //   contentLabel (if text) + 8pt spacing (to mediaContainer)
                 //   mediaContainer (mediaH) + 2pt spacing (if caption visible) + caption(17)
 
-                let embeddedMedia = embeddedTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
-
-                // Must be computed before hasEmbeddedCaption (fileName caption depends on it)
                 let hasEmbeddedText = embeddedTweet.content != nil &&
                     !(embeddedTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-
-                // Check for video caption in embedded tweet
-                // fileName caption only shown when embedded tweet has no text (matches singleVideoCaption)
-                var hasEmbeddedCaption = false
-                if embeddedMedia.count == 1 {
-                    let att = embeddedMedia[0]
-                    if att.type == .video || att.type == .hls_video {
-                        let hasTitle = embeddedTweet.title != nil &&
-                            !(embeddedTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                        let hasFileName = att.fileName != nil &&
-                            !(att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                        hasEmbeddedCaption = hasTitle || (hasFileName && !hasEmbeddedText)
-                    }
-                }
 
                 // Calculate embedded bodyView height (matches TweetBodyUIView auto layout)
                 var embeddedBodyH: CGFloat = 2 // contentStack top padding
@@ -2953,17 +2890,12 @@ class TweetTableViewController: UITableViewController {
                     embeddedBodyH += ceil(embeddedTextHeight)
                 }
 
-                if !embeddedMedia.isEmpty {
-                    let embeddedMediaGridWidth = max(10, contentWidth - 14)
-                    embeddedBodyH += 8 // spacing above media
-                    embeddedBodyH += MediaGridViewModel.calculateHeight(
-                        for: embeddedMedia,
-                        gridWidth: embeddedMediaGridWidth
-                    )
-                    if hasEmbeddedCaption {
-                        embeddedBodyH += 2 + 17 // spacing + caption label
-                    }
-                }
+                _ = addAttachmentHeights(
+                    for: embeddedTweet,
+                    contentWidth: contentWidth - 12,
+                    hasTextContent: hasEmbeddedText,
+                    to: &embeddedBodyH
+                )
 
                 // EmbeddedTweetUIView.contentStack (spacing=4):
                 //   headerRow height = max(32pt avatar, measured two-line header)
@@ -3277,7 +3209,6 @@ class TweetTableViewController: UITableViewController {
         // CRITICAL: Save scroll position immediately when user stops dragging
         // (if not decelerating, scroll has stopped - save now to survive app termination)
         if !decelerate {
-            runDeferredHeightOverflowChecksForVisibleCells()
             performPendingHeightRelayout()
             saveScrollPositionIfNeeded()
             runScrollStopPreloadWhenIdle()
@@ -3290,7 +3221,6 @@ class TweetTableViewController: UITableViewController {
 
         // Deceleration skipped video visibility updates — do one final update now
         updateVisibleTweetsForVideoPlayback()
-        runDeferredHeightOverflowChecksForVisibleCells()
         performPendingHeightRelayout()
 
         triggerPreloadOnScrollStop()
@@ -3433,15 +3363,6 @@ class TweetTableViewController: UITableViewController {
                   "feed=\(feedIdentifier) pending=\(tracePendingTweetIds) " +
                   "offset=\(tableView.contentOffset.y)")
 #endif
-        }
-    }
-
-    private func runDeferredHeightOverflowChecksForVisibleCells() {
-        guard isTableVisibleForMutation else { return }
-
-        for cell in tableView.visibleCells {
-            guard let tweetCell = cell as? TweetTableViewCell else { continue }
-            tweetCell.runDeferredHeightOverflowCheckIfNeeded()
         }
     }
 

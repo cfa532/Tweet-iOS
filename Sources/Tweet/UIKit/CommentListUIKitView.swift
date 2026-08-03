@@ -523,7 +523,6 @@ private final class CommentListTableViewController: UIViewController, UITableVie
                 return UITableViewCell()
             }
 
-            cell.shouldDeferHeightOverflowCheck = { false }
             if let hproseInstance, let parentTweet {
                 cell.configure(
                     with: comment,

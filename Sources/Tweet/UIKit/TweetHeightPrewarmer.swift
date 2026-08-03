@@ -54,6 +54,18 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
         guard contentWidth > 1 else { return }
         for tweet in tweets {
             prewarm(tweet, width: contentWidth, priority: .utility)
+
+            // A quote renders its original below the quoting body at a narrower width. Warm
+            // that exact width too; otherwise the outer row has an authoritative estimate
+            // while the embedded card changes from a rough guess as it enters the viewport.
+            let hasOwnContent = (tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                || (tweet.attachments?.isEmpty == false)
+            if hasOwnContent,
+               let originalTweetId = tweet.originalTweetId,
+               let embeddedTweet = Tweet.getInstance(for: originalTweetId),
+               embeddedTweet.author != nil {
+                prewarm(embeddedTweet, width: contentWidth - 12, priority: .utility)
+            }
         }
     }
 
@@ -65,14 +77,17 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
         cache[key] = height
     }
 
-    private func cacheKey(tweetId: String, width: CGFloat) -> String {
-        "\(tweetId):\(Int(width))"
+    /// Removes estimates for every width when a tweet's text changes.
+    func invalidate(tweetId: String) {
+        let prefix = "\(tweetId):"
+        lock.lock(); defer { lock.unlock() }
+        for key in cache.keys.filter({ $0.hasPrefix(prefix) }) {
+            cache.removeValue(forKey: key)
+        }
     }
 
-    private func isCached(tweetId: String, width: CGFloat) -> Bool {
-        let key = cacheKey(tweetId: tweetId, width: width)
-        lock.lock(); defer { lock.unlock() }
-        return cache[key] != nil
+    private func cacheKey(tweetId: String, width: CGFloat) -> String {
+        "\(tweetId):\(Int(width))"
     }
 
     @MainActor
@@ -99,7 +114,14 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
            displayTweet.cachedMeasuredTextWidth == width { return }
 
         let mid = displayTweet.mid
-        guard !isCached(tweetId: mid, width: width) else { return }
+        if let cachedHeight = get(tweetId: mid, width: width) {
+            // Tweet singletons can be recreated after memory trimming while this global cache
+            // survives. Re-publish the authoritative value so the new model does not fall back
+            // to a different visible-row measurement during reverse scrolling.
+            displayTweet.cachedMeasuredTextHeight = cachedHeight
+            displayTweet.cachedMeasuredTextWidth = width
+            return
+        }
 
         let cache = self
         Task.detached(priority: priority) {
@@ -112,10 +134,21 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
                 context: nil
             )
             let height = ceil(bounds.height)
-            cache.set(height, tweetId: mid, width: width)
 
-            // Keep background work estimate-only. The visible-row path builds and measures
-            // the final UILabel text once, then caches that exact result for reuse.
+            // Keep the prewarmed height authoritative for both UITableView's estimate and
+            // its first displayed height. Publishing only the immutable numeric result avoids
+            // sending the background-built attributed string across the actor boundary; the
+            // visible cell still builds the final UILabel/"More..." text on the main actor.
+            await MainActor.run {
+                guard let tweet = Tweet.getInstance(for: mid),
+                      tweet.content == content,
+                      tweet.cachedMeasuredTextWidth != width || tweet.cachedMeasuredTextHeight < 0 else {
+                    return
+                }
+                tweet.cachedMeasuredTextHeight = height
+                tweet.cachedMeasuredTextWidth = width
+                cache.set(height, tweetId: mid, width: width)
+            }
         }
     }
 }

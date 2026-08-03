@@ -381,6 +381,9 @@ class TweetCellContentView: UIView {
 
         // Forward content expansion callback (set before early return so it's always current)
         bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
+        bodyView.onContentDidChangeHeightAsync = { [weak self] in
+            self?.onContentDidChangeHeightAsync?()
+        }
         embeddedTweetView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
         separatorView.isHidden = isLastItem
@@ -1245,6 +1248,7 @@ class TweetCellContentView: UIView {
         onShowLogin = nil
         onShowToast = nil
         onContentExpanded = nil
+        onContentDidChangeHeightAsync = nil
         onRetweetUnavailable = nil
     }
 }
