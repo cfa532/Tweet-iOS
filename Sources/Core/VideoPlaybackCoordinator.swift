@@ -1775,6 +1775,18 @@ class VideoPlaybackCoordinator: ObservableObject {
         isTableViewScrollIdle
     }
 
+    /// Latest scroll velocity (pt/s), pushed by the owning table controller on each
+    /// scroll frame and zeroed at scroll stop.
+    var currentScrollVelocityY: CGFloat = 0
+
+    /// True while the feed is moving faster than AVPlayer creation/attachment can
+    /// afford on the main thread. MediaCellUIView defers eager player acquisition
+    /// while this is true; see FeedPlaybackTuning.playerAcquireMaxScrollVelocity.
+    var isFeedScrollTooFastForPlayerWork: Bool {
+        guard !isTableViewScrollIdle else { return false }
+        return abs(currentScrollVelocityY) > FeedPlaybackTuning.playerAcquireMaxScrollVelocity
+    }
+
     private func refreshDirectionalPreloads(reason: String, throttle: Bool) {
         guard AppDelegate.isVideoInfrastructureReady else { return }
         promoteForegroundVisibleMedia(reason: reason)

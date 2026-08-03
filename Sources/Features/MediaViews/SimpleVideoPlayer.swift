@@ -450,45 +450,77 @@ enum VideoFrameExtractor {
     /// Heuristic guard: treat near-black frames as invalid placeholders.
     /// This prevents overwriting a good cached last frame with a black capture that can happen during app transitions.
     static func isMostlyBlack(_ image: UIImage, luminanceThreshold: Float = 0.05) -> Bool {
-        guard let luminance = averageLuminance(of: image) else { return false }
+        guard let luminance = cachedAverageLuminance(of: image) else { return false }
         return luminance < luminanceThreshold
     }
 
     static func isMostlyWhite(_ image: UIImage, luminanceThreshold: Float = 0.96) -> Bool {
-        guard let luminance = averageLuminance(of: image) else { return false }
+        guard let luminance = cachedAverageLuminance(of: image) else { return false }
         return luminance > luminanceThreshold
     }
 
+    // Luminance is a pure function of the image, but computing it forces a full decode +
+    // resample of a 720p frame (~130ms on the main thread, caught by the stall sampler).
+    // Every cover image was paying that twice, because isInvalidVideoCover asks for both
+    // isMostlyBlack and isMostlyWhite. Memoize per image instance — weak keys so cached
+    // frames are still free to deallocate.
+    // nonisolated(unsafe): the map table is never touched without holding the lock below.
+    private nonisolated(unsafe) static let luminanceCache = NSMapTable<UIImage, NSNumber>.weakToStrongObjects()
+    private static let luminanceCacheLock = NSLock()
+
+    private static func cachedAverageLuminance(of image: UIImage) -> Float? {
+        luminanceCacheLock.lock()
+        let cached = luminanceCache.object(forKey: image)
+        luminanceCacheLock.unlock()
+        if let cached { return cached.floatValue.isNaN ? nil : cached.floatValue }
+
+        let computed = averageLuminance(of: image)
+
+        luminanceCacheLock.lock()
+        // Store NaN as the "couldn't analyze" sentinel so failures aren't retried either.
+        luminanceCache.setObject(NSNumber(value: computed ?? Float.nan), forKey: image)
+        luminanceCacheLock.unlock()
+        return computed
+    }
+
+    /// Mean luminance of the whole image, computed on the CPU.
+    ///
+    /// This used to run CIAreaAverage through `ciContext.render(toBitmap:)`. That is a
+    /// GPU round-trip: on-device it waits on a Metal command buffer, and in the Simulator
+    /// each readback is a synchronous XPC call to the host GPU. Because isMostlyBlack /
+    /// isMostlyWhite are called from `transitionTo` (i.e. on the scroll path, per cover
+    /// image), those readbacks showed up as 120ms+ main-thread stalls. Drawing into a
+    /// 1×1 CGContext downsamples with the same box-filter semantics, stays on the CPU,
+    /// and costs microseconds.
     private static func averageLuminance(of image: UIImage) -> Float? {
         // If we can't analyze, don't block caching.
         guard let cgImage = image.cgImage else { return nil }
-
-        let ciImage = CIImage(cgImage: cgImage)
-        let extent = ciImage.extent
-        guard extent.width.isFinite, extent.height.isFinite, extent.width > 0, extent.height > 0 else { return nil }
-        guard let filter = CIFilter(name: "CIAreaAverage") else { return nil }
-
-        filter.setValue(ciImage, forKey: kCIInputImageKey)
-        filter.setValue(CIVector(cgRect: extent), forKey: kCIInputExtentKey)
-        guard let outputImage = filter.outputImage else { return nil }
+        let width = cgImage.width
+        let height = cgImage.height
+        guard width > 0, height > 0 else { return nil }
 
         var pixel: [UInt8] = [0, 0, 0, 0] // RGBA
-        ciContext.render(
-            outputImage,
-            toBitmap: &pixel,
-            rowBytes: 4,
-            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-            format: .RGBA8,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        )
+        guard let context = CGContext(
+            data: &pixel,
+            width: 1,
+            height: 1,
+            bitsPerComponent: 8,
+            bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.interpolationQuality = .medium
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
 
         let a = Float(pixel[3]) / 255.0
         if a < 0.1 { return nil }
 
-        let r = Float(pixel[0]) / 255.0
-        let g = Float(pixel[1]) / 255.0
-        let b = Float(pixel[2]) / 255.0
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+        // Undo the premultiplication so a translucent frame isn't misread as dark.
+        let r = Float(pixel[0]) / 255.0 / a
+        let g = Float(pixel[1]) / 255.0 / a
+        let b = Float(pixel[2]) / 255.0 / a
+        return min(1.0, 0.2126 * r + 0.7152 * g + 0.0722 * b)
     }
 }
 

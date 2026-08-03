@@ -61,6 +61,14 @@ enum FeedPlaybackTuning {
     // Overlay/layout settling
     static let overlayDismissSettleDelay: TimeInterval = 0.35
     static let barAppearanceCompensationTimeout: TimeInterval = 0.15
+
+    /// Above this scroll speed (pt/s), visible video cells defer AVPlayer creation and
+    /// AVPlayerLayer attachment until the deceleration slows — player setup on the main
+    /// thread mid-fling costs 100–350ms and visibly hitches the scroll. The
+    /// coordinator-selected primary (coordinatorWantsToPlay) is exempt, so slow-scroll
+    /// autoplay is unaffected. Deferred cells self-recover: the throttled visibility
+    /// passes re-enter setVisible → schedulePlayerAcquireIfNeeded as velocity decays.
+    static let playerAcquireMaxScrollVelocity: CGFloat = 800
 }
 
 enum UserContentType: String {

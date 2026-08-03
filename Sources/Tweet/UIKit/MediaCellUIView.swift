@@ -1590,6 +1590,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         return true
     }
 
+    /// AVPlayer creation + AVPlayerLayer attachment cost 100–350ms of main-thread time;
+    /// running them while the feed is flying causes visible scroll hitches. Defer eager
+    /// acquisition while fast-scrolling — the throttled visibility passes re-enter
+    /// setVisible → schedulePlayerAcquireIfNeeded as the deceleration slows (via the
+    /// needsRecovery clause), so acquisition resumes automatically below the velocity
+    /// threshold. The coordinator-selected primary (coordinatorWantsToPlay, driven by
+    /// handleCoordinatorPlayCommand which acquires directly) is never deferred.
+    private var shouldDeferPlayerWorkForFastScroll: Bool {
+        guard !coordinatorWantsToPlay else { return false }
+        return (videoCoordinator ?? .shared).isFeedScrollTooFastForPlayerWork
+    }
+
     private func schedulePlayerAcquireIfNeeded() {
         guard isVisible,
               isVideoAttachment,
@@ -1599,6 +1611,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return
         }
         guard !deferVideoWorkUntilInfrastructureReady(reason: "schedulePlayerAcquire") else {
+            return
+        }
+        guard !shouldDeferPlayerWorkForFastScroll else {
             return
         }
 
@@ -3930,14 +3945,15 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             return imageView.image != nil
         }
 
-        // showCover=false (the common prepareForReuse case: cell already off-screen,
-        // isVisible=false) means nothing needs the captured frame to display right
-        // now — only the cache needs it for a future re-display. Use the async path
-        // there so the synchronous copyPixelBuffer/downscale work (real main-thread
-        // cost) doesn't run during cell dequeue while scrolling. showCover=true (cell
-        // still visible, e.g. explicit pause/stop) keeps the sync path since the
-        // image must be set before hiding the video layer, to avoid a blank flash.
-        let captureAsync = !showCover
+        // The sync capture path is only needed when the captured frame has to be on
+        // screen THIS frame to avoid a blank flash — i.e. the cell is still visible and
+        // the caller wants the cover shown. Otherwise use the async path: the
+        // synchronous work is a CoreImage → Metal GPU readback (createCGImage) that
+        // blocks the main thread 120–145ms, and it fires from setVisible(false) on the
+        // scroll-out path (didEndDisplaying → releaseCurrentIndependentPlayer), which is
+        // exactly when the feed is moving. An off-screen cell has nothing to flash: only
+        // the thumbnail cache needs the frame, for whenever the row scrolls back.
+        let captureAsync = !showCover || !isVisible
         let didPreserveCover = preserveFrameToCache(async: captureAsync, skipImageView: true)
             || preserveFrameToCache(useVideoOutput: false, async: captureAsync, skipImageView: true)
 
@@ -5272,7 +5288,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     VideoStateCache.shared.markAsVisible(attachment.mid)
                     LocalHTTPServer.shared.markMediaVisible(attachment.mid)
                 }
-                if shouldAcquirePlayer {
+                if shouldAcquirePlayer, !shouldDeferPlayerWorkForFastScroll {
                     _ = attachCachedPlayerIfAvailable(reason: "becameVisible")
                 }
                 requestCachedVideoCoverIfNeeded(for: attachment.mid)

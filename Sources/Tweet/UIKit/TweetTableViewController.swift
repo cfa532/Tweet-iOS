@@ -184,9 +184,15 @@ class TweetTableViewController: UITableViewController {
     // Cached main content rect to avoid recalculating on every visibility check
     private var cachedMainContentRect: CGRect?
     private var lastContentOffset: CGFloat = 0
+    // Jump-detector state: timestamp of the previous scroll callback (hitch detection).
+    private var lastScrollEventTimestamp: CFTimeInterval = 0
     private var lastCallbackOffset: CGFloat = 0  // Only updated when onScroll fires — gives accumulated delta
     private var isCompensatingForBarAppearance: Bool = false  // Compensate contentOffset when header expands
-    private var compensationBaseOriginY: CGFloat?
+    /// Row anchored while the bars animate in, plus where it sat in window coordinates
+    /// at the moment the bars were requested. viewDidLayoutSubviews drives the row back
+    /// to that screen position so the content appears stationary.
+    private var barCompensationAnchorTweetId: String?
+    private var barCompensationAnchorScreenY: CGFloat?
     private var lastBarAppearanceRequestTime: CFTimeInterval = 0
     private var lastHeaderHeight: CGFloat = 0
     private var lastHeaderLayoutWidth: CGFloat = 0
@@ -261,6 +267,11 @@ class TweetTableViewController: UITableViewController {
     private var pendingSpinnerShouldShowMessage = false
     private var needsFullReloadAfterAttach: Bool = false
     private var pendingHeightRelayoutTweetIds = Set<String>()
+    /// Visible rows whose recomputed height SHRANK: applying the shrink while the row is
+    /// on screen slides everything below it up (visible shake at scroll stop) for zero
+    /// visual benefit — the content already fits. The reconcile is deferred until the
+    /// row leaves the screen (didEndDisplaying re-queues it into pendingHeightRelayoutTweetIds).
+    private var deferredShrinkTweetIds = Set<String>()
     /// Tweet IDs whose content is currently expanded by the user ("More..." tapped).
     /// `heightForRowAt` returns `automaticDimension` for these so the table re-measures
     /// the cell at full expanded height instead of using the cached truncated height.
@@ -387,6 +398,8 @@ class TweetTableViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+
+        MainThreadStallSampler.shared.startIfNeeded()
 
         interfaceStyleTraitRegistration = registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: TweetTableViewController, _) in
             controller.applyTheme()
@@ -1089,18 +1102,18 @@ class TweetTableViewController: UITableViewController {
 
         guard isTableVisibleForMutation else { return }
 
-        // Compensate contentOffset when the header expands without animation.
-        // The frame jumps instantly; we adjust offset by the same amount so
-        // visible content stays at the same screen position.
-        if isCompensatingForBarAppearance, let baseY = compensationBaseOriginY {
-            let currentY = view.convert(CGPoint.zero, to: nil).y
-            let shift = currentY - baseY
-            if abs(shift) > 1 {
-                tableView.contentOffset.y += shift
-                compensationBaseOriginY = currentY
-                isCompensatingForBarAppearance = false
-            }
-        }
+        // Keep visible content pinned while the bars appear without animation.
+        //
+        // This used to compensate by how far this VIEW's frame moved in window space,
+        // then apply that as a contentOffset delta. That double-counts: showing the bars
+        // also grows adjustedContentInset.top, and UIKit shifts contentOffset for the
+        // inset change on its own — so adding the frame delta on top produced a visible
+        // ~91pt jump at scroll stop (caught as `idle-offset-change` from
+        // viewDidLayoutSubviews). Anchoring a real row instead is self-correcting: it
+        // measures where the content ACTUALLY landed after UIKit finished, whatever
+        // combination of frame/inset/offset changes got it there, and cancels the
+        // residual drift only.
+        applyBarAppearanceAnchorCorrectionIfNeeded()
 
         // Initialize lastScrollOffset to current offset to prevent incorrect delta on first scroll
         // This prevents toolbar from hiding incorrectly when view loads with negative content offset
@@ -1487,6 +1500,18 @@ class TweetTableViewController: UITableViewController {
                     $0.originalTweetId == originalTweetId
                 }
                 self.scheduleHeightPrewarm(for: relatedQuotes)
+
+                // The deterministic height of every quote row flips from the placeholder
+                // to the full embedded height the moment the original enters the singleton
+                // cache — including rows far off screen. Reconcile them through the
+                // anchor-preserving relayout (deferred to scroll-stop if the user is
+                // mid-gesture); otherwise UIKit discovers each new height at realization
+                // while scrolling up — one visible jump per quote row. Coalesced: a burst
+                // of prefetch completions must produce ONE table pass, not one each.
+                for quote in relatedQuotes {
+                    self.pendingHeightRelayoutTweetIds.insert(quote.mid)
+                }
+                self.scheduleCoalescedHeightRelayout()
             }
         }
     }
@@ -1804,6 +1829,22 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
+        // Preserve the viewport across arbitrary diffs. Inserts/removals above the
+        // visible rows shift content, and unlike the prepend/trim paths this one had no
+        // offset compensation — a deferred server merge applied at scroll stop produced
+        // a visible jump. Anchor by tweet ID (row indices change across the diff);
+        // `tweets` already holds the new array here, so read ids from the visible cells.
+        var anchorTweetId: String?
+        var anchorOffset: CGFloat = 0
+        for cell in tableView.visibleCells.sorted(by: { $0.frame.origin.y < $1.frame.origin.y }) {
+            guard let tweetCell = cell as? TweetTableViewCell,
+                  let tid = tweetCell.tweetId,
+                  rowForTweetId(tid) != nil else { continue }
+            anchorTweetId = tid
+            anchorOffset = tableView.contentOffset.y - cell.frame.origin.y
+            break
+        }
+
         isTableViewUpdating = true
         tableView.performBatchUpdates {
             for change in diff {
@@ -1813,6 +1854,14 @@ class TweetTableViewController: UITableViewController {
                 case .insert(let offset, _, _):
                     tableView.insertRows(at: [regularTweetIndexPath(offset)], with: .none)
                 }
+            }
+        }
+
+        if let anchorTweetId, let row = rowForTweetId(anchorTweetId) {
+            let newTop = tableView.rectForRow(at: IndexPath(row: row, section: 0)).origin.y
+            let targetOffset = newTop + anchorOffset
+            if abs(targetOffset - tableView.contentOffset.y) > 0.5 {
+                tableView.setContentOffset(CGPoint(x: 0, y: targetOffset), animated: false)
             }
         }
         isTableViewUpdating = false
@@ -1978,6 +2027,10 @@ class TweetTableViewController: UITableViewController {
     }
 
     private func applyDeferredTableChromeUpdatesAfterScroll() {
+        // Flush height reconciliations queued while the feed was hidden or mid-gesture
+        // (async embedded loads, prefetch completions) before structural updates run.
+        performPendingHeightRelayout()
+
         let hadDeferredTweets = deferredTweets != nil
         if let deferredTweets {
             self.deferredTweets = nil
@@ -2461,16 +2514,21 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
-        // Live content/title/attachment updates are not user expansion. Recalculate the
-        // deterministic row height, but defer table mutation until momentum stops and use
-        // the anchor-preserving relayout path so rows above the viewport cannot cause a jump.
+        // Live content/title/attachment updates are not user expansion. Queue the row for
+        // the anchor-preserving relayout, which recomputes the deterministic height and
+        // mutates the table only once momentum stops. Do NOT clear the cached height here:
+        // heightForRowAt serves cache-first, so the intact cache keeps reporting the OLD
+        // height until the relayout applies the new one under an anchor. Clearing it (as
+        // this used to) let calculateTweetHeight's answer flip mid-scroll (embedded tweet
+        // placeholder → loaded) and destroyed the persisted height on every async embedded
+        // configure — quote rows never kept a stable height, so each scroll-up pass
+        // rediscovered their heights at realization time as a visible jump.
         cell.onContentDidChangeHeightAsync = { [weak self, weak cell] in
             guard let self, let cell,
                   let indexPath = self.tableView.indexPath(for: cell),
                   let tweet = self.tweetForRow(indexPath.row) else { return }
 
             self.expandedTweetIds.remove(tweet.mid)
-            self.clearCachedHeight(for: tweet)
             if self.isScrollInteractionActive {
                 self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
             } else {
@@ -2721,7 +2779,7 @@ class TweetTableViewController: UITableViewController {
                 let embeddedHeight: CGFloat = 8 + embeddedHeaderHeight + 4 + embeddedBodyH + EmbeddedTweetUIView.contentBottomPadding
                 height += embeddedHeight
             } else {
-                height += 60
+                height += EmbeddedTweetUIView.placeholderHeight
             }
             height += 10
         }
@@ -2912,8 +2970,8 @@ class TweetTableViewController: UITableViewController {
                 let embeddedHeight: CGFloat = 8 + embeddedHeaderHeight + 4 + embeddedBodyH + EmbeddedTweetUIView.contentBottomPadding
                 height += embeddedHeight
             } else {
-                // Not loaded: show placeholder (60pt)
-                height += 60
+                // Not loaded: "Loading quoted tweet..." placeholder
+                height += EmbeddedTweetUIView.placeholderHeight
             }
 
             height += 10 // contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
@@ -3054,6 +3112,14 @@ class TweetTableViewController: UITableViewController {
             tweetCell.tweetContentView.setMediaVisible(false)
         }
 
+        // A shrink deferred while this row was on screen can now be reconciled — re-queue
+        // it; the next relayout flush finds the row off screen and applies the shrink via
+        // the reloadRows path with the viewport anchored (no visible movement).
+        if let tweetCell = cell as? TweetTableViewCell, let tweetId = tweetCell.tweetId,
+           deferredShrinkTweetIds.remove(tweetId) != nil {
+            pendingHeightRelayoutTweetIds.insert(tweetId)
+        }
+
         // If this cell was showing expanded content, clear the expansion tracking and nil
         // cachedHeight so that when the tweet scrolls back into view, heightForRowAt falls
         // back to calculateTweetHeight (truncated height) and the cell remeasures correctly.
@@ -3082,6 +3148,30 @@ class TweetTableViewController: UITableViewController {
 
         guard isTableVisibleForMutation else { return }
 
+        // Jump/hitch detector — NOT #if DEBUG: the app's Run configuration is Release,
+        // so DEBUG-gated code never reaches the device. Two signatures:
+        //   (a) idle-offset-change: the offset moved while the table was fully stopped
+        //       (a layout-induced twitch) — prints the responsible call stack.
+        //   (b) scroll-hitch: the gap between scroll callbacks during physical scrolling
+        //       exceeded ~3 frames — the main thread was blocked (the "hang"); the
+        //       culprit is whatever logged during the gap, so no stack is taken.
+        let detectorNow = CACurrentMediaTime()
+        let isPhysicallyScrolling = isUserDragging || isDecelerating
+            || scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
+        if !isPhysicallyScrolling, !isScrollingToTop, !isTableViewUpdating, abs(frameDelta) > 2 {
+            let stack = Thread.callStackSymbols.dropFirst(2).prefix(10).joined(separator: "\n")
+            print("🧭 [SCROLL JUMP TRACE] idle-offset-change feed=\(feedIdentifier) " +
+                  "delta=\(String(format: "%.1f", frameDelta)) offset=\(String(format: "%.1f", currentOffset))\n\(stack)")
+        } else if isPhysicallyScrolling, lastScrollEventTimestamp > 0 {
+            let gapMs = (detectorNow - lastScrollEventTimestamp) * 1000
+            if gapMs > 50 {
+                print("🧭 [SCROLL JUMP TRACE] scroll-hitch feed=\(feedIdentifier) " +
+                      "gapMs=\(Int(gapMs)) delta=\(String(format: "%.1f", frameDelta)) " +
+                      "offset=\(String(format: "%.1f", currentOffset)) decelerating=\(isDecelerating)")
+            }
+        }
+        lastScrollEventTimestamp = detectorNow
+
         notifyScrollStateChanged(scrollView)
 
         // Update scroll direction only during active user dragging
@@ -3091,6 +3181,8 @@ class TweetTableViewController: UITableViewController {
 
         let now = CACurrentMediaTime()
         updateEstimatedScrollVelocity(frameDelta: frameDelta, now: now)
+        // Cells consult this to defer AVPlayer creation/attach during fast flings.
+        videoCoordinator.currentScrollVelocityY = estimatedScrollVelocityY
 
         // Update video visibility during all scroll phases (drag + deceleration).
         // Throttle limits frequency to avoid excessive work.
@@ -3160,12 +3252,16 @@ class TweetTableViewController: UITableViewController {
 
         if delta > 0 {
             // Scrolling down → hide bars immediately (no layout shift — content area expands)
+            pendingBarsShowAfterScroll = false
             onScroll?(currentOffset, delta)
         } else {
-            // Scrolling up → show bars immediately without animation.
-            // Post notification so parent sets isNavigationVisible without withAnimation;
-            // viewDidLayoutSubviews compensates contentOffset for the instant frame shift.
-            showBarsWithoutAnimation()
+            // Scrolling up → show the bars at scroll STOP, not mid-gesture. Setting
+            // isNavigationVisible triggers a full SwiftUI layout pass (measured ~230ms)
+            // that blocks the main thread while the deceleration animation is running:
+            // the content freezes, then leaps hundreds of points on the next frame —
+            // the "hang + jump when scrolling up". Deferring the same work to the stop
+            // makes it invisible; viewDidLayoutSubviews still compensates the frame shift.
+            pendingBarsShowAfterScroll = true
         }
 
         lastCallbackOffset = currentOffset
@@ -3194,6 +3290,7 @@ class TweetTableViewController: UITableViewController {
         isDecelerating = false
         lastScrollVelocitySampleTime = 0
         estimatedScrollVelocityY = 0
+        lastScrollEventTimestamp = 0
         autoLoadMoreCountDuringCurrentScrollGesture = 0
         lastCallbackOffset = scrollView.contentOffset.y
         videoCoordinator.onScrollStarted()
@@ -3209,19 +3306,33 @@ class TweetTableViewController: UITableViewController {
         // CRITICAL: Save scroll position immediately when user stops dragging
         // (if not decelerating, scroll has stopped - save now to survive app termination)
         if !decelerate {
+            videoCoordinator.currentScrollVelocityY = 0
             performPendingHeightRelayout()
+            showPendingBarsAfterScrollIfNeeded()
             saveScrollPositionIfNeeded()
             runScrollStopPreloadWhenIdle()
         }
         notifyScrollStateChanged(scrollView)
     }
 
+    /// Bars-show requested during an upward gesture, deferred to scroll stop (the
+    /// SwiftUI layout pass it triggers is too expensive to run mid-deceleration).
+    private var pendingBarsShowAfterScroll = false
+
+    private func showPendingBarsAfterScrollIfNeeded() {
+        guard pendingBarsShowAfterScroll else { return }
+        pendingBarsShowAfterScroll = false
+        showBarsWithoutAnimation()
+    }
+
     override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         isDecelerating = false
+        videoCoordinator.currentScrollVelocityY = 0
 
         // Deceleration skipped video visibility updates — do one final update now
         updateVisibleTweetsForVideoPlayback()
         performPendingHeightRelayout()
+        showPendingBarsAfterScrollIfNeeded()
 
         triggerPreloadOnScrollStop()
 
@@ -3266,6 +3377,23 @@ class TweetTableViewController: UITableViewController {
         refreshVisiblePlaybackAfterProgrammaticListChange(reason: "pendingTweetsScrollAnimationEnded")
     }
 
+    /// Coalesces multiple same-turn relayout requests (e.g. a burst of embedded-tweet
+    /// prefetch completions) into a single table pass on the next run-loop turn.
+    /// While the user is scrolling, does nothing — the pending set is flushed by the
+    /// scroll-stop handlers.
+    private var isCoalescedHeightRelayoutScheduled = false
+    private func scheduleCoalescedHeightRelayout() {
+        guard !isScrollInteractionActive else { return }
+        guard !isCoalescedHeightRelayoutScheduled else { return }
+        isCoalescedHeightRelayoutScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isCoalescedHeightRelayoutScheduled = false
+            guard !self.isScrollInteractionActive else { return }
+            self.performPendingHeightRelayout()
+        }
+    }
+
     private func performPendingHeightRelayout(include tweetId: String? = nil) {
         if let tweetId {
             pendingHeightRelayoutTweetIds.insert(tweetId)
@@ -3277,6 +3405,69 @@ class TweetTableViewController: UITableViewController {
         let currentCount = tableView.numberOfRows(inSection: 0)
         guard expectedCount == currentCount else { return }
 
+        // Recompute the deterministic height for every pending tweet and keep only the
+        // rows whose height actually changed. heightForRowAt serves cache-first, so the
+        // cache must be updated here — before the reflow — for begin/endUpdates to see
+        // the new value; and rows whose recomputed height matches the cache are dropped
+        // so an async configure that didn't change the height costs no table pass at all.
+        let layoutWidth = currentRowLayoutWidth
+        let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
+        let visibleRowSet = Set(visibleIndexPaths.map(\.row))
+        var changedTweetIds = Set<String>()
+        var changedRows: [Int] = []
+        for mid in pendingHeightRelayoutTweetIds {
+            guard let row = rowForTweetId(mid), let tweet = tweetForRow(row) else { continue }
+
+            // Rows measured by Auto Layout (expanded content, saved-comment context)
+            // bypass the height caches entirely — always reflow, never cache.
+            if expandedTweetIds.contains(mid)
+                || (tweet.originalTweetId == nil && effectiveEmbeddedTweetId(for: tweet) != nil) {
+                changedTweetIds.insert(mid)
+                changedRows.append(row)
+                continue
+            }
+
+            let newHeight = Self.calculateTweetHeight(
+                for: tweet,
+                rowWidth: layoutWidth,
+                cellHorizontalPadding: leadingPadding + trailingPadding
+            )
+            // Compare against the height UIKit is actually being served: in-memory first,
+            // then the persisted cache — a recreated Tweet instance has no in-memory height
+            // even though heightForRowAt has been serving the persisted value the whole
+            // time. Without this fallback every instance recreation registered as a height
+            // change and triggered a 1–2pt begin/endUpdates wiggle at each scroll stop.
+            let servedHeight = cachedHeight(for: tweet, width: layoutWidth)
+                ?? TweetHeightCache.shared.getHeight(for: tweet.mid, width: layoutWidth)
+            if let servedHeight, abs(servedHeight - newHeight) <= 1.5 {
+                // Republish the SERVED value (not the fresh calculation) so heightForRowAt
+                // keeps returning the exact number UIKit already banked — zero movement.
+                if tweet.cachedHeight == nil {
+                    setCachedHeight(servedHeight, for: tweet, width: layoutWidth)
+                }
+                continue
+            }
+
+            // Defer moderate shrinks of on-screen rows until the row scrolls away;
+            // large shrinks still apply now (a big blank band looks broken).
+            if let servedHeight,
+               visibleRowSet.contains(row),
+               newHeight < servedHeight,
+               servedHeight - newHeight <= 60 {
+                if tweet.cachedHeight == nil {
+                    setCachedHeight(servedHeight, for: tweet, width: layoutWidth)
+                }
+                deferredShrinkTweetIds.insert(mid)
+                continue
+            }
+
+            setCachedHeight(newHeight, for: tweet, width: layoutWidth)
+            changedTweetIds.insert(mid)
+            changedRows.append(row)
+        }
+        pendingHeightRelayoutTweetIds.removeAll()
+        guard !changedTweetIds.isEmpty else { return }
+
         // Anchor to the first visible cell whose height isn't itself among the pending
         // changes, so the anchor's own rectForRow (measured before AND after the reflow)
         // isn't thrown off by its own row growing/shrinking. If the changing row sits
@@ -3286,41 +3477,48 @@ class TweetTableViewController: UITableViewController {
         // absorb. Falls back to the first visible row if every visible row is changing.
         var anchorIndexPath: IndexPath?
         var anchorOffset: CGFloat = 0
-        if let visibleIndexPaths = tableView.indexPathsForVisibleRows {
-            let stableAnchor = visibleIndexPaths.first { indexPath in
-                guard let tweet = tweetForRow(indexPath.row) else { return false }
-                return !pendingHeightRelayoutTweetIds.contains(tweet.mid)
-            }
-            if let chosen = stableAnchor ?? visibleIndexPaths.first {
-                let cellTop = tableView.rectForRow(at: chosen).origin.y
-                anchorOffset = tableView.contentOffset.y - cellTop
-                anchorIndexPath = chosen
-            }
+        let stableAnchor = visibleIndexPaths.first { indexPath in
+            guard let tweet = tweetForRow(indexPath.row) else { return false }
+            return !changedTweetIds.contains(tweet.mid)
+        }
+        if let chosen = stableAnchor ?? visibleIndexPaths.first {
+            let cellTop = tableView.rectForRow(at: chosen).origin.y
+            anchorOffset = tableView.contentOffset.y - cellTop
+            anchorIndexPath = chosen
         }
 
-#if DEBUG
-        let tracePendingTweetIds = pendingHeightRelayoutTweetIds.sorted()
+        // Off-screen changed rows must be reloaded: begin/endUpdates only re-queries
+        // heights for VISIBLE rows, so a realized-then-scrolled-away row would keep its
+        // stale banked height and UIKit would discover the new one mid-scroll at
+        // realization — the exact top-entering jump this reflow exists to prevent.
+        // Reloading an off-screen row is cheap (no cell exists) and flicker-free.
+        let offscreenReloadPaths = changedRows
+            .filter { !visibleRowSet.contains($0) }
+            .map { IndexPath(row: $0, section: 0) }
+
+        let tracePendingTweetIds = changedTweetIds.sorted()
         let traceAnchorTweetId = anchorIndexPath.flatMap { tweetForRow($0.row)?.mid } ?? "none"
         let traceAnchorRow = anchorIndexPath?.row ?? -1
         let traceOffsetBefore = tableView.contentOffset.y
         let traceContentHeightBefore = tableView.contentSize.height
         print("🧭 [SCROLL JUMP TRACE] relayout-before " +
-              "feed=\(feedIdentifier) pending=\(tracePendingTweetIds) " +
+              "feed=\(feedIdentifier) changed=\(tracePendingTweetIds) " +
+              "offscreenReloads=\(offscreenReloadPaths.map(\.row)) " +
               "anchorTweet=\(traceAnchorTweetId) anchorRow=\(traceAnchorRow) " +
               "anchorOffset=\(anchorOffset) offset=\(traceOffsetBefore) " +
               "contentHeight=\(traceContentHeightBefore) " +
               "dragging=\(isUserDragging) decelerating=\(isDecelerating)")
-#endif
 
-        pendingHeightRelayoutTweetIds.removeAll()
         UIView.performWithoutAnimation {
             isTableViewUpdating = true
             tableView.beginUpdates()
+            if !offscreenReloadPaths.isEmpty {
+                tableView.reloadRows(at: offscreenReloadPaths, with: .none)
+            }
             tableView.endUpdates()
             isTableViewUpdating = false
         }
 
-#if DEBUG
         let traceRawOffsetAfter = tableView.contentOffset.y
         let traceContentHeightAfter = tableView.contentSize.height
         print("🧭 [SCROLL JUMP TRACE] relayout-raw-after " +
@@ -3329,40 +3527,23 @@ class TweetTableViewController: UITableViewController {
               "offset=\(traceRawOffsetAfter) offsetDelta=\(traceRawOffsetAfter - traceOffsetBefore) " +
               "contentHeight=\(traceContentHeightAfter) " +
               "contentHeightDelta=\(traceContentHeightAfter - traceContentHeightBefore)")
-#endif
 
         // Restore position relative to the anchor cell to absorb any content-offset drift.
         if let anchor = anchorIndexPath {
             let newCellTop = tableView.rectForRow(at: anchor).origin.y
             let newOffset = newCellTop + anchorOffset
             if abs(newOffset - tableView.contentOffset.y) > 0.5 {
-#if DEBUG
                 let correctionDelta = newOffset - tableView.contentOffset.y
                 print("🧭 [SCROLL JUMP TRACE] anchor-correction " +
                       "feed=\(feedIdentifier) anchorTweet=\(traceAnchorTweetId) " +
                       "anchorRow=\(anchor.row) newCellTop=\(newCellTop) " +
                       "targetOffset=\(newOffset) correctionDelta=\(correctionDelta)")
-#endif
                 tableView.setContentOffset(CGPoint(x: 0, y: newOffset), animated: false)
-#if DEBUG
-                print("🧭 [SCROLL JUMP TRACE] anchor-corrected " +
-                      "feed=\(feedIdentifier) anchorTweet=\(traceAnchorTweetId) " +
-                      "anchorRow=\(anchor.row) actualOffset=\(tableView.contentOffset.y)")
-#endif
-            } else {
-#if DEBUG
-                print("🧭 [SCROLL JUMP TRACE] anchor-no-correction " +
-                      "feed=\(feedIdentifier) anchorTweet=\(traceAnchorTweetId) " +
-                      "anchorRow=\(anchor.row) newCellTop=\(newCellTop) " +
-                      "offset=\(tableView.contentOffset.y) drift=\(newOffset - tableView.contentOffset.y)")
-#endif
             }
         } else {
-#if DEBUG
             print("🧭 [SCROLL JUMP TRACE] anchor-missing " +
                   "feed=\(feedIdentifier) pending=\(tracePendingTweetIds) " +
                   "offset=\(tableView.contentOffset.y)")
-#endif
         }
     }
 
@@ -3378,9 +3559,9 @@ class TweetTableViewController: UITableViewController {
         }
         lastBarAppearanceRequestTime = now
 
-        // Record baseline before the header expands
-        isCompensatingForBarAppearance = true
-        compensationBaseOriginY = view.convert(CGPoint.zero, to: nil).y
+        // Anchor a real row before the bars expand, in window coordinates, so the
+        // correction below can measure the true visual drift rather than inferring it.
+        captureBarAppearanceAnchor()
 
         NotificationCenter.default.post(
             name: .showBarsAfterScrollEnd,
@@ -3390,9 +3571,64 @@ class TweetTableViewController: UITableViewController {
 
         // Safety timeout — stop compensating even if layout never fires
         DispatchQueue.main.asyncAfter(deadline: .now() + FeedPlaybackTuning.barAppearanceCompensationTimeout) { [weak self] in
-            self?.isCompensatingForBarAppearance = false
-            self?.compensationBaseOriginY = nil
+            self?.endBarAppearanceCompensation()
         }
+    }
+
+    private func captureBarAppearanceAnchor() {
+        guard let visibleIndexPaths = tableView.indexPathsForVisibleRows?.sorted(),
+              let anchorPath = visibleIndexPaths.first,
+              let tweet = tweetForRow(anchorPath.row) else {
+            endBarAppearanceCompensation()
+            return
+        }
+        let rowOrigin = tableView.rectForRow(at: anchorPath).origin
+        barCompensationAnchorTweetId = tweet.mid
+        barCompensationAnchorScreenY = tableView.convert(rowOrigin, to: nil).y
+        isCompensatingForBarAppearance = true
+    }
+
+    /// Drives the anchored row back to the screen position it occupied before the bars
+    /// appeared. Idempotent: once the drift is gone this does nothing, so it can safely
+    /// run on every layout pass until the compensation window closes.
+    private func applyBarAppearanceAnchorCorrectionIfNeeded() {
+        guard isCompensatingForBarAppearance,
+              let anchorTweetId = barCompensationAnchorTweetId,
+              let targetScreenY = barCompensationAnchorScreenY,
+              let row = rowForTweetId(anchorTweetId),
+              row < tableView.numberOfRows(inSection: 0) else { return }
+
+        // Never fight the user's finger — if a new gesture started, abandon the anchor.
+        guard !isUserDragging, !tableView.isTracking else {
+            endBarAppearanceCompensation()
+            return
+        }
+
+        let rowOrigin = tableView.rectForRow(at: IndexPath(row: row, section: 0)).origin
+        let currentScreenY = tableView.convert(rowOrigin, to: nil).y
+        let drift = currentScreenY - targetScreenY
+        guard abs(drift) > 0.5 else { return }
+
+        tableView.contentOffset.y += drift
+    }
+
+    private func endBarAppearanceCompensation() {
+        if isCompensatingForBarAppearance,
+           let anchorTweetId = barCompensationAnchorTweetId,
+           let targetScreenY = barCompensationAnchorScreenY,
+           let row = rowForTweetId(anchorTweetId),
+           row < tableView.numberOfRows(inSection: 0) {
+            let rowOrigin = tableView.rectForRow(at: IndexPath(row: row, section: 0)).origin
+            let netVisualShift = tableView.convert(rowOrigin, to: nil).y - targetScreenY
+            // Silence on success: a correct compensation leaves the anchored row exactly
+            // where it started. Only a non-zero residual is worth reporting.
+            if abs(netVisualShift) > 0.5 {
+                print("🧭 [SCROLL JUMP TRACE] bar-appearance netVisualShift=\(String(format: "%.1f", netVisualShift))")
+            }
+        }
+        isCompensatingForBarAppearance = false
+        barCompensationAnchorTweetId = nil
+        barCompensationAnchorScreenY = nil
     }
 
     /// Warm images in the scroll direction, plus the existing reverse row once scrolling settles.

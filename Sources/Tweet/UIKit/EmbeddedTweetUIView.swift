@@ -11,6 +11,10 @@ import Combine
 
 class EmbeddedTweetUIView: UIView {
     static let contentBottomPadding: CGFloat = 4
+    /// Rendered height of the "Loading quoted tweet..." placeholder state.
+    /// TweetTableViewController's deterministic height calculators must use this same
+    /// value for unloaded embedded tweets or quote rows mis-estimate until load lands.
+    static let placeholderHeight: CGFloat = 36
 
     private let avatarView = AvatarUIView()
     private let headerView = TweetHeaderUIView()
@@ -135,7 +139,7 @@ class EmbeddedTweetUIView: UIView {
         // Mutually exclusive constraints — only one group active at a time
         contentStackBottomConstraint = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.contentBottomPadding)
         placeholderBottomConstraint = placeholderView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: 36)
+        placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: Self.placeholderHeight)
         // Lower priority so parent's height=0 constraint wins when hidden in stack view
         placeholderHeightConstraint.priority = .defaultHigh
         placeholderBottomConstraint.priority = .defaultHigh
@@ -344,7 +348,7 @@ class EmbeddedTweetUIView: UIView {
     override var intrinsicContentSize: CGSize {
         // Placeholder needs an explicit height; content relies on constraints
         if contentStack.isHidden {
-            return CGSize(width: UIView.noIntrinsicMetric, height: 36)
+            return CGSize(width: UIView.noIntrinsicMetric, height: Self.placeholderHeight)
         }
         // Let auto-layout constraints determine the height (top/bottom pinned to contentStack)
         return CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
