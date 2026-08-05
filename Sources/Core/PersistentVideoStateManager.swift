@@ -12,13 +12,13 @@ import AVFoundation
 @MainActor
 class PersistentVideoStateManager: ObservableObject {
     static let shared = PersistentVideoStateManager()
+    nonisolated static let restartFromBeginningThreshold: TimeInterval = 1.0
     
     private init() {}
     
     // Storage for video states, isolated by context (detail vs fullscreen vs feed cell)
     // This prevents one surface (e.g. feed) from overwriting another (e.g. detail view).
     private var videoStates: [VideoPlaybackState.VideoContext: [String: VideoPlaybackState]] = [:]
-    private let stateFreshnessInterval: TimeInterval = 300
     
     /// Video playback state
     struct VideoPlaybackState {
@@ -87,11 +87,13 @@ class PersistentVideoStateManager: ObservableObject {
         if duration.isValid && duration.seconds > 0 {
             let timeRemaining = duration.seconds - currentTime.seconds
             
-            // If within 1 second of the end, clear state instead of saving
+            // If close to the end, clear every surface's copy instead of leaving an
+            // older position available to restore.
             // This prevents videos from restoring to end position on next play
-            if timeRemaining <= 1.0 {
+            if timeRemaining <= Self.restartFromBeginningThreshold {
                 print("🗑️ [VIDEO STATE] Video \(videoMid) at end (\(currentTime.seconds)s / \(duration.seconds)s) - clearing state instead of saving")
-                clearState(videoMid: videoMid, context: context)
+                VideoStateCache.shared.clearCachedState(for: videoMid)
+                clearState(videoMid: videoMid)
                 return
             }
         }
@@ -111,10 +113,12 @@ class PersistentVideoStateManager: ObservableObject {
         if let duration = duration, duration.isValid && duration.seconds > 0 {
             let timeRemaining = duration.seconds - state.currentTime.seconds
             
-            // If within 1 second of the end, clear this stale state and return nil
-            if timeRemaining <= 1.0 {
+            // If close to the end, clear every surface's copy so another context
+            // cannot restore an older position after this one has finished.
+            if timeRemaining <= Self.restartFromBeginningThreshold {
                 print("🗑️ [VIDEO STATE] Found stale end-position state for \(videoMid) (\(state.currentTime.seconds)s / \(duration.seconds)s) - clearing")
-                clearState(videoMid: videoMid, context: context)
+                VideoStateCache.shared.clearCachedState(for: videoMid)
+                clearState(videoMid: videoMid)
                 return nil
             }
         }
@@ -130,13 +134,11 @@ class PersistentVideoStateManager: ObservableObject {
         excluding excludedContext: VideoPlaybackState.VideoContext? = nil,
         duration: CMTime? = nil
     ) -> VideoPlaybackState? {
-        let freshnessCutoff = Date().addingTimeInterval(-stateFreshnessInterval)
         var latest: VideoPlaybackState?
 
         for context in VideoPlaybackState.VideoContext.allCases {
             if let excludedContext, context == excludedContext { continue }
             guard let state = getState(videoMid: videoMid, context: context, duration: duration) else { continue }
-            guard state.timestamp > freshnessCutoff else { continue }
             guard state.currentTime.isValid,
                   state.currentTime.seconds.isFinite,
                   state.currentTime.seconds > 0.25 else { continue }
@@ -161,26 +163,6 @@ class PersistentVideoStateManager: ObservableObject {
         }
     }
     
-    /// Clear states older than 1 hour
-    func clearStaleStates() {
-        let oneHourAgo = Date().addingTimeInterval(-3600)
-        var removedCount = 0
-
-        for context in VideoPlaybackState.VideoContext.allCases {
-            guard var bucket = videoStates[context] else { continue }
-            let staleMids = bucket.filter { $0.value.timestamp < oneHourAgo }.map { $0.key }
-            for mid in staleMids {
-                bucket.removeValue(forKey: mid)
-                removedCount += 1
-            }
-            videoStates[context] = bucket
-        }
-
-        if removedCount > 0 {
-            print("🗑️ [VIDEO STATE] Cleared \(removedCount) stale states")
-        }
-    }
-    
     /// Clear all states
     func clearAllStates() {
         videoStates.removeAll()
@@ -188,7 +170,7 @@ class PersistentVideoStateManager: ObservableObject {
     }
     
     /// Check if we should restore playback for a video
-    /// Validates that state exists, is recent, and is not at the end
+    /// Validates that state exists and is not at the end.
     func shouldRestorePlayback(videoMid: String, context: VideoPlaybackState.VideoContext, duration: CMTime? = nil) -> Bool {
         guard let state = getState(videoMid: videoMid, context: context, duration: duration) else {
             return false
@@ -196,13 +178,6 @@ class PersistentVideoStateManager: ObservableObject {
         
         // Context is isolated by dictionary key; this is a safety check.
         guard state.context == context else { return false }
-        
-        // Only restore if saved within the freshness window
-        let fiveMinutesAgo = Date().addingTimeInterval(-stateFreshnessInterval)
-        guard state.timestamp > fiveMinutesAgo else {
-            print("⚠️ [VIDEO STATE] State too old for \(videoMid): \(Date().timeIntervalSince(state.timestamp))s ago")
-            return false
-        }
         
         return true
     }

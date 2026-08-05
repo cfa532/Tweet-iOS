@@ -839,7 +839,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
            duration.isValid,
            duration.seconds.isFinite,
            duration.seconds > 0,
-           duration.seconds - time.seconds <= 0.5 {
+           duration.seconds - time.seconds <= PersistentVideoStateManager.restartFromBeginningThreshold {
             return .zero
         }
 
@@ -857,17 +857,17 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
             return currentTime
         }
 
-        if let cachedPlayback = VideoStateCache.shared.getCachedPlaybackInfo(for: mid),
-           let currentTime = validResumeTime(cachedPlayback.time, duration: duration) {
-            return currentTime
-        }
-
         if let latest = PersistentVideoStateManager.shared.latestState(
             videoMid: mid,
             excluding: .fullScreen,
             duration: duration
         ) {
             return latest.currentTime
+        }
+
+        if let cachedPlayback = VideoStateCache.shared.getCachedPlaybackInfo(for: mid),
+           let currentTime = validResumeTime(cachedPlayback.time, duration: duration) {
+            return currentTime
         }
 
         return nil
@@ -2137,6 +2137,10 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     func handleVideoFinished() {
         // Guard against re-entrancy (finish event can fire twice during transitions / item swaps)
         guard canNavigateNow() else { return }
+        if let finishedMid = currentVideoMid {
+            VideoStateCache.shared.clearCachedState(for: finishedMid)
+            PersistentVideoStateManager.shared.clearState(videoMid: finishedMid)
+        }
         isPlaying = false
 
         // Non-feed context (opened from detail view) — no auto-advance
@@ -2185,6 +2189,26 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     private func seekOnceAndPlay(playerItem: AVPlayerItem, mid: String, preferredSeekTime: CMTime? = nil) {
         print("🎬 [FullScreenVideoManager] seekOnceAndPlay \(shortMID(mid)): \(playerDiagnostic(singletonPlayer, item: playerItem))")
         if isUsingBorrowedFeedPlayer {
+            if let player = singletonPlayer,
+               let target = validResumeTime(player.currentTime(), duration: playerItem.duration),
+               CMTimeCompare(target, .zero) == 0,
+               player.currentTime().seconds > 0.25 {
+                hasRestoredPosition = false
+                isSeekingToRestoredPosition = true
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player, weak playerItem] _ in
+                    Task { @MainActor [weak self, weak player, weak playerItem] in
+                        guard let self,
+                              let player,
+                              let playerItem,
+                              self.singletonPlayer === player,
+                              player.currentItem === playerItem else { return }
+                        self.hasRestoredPosition = true
+                        self.isSeekingToRestoredPosition = false
+                        self.startFullscreenPlayback(player: player, item: playerItem, log: "borrowed feed player near end")
+                    }
+                }
+                return
+            }
             hasRestoredPosition = true
             isSeekingToRestoredPosition = false
             startFullscreenPlayback(player: singletonPlayer, item: playerItem, log: "borrowed feed player")
@@ -2227,7 +2251,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
             // 4) At/near end → rewind
             if duration.isValid && duration.seconds > 0 {
                 let remaining = duration.seconds - playerItem.currentTime().seconds
-                if remaining <= 0.5 { return .zero }
+                if remaining <= PersistentVideoStateManager.restartFromBeginningThreshold { return .zero }
             }
             return nil
         }()
@@ -3352,7 +3376,7 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
 
                 // Rewind if at end, then play
                 if item.duration.isValid && item.duration.seconds > 0,
-                   (item.duration.seconds - item.currentTime().seconds) < 0.5 {
+                   (item.duration.seconds - item.currentTime().seconds) < PersistentVideoStateManager.restartFromBeginningThreshold {
                     currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
                         Task { @MainActor [weak self, weak player] in
                             self?.startDetailPlayback(player: player, item: item, log: "same-video rewind")
@@ -3678,7 +3702,9 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         }
 
         let duration = playerItem.duration
-        if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
+        if duration.isValid
+            && duration.seconds > 0
+            && savedSec >= duration.seconds - PersistentVideoStateManager.restartFromBeginningThreshold {
             let player = currentPlayer
             markWaitingForStartupSeek()
             print("📱 [DetailVideoManager] Seek live handoff at end \(shortMID(mid)): saved=\(String(format: "%.2f", savedSec))")
@@ -3846,7 +3872,7 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         if isUsingBorrowedFeedPlayer {
             if duration.isValid && duration.seconds > 0 {
                 let remaining = duration.seconds - playerItem.currentTime().seconds
-                if remaining <= 0.5 {
+                if remaining <= PersistentVideoStateManager.restartFromBeginningThreshold {
                     let player = currentPlayer
                     markWaitingForStartupSeek()
                     print("📱 [DetailVideoManager] Seek borrowed feed player at end \(shortMID(mid)): remaining=\(String(format: "%.2f", remaining))")
@@ -3865,13 +3891,14 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
             return
         }
 
-        // Check PersistentVideoStateManager for saved position
-        if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .detailView),
-           let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) {
+        // Restore the freshest position regardless of which surface last played it.
+        if let saved = PersistentVideoStateManager.shared.latestState(videoMid: mid, duration: duration) {
             let savedSec = saved.currentTime.seconds
             if savedSec.isFinite && savedSec > 0.25 {
                 // If near end, restart from beginning
-                if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
+                if duration.isValid
+                    && duration.seconds > 0
+                    && savedSec >= duration.seconds - PersistentVideoStateManager.restartFromBeginningThreshold {
                     let player = currentPlayer
                     markWaitingForStartupSeek()
                     print("📱 [DetailVideoManager] Seek saved position at end \(shortMID(mid)): saved=\(String(format: "%.2f", savedSec))")
@@ -3911,7 +3938,7 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         // At/near end → rewind
         if duration.isValid && duration.seconds > 0 {
             let remaining = duration.seconds - playerItem.currentTime().seconds
-            if remaining <= 0.5 {
+            if remaining <= PersistentVideoStateManager.restartFromBeginningThreshold {
                 let player = currentPlayer
                 markWaitingForStartupSeek()
                 print("📱 [DetailVideoManager] Seek rewind \(shortMID(mid)): remaining=\(String(format: "%.2f", remaining))")
@@ -3941,6 +3968,10 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
                       let player = self.currentPlayer,
                       player.currentItem === playerItem else { return }
                 let finishedMid = self.currentVideoMid
+                if let finishedMid {
+                    VideoStateCache.shared.clearCachedState(for: finishedMid)
+                    PersistentVideoStateManager.shared.clearState(videoMid: finishedMid)
+                }
                 self.isPlaying = false
                 self.isBuffering = false
                 self.isPlaybackRendering = false

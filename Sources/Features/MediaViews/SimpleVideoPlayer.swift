@@ -197,13 +197,9 @@ final class VideoStateCache {
     func getCachedPlaybackInfo(for mid: String) -> (time: CMTime, wasPlaying: Bool)? {
         guard let cachedState = cache[mid] else { return nil }
 
-        // Expire old entries; this is still safe to clear.
-        let age = Date().timeIntervalSince(cachedState.timestamp)
-        if age > cacheExpirationInterval {
-            cache.removeValue(forKey: mid)
-            return nil
-        }
-
+        // Playback positions remain useful after the cached AVPlayer expires. The
+        // cache is already LRU-bounded, so keep the position until it is replaced
+        // or explicitly cleared when playback finishes.
         return (time: cachedState.time, wasPlaying: cachedState.wasPlaying)
     }
 

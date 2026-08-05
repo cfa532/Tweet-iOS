@@ -582,16 +582,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     ///
     /// **State Management:**
-    /// - Clears stale video states (older than 1 hour)
+    /// - Preserves cached video positions for player recreation
     /// - Refreshes mute state from preferences
     /// - Posts .appDidBecomeActive for other listeners
     ///
     /// - Note: Only visible videos reload automatically; off-screen videos load when scrolled into view
     @objc private func handleAppDidBecomeActive() {
         print("[AppDelegate] App did become active - checking for screen lock recovery")
-        
-        // Clear stale video states (older than 1 hour)
-        PersistentVideoStateManager.shared.clearStaleStates()
         
         // Check if this is a screen lock recovery (not background recovery)
         if let resignActiveDate = UserDefaults.standard.object(forKey: "lastResignActiveTimestamp") as? Date,
