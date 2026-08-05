@@ -375,7 +375,6 @@ struct MediaBrowserView: View {
                         .clipped()
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
-                .clipped()
             }
             .statusBar(hidden: true)
             .onTapGesture {

@@ -1026,9 +1026,12 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         Coordinator()
     }
 
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        weak var player: AVPlayer?
+    @MainActor
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate, @preconcurrency AVPlayerViewControllerDelegate {
+        var player: AVPlayer?
         private var wasPlayingBeforeSurfaceTap = false
+        private var fullscreenMuteObserver: NSKeyValueObservation?
+        private var fullscreenVolumeObserver: NSKeyValueObservation?
 
         func attach(player: AVPlayer) {
             self.player = player
@@ -1072,6 +1075,73 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
             true
         }
 
+        func playerViewController(
+            _ playerViewController: AVPlayerViewController,
+            willBeginFullScreenPresentationWithAnimationCoordinator transitionCoordinator: UIViewControllerTransitionCoordinator
+        ) {
+            beginEnforcingAudibleFullscreenPlayback()
+            restoreAudiblePlayback(on: playerViewController)
+            transitionCoordinator.animate(alongsideTransition: nil) { [weak self, weak playerViewController] context in
+                guard let self, let playerViewController else { return }
+                self.restoreAudiblePlayback(on: playerViewController)
+                if context.isCancelled {
+                    self.stopEnforcingAudibleFullscreenPlayback()
+                }
+            }
+        }
+
+        func playerViewController(
+            _ playerViewController: AVPlayerViewController,
+            willEndFullScreenPresentationWithAnimationCoordinator transitionCoordinator: UIViewControllerTransitionCoordinator
+        ) {
+            transitionCoordinator.animate(alongsideTransition: nil) { [weak self, weak playerViewController] context in
+                guard let self, let playerViewController else { return }
+                self.restoreAudiblePlayback(on: playerViewController)
+                if !context.isCancelled {
+                    self.stopEnforcingAudibleFullscreenPlayback()
+                }
+            }
+        }
+
+        private func beginEnforcingAudibleFullscreenPlayback() {
+            fullscreenMuteObserver?.invalidate()
+            fullscreenVolumeObserver?.invalidate()
+
+            guard let player else { return }
+            fullscreenMuteObserver = player.observe(\.isMuted, options: [.new]) { player, change in
+                guard change.newValue == true else { return }
+                DispatchQueue.main.async {
+                    AudioSessionManager.shared.activateForVideoPlayback()
+                    player.isMuted = false
+                }
+            }
+            fullscreenVolumeObserver = player.observe(\.volume, options: [.new]) { player, change in
+                guard let volume = change.newValue, volume < 1 else { return }
+                DispatchQueue.main.async {
+                    AudioSessionManager.shared.activateForVideoPlayback()
+                    player.volume = 1
+                }
+            }
+        }
+
+        private func stopEnforcingAudibleFullscreenPlayback() {
+            fullscreenMuteObserver?.invalidate()
+            fullscreenMuteObserver = nil
+            fullscreenVolumeObserver?.invalidate()
+            fullscreenVolumeObserver = nil
+        }
+
+        private func restoreAudiblePlayback(on playerViewController: AVPlayerViewController) {
+            guard let player else { return }
+            AudioSessionManager.shared.activateForVideoPlayback()
+            player.isMuted = false
+            player.volume = 1
+            if playerViewController.player !== player {
+                playerViewController.player = player
+            }
+            playerViewController.view.setNeedsLayout()
+        }
+
         private func touchTargetsControl(_ touchedView: UIView?, within rootView: UIView?) -> Bool {
             var candidate = touchedView
             while let view = candidate {
@@ -1093,12 +1163,14 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         // Avoid starting Visual Look Up work that would immediately be cancelled by the
         // next cell handoff on platforms where the native controller remains in use.
         vc.allowsVideoFrameAnalysis = false
+        configureAudiblePlayback(for: player)
         vc.player = player
         vc.showsPlaybackControls = true
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
 
         let coordinator = context.coordinator
+        vc.delegate = coordinator
         coordinator.attach(player: player)
         let surfaceTap = UITapGestureRecognizer(
             target: coordinator,
@@ -1115,6 +1187,7 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
         context.coordinator.attach(player: player)
+        configureAudiblePlayback(for: player)
         if vc.player !== player {
             vc.player = player
         }
@@ -1123,8 +1196,16 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         }
     }
 
+    private func configureAudiblePlayback(for player: AVPlayer) {
+        AudioSessionManager.shared.activateForVideoPlayback()
+        player.isMuted = false
+        player.volume = 1
+    }
+
     static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
-        vc.player = nil
+        // AVPlayerViewController can still own a system fullscreen transition when
+        // SwiftUI dismantles the inline representable. Keep the player attached until
+        // that controller is released so fullscreen does not become a black surface.
     }
 }
 
