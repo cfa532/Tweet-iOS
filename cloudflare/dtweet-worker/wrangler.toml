@@ -9,7 +9,13 @@ compatibility_date = "2026-07-01"
 routes = [
   { pattern = "dtweet.com", custom_domain = true },
   { pattern = "www.dtweet.com", custom_domain = true },
-  { pattern = "dl.dtweet.com/*", zone_name = "dtweet.com" }
+  { pattern = "dl.dtweet.com/*", zone_name = "dtweet.com" },
+  # Old TweetWeb links reach Leither before its client-side compatibility
+  # normalizer can run. Intercept only the external share paths and redirect
+  # them to the current fragment-form URL; all other legacy-host traffic keeps
+  # its existing Leither routing.
+  { pattern = "t1.fireshare.us/tweet/*", zone_name = "fireshare.us" },
+  { pattern = "t1.fireshare.us/author/*", zone_name = "fireshare.us" }
 ]
 
 [assets]
