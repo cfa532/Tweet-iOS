@@ -193,6 +193,9 @@ class TweetTableViewController: UITableViewController {
     /// to that screen position so the content appears stationary.
     private var barCompensationAnchorTweetId: String?
     private var barCompensationAnchorScreenY: CGFloat?
+    /// Top of the table's content area in window space at the last layout pass. Corrections
+    /// run only when THIS changes, so a coasting scroll is never mistaken for drift.
+    private var barCompensationChromeTopWindowY: CGFloat?
     private var lastBarAppearanceRequestTime: CFTimeInterval = 0
     private var lastHeaderHeight: CGFloat = 0
     private var lastHeaderLayoutWidth: CGFloat = 0
@@ -1115,7 +1118,8 @@ class TweetTableViewController: UITableViewController {
         // viewDidLayoutSubviews). Anchoring a real row instead is self-correcting: it
         // measures where the content ACTUALLY landed after UIKit finished, whatever
         // combination of frame/inset/offset changes got it there, and cancels the
-        // residual drift only.
+        // residual drift only. That measurement is gated on the chrome geometry actually
+        // changing, so it corrects the bar-driven shift without fighting a coasting scroll.
         applyBarAppearanceAnchorCorrectionIfNeeded()
 
         // Initialize lastScrollOffset to current offset to prevent incorrect delta on first scroll
@@ -3619,12 +3623,28 @@ class TweetTableViewController: UITableViewController {
         let rowOrigin = tableView.rectForRow(at: anchorPath).origin
         barCompensationAnchorTweetId = tweet.mid
         barCompensationAnchorScreenY = tableView.convert(rowOrigin, to: nil).y
+        barCompensationChromeTopWindowY = currentChromeTopWindowY()
         isCompensatingForBarAppearance = true
     }
 
+    /// Where the chrome puts the top of the list, in window space.
+    ///
+    /// Purely geometric: it is read from the table's FRAME (via its superview) plus the
+    /// adjusted inset, never from `bounds`/`contentOffset`. So it moves when the bars
+    /// resize the table and stays put while the list scrolls — which is exactly the
+    /// distinction the correction below needs.
+    private func currentChromeTopWindowY() -> CGFloat? {
+        guard let superview = tableView.superview else { return nil }
+        return superview.convert(tableView.frame.origin, to: nil).y + tableView.adjustedContentInset.top
+    }
+
     /// Drives the anchored row back to the screen position it occupied before the bars
-    /// appeared. Idempotent: once the drift is gone this does nothing, so it can safely
-    /// run on every layout pass until the compensation window closes.
+    /// appeared, cancelling the shift their arrival caused.
+    ///
+    /// Runs on every layout pass in the compensation window but only ACTS on the pass where
+    /// the chrome resized; the rest just re-baseline the anchor. That distinction matters
+    /// because the bars come in at finger lift while the list is still coasting, so most
+    /// passes see legitimate scroll movement that must not be cancelled.
     private func applyBarAppearanceAnchorCorrectionIfNeeded() {
         guard isCompensatingForBarAppearance,
               let anchorTweetId = barCompensationAnchorTweetId,
@@ -3638,31 +3658,54 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
-        let rowOrigin = tableView.rectForRow(at: IndexPath(row: row, section: 0)).origin
+        // Correct only on the layout pass where the chrome actually resized the table.
+        //
+        // The bars are revealed at finger lift and the list keeps coasting underneath them,
+        // so most passes in the compensation window see a moving list and a stationary
+        // chrome. Re-pinning the anchor on those passes treats the coast itself as drift:
+        // it dragged contentOffset back to a fixed value every other frame, freezing and
+        // juddering the feed for ~150ms before it lurched free. Scroll-up only, because the
+        // bars never appear on scroll-down — which is exactly the asymmetry users report.
+        guard let chromeTop = currentChromeTopWindowY() else { return }
+        let anchorPath = IndexPath(row: row, section: 0)
+        guard abs(chromeTop - (barCompensationChromeTopWindowY ?? chromeTop)) > 0.5 else {
+            // Chrome is stable — the list is merely coasting. Re-baseline to where the
+            // scroll has legitimately carried the anchor, so if the chrome resizes again
+            // that pass measures only the NEW shift instead of re-cancelling this coast.
+            barCompensationChromeTopWindowY = chromeTop
+            barCompensationAnchorScreenY = tableView.convert(
+                tableView.rectForRow(at: anchorPath).origin, to: nil
+            ).y
+            return
+        }
+        barCompensationChromeTopWindowY = chromeTop
+
+        let rowOrigin = tableView.rectForRow(at: anchorPath).origin
         let currentScreenY = tableView.convert(rowOrigin, to: nil).y
         let drift = currentScreenY - targetScreenY
         guard abs(drift) > 0.5 else { return }
 
         tableView.contentOffset.y += drift
+        barCompensationAnchorScreenY = tableView.convert(
+            tableView.rectForRow(at: anchorPath).origin, to: nil
+        ).y
     }
 
     private func endBarAppearanceCompensation() {
+        // Silence on success. The anchored row is expected to have MOVED by now — the list
+        // coasts under the bars — so its displacement is not an error signal. What must be
+        // zero is leftover chrome resizing that no pass got to cancel.
         if isCompensatingForBarAppearance,
-           let anchorTweetId = barCompensationAnchorTweetId,
-           let targetScreenY = barCompensationAnchorScreenY,
-           let row = rowForTweetId(anchorTweetId),
-           row < tableView.numberOfRows(inSection: 0) {
-            let rowOrigin = tableView.rectForRow(at: IndexPath(row: row, section: 0)).origin
-            let netVisualShift = tableView.convert(rowOrigin, to: nil).y - targetScreenY
-            // Silence on success: a correct compensation leaves the anchored row exactly
-            // where it started. Only a non-zero residual is worth reporting.
-            if abs(netVisualShift) > 0.5 {
-                print("🧭 [SCROLL JUMP TRACE] bar-appearance netVisualShift=\(String(format: "%.1f", netVisualShift))")
-            }
+           let recorded = barCompensationChromeTopWindowY,
+           let chromeTop = currentChromeTopWindowY(),
+           abs(chromeTop - recorded) > 0.5 {
+            print("🧭 [SCROLL JUMP TRACE] bar-appearance uncompensatedChromeShift=" +
+                  "\(String(format: "%.1f", chromeTop - recorded))")
         }
         isCompensatingForBarAppearance = false
         barCompensationAnchorTweetId = nil
         barCompensationAnchorScreenY = nil
+        barCompensationChromeTopWindowY = nil
     }
 
     /// Warm images in the scroll direction, plus the existing reverse row once scrolling settles.
