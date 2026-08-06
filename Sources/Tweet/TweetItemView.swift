@@ -20,6 +20,7 @@ struct TweetItemView: View, @MainActor Equatable {
     var onRemove: ((String) -> Void)? = nil
     @State private var showBrowser = false
     @State private var showLoginSheet = false
+    @State private var menuShareItems: ShareSheetData?
     @State private var selectedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
 
@@ -122,6 +123,9 @@ struct TweetItemView: View, @MainActor Equatable {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .sheet(item: $menuShareItems) { data in
+            ShareSheetView(items: data.items)
         }
         .task {
             isVisible = true
@@ -336,6 +340,7 @@ struct TweetItemView: View, @MainActor Equatable {
                                 editTweet: originalTweet,
                                 isPinned: isPinned,
                                 showDeleteButton: showDeleteButton,
+                                onShareTap: { shareFromFeedMenu(originalTweet) },
                                 onShowLogin: { showLoginSheet = true }
                             )
                                 .padding(.trailing, -20)
@@ -388,6 +393,7 @@ struct TweetItemView: View, @MainActor Equatable {
                                 editTweet: originalTweet,
                                 isPinned: isPinned,
                                 showDeleteButton: showDeleteButton,
+                                onShareTap: { shareFromFeedMenu(originalTweet) },
                                 onShowLogin: { showLoginSheet = true }
                             )
                                 .padding(.trailing, -20)
@@ -459,6 +465,7 @@ struct TweetItemView: View, @MainActor Equatable {
                             tweet: tweet,
                             isPinned: isPinned,
                             showDeleteButton: showDeleteButton,
+                            onShareTap: { shareFromFeedMenu(tweet) },
                             onShowLogin: { showLoginSheet = true }
                         )
                             .padding(.trailing, -12)
@@ -542,6 +549,7 @@ struct TweetItemView: View, @MainActor Equatable {
                             tweet: tweet,
                             isPinned: isPinned,
                             showDeleteButton: showDeleteButton,
+                            onShareTap: { shareFromFeedMenu(tweet) },
                             onShowLogin: { showLoginSheet = true }
                         )
                             .padding(.trailing, -20)
@@ -580,6 +588,18 @@ struct TweetItemView: View, @MainActor Equatable {
         }
         // STABILITY: Stable ID prevents view recreation during recomposition
         .id("tweet_\(tweet.mid)")
+    }
+
+    private func shareFromFeedMenu(_ shareTweet: Tweet) {
+        Task {
+            let items = await TweetActionBarView.buildFeedMenuShareItems(
+                tweet: shareTweet,
+                hproseInstance: hproseInstance
+            )
+            await MainActor.run {
+                menuShareItems = ShareSheetData(items: items)
+            }
+        }
     }
     
     // MARK: - Equatable Implementation

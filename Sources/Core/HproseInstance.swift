@@ -55,7 +55,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     nonisolated(unsafe) static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     private static let updateFollowingTweetsEntry = "update_following_tweets"
     private static let heavyCallInterval: TimeInterval = 5 * 60
-    @MainActor private var _domainToShare: String = AppConfig.baseUrl
+    @MainActor private var _domainToShare: String = AppConfig.shareDomain
     
     // IP Cache: Stores short-lived HEAD health results with 30-second expiry
     private var ipCache: [String: IPCacheEntry] = [:]

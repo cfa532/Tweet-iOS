@@ -14,10 +14,10 @@ import AVFoundation
 /// Which URL a share action embeds — see DEEPLINKING.md for the policy.
 enum TweetShareLinkStyle {
     /// `http://dtweet.com/#tweet/{mid}/{authorId}` — public fragment-form share URL;
-    /// the OS opens the app when installed (feed share button)
+    /// the OS opens the app when installed (all tweet action-bar share buttons)
     case deeplink
     /// Domain delivered by the backend's `check_upgrade`, using TweetWeb's
-    /// domain share-link format (`hproseInstance.domainToShare`) — detail-view share button
+    /// domain share-link format — feed dropdown-menu share
     case webDomain
     /// The tweet author's provider-IP entry URL — detail-view dropdown menu
     case providerIP
@@ -69,8 +69,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     // Context
     var isInDetailView = false
-    /// Overrides the default style (feed → .deeplink, detail → .webDomain);
-    /// set to .providerIP by buildDetailShareItems for the dropdown menu
+    /// Overrides the action bar's default `.deeplink` style for dropdown menus.
     var shareLinkStyleOverride: TweetShareLinkStyle?
     weak var parentTweet: Tweet?       // For comments: the parent tweet this is a comment on
     weak var commentsVMParentTweet: Tweet?  // Fallback: commentsVM?.parentTweet
@@ -569,9 +568,9 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// Build share items with rich preview
     private func buildShareItems(for tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
         let effectiveParentTweet = parentTweet ?? commentsVMParentTweet
-        // Only plain feed tweet rows use the deep-link format; detail views and
-        // comment shares keep the check_upgrade web domain (DEEPLINKING.md)
-        let style = shareLinkStyleOverride ?? ((isInDetailView || effectiveParentTweet != nil) ? .webDomain : .deeplink)
+        // Every action-bar share uses dtweet.com. Dropdown menus opt into their
+        // own explicit styles through shareLinkStyleOverride (DEEPLINKING.md).
+        let style = shareLinkStyleOverride ?? .deeplink
         let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, style: style, parentTweet: effectiveParentTweet)
         let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
 
@@ -607,13 +606,23 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return await helper.buildShareItems(for: tweet, hproseInstance: hproseInstance)
     }
 
+    /// Share items for a feed tweet's dropdown menu: uses the domain returned
+    /// by `check_upgrade`, without applying the user's profile-level override.
+    @MainActor
+    static func buildFeedMenuShareItems(tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
+        let helper = TweetActionBarView(frame: .zero)
+        helper.shareLinkStyleOverride = .webDomain
+        helper.attachmentPreviewImage = await helper.loadAttachmentPreviewImage(for: tweet, hproseInstance: hproseInstance)
+        return await helper.buildShareItems(for: tweet, hproseInstance: hproseInstance)
+    }
+
     /// Build share text for a tweet.
     ///
     /// Share-URL policy (see DEEPLINKING.md):
-    /// - `.deeplink`   feed share button — `http://dtweet.com/#tweet/{mid}/{authorId}`;
+    /// - `.deeplink`   action-bar share button — `http://dtweet.com/#tweet/{mid}/{authorId}`;
     ///                 the OS opens the app when installed, browsers land on the web app.
-    /// - `.webDomain`  detail-view share button — domain delivered by the backend's
-    ///                 `check_upgrade` (`hproseInstance.domainToShare`).
+    /// - `.webDomain`  feed dropdown-menu share — domain delivered by the backend's
+    ///                 `check_upgrade` (`hproseInstance.backendDomainToShare`).
     /// - `.providerIP` detail-view dropdown menu — the author's provider-IP entry URL.
     static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, style: TweetShareLinkStyle, parentTweet: Tweet? = nil) -> String {
         var shareText = ""
@@ -645,7 +654,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             urlText = "\(AppConfig.shareDomain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         case .webDomain:
             // Domain delivered by the backend's check_upgrade
-            var domain = hproseInstance.domainToShare
+            var domain = hproseInstance.backendDomainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
+            if domain.isEmpty {
+                domain = AppConfig.shareDomain
+            }
             if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
                 domain = "http://" + domain
             }

@@ -1631,22 +1631,10 @@ struct TweetActionButtonsView: View {
             shareText += "\n\n"
         }
         
-        // Add URL — share-URL policy (see DEEPLINKING.md):
-        // only plain feed tweet rows use the deep-link format on dtweet.com;
-        // detail view, fullscreen, and comment shares keep the check_upgrade domain
-        let urlText: String
+        // Every tweet action-bar share uses the dtweet.com app-link format.
         let effectiveParentTweet = parentTweet ?? commentsVM?.parentTweet
         let commentParams = effectiveParentTweet.map { "?fromComment=true&parentTweetId=\($0.mid)&parentAuthorId=\($0.authorId)" } ?? ""
-
-        if isInDetailView || isFullScreen || effectiveParentTweet != nil {
-            var domain = hproseInstance.domainToShare
-            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
-                domain = "http://" + domain
-            }
-            urlText = "\(domain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
-        } else {
-            urlText = "\(AppConfig.shareDomain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
-        }
+        let urlText = "\(AppConfig.shareDomain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         
         // Only add space if there's content before the URL
         if !shareText.isEmpty {

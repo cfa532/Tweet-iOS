@@ -865,6 +865,33 @@ class TweetCellContentView: UIView {
         }
         actions.append(copyAction)
 
+        // Feed-menu sharing deliberately uses the backend domain returned by
+        // check_upgrade; action-bar sharing uses dtweet.com instead.
+        let shareAction = UIAction(
+            title: NSLocalizedString("Share", comment: "Menu item"),
+            image: UIImage(systemName: "square.and.arrow.up")
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let shareTweet = await self.resolveEditTweet(for: tweet, hproseInstance: hproseInstance)
+                let items = await TweetActionBarView.buildFeedMenuShareItems(
+                    tweet: shareTweet,
+                    hproseInstance: hproseInstance
+                )
+                guard let viewController = self.parentViewController else { return }
+                let activityViewController = UIActivityViewController(
+                    activityItems: items,
+                    applicationActivities: nil
+                )
+                if let popover = activityViewController.popoverPresentationController {
+                    popover.sourceView = self.headerView
+                    popover.sourceRect = self.headerView.bounds
+                }
+                viewController.present(activityViewController, animated: true)
+            }
+        }
+        actions.append(shareAction)
+
         // Filter Content
         let filterAction = UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"),
                                      image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { [weak self] _ in
