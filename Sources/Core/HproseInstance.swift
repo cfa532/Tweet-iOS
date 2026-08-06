@@ -3841,27 +3841,34 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return nil
         }
 
-        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-        guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
-            hproseError("⚠️ [updateRetweetCount] Failed to unwrap v2 response")
-            return nil
-        }
-        guard let tweetDict = unwrappedResponse as? [String: Any] else {
-            hproseWarning("⚠️ [updateRetweetCount] Nil response from server")
-            return nil
-        }
-        
-        do {
-            // Update the tweet from server response
-            try await MainActor.run {
-                try tweet.update(from: tweetDict)
+        // Both entries key the original tweet's retweet list by retweetId (Hset / Hdel),
+        // so they are idempotent and safe to retry. Without a retry a single dropped RPC
+        // silently loses the count change — the retweet exists but the original never
+        // learns about it, and the next refresh reverts the optimistic UI update.
+        let maxAttempts = 2
+        for attempt in 1...maxAttempts {
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
+            if let unwrappedResponse = try? Self.unwrapV2Response(rawResponse),
+               let tweetDict = unwrappedResponse as? [String: Any] {
+                do {
+                    // Update the tweet from server response
+                    try await MainActor.run {
+                        try tweet.update(from: tweetDict)
+                    }
+                    // Return the updated tweet (same instance, updated in place)
+                    return tweet
+                } catch {
+                    hproseError("⚠️ [updateRetweetCount] Failed to update tweet from server response: \(error)")
+                    return nil
+                }
             }
-            // Return the updated tweet (same instance, updated in place)
-            return tweet
-        } catch {
-            hproseError("⚠️ [updateRetweetCount] Failed to update tweet from server response: \(error)")
-            return nil
+
+            hproseWarning("⚠️ [updateRetweetCount] \(entry) attempt \(attempt)/\(maxAttempts) failed for tweet \(tweetMid)")
+            if attempt < maxAttempts {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
         }
+        return nil
     }
     
     /**
@@ -3941,6 +3948,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let (appUserMid, isAdminDeletingAnotherUsersTweet) = await MainActor.run {
             (self.appUser.mid, tweetAuthorId != self.appUser.mid && Gadget.isResearchAdminUser(self.appUser))
         }
+        // Snapshot the retweet link BEFORE deleting: removeDeletedTweetLocally() clears the
+        // singleton and the cache row, so afterwards there is no way to find the original.
+        // The backend's delete_tweet does not touch the original tweet's retweet list, so
+        // the client is what keeps the original's retweetCount honest.
+        let retweetOrigin = await MainActor.run { () -> (String, String)? in
+            let tweet = Tweet.getInstance(for: tweetId)
+                ?? TweetCacheManager.shared.fetchTweetSync(mid: tweetId)
+            guard let originalTweetId = tweet?.originalTweetId,
+                  let originalAuthorId = tweet?.originalAuthorId else { return nil }
+            return (originalTweetId, originalAuthorId)
+        }
         let params = [
             "aid": appId,
             "ver": "last",
@@ -3981,6 +3999,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             if Self.isTweetNotFoundDeleteFailure(error, response: rawResponse) {
                 hproseDebug("DEBUG: [deleteTweet] Tweet \(tweetId) is already missing on server; clearing local cache")
                 await removeDeletedTweetLocally(tweetId)
+                // retweet_removed is an idempotent Hdel, so it is safe to send even when
+                // another client already unlinked this retweet.
+                if let retweetOrigin {
+                    await decrementRetweetCountOfOriginal(
+                        originalTweetId: retweetOrigin.0,
+                        originalAuthorId: retweetOrigin.1,
+                        retweetId: tweetId
+                    )
+                }
                 try? await self.refreshAppUserFromServer()
                 return tweetId
             }
@@ -4005,6 +4032,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         await removeDeletedTweetLocally(deletedTweetId)
 
+        // Deleting a retweet/quote must unlink it from the original tweet's retweet list,
+        // otherwise the original keeps counting a retweet that no longer exists.
+        if let retweetOrigin {
+            await decrementRetweetCountOfOriginal(
+                originalTweetId: retweetOrigin.0,
+                originalAuthorId: retweetOrigin.1,
+                retweetId: deletedTweetId
+            )
+        }
+
         // Only decrement tweetCount if appUser is the author
         // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
         if tweetAuthorId == appUserMid {
@@ -4021,6 +4058,55 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         try? await self.refreshAppUserFromServer()
 
         return deletedTweetId
+    }
+
+    /// Unlink a deleted retweet from its original tweet and bring the original's
+    /// retweetCount back in line with the server.
+    ///
+    /// The original tweet may not be in memory (its retweet can be shown in a feed the
+    /// original never appeared in), so it is fetched when needed. The live singleton is
+    /// updated in place so every view bound to it — feed cell, detail view, profile —
+    /// reflects the new count.
+    private func decrementRetweetCountOfOriginal(
+        originalTweetId: String,
+        originalAuthorId: String,
+        retweetId: String
+    ) async {
+        let originalTweet: Tweet?
+        if let inMemory = await MainActor.run(body: { Tweet.getInstance(for: originalTweetId) }) {
+            originalTweet = inMemory
+        } else {
+            originalTweet = try? await getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+        }
+        guard let originalTweet else {
+            hproseWarning("⚠️ [deleteTweet] Original tweet \(originalTweetId) unavailable — retweetCount not decremented")
+            return
+        }
+
+        // Optimistic decrement so the UI reacts immediately; the server response below
+        // overwrites it with the authoritative count.
+        let previousCount = await MainActor.run { () -> Int? in
+            let previous = originalTweet.retweetCount
+            originalTweet.retweetCount = max(0, (previous ?? 0) - 1)
+            return previous
+        }
+
+        guard let updatedTweet = await updateRetweetCount(
+            tweet: originalTweet,
+            retweetId: retweetId,
+            direction: false
+        ) else {
+            // Server never unlinked the retweet — put the count back rather than leave
+            // the UI showing a decrement that did not happen.
+            await MainActor.run { originalTweet.retweetCount = previousCount }
+            hproseWarning("⚠️ [deleteTweet] retweet_removed failed for original \(originalTweetId) — restored retweetCount")
+            return
+        }
+
+        await MainActor.run {
+            TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
+            hproseDebug("DEBUG: [deleteTweet] Original \(originalTweetId) retweetCount now \(updatedTweet.retweetCount ?? 0)")
+        }
     }
 
     @MainActor
