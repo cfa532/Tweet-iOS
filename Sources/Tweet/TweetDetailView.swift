@@ -1817,7 +1817,16 @@ struct TweetDetailView: View {
                             hproseInstance: hproseInstance
                         )
                         await MainActor.run {
-                            menuShareItems = ShareSheetData(items: items)
+                            if let items {
+                                menuShareItems = ShareSheetData(items: items)
+                            } else {
+                                toastMessage = NSLocalizedString(
+                                    "No public IPv4 address is available for this tweet.",
+                                    comment: "Detail share public IPv4 unavailable"
+                                )
+                                toastIsError = true
+                                showToast = true
+                            }
                         }
                     }
                 },

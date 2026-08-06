@@ -277,7 +277,7 @@ JavaScript asset and the app will render an empty/error page.
 |---|---|---|
 | Tweet action-bar share buttons | `http://dtweet.com/#tweet/{mid}/{authorId}` | Standard app-link URL with browser fallback, in feed, detail, comment, media, and fullscreen contexts. |
 | Feed dropdown menu to share | `http://{check_upgrade domain}/#tweet/{mid}/{authorId}` | Uses the backend-controlled domain and TweetWeb's external share-link format, with `dtweet.com` as fallback. |
-| Detail-view dropdown menu to share | `http://{author provider IP}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}` | Works without DNS or app-link setup. |
+| Detail-view dropdown menu to share | `http://{author public IPv4}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}` | Uses only a validated public IPv4; private, Tailscale, IPv6, domain, and reserved addresses are rejected. |
 
 Comment shares append:
 

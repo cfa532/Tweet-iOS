@@ -591,14 +591,19 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// author's provider-IP entry URL (`.providerIP`), reachable even without
     /// the dtweet.com / check_upgrade domains. See DEEPLINKING.md.
     @MainActor
-    static func buildDetailShareItems(tweet: Tweet, hproseInstance: HproseInstance, parentTweet: Tweet? = nil) async -> [Any] {
+    static func buildDetailShareItems(tweet: Tweet, hproseInstance: HproseInstance, parentTweet: Tweet? = nil) async -> [Any]? {
         let helper = TweetActionBarView(frame: .zero)
         helper.isInDetailView = true
         helper.shareLinkStyleOverride = .providerIP
         helper.parentTweet = parentTweet
 
-        let preferredBaseUrl = await Self.getIPv4PreferredBaseUrl(for: tweet, hproseInstance: hproseInstance)
-        if let author = tweet.author, let url = URL(string: preferredBaseUrl) {
+        guard let publicIPv4BaseUrl = await Self.getPublicIPv4BaseUrl(
+            for: tweet,
+            hproseInstance: hproseInstance
+        ) else {
+            return nil
+        }
+        if let author = tweet.author, let url = URL(string: publicIPv4BaseUrl) {
             author.baseUrl = url
         }
 
@@ -663,9 +668,13 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             }
             urlText = "\(domain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         case .providerIP:
-            // Author's provider-IP entry URL (hash-router format); the caller is
-            // expected to have refreshed tweet.author.baseUrl to a reachable IP
-            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
+            // buildDetailShareItems validates this immediately before sharing.
+            // Keep this guard as defense in depth against future direct callers.
+            guard let baseUrlString = publicIPv4BaseURL(
+                from: tweet.author?.baseUrl?.absoluteString
+            ) else {
+                return ""
+            }
             urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         }
 
@@ -678,35 +687,23 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return shareText
     }
 
-    /// Get an IPv4-preferred baseUrl for sharing from detail view.
-    /// Only a domain name or a sound public IPv4 is acceptable in a shared
-    /// link — private/Tailscale (RFC 6598) addresses and IPv6 trigger a fresh
-    /// public-IPv4 resolution instead.
-    private static func getIPv4PreferredBaseUrl(for tweet: Tweet, hproseInstance: HproseInstance) async -> String {
+    /// Get a strictly public IPv4 base URL for detail-menu sharing. Domains,
+    /// IPv6, Tailscale/RFC 6598, private, loopback, link-local, multicast, and
+    /// documentation/reserved IPv4 ranges are never returned.
+    private static func getPublicIPv4BaseUrl(for tweet: Tweet, hproseInstance: HproseInstance) async -> String? {
         guard let author = tweet.author else {
-            return AppConfig.baseUrl
+            return nil
         }
 
-        let currentBaseUrl = author.baseUrl?.absoluteString ?? AppConfig.baseUrl
-
-        if let host = URL(string: currentBaseUrl)?.host, !Gadget.isIPv6Address(host) {
-            let looksLikeIPv4 = host.range(of: #"^(\d{1,3}\.){3}\d{1,3}$"#, options: .regularExpression) != nil
-            if !looksLikeIPv4 {
-                // Domain name — fine to share as-is
-                return currentBaseUrl
-            }
-            if Gadget.isValidPublicIpAddress(host) {
-                // Sound public IPv4 — use it
-                return currentBaseUrl
-            }
-            // Private/Tailscale IPv4 — fall through to re-resolve
+        if let currentBaseUrl = publicIPv4BaseURL(from: author.baseUrl?.absoluteString) {
+            return currentBaseUrl
         }
 
-        // IPv6 or non-public IPv4 - resolve a public IPv4 via getProviderIP
-        // (its result list is already filtered by Gadget.isValidPublicIpAddress)
+        // Resolve again when the cached route is not a public IPv4. Validate
+        // the discovery result here even though getProviderIP also filters it.
         do {
-            if let ipv4 = try await hproseInstance.getProviderIP(author.mid, v4Only: true) {
-                let ipv4BaseUrl = "http://\(ipv4)"
+            if let resolvedIP = try await hproseInstance.getProviderIP(author.mid, v4Only: true),
+               let ipv4BaseUrl = publicIPv4BaseURL(from: resolvedIP) {
                 if let ipv4URL = URL(string: ipv4BaseUrl) {
                     await MainActor.run {
                         author.baseUrl = ipv4URL
@@ -716,8 +713,54 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             }
         } catch {}
 
-        // Never leak a private/Tailscale IP into a shared link
-        return AppConfig.baseUrl
+        // Do not fall back to AppConfig/base URLs: they may be private routes.
+        return nil
+    }
+
+    private static func publicIPv4BaseURL(from value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+        let normalized = value.hasPrefix("http://") || value.hasPrefix("https://")
+            ? value
+            : "http://\(value)"
+        guard let components = URLComponents(string: normalized),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              isStrictPublicIPv4(host) else {
+            return nil
+        }
+        let portSuffix = components.port.map { ":\($0)" } ?? ""
+        return "\(scheme)://\(host)\(portSuffix)"
+    }
+
+    private static func isStrictPublicIPv4(_ host: String) -> Bool {
+        let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard octets.count == 4 else { return false }
+        let values = octets.compactMap { UInt8($0) }
+        guard values.count == 4 else { return false }
+
+        let a = values[0]
+        let b = values[1]
+        let c = values[2]
+        switch (a, b, c) {
+        case (0, _, _), (10, _, _), (127, _, _):
+            return false
+        case (100, 64...127, _):                         // RFC 6598 / Tailscale
+            return false
+        case (169, 254, _), (172, 16...31, _), (192, 168, _):
+            return false
+        case (192, 0, 0), (192, 0, 2), (192, 88, 99):   // special/test ranges
+            return false
+        case (198, 18...19, _), (198, 51, 100), (203, 0, 113):
+            return false
+        case (224...255, _, _):                         // multicast/reserved
+            return false
+        default:
+            return true
+        }
     }
 
     /// Load attachment preview image (first image or video thumbnail)
