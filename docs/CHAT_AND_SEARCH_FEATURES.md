@@ -64,11 +64,11 @@ Uses `searchUsersIncremental()` which searches three sources progressively:
    - Results shown immediately for instant feedback
 
 2. **Core Data Cached Users**
-   - Searches up to 100 users from Core Data cache
+   - Searches every user in the Core Data cache
    - Updates UI with additional results as found
 
 3. **Tweet Authors from Cached Tweets**
-   - Extracts author IDs from recent cached tweets (up to 200 tweets, 50 unique authors)
+   - Extracts author IDs from every cached tweet
    - Fetches User instances for these authors
    - Only includes users with valid usernames
 
@@ -83,11 +83,11 @@ Results are scored and sorted by relevance:
 - Exact API matches are always placed first (at index 0)
 - If exact match already exists in partial results, it's moved to front
 - Results sorted by: score (ascending), then alphabetically by username
-- Limited to 25 results
+- Retains every matching cached user and displays them in pages of 25
 
 **Tweet Search Algorithm:**
 
-Tweet search only runs for non-`@` queries and searches:
+Tweet and comment search only runs for non-`@` queries and searches every cached `Tweet` object. Comments and replies share the same model and are therefore searched alongside top-level tweets:
 - **Content field**: Tweet text content
 - **Title field**: Tweet title (for media tweets)
 
@@ -100,11 +100,12 @@ Tweet search only runs for non-`@` queries and searches:
 **Exclusions:**
 - Private tweets are excluded from search results
 - Only searches content/title, NOT author username or name
-- Limited to 40 results
+- Retains every matching cached tweet, comment, and reply and displays them in pages of 20
 
 **Performance Optimizations:**
 - Incremental results: UI updates as each phase completes
-- Early termination: Stops searching when limit reached
+- Full cache coverage: Searches all in-memory and persisted cache entries
+- Paginated output: Renders one result page at a time with explicit load-more controls
 - Case-insensitive matching: All comparisons use lowercased strings
 - Deduplication: Each user/tweet appears only once with best score
 
@@ -300,4 +301,4 @@ Key differences from Android:
 - Uses SwiftUI instead of Jetpack Compose
 - iOS-specific navigation patterns
 - Swift concurrency instead of Kotlin coroutines
-- Core Data integration planned (vs Room in Android) 
+- Core Data integration planned (vs Room in Android)

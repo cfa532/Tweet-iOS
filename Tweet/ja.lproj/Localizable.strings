@@ -391,6 +391,7 @@
 "No results found" = "結果が見つかりません";
 "Try searching for a different username" = "別のユーザー名で検索してみてください";
 "Try a different search term" = "別の検索語で試してみてください";
+"Load more" = "さらに読み込む";
 "Search for users" = "ユーザーを検索";
 "Enter @username to find users" = "@ユーザー名を入力してユーザーを見つける";
 "Search by username or name..." = "ユーザー名または名前で検索...";

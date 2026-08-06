@@ -1149,7 +1149,7 @@ extension TweetCacheManager {
     /// Only returns users with valid usernames (username is required, name is optional)
     /// Uses multi-source search with relevance scoring (matches Android implementation)
     @MainActor
-    func searchUsers(query: String, limit: Int = 25) async -> [User] {
+    func searchUsers(query: String) async -> [User] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return []
         }
@@ -1197,69 +1197,58 @@ extension TweetCacheManager {
         let memoryUsers = User.getAllInstances()
         for (_, user) in memoryUsers {
             consider(user)
-            if scoredResults.count >= limit { break }
         }
         
         // Step 2: Search cached users in Core Data
-        if scoredResults.count < limit {
-            let coreDataUserRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[UserRecord], Never>) in
-                context.perform {
-                    let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                    request.fetchLimit = 100 // Get more candidates for better results
-                    
-                    var users: [UserRecord] = []
-                    if let cdUsers = try? self.context.fetch(request) {
-                        for cdUser in cdUsers {
-                            guard let userData = cdUser.userData,
-                                  let user = try? UserRecord.fromCacheData(userData) else { continue }
-                            users.append(user)
-                        }
-                    }
-                    continuation.resume(returning: users)
-                }
-            }
+        let coreDataUserRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[UserRecord], Never>) in
+            context.perform {
+                let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
 
-            let coreDataUsers = await MainActor.run {
-                coreDataUserRecords.map { UserStore.shared.merge($0, shouldUpdateBaseUrl: true) }
+                var users: [UserRecord] = []
+                if let cdUsers = try? self.context.fetch(request) {
+                    for cdUser in cdUsers {
+                        guard let userData = cdUser.userData,
+                              let user = try? UserRecord.fromCacheData(userData) else { continue }
+                        users.append(user)
+                    }
+                }
+                continuation.resume(returning: users)
             }
-            for user in coreDataUsers {
-                if scoredResults.count >= limit { break }
-                consider(user)
-            }
+        }
+
+        let coreDataUsers = await MainActor.run {
+            coreDataUserRecords.map { UserStore.shared.merge($0, shouldUpdateBaseUrl: true) }
+        }
+        for user in coreDataUsers {
+            consider(user)
         }
         
         // Step 3: Search users from cached tweets (tweet authors)
-        if scoredResults.count < limit {
-            let candidateUserIds = await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>, Never>) in
-                context.perform {
-                    let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-                    tweetRequest.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
-                    tweetRequest.fetchLimit = 200 // Check recent tweets for author candidates
-                    
-                    var userIds = Set<String>()
-                    if let cdTweets = try? self.context.fetch(tweetRequest) {
-                        // Collect unique author IDs from recent tweets by decoding tweet data
-                        for cdTweet in cdTweets {
-                            if let tweetData = cdTweet.tweetData,
-                               let tweet = try? TweetRecord.fromCacheData(tweetData) {
-                                userIds.insert(tweet.authorId)
-                            }
-                            if userIds.count >= 50 { break }
+        let candidateUserIds = await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>, Never>) in
+            context.perform {
+                let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+
+                var userIds = Set<String>()
+                if let cdTweets = try? self.context.fetch(tweetRequest) {
+                    // Collect every unique author ID represented in the tweet cache.
+                    for cdTweet in cdTweets {
+                        if let tweetData = cdTweet.tweetData,
+                           let tweet = try? TweetRecord.fromCacheData(tweetData) {
+                            userIds.insert(tweet.authorId)
                         }
                     }
-                    continuation.resume(returning: userIds)
                 }
+                continuation.resume(returning: userIds)
             }
+        }
+
+        // Fetch and consider these users outside the closure
+        for userId in candidateUserIds {
+            if scoredResults[userId] != nil { continue } // Already have this user
             
-            // Fetch and consider these users outside the closure
-            for userId in candidateUserIds {
-                if scoredResults.count >= limit { break }
-                if scoredResults[userId] != nil { continue } // Already have this user
-                
-                let user = User.getInstance(mid: userId)
-                if user.username != nil {
-                    consider(user)
-                }
+            let user = User.getInstance(mid: userId)
+            if user.username != nil {
+                consider(user)
             }
         }
         
@@ -1273,7 +1262,6 @@ extension TweetCacheManager {
                 let username2 = rhs.user.username?.lowercased() ?? ""
                 return username1 < username2
             }
-            .prefix(limit)
             .map { $0.user }
         
         return Array(sortedResults)
@@ -1284,7 +1272,6 @@ extension TweetCacheManager {
     @MainActor
     func searchUsersIncremental(
         query: String,
-        limit: Int = 25,
         onResults: @escaping @MainActor @Sendable ([User]) async -> Void
     ) async {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -1342,7 +1329,6 @@ extension TweetCacheManager {
                     let username2 = rhs.user.username?.lowercased() ?? ""
                     return username1 < username2
                 }
-                .prefix(limit)
                 .map { $0.user }
             return Array(sorted)
         }
@@ -1351,7 +1337,6 @@ extension TweetCacheManager {
         let memoryUsers = User.getAllInstances()
         for (_, user) in memoryUsers {
             consider(user)
-            if scoredResults.count >= limit { break }
         }
         
         // Show first results immediately
@@ -1360,79 +1345,69 @@ extension TweetCacheManager {
         }
         
         // Step 2: Search cached users in Core Data - update UI
-        if scoredResults.count < limit {
-            let coreDataUserRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[UserRecord], Never>) in
-                context.perform {
-                    let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                    request.fetchLimit = 100
-                    
-                    var users: [UserRecord] = []
-                    if let cdUsers = try? self.context.fetch(request) {
-                        for cdUser in cdUsers {
-                            guard let userData = cdUser.userData,
-                                  let user = try? UserRecord.fromCacheData(userData) else { continue }
-                            users.append(user)
-                        }
-                    }
-                    continuation.resume(returning: users)
-                }
-            }
+        let coreDataUserRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[UserRecord], Never>) in
+            context.perform {
+                let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
 
-            let coreDataUsers = await MainActor.run {
-                coreDataUserRecords.map { UserStore.shared.merge($0, shouldUpdateBaseUrl: true) }
+                var users: [UserRecord] = []
+                if let cdUsers = try? self.context.fetch(request) {
+                    for cdUser in cdUsers {
+                        guard let userData = cdUser.userData,
+                              let user = try? UserRecord.fromCacheData(userData) else { continue }
+                        users.append(user)
+                    }
+                }
+                continuation.resume(returning: users)
             }
-            for user in coreDataUsers {
-                if scoredResults.count >= limit { break }
-                consider(user)
-            }
-            
-            // Show updated results
-            await onResults(getSortedResults())
+        }
+
+        let coreDataUsers = await MainActor.run {
+            coreDataUserRecords.map { UserStore.shared.merge($0, shouldUpdateBaseUrl: true) }
+        }
+        for user in coreDataUsers {
+            consider(user)
         }
         
+        // Show updated results
+        await onResults(getSortedResults())
+
         // Step 3: Search users from cached tweets (tweet authors) - final update
-        if scoredResults.count < limit {
-            let candidateUserIds = await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>, Never>) in
-                context.perform {
-                    let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-                    tweetRequest.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
-                    tweetRequest.fetchLimit = 200
-                    
-                    var userIds = Set<String>()
-                    if let cdTweets = try? self.context.fetch(tweetRequest) {
-                        // Collect unique author IDs from recent tweets by decoding tweet data
-                        for cdTweet in cdTweets {
-                            if let tweetData = cdTweet.tweetData,
-                               let tweet = try? TweetRecord.fromCacheData(tweetData) {
-                                userIds.insert(tweet.authorId)
-                            }
-                            if userIds.count >= 50 { break }
+        let candidateUserIds = await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>, Never>) in
+            context.perform {
+                let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+
+                var userIds = Set<String>()
+                if let cdTweets = try? self.context.fetch(tweetRequest) {
+                    // Collect every unique author ID represented in the tweet cache.
+                    for cdTweet in cdTweets {
+                        if let tweetData = cdTweet.tweetData,
+                           let tweet = try? TweetRecord.fromCacheData(tweetData) {
+                            userIds.insert(tweet.authorId)
                         }
                     }
-                    continuation.resume(returning: userIds)
                 }
+                continuation.resume(returning: userIds)
             }
-            
-            // Fetch and consider these users outside the closure
-            for userId in candidateUserIds {
-                if scoredResults.count >= limit { break }
-                if scoredResults[userId] != nil { continue }
-                
-                let user = User.getInstance(mid: userId)
-                if user.username != nil {
-                    consider(user)
-                }
-            }
-            
-            // Show final results
-            await onResults(getSortedResults())
         }
+
+        // Fetch and consider these users outside the closure
+        for userId in candidateUserIds {
+            if scoredResults[userId] != nil { continue }
+            
+            let user = User.getInstance(mid: userId)
+            if user.username != nil {
+                consider(user)
+            }
+        }
+
+        // Show final results
+        await onResults(getSortedResults())
     }
     
-    /// Search for tweets by content and title only (not author username/name)
-    /// Matches Android implementation - only searches in content and title
+    /// Search every cached tweet and comment by content and title only (not author username/name).
+    /// Comments and replies share the Tweet model and are included in the in-memory store.
     @MainActor
-    func searchTweets(query: String, limit: Int = 40) async -> [Tweet] {
+    func searchTweets(query: String) async -> [Tweet] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return []
         }
@@ -1482,40 +1457,33 @@ extension TweetCacheManager {
         let memoryTweets = Tweet.getAllInstances()
         for (_, tweet) in memoryTweets {
             consider(tweet)
-            if scoredResults.count >= limit { break }
         }
         
         // Step 2: Search cached tweets in Core Data
-        if scoredResults.count < limit {
-            let coreDataTweetRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[TweetRecord], Never>) in
-                context.perform {
-                    let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-                    request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
-                    request.fetchLimit = 400 // Get more candidates for better results
-                    
-                    var tweets: [TweetRecord] = []
-                    if let cdTweets = try? self.context.fetch(request) {
-                        for cdTweet in cdTweets {
-                            if let tweetData = cdTweet.tweetData,
-                               let tweet = try? TweetRecord.fromCacheData(tweetData) {
-                                tweets.append(tweet)
-                            }
-                            if tweets.count >= 400 { break }
+        let coreDataTweetRecords = await withCheckedContinuation { (continuation: CheckedContinuation<[TweetRecord], Never>) in
+            context.perform {
+                let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+
+                var tweets: [TweetRecord] = []
+                if let cdTweets = try? self.context.fetch(request) {
+                    for cdTweet in cdTweets {
+                        if let tweetData = cdTweet.tweetData,
+                           let tweet = try? TweetRecord.fromCacheData(tweetData) {
+                            tweets.append(tweet)
                         }
                     }
-                    continuation.resume(returning: tweets)
                 }
+                continuation.resume(returning: tweets)
             }
+        }
 
-            let coreDataTweets = await MainActor.run {
-                coreDataTweetRecords.map { record in
-                    TweetStore.shared.merge(record)
-                }
+        let coreDataTweets = await MainActor.run {
+            coreDataTweetRecords.map { record in
+                TweetStore.shared.merge(record)
             }
-            for tweet in coreDataTweets {
-                if scoredResults.count >= limit { break }
-                consider(tweet)
-            }
+        }
+        for tweet in coreDataTweets {
+            consider(tweet)
         }
         
         // Sort by score (lower is better), then by timestamp (newer first)
@@ -1527,7 +1495,6 @@ extension TweetCacheManager {
                 // If scores are equal, sort by timestamp (newer first)
                 return lhs.tweet.timestamp > rhs.tweet.timestamp
             }
-            .prefix(limit)
             .map { $0.tweet }
         
         // Ensure authors are loaded for display

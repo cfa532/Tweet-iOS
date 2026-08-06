@@ -130,8 +130,19 @@ struct SearchScreen: View {
                         // User results section
                         if !searchViewModel.userResults.isEmpty {
                             Section(header: Text(LocalizedStringKey("Accounts"))) {
-                                ForEach(searchViewModel.userResults) { user in
+                                ForEach(searchViewModel.visibleUserResults) { user in
                                     UserSearchResultRow(user: user)
+                                }
+
+                                if searchViewModel.hasMoreUserResults {
+                                    Button {
+                                        searchViewModel.loadNextUserPage()
+                                    } label: {
+                                        Text(LocalizedStringKey("Load more"))
+                                            .frame(maxWidth: .infinity)
+                                            .foregroundColor(XTheme.accentColor)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
                                 }
                             }
                         }
@@ -139,8 +150,19 @@ struct SearchScreen: View {
                         // Tweet results section
                         if !searchViewModel.tweetResults.isEmpty {
                             Section(header: Text(LocalizedStringKey("Tweets"))) {
-                                ForEach(searchViewModel.tweetResults) { tweet in
+                                ForEach(searchViewModel.visibleTweetResults) { tweet in
                                     TweetSearchResultRow(tweet: tweet)
+                                }
+
+                                if searchViewModel.hasMoreTweetResults {
+                                    Button {
+                                        searchViewModel.loadNextTweetPage()
+                                    } label: {
+                                        Text(LocalizedStringKey("Load more"))
+                                            .frame(maxWidth: .infinity)
+                                            .foregroundColor(XTheme.accentColor)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
                                 }
                             }
                         }
@@ -259,6 +281,8 @@ class SearchViewModel: ObservableObject {
     @Published var searchText: String = ""
     @Published var isLoading = false
     @Published var countdownSeconds: Int = 30
+    @Published private(set) var userPage = 1
+    @Published private(set) var tweetPage = 1
 
     private let hproseInstance = HproseInstance.shared
     private let cacheManager = TweetCacheManager.shared
@@ -266,8 +290,36 @@ class SearchViewModel: ObservableObject {
     private var activeSearchTask: Task<Void, Never>?
 
     private static let searchTimeoutSeconds = 30
+    private static let userPageSize = 25
+    private static let tweetPageSize = 20
 
     private init() {}
+
+    var visibleUserResults: [User] {
+        Array(userResults.prefix(userPage * Self.userPageSize))
+    }
+
+    var visibleTweetResults: [Tweet] {
+        Array(tweetResults.prefix(tweetPage * Self.tweetPageSize))
+    }
+
+    var hasMoreUserResults: Bool {
+        visibleUserResults.count < userResults.count
+    }
+
+    var hasMoreTweetResults: Bool {
+        visibleTweetResults.count < tweetResults.count
+    }
+
+    func loadNextUserPage() {
+        guard hasMoreUserResults else { return }
+        userPage += 1
+    }
+
+    func loadNextTweetPage() {
+        guard hasMoreTweetResults else { return }
+        tweetPage += 1
+    }
 
     func search() async {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -281,6 +333,8 @@ class SearchViewModel: ObservableObject {
             countdownSeconds = Self.searchTimeoutSeconds
             userResults = []
             tweetResults = []
+            userPage = 1
+            tweetPage = 1
         }
 
         let isUsernameOnly = query.hasPrefix("@")
@@ -344,7 +398,7 @@ class SearchViewModel: ObservableObject {
             // Always do partial search of known usernames/names
             // Capture exactUser as immutable to avoid Swift 6 concurrency error
             let capturedExactUser = exactUser
-            await cacheManager.searchUsersIncremental(query: userQuery, limit: 25) { [weak self] users in
+            await cacheManager.searchUsersIncremental(query: userQuery) { [weak self] users in
                 // Update UI immediately with each batch of results
                 guard let self = self else { return }
                 await MainActor.run {
@@ -371,7 +425,7 @@ class SearchViewModel: ObservableObject {
 
         // Only search tweets if query doesn't start with @ (matches Android logic)
         if !isUsernameOnly {
-            let tweets = await cacheManager.searchTweets(query: query, limit: 40)
+            let tweets = await cacheManager.searchTweets(query: query)
             await MainActor.run {
                 self.tweetResults = tweets
             }
@@ -382,6 +436,8 @@ class SearchViewModel: ObservableObject {
         await MainActor.run {
             userResults = []
             tweetResults = []
+            userPage = 1
+            tweetPage = 1
         }
     }
     
