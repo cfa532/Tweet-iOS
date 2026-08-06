@@ -390,7 +390,6 @@ struct TweetItemView: View, @MainActor Equatable {
                             Spacer(minLength: 0)
                             TweetMenu(
                                 tweet: tweet,
-                                editTweet: originalTweet,
                                 isPinned: isPinned,
                                 showDeleteButton: showDeleteButton,
                                 onShareTap: { shareFromFeedMenu(originalTweet) },

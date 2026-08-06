@@ -873,7 +873,7 @@ class TweetCellContentView: UIView {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let shareTweet = await self.resolveEditTweet(for: tweet, hproseInstance: hproseInstance)
+                let shareTweet = await self.resolveOriginalTweet(for: tweet, hproseInstance: hproseInstance)
                 let items = await TweetActionBarView.buildFeedMenuShareItems(
                     tweet: shareTweet,
                     hproseInstance: hproseInstance
@@ -916,10 +916,17 @@ class TweetCellContentView: UIView {
                 guard let self, let pvc = self.parentViewController else { return }
                 Task { @MainActor [weak self, weak pvc] in
                     guard let self, let pvc else { return }
-                    let editTweet = await self.resolveEditTweet(
-                        for: tweet,
-                        hproseInstance: hproseInstance
-                    )
+                    let hasOwnContent = (tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                        || (tweet.attachments?.isEmpty == false)
+                    let editTweet: Tweet
+                    if hasOwnContent {
+                        editTweet = tweet
+                    } else {
+                        editTweet = await self.resolveOriginalTweet(
+                            for: tweet,
+                            hproseInstance: hproseInstance
+                        )
+                    }
                     let sheet = UIHostingController(
                         rootView: AdminTweetContentEditSheet(tweet: editTweet)
                             .environmentObject(hproseInstance)
@@ -1094,7 +1101,7 @@ class TweetCellContentView: UIView {
     }
 
     @MainActor
-    private func resolveEditTweet(for tweet: Tweet, hproseInstance: HproseInstance) async -> Tweet {
+    private func resolveOriginalTweet(for tweet: Tweet, hproseInstance: HproseInstance) async -> Tweet {
         guard let originalTweetId = tweet.originalTweetId,
               let originalAuthorId = tweet.originalAuthorId else {
             return tweet
