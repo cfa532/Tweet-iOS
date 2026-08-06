@@ -269,32 +269,21 @@ final class TweetUploadManager {
                     guard let hproseInstance = self.hproseInstance else { return }
                     
                     print("📝 [Background Submit] Submitting comment with image attachments...")
-                    
+
+                    // Start the quote tweet alongside the comment. The two requests share no
+                    // data, so a slow or timed-out add_comment must not swallow the quote.
+                    let quoteTask = self.startQuoteTweetIfNeeded(
+                        isQuoting: isQuoting,
+                        comment: comment,
+                        quoting: tweet,
+                        hproseInstance: hproseInstance
+                    )
+
                     do {
                         if let newComment = try await hproseInstance.addComment(comment, to: tweet) {
                             print("✅ [Background Submit] Comment posted successfully!")
                             print("[TweetUploadManager] New comment mid: \(newComment.mid)")
                             print("[TweetUploadManager] Parent tweet mid: \(tweet.mid)")
-                            
-                            // If quoting, also upload as a new tweet
-                            if isQuoting {
-                                print("📝 [Quote Tweet] Uploading comment as quote tweet...")
-                                newComment.originalTweetId = tweet.mid
-                                newComment.originalAuthorId = tweet.authorId
-                                if let quoteTweet = try await hproseInstance.uploadTweet(newComment) {
-                                    print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
-                                    // Update retweet count on the original tweet
-                                    if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: quoteTweet.mid, direction: true) {
-                                        // Cache the updated original tweet with its authorId as the cache key
-                                        TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
-                                        print("✅ [Quote Tweet] Updated retweet count for original tweet")
-                                    } else {
-                                        print("⚠️ [Quote Tweet] Failed to update retweet count")
-                                    }
-                                } else {
-                                    print("❌ [Quote Tweet] Failed to post quote tweet")
-                                }
-                            }
                             // Success notification is posted by addComment()
                         } else {
                             let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to post comment", comment: "Comment error")])
@@ -320,6 +309,8 @@ final class TweetUploadManager {
                             }
                         }
                     }
+
+                    await quoteTask?.value
                 }
             } catch {
                 print("❌ [Comment Upload] Failed to upload attachments: \(error)")
@@ -1025,33 +1016,22 @@ extension TweetUploadManager {
         }
         
         comment.attachments = finalAttachments
-        
+
+        // Start the quote tweet alongside the comment. The two requests share no data, so a
+        // slow or timed-out add_comment must not swallow the quote.
+        let quoteTask = startQuoteTweetIfNeeded(
+            isQuoting: isQuoting,
+            comment: comment,
+            quoting: parentTweet,
+            hproseInstance: hproseInstance
+        )
+
         // Submit the comment
         do {
             if let newComment = try await hproseInstance.addComment(comment, to: parentTweet) {
                 print("✅ [Comment Submit] Comment posted successfully with \(finalAttachments.count) attachments!")
                 print("[TweetUploadManager] New comment mid: \(newComment.mid)")
                 print("[TweetUploadManager] Parent tweet mid: \(parentTweet.mid)")
-                
-                // If quoting, also upload as a new tweet
-                if isQuoting {
-                    print("📝 [Quote Tweet] Uploading comment as quote tweet...")
-                    newComment.originalTweetId = parentTweet.mid
-                    newComment.originalAuthorId = parentTweet.authorId
-                    if let quoteTweet = try await hproseInstance.uploadTweet(newComment) {
-                        print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
-                        // Update retweet count on the original tweet
-                        if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: parentTweet, retweetId: quoteTweet.mid, direction: true) {
-                            // Cache the updated original tweet with its authorId as the cache key
-                            TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
-                            print("✅ [Quote Tweet] Updated retweet count for original tweet")
-                        } else {
-                            print("⚠️ [Quote Tweet] Failed to update retweet count")
-                        }
-                    } else {
-                        print("❌ [Quote Tweet] Failed to post quote tweet")
-                    }
-                }
                 // Success notification is posted by addComment()
             } else {
                 throw NSError(domain: "CommentUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to post comment"])
@@ -1063,18 +1043,100 @@ extension TweetUploadManager {
             if retryCount < maxRetries {
                 print("🔄 [Comment Submit] Retrying... (\(retryCount + 1)/\(maxRetries))")
                 try? await Task.sleep(nanoseconds: UInt64(retryCount + 1) * 2_000_000_000) // Exponential backoff
+                // isQuoting: false — the quote tweet is already in flight from this attempt.
+                // Re-arming it here would publish a second quote and count it twice.
                 await submitCommentWithCompletedJobs(
                     comment: comment,
                     to: parentTweet,
                     itemData: itemData,
                     completedCIDs: completedCIDs,
                     retryCount: retryCount + 1,
-                    isQuoting: isQuoting
+                    isQuoting: false
                 )
             } else {
                 print("❌ [Comment Submit] Max retries reached")
                 await showFailureToast(message: NSLocalizedString("Failed to post comment after retries", comment: "Error"))
             }
+        }
+
+        await quoteTask?.value
+    }
+
+    /// Kick off the quote tweet that accompanies a quoted comment, to run concurrently with
+    /// add_comment. Returns nil when the comment isn't a quote.
+    ///
+    /// The payload is snapshotted synchronously, before either request starts: addComment()
+    /// nils out the comment's author while encoding it and rewrites its mid afterwards, so a
+    /// concurrent read of the live comment object could capture it mid-flight. The quote
+    /// shares no state with the comment — they are separate objects server-side (add_comment.js
+    /// strips originalTweetId before storing the comment), and a comment must never influence
+    /// the original's retweetCount.
+    private func startQuoteTweetIfNeeded(
+        isQuoting: Bool,
+        comment: Tweet,
+        quoting originalTweet: Tweet,
+        hproseInstance: HproseInstance
+    ) -> Task<Void, Never>? {
+        guard isQuoting else { return nil }
+
+        let payload = Tweet.getInstance(
+            mid: "TEMP_QUOTE_\(UUID().uuidString)",
+            authorId: comment.authorId,
+            content: comment.content,
+            timestamp: comment.timestamp,
+            originalTweetId: originalTweet.mid,
+            originalAuthorId: originalTweet.authorId,
+            parentTweetId: comment.parentTweetId,
+            author: comment.author,
+            attachments: comment.attachments
+        )
+
+        return Task { @MainActor [weak self] in
+            await self?.publishQuoteTweet(
+                payload: payload,
+                quoting: originalTweet,
+                hproseInstance: hproseInstance
+            )
+        }
+    }
+
+    /// Publish a quote tweet and count it against the original.
+    ///
+    /// Creating the quote increments the original's retweetCount here; deleting it decrements
+    /// via HproseInstance.deleteTweet, keyed by the same mid, so the two stay symmetric.
+    private func publishQuoteTweet(
+        payload: Tweet,
+        quoting originalTweet: Tweet,
+        hproseInstance: HproseInstance
+    ) async {
+        // Read before uploading: uploadTweet()'s fallback path assigns the new server id onto
+        // the object it was handed, which would leave the temporary instance uncleared.
+        let temporaryId = payload.mid
+        print("📝 [Quote Tweet] Uploading quote tweet quoting \(originalTweet.mid)...")
+        defer { Tweet.clearInstance(mid: temporaryId) }
+
+        do {
+            guard let quoteTweet = try await hproseInstance.uploadTweet(payload) else {
+                print("❌ [Quote Tweet] Failed to post quote tweet")
+                return
+            }
+            print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
+
+            if let updatedTweet = await hproseInstance.updateRetweetCount(
+                tweet: originalTweet,
+                retweetId: quoteTweet.mid,
+                direction: true
+            ) {
+                // Cache the updated original tweet with its authorId as the cache key
+                TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
+                print("✅ [Quote Tweet] Updated retweet count for original tweet")
+            } else {
+                print("⚠️ [Quote Tweet] Failed to update retweet count")
+            }
+        } catch {
+            // Runs on its own task, so a failure here cannot surface as a comment failure and
+            // trigger the comment retry — which would duplicate the comment.
+            print("❌ [Quote Tweet] Failed to post quote tweet: \(error)")
         }
     }
 

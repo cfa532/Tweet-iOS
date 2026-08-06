@@ -4274,6 +4274,20 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     )
                 }
                 
+                // add_comment.js creates this quote tweet itself when the submitted comment
+                // carries originalTweetId, and that path never touches the original's retweet
+                // list. Count it here so a quote is counted no matter which side created it —
+                // the key is the quote's own mid, matching what deleteTweet later removes.
+                if let updatedOriginal = await updateRetweetCount(
+                    tweet: tweet,
+                    retweetId: retweetId,
+                    direction: true
+                ) {
+                    await MainActor.run {
+                        TweetCacheManager.shared.saveTweet(updatedOriginal, userId: updatedOriginal.authorId)
+                    }
+                }
+
                 // For comments, we should NOT post newTweetCreated notification
                 // Comments should only appear in comment sections, not in the main feed
                 hproseDebug("[HproseInstance] Comment created with retweetId: \(retweetId), but NOT posting newTweetCreated notification")

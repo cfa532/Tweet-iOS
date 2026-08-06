@@ -426,14 +426,16 @@ struct ReplyEditorView: View {
             return
         }
         
-        // Create comment tweet using singleton
+        // Create comment tweet using singleton.
+        // Quoting is expressed through scheduleCommentUpload(isQuoting:), not by putting
+        // originalTweetId on the comment: add_comment.js would then create the quote tweet
+        // server-side, which never touches the original's retweet list, so the quote would
+        // not be counted.
         let comment = Tweet.getInstance(
             mid: UUID().uuidString, // Temporary ID, will be replaced by server
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(),
-            originalTweetId: isQuoting ? parentTweet.mid : nil,
-            originalAuthorId: isQuoting ? parentTweet.authorId : nil,
             parentTweetId: parentTweet.mid,
             author: hproseInstance.appUser
         )
@@ -447,7 +449,7 @@ struct ReplyEditorView: View {
             )
             
             // Schedule comment upload in background (same as CommentComposeView)
-            hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
+            hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData, isQuoting: isQuoting)
             
             print("DEBUG: Reply scheduled for upload with \(itemData.count) attachments")
         } catch {
