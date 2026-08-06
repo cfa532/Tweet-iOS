@@ -1643,9 +1643,9 @@ struct TweetActionButtonsView: View {
             if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
                 domain = "http://" + domain
             }
-            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+            urlText = "\(domain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         } else {
-            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+            urlText = "\(AppConfig.shareDomain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         }
         
         // Only add space if there's content before the URL

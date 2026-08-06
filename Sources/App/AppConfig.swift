@@ -14,7 +14,7 @@ enum BuildConfiguration {
 }
 
 struct AppConfig {
-    /// Fixed public domain for deep-link share URLs (feed share button):
+    /// Fixed public domain for fragment-form share URLs (feed share button):
     /// iOS Universal Links / Android App Links open the app directly; browsers
     /// are redirected to the http-only web app by the Cloudflare Worker in
     /// cloudflare/dtweet-worker/. http scheme: the web stack (Leither) is

@@ -2,11 +2,11 @@
 
 This document describes the `dtweet.com` deep-link setup and the rules that
 keep it compatible with existing Leither web URLs such as `t1.fireshare.us` and
-`t1.www333.store`.
+`t1.www3.shop`.
 
 The goal is:
 
-- `http://dtweet.com/tweet/{mid}/{authorId}` opens the native app when the app
+- `http://dtweet.com/#tweet/{mid}/{authorId}` opens the native app when the app
   is installed.
 - The same URL opens a real web page when the app is not installed or when the
   user opens it in a desktop browser.
@@ -17,10 +17,10 @@ The goal is:
 
 | URL | Role | Expected behavior |
 |---|---|---|
-| `dtweet.com` | Public deep-link wrapper | iOS/Android verify it as an app-link domain. Browser navigations are redirected by the Worker to `http://t1.www333.store` with the same route and query. |
+| `dtweet.com` | Public deep-link wrapper | iOS/Android verify it as an app-link domain. Browser navigations are redirected by the Worker to `http://t1.www3.shop`; the browser retains the fragment locally. |
 | `www.dtweet.com` | Alias | Redirects permanently to `dtweet.com`. |
 | `dl.dtweet.com` | Public gateway alias | Served by the same Cloudflare Worker and static assets. Kept only for compatibility; new shared links should not need it. |
-| `t1.fireshare.us`, `t1.www333.store`, other Leither domains | Legacy web app hosts | `t1.www333.store` is the current browser fallback target. These hosts keep normal Leither route discovery and must not be forced through dtweet gateway behavior. |
+| `t1.fireshare.us`, `t1.www3.shop`, other Leither domains | Legacy web app hosts | `t1.www3.shop` is the current browser fallback target. These hosts keep normal Leither route discovery and must not be forced through dtweet gateway behavior. |
 | check_upgrade domain | Backend-controlled share domain | Used by some existing share paths and user settings. Independent of `dtweet.com`. |
 | provider IP entry URL | Direct node fallback | `http://{providerIP}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}`. Works without DNS. |
 
@@ -28,16 +28,22 @@ Use `dtweet.com` for share links that should behave like universal/app links.
 Do not share `dl.dtweet.com` as the primary public link unless a specific
 compatibility case needs it.
 
+The `#` in `domain/#tweet/...` is TweetWeb's external share-link delimiter; it
+does not indicate that TweetWeb uses Vue `createWebHashHistory()` for domain
+navigation. Normal domain navigation uses history mode. The distinct
+`provider/entry?...#/tweet/...` form is the IP-entry hash-routing contract.
+
 ## Request flow
 
 ### App installed
 
-1. The user taps `http://dtweet.com/tweet/{mid}/{authorId}` or
-   `https://dtweet.com/tweet/{mid}/{authorId}`.
+1. The user taps `http://dtweet.com/#tweet/{mid}/{authorId}` or
+   `https://dtweet.com/#tweet/{mid}/{authorId}`.
 2. iOS Universal Links or Android App Links check the association file already
    cached from `https://dtweet.com/.well-known/...`.
 3. The OS opens the native app before the normal browser navigation completes.
-4. The app parses `/tweet/{mid}/{authorId}` and opens the tweet.
+4. The app parses `tweet/{mid}/{authorId}` from the URL fragment and opens the
+   tweet.
 
 The native app does not depend on the Worker serving the tweet page for this
 case. The Worker only needs to serve valid association files over HTTPS.
@@ -45,8 +51,10 @@ case. The Worker only needs to serve valid association files over HTTPS.
 ### App not installed, or desktop browser
 
 1. The browser opens `dtweet.com`.
-2. After the association-file checks, the Cloudflare Worker returns a temporary
-   redirect to the same path and query on `http://t1.www333.store`.
+2. For `/#tweet/...`, the fragment is not sent in the HTTP request; the Worker
+   redirects to `http://t1.www3.shop` and the browser retains the fragment.
+   For a legacy `/tweet/...` path, the Worker explicitly redirects to
+   `http://t1.www3.shop/#tweet/...`, moving its query into the fragment route.
 3. Chrome may try HTTPS first; because that host does not provide a valid HTTPS
    page, normal browser fallback settles on HTTP. Safari opens the HTTP target
    directly.
@@ -58,7 +66,7 @@ failure and an HTTPS-to-HTTP redirect loop.
 
 ### Existing Leither domains
 
-When the page host is `t1.fireshare.us`, `t1.www333.store`, or another normal
+When the page host is `t1.fireshare.us`, `t1.www3.shop`, or another normal
 Leither web domain, TweetWeb must not switch into dtweet gateway mode. These
 hosts keep their original provider-route behavior, including any private routes
 that are valid for that host.
@@ -89,7 +97,7 @@ The Worker has three jobs:
 2. Serve Android App Links association:
    `/.well-known/assetlinks.json`
 3. Redirect browser navigations on `dtweet.com` to
-   `http://t1.www333.store`, while keeping `dl.dtweet.com` as a legacy asset and
+   `http://t1.www3.shop`, while keeping `dl.dtweet.com` as a legacy asset and
    origin route.
 
 The Worker routes are configured in:
@@ -121,7 +129,7 @@ run_worker_first = true
 Do not make `dtweet.com` browser navigation redirect to `dl.dtweet.com`. Chrome
 upgrades that host to HTTPS, which blocks Leither's HTTP provider requests as
 mixed content. The Worker must redirect browser navigations to
-`http://t1.www333.store`; `dl.dtweet.com` remains only a legacy route.
+`http://t1.www3.shop`; `dl.dtweet.com` remains only a legacy route.
 
 The `dtweet.com` zone's old single Redirect Rule named
 `Browser fallback to dl.dtweet.com` must remain disabled. Zone redirect rules
@@ -143,9 +151,10 @@ Bundle IDs:
   com.example.Tweet.debug
 ```
 
-Current path components:
+Current association components:
 
 ```text
+/ (with hash fragment tweet/*)
 /tweet/*
 /user/*
 /profile/*
@@ -210,10 +219,10 @@ Required behavior:
   `www.dtweet.com`, and `dl.dtweet.com`.
 - `browserUsableProviderRoutes()` filters private/Tailscale routes only when
   the current page host is one of those gateway hosts.
-- Legacy hosts such as `t1.fireshare.us` and `t1.www333.store` must return
+- Legacy hosts such as `t1.fireshare.us` and `t1.www3.shop` must return
   false from `isPublicWebGatewayHost()`.
 
-Redirecting browsers to `t1.www333.store` does not change that classification:
+Redirecting browsers to `t1.www3.shop` does not change that classification:
 after the redirect it is still a legacy Leither host and must retain normal
 provider-route behavior.
 
@@ -266,8 +275,8 @@ JavaScript asset and the app will render an empty/error page.
 
 | Share action | URL format | Rationale |
 |---|---|---|
-| Feed share button, plain tweet rows | `http://dtweet.com/tweet/{mid}/{authorId}` | Standard app-link URL with browser fallback. |
-| Detail-view share button | `http://{check_upgrade domain}/tweet/{mid}/{authorId}` | Preserves backend-controlled legacy behavior. |
+| Feed share button, plain tweet rows | `http://dtweet.com/#tweet/{mid}/{authorId}` | Standard app-link URL with browser fallback. |
+| Detail-view share button | `http://{check_upgrade domain}/#tweet/{mid}/{authorId}` | Uses the backend-controlled domain and TweetWeb's external share-link format. |
 | Detail-view dropdown menu to share | `http://{author provider IP}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}` | Works without DNS or app-link setup. |
 | Comment rows, fullscreen player, media browser | check_upgrade domain | Existing behavior. |
 
@@ -277,7 +286,8 @@ Comment shares append:
 ?fromComment=true&parentTweetId={mid}&parentAuthorId={mid}
 ```
 
-For provider-IP URLs, the comment parameters live inside the hash route.
+For provider-IP URLs, the comment parameters live inside the IP-entry hash
+route. For domain URLs, they are part of the external fragment-form share link.
 
 ## iOS implementation map
 
@@ -311,8 +321,9 @@ normal feed sharing uses the dtweet deep-link format.
 Sources/Utils/DeeplinkManager.swift
 ```
 
-Parses `/tweet/{mid}/{authorId}`, `/user/{id}`, `/profile/{id}`, and the
-`tweet://` custom scheme. It is host-agnostic after the OS has opened the app.
+Parses `/tweet/{mid}/{authorId}`, the fragment-form `tweet/{mid}/{authorId}` share link,
+`/user/{id}`, `/profile/{id}`, and the `tweet://` custom scheme. It is
+host-agnostic after the OS has opened the app.
 
 ```text
 Sources/Core/HproseInstance.swift
@@ -332,19 +343,22 @@ Sources/Core/HproseInstance.swift
    `assetlinks.json` in sync with release signing certificates only.
 5. Build TweetWeb so `dist/index.html` uses bare local asset names.
 6. Keep TweetWeb gateway detection limited to the exact dtweet host allowlist;
-   `t1.www333.store` remains a legacy host.
+   `t1.www3.shop` remains a legacy host.
 7. Keep the old `Browser fallback to dl.dtweet.com` zone Redirect Rule disabled.
 8. Publish/deploy the Worker and Leither app using the owner's normal release
    process.
 9. Verify these cases after publishing:
    - `https://dtweet.com/.well-known/apple-app-site-association` returns JSON.
    - `https://dtweet.com/.well-known/assetlinks.json` returns JSON.
-   - `http://dtweet.com/tweet/{mid}/{authorId}` opens the app on a device with
+   - `http://dtweet.com/#tweet/{mid}/{authorId}` opens the app on a device with
      the app installed.
-   - `https://dtweet.com/tweet/{mid}/{authorId}` redirects a desktop browser to
-     the same route on `http://t1.www333.store` and renders TweetWeb.
+   - `http://dtweet.com/tweet/{mid}/{authorId}` remains accepted by installed
+     native apps and redirects browsers to
+     `http://t1.www3.shop/#tweet/{mid}/{authorId}`.
+   - `https://dtweet.com/#tweet/{mid}/{authorId}` redirects a desktop browser to
+     the fragment-form route on `http://t1.www3.shop` and renders TweetWeb.
    - `http://t1.fireshare.us/` still renders the legacy Leither web app.
-   - `http://t1.www333.store/` still renders the legacy Leither web app.
+   - `http://t1.www3.shop/` still renders the legacy Leither web app.
 
 ## Common failure modes
 

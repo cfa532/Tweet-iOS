@@ -221,12 +221,15 @@ class DeeplinkManager: ObservableObject {
             return .tweet(tweetId: tweetId, authorId: authorId)
         }
         
-        // Handle hash fragment format: /entry?aid=...&ver=last#/tweet/{tweetId}/{authorId}
-        if let fragment = url.fragment, fragment.hasPrefix("/tweet/") {
+        // Handle hash fragment formats: #/tweet/{tweetId}/{authorId} and
+        // #tweet/{tweetId}/{authorId}.
+        if let fragment = url.fragment {
             let fragmentComponents = fragment.components(separatedBy: "/").filter { !$0.isEmpty }
             if fragmentComponents.count >= 2 && fragmentComponents[0] == "tweet" {
                 let tweetId = fragmentComponents[1]
-                let authorId = fragmentComponents.count >= 3 ? fragmentComponents[2] : ""
+                let authorId = fragmentComponents.count >= 3
+                    ? fragmentComponents[2].components(separatedBy: "?")[0]
+                    : ""
                 return .tweet(tweetId: tweetId, authorId: authorId)
             }
         }

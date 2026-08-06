@@ -1,13 +1,22 @@
 # Sharing System
 
-**Last Updated:** April 14, 2026  
+**Last Updated:** August 6, 2026
 **Status:** ✅ Production
 
 ---
 
 ## Overview
 
-The sharing system provides context-aware URL generation that adapts based on where the share action is initiated. It uses IP-based URLs for detail view sharing to ensure compatibility with the web application's Vue HashHistory router.
+The sharing system provides context-aware URL generation that adapts based on
+where the share action is initiated. Domain-based links are opened by TweetWeb
+when a native app does not claim them. Provider-IP links use the separate
+Leither `entry` form required for direct node access.
+
+The `#` in a domain URL such as `http://t1.www3.shop/#tweet/...` is part of
+TweetWeb's external share-link contract. It does not mean TweetWeb uses Vue
+`createWebHashHistory()` for domain navigation. TweetWeb keeps
+`createWebHistory()` for normal domain routes. Hash routing is reserved for the
+provider-IP `entry?...#/tweet/...` form.
 
 On iOS, the share flow also provides rich metadata to the system share sheet using `UIActivityItemSource` and `LPLinkMetadata`. That metadata is what allows apps such as WeChat to render a card-like preview even though the app is not using the WeChat SDK.
 
@@ -20,9 +29,10 @@ This behavior is platform-specific. Android's generic `ACTION_SEND` flow does no
 
 ## URL Formats
 
-### Detail View Sharing (TweetDetailView / CommentDetailView)
+### Provider-IP Entry Sharing (Detail Dropdown)
 
-When sharing from detail views, the app generates **IP-based entry URLs** with hash fragments:
+The detail dropdown's dedicated share-link action generates an **IP-based
+entry URL** with a hash fragment:
 
 ```
 {author's baseUrl}/entry?aid={appIdHash}&ver=last#/tweet/{tweetMid}/{authorId}
@@ -39,53 +49,54 @@ http://125.229.161.122:8080/entry?aid=h5U5jxPr2p2tg2kMr8UeyRMNIJ_&ver=last#/twee
 - **ver**: Version parameter set to `"last"` for latest app version
 - **Hash Fragment**: `#/tweet/{mid}/{authorId}` - Vue router path
 
-### Feed/Grid Sharing (TweetItemView)
+### Backend-Domain Sharing (Detail View / Comments)
 
-When sharing from the feed or grid view, the app uses the **traditional domain format**:
+When sharing through the backend-provided domain, the app uses TweetWeb's
+**fragment-form domain share format**:
 
 ```
-{domainToShare}/tweet/{tweetMid}/{authorId}
+{domainToShare}/#tweet/{tweetMid}/{authorId}
 ```
 
 **Example:**
 ```
-https://tweet.fireshare.us/tweet/abc123/user456
+http://t1.www3.shop/#tweet/abc123/user456
 ```
 
 ---
 
 ## Why Different Formats?
 
-### IP-Based URLs in Detail View
+### Provider-IP URLs in the Detail Dropdown
 
-The detail view uses **IP-based URLs** because:
+The detail dropdown offers an **IP-based URL** because:
 
 1. **Direct Author Access**: Each tweet author hosts their content on their own IP address
 2. **Decentralized Architecture**: Content is distributed across multiple user-hosted nodes
 3. **Immediate Resolution**: No DNS lookup needed, direct IP connection
-4. **Web App Compatibility**: Works seamlessly with Vue Router's HashHistory mode
+4. **Entry Routing Compatibility**: The `entry` loader reads the route from the hash fragment
 
-### Domain URLs in Feed
+### Domain URLs
 
-The feed uses **domain URLs** because:
+Backend-domain sharing uses **domain URLs** because:
 
 1. **User-Friendly**: Easier to remember and share
 2. **Brand Consistency**: Uses the main application domain
-3. **SEO Friendly**: Better for search engine indexing
+3. **TweetWeb Share Contract**: Uses `/#tweet/...` for externally shared tweet links
 4. **Gateway Access**: Routes through the main gateway for distributed content
 
 ---
 
 ## Web Application Integration
 
-### Vue Router HashHistory
+### Domain URLs: History Mode
 
-The web application uses **HashHistory** mode in Vue Router, which relies on URL hash fragments for routing:
+TweetWeb uses **HTML5 history mode** for normal domain navigation:
 
 ```javascript
 // Web app router configuration
 const router = createRouter({
-  history: createWebHashHistory(),
+  history: createWebHistory(),
   routes: [
     {
       path: '/tweet/:mid/:authorId',
@@ -95,12 +106,19 @@ const router = createRouter({
 })
 ```
 
-### Why HashHistory?
+An external domain share such as `/#tweet/{mid}/{authorId}` is recognized at
+TweetWeb ingress and resolved to the existing `/tweet/{mid}/{authorId}` history
+route. The fragment is an external URL envelope; it does not change the
+router's history implementation.
 
-1. **IP Compatibility**: Hash fragments work with any IP address or domain
-2. **No Server Configuration**: Doesn't require server-side routing rules
-3. **Client-Side Routing**: All routing handled by JavaScript
-4. **Bookmark Friendly**: URLs with hashes are fully shareable
+### Provider-IP URLs: Entry Hash Routing
+
+The provider-IP form is different:
+
+1. The browser must first load `/entry?aid=...&ver=last` from the selected node.
+2. The server never receives the fragment.
+3. After the entry app loads, `#/tweet/{mid}/{authorId}` selects the tweet.
+4. This hash-routing form is retained specifically for direct IP/node URLs.
 
 ### URL Flow Example
 
@@ -112,7 +130,7 @@ const router = createRouter({
 2. **Recipient opens link in web browser:**
    - Browser loads `entry` page from author's IP
    - Vue app initializes with `aid` and `ver` parameters
-   - Vue Router reads hash fragment: `#/tweet/abc123/user456`
+   - The IP-entry router reads hash fragment: `#/tweet/abc123/user456`
    - App navigates to tweet detail view with specified mid and authorId
 
 3. **Content loads directly from author's node:**
@@ -126,28 +144,18 @@ const router = createRouter({
 
 ### Context Detection
 
-The system uses an `isInDetailView` flag to determine the appropriate URL format:
+The current share policy selects one of three explicit URL styles:
 
 ```swift
-struct TweetActionButtonsView: View {
-    var isInDetailView: Bool = false
-    
-    private func tweetShareText(_ tweet: Tweet) -> String {
-        let urlText: String
-        if isInDetailView {
-            // Detail view: IP-based entry URL
-            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
-            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
-        } else {
-            // Feed: Traditional domain URL
-            var text = hproseInstance.domainToShare
-            text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
-            urlText = text
-        }
-        return urlText
-    }
+enum TweetShareLinkStyle {
+    case deeplink   // dtweet.com/#tweet/... for plain feed rows
+    case webDomain // check_upgrade domain/#tweet/... for direct detail/comment shares
+    case providerIP // provider/entry?...#/tweet/... for the detail dropdown
 }
 ```
+
+The provider-IP form is not the general detail-view default. It is selected by
+the detail dropdown's dedicated “share link” action.
 
 ### Screenshot Capture
 
@@ -278,39 +286,38 @@ http://125.229.161.122:8080/entry?aid=h5U5jxPr2p2tg2kMr8UeyRMNIJ_&ver=last#/twee
 
 ---
 
-## Files Modified
-
-### November 14, 2025 - Share System Enhancement
+## Current Implementation Files
 
 **TweetActionButtonsView.swift**
-- Added `isInDetailView` parameter
-- Implemented dual URL format logic
-- Enhanced video screenshot capture with context awareness
+- Plain feed rows use `dtweet.com/#tweet/...`.
+- Detail, fullscreen, and comment shares use the backend-provided
+  `domain/#tweet/...` form.
+- Screenshot capture remains context-aware.
 
 **TweetDetailView.swift**
-- Pass `isInDetailView: true` to TweetActionButtonsView
-- Ensures detail view sharing uses IP-based URLs
+- The direct share button uses the backend-provided domain.
+- The dropdown share-link action uses the provider-IP entry URL.
 
 **CommentDetailView.swift**
-- Pass `isInDetailView: true` to TweetActionButtonsView
-- Maintains consistency with TweetDetailView
+- Comment sharing uses the backend-provided domain and appends parent context
+  inside the fragment-form URL.
 
 ---
 
 ## Testing Checklist
 
-### Detail View Sharing
+### Detail Dropdown Provider-IP Sharing
 - [ ] Open tweet in TweetDetailView
-- [ ] Tap share button
+- [ ] Open the dropdown and choose the share-link action
 - [ ] Verify URL format: `{ip}/entry?aid={hash}&ver=last#/tweet/{mid}/{authorId}`
 - [ ] Verify screenshot shows current frame from detail view player
 - [ ] Open shared link in web browser
 - [ ] Verify Vue app loads and navigates to tweet
 
-### Feed Sharing
-- [ ] Share tweet from feed (TweetItemView)
-- [ ] Verify URL format: `{domain}/tweet/{mid}/{authorId}`
-- [ ] Verify traditional domain-based URL
+### Backend-Domain Sharing
+- [ ] Share a tweet from a detail view or comment row
+- [ ] Verify URL format: `{domain}/#tweet/{mid}/{authorId}` when using the backend-provided domain
+- [ ] Verify TweetWeb opens the external fragment-form URL and resolves the history-mode tweet route
 - [ ] Screenshot matches grid view player state
 
 ### Build Configurations
@@ -338,15 +345,19 @@ If Android cannot obtain a WeChat `AppID`, there is no native SDK path to guaran
 2. Make sure the destination webpage exposes strong public metadata
 3. Treat WeChat card rendering as server-side URL unfurling behavior rather than app-driven share metadata
 
-Important limitation: detail-view share URLs currently encode the tweet route in the hash fragment (`#/tweet/...`). Server-side crawlers do not send URL fragments in HTTP requests, so WeChat unfurling cannot reliably derive tweet-specific metadata from those URLs alone. A clean canonical URL such as `/tweet/{mid}/{authorId}` is much more suitable for crawler-generated cards.
+Important limitation: domain and provider-IP share URLs currently encode the
+tweet identity after `#`. Server-side crawlers do not send URL fragments in
+HTTP requests, so WeChat unfurling cannot reliably derive tweet-specific
+metadata from those URLs alone. A clean canonical URL such as
+`/tweet/{mid}/{authorId}` is much more suitable for crawler-generated cards.
 
 ### Migration Notes
 
-If the web app switches from HashHistory to HTML5 History mode:
-- Remove hash fragment from URL format
-- Update URL generation to use clean paths
-- Ensure server-side routing configuration
-- Maintain backward compatibility with existing shared links
+TweetWeb already uses HTML5 history mode for normal domain navigation. Do not
+remove `#` from domain share URLs merely because of that router setting; the
+fragment-form URL is a separate external contract. If the provider-IP entry
+loader is changed in the future, migrate its `#/tweet/...` route separately and
+keep backward compatibility with existing node links.
 
 ---
 
@@ -355,4 +366,3 @@ If the web app switches from HashHistory to HTML5 History mode:
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Overall app architecture
 - **[VIDEO_PLAYBACK_PIPELINE.md](./VIDEO_PLAYBACK_PIPELINE.md)** - Video playback and network behavior
 - **[UNIVERSAL_LINKS.md](./UNIVERSAL_LINKS.md)** - Link routing behavior
-

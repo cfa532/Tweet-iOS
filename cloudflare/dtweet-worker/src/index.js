@@ -5,10 +5,11 @@
  * - /.well-known/assetlinks.json             -> Android App Links
  * - browser navigations                      -> redirected to the HTTP
  *   TweetWeb host, so users without the app see the real web page.
- *   (/user/* and /profile/* are rewritten to TweetWeb's /author/* route.)
+ *   Legacy /tweet/* and profile paths are canonicalized to /#tweet/* and
+ *   /#author/* respectively.
  * - non-navigation requests                  -> reverse-proxied to Leither
  *
- * Users WITH the app never reach this worker for /tweet/* links: the OS
+ * Users WITH the app never reach this worker for supported fragment-form links: the OS
  * verifies the well-known files and opens the app directly.
  */
 
@@ -32,7 +33,7 @@ const APP_STORE_ID = "6751131431";
 // at the server; nginx's dtweet.com.conf (*.dtweet.com) proxies to Leither :8080
 // preserving the Host header, so Leither domain routing can take over later.
 const ORIGIN = "http://dl.dtweet.com";
-const BROWSER_FALLBACK_ORIGIN = "http://t1.www333.store";
+const BROWSER_FALLBACK_ORIGIN = "http://t1.www3.shop";
 const STATIC_ASSETS = new Set([
   "/index_entry.js",
   "/hprose.js",
@@ -104,6 +105,7 @@ function appleAppSiteAssociation() {
         {
           appIDs: IOS_BUNDLE_IDS.map((b) => `${IOS_TEAM_ID}.${b}`),
           components: [
+            { "/": "/", "#": "tweet/*" },
             { "/": "/tweet/*" },
             { "/": "/user/*" },
             { "/": "/profile/*" },
@@ -134,13 +136,20 @@ function isHtmlNavigation(request) {
 }
 
 async function proxyToTweetWeb(request, url) {
-  // App deep-link paths use /user|/profile; TweetWeb's route is /author
+  // App deep-link paths use /user|/profile; TweetWeb's external route is #author.
   const path = url.pathname.replace(/^\/(user|profile)(\/|$)/, "/author$2");
 
   // App users never get here: iOS and Android claim supported dtweet.com links
   // before browser navigation. Browser fallback uses a separate HTTP host so
   // TweetWeb can contact HTTP/ws:// Leither providers without mixed content.
   if (isHtmlNavigation(request)) {
+    const externalRoute = path.match(/^\/(tweet|author)(\/.*)$/);
+    if (externalRoute) {
+      return Response.redirect(
+        `${BROWSER_FALLBACK_ORIGIN}/#${externalRoute[1]}${externalRoute[2]}${url.search}`,
+        302,
+      );
+    }
     return Response.redirect(BROWSER_FALLBACK_ORIGIN + path + url.search, 302);
   }
 

@@ -13,11 +13,11 @@ import AVFoundation
 
 /// Which URL a share action embeds — see DEEPLINKING.md for the policy.
 enum TweetShareLinkStyle {
-    /// `http://dtweet.com/tweet/{mid}/{authorId}` — standard deep-link format;
+    /// `http://dtweet.com/#tweet/{mid}/{authorId}` — public fragment-form share URL;
     /// the OS opens the app when installed (feed share button)
     case deeplink
-    /// Domain delivered by the backend's `check_upgrade`
-    /// (`hproseInstance.domainToShare`) — detail-view share button
+    /// Domain delivered by the backend's `check_upgrade`, using TweetWeb's
+    /// domain share-link format (`hproseInstance.domainToShare`) — detail-view share button
     case webDomain
     /// The tweet author's provider-IP entry URL — detail-view dropdown menu
     case providerIP
@@ -610,7 +610,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// Build share text for a tweet.
     ///
     /// Share-URL policy (see DEEPLINKING.md):
-    /// - `.deeplink`   feed share button — `http://dtweet.com/tweet/{mid}/{authorId}`;
+    /// - `.deeplink`   feed share button — `http://dtweet.com/#tweet/{mid}/{authorId}`;
     ///                 the OS opens the app when installed, browsers land on the web app.
     /// - `.webDomain`  detail-view share button — domain delivered by the backend's
     ///                 `check_upgrade` (`hproseInstance.domainToShare`).
@@ -642,14 +642,14 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         switch style {
         case .deeplink:
             // Standard deep-link format: OS opens the app when installed
-            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+            urlText = "\(AppConfig.shareDomain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         case .webDomain:
             // Domain delivered by the backend's check_upgrade
             var domain = hproseInstance.domainToShare
             if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
                 domain = "http://" + domain
             }
-            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+            urlText = "\(domain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         case .providerIP:
             // Author's provider-IP entry URL (hash-router format); the caller is
             // expected to have refreshed tweet.author.baseUrl to a reachable IP
