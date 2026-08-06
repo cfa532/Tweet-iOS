@@ -52,6 +52,29 @@ final class TweetCacheManager: @unchecked Sendable {
     private var userCacheWriteTimes: [String: Date] = [:]
     private let userCacheWriteTimesLock = NSLock()
 
+    private func isPureRetweet(_ record: TweetRecord, of originalTweetId: String) -> Bool {
+        guard record.originalTweetId == originalTweetId else { return false }
+        let hasContent = !(record.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let hasTitle = !(record.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        return !hasContent && !hasTitle && (record.attachments?.isEmpty ?? true)
+    }
+
+    private func isBlockedByDeletion(_ record: TweetRecord) -> Bool {
+        if TweetDeletionRegistry.shared.isDeleted(record.mid) {
+            return true
+        }
+        guard let originalTweetId = record.originalTweetId,
+              TweetDeletionRegistry.shared.isDeleted(originalTweetId) else {
+            return false
+        }
+        return isPureRetweet(record, of: originalTweetId)
+    }
+
+    @MainActor
+    private func isBlockedByDeletion(_ tweet: Tweet) -> Bool {
+        isBlockedByDeletion(TweetRecord(tweet: tweet))
+    }
+
     private func lockedAccessTime(for id: String) -> Date? {
         accessTimesLock.lock(); defer { accessTimesLock.unlock() }
         return tweetAccessTimes[id]
@@ -532,9 +555,11 @@ extension TweetCacheManager {
     /// Returns nil if tweet is not cached
     @MainActor
     func fetchTweetSync(mid: String) -> Tweet? {
+        guard !TweetDeletionRegistry.shared.isDeleted(mid) else { return nil }
+
         // First check in-memory singleton
         if let tweetInstance = TweetStore.shared.tweet(mid: mid) {
-            return tweetInstance
+            return isBlockedByDeletion(tweetInstance) ? nil : tweetInstance
         }
         
         // Otherwise, load from Core Data cache synchronously
@@ -557,7 +582,7 @@ extension TweetCacheManager {
             }
         }
 
-        guard let cachedPayload else { return nil }
+        guard let cachedPayload, !isBlockedByDeletion(cachedPayload.tweet) else { return nil }
         let author = cachedPayload.author.map {
             UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
         } ?? UserStore.shared.user(mid: cachedPayload.tweet.authorId)
@@ -565,7 +590,15 @@ extension TweetCacheManager {
     }
     
     func fetchTweet(mid: String) async -> Tweet? {
-        if let tweetInstance = await MainActor.run(body: { TweetStore.shared.tweet(mid: mid) }) {
+        guard !TweetDeletionRegistry.shared.isDeleted(mid) else { return nil }
+
+        if let tweetInstance = await MainActor.run(body: { () -> Tweet? in
+            guard let tweet = TweetStore.shared.tweet(mid: mid),
+                  !self.isBlockedByDeletion(tweet) else {
+                return nil
+            }
+            return tweet
+        }) {
             return tweetInstance
         }
 
@@ -595,7 +628,7 @@ extension TweetCacheManager {
             }
         }
 
-        guard let cachedPayload else { return nil }
+        guard let cachedPayload, !isBlockedByDeletion(cachedPayload.tweet) else { return nil }
 
         return await MainActor.run {
             let author = cachedPayload.author.map {
@@ -615,6 +648,8 @@ extension TweetCacheManager {
     @MainActor
     func saveTweet(_ tweet: Tweet, userId: String, timeCached: Date? = nil) {
         let record = TweetRecord(tweet: tweet)
+        guard !isBlockedByDeletion(record) else { return }
+
         let tweetId = record.mid
         let timestamp = record.timestamp
         let attachments = record.attachments ?? []
@@ -630,6 +665,10 @@ extension TweetCacheManager {
         // background queue rather than on @MainActor, preventing startup freezes when
         // saveTweet is called in a tight loop for many tweets.
         context.perform {
+            // A deletion can be confirmed while this queued Core Data write is
+            // waiting. Recheck on the context queue so stale work cannot restore it.
+            guard !self.isBlockedByDeletion(record) else { return }
+
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .millisecondsSince1970
             guard let tweetData = try? encoder.encode(record) else {
@@ -780,26 +819,44 @@ extension TweetCacheManager {
         }
     }
 
-    func deleteTweet(mid: String) {
-        context.performAndWait {
+    /// Delete the tweet from every cache bucket and remove pure-retweet wrappers
+    /// that have no content of their own. Quote tweets remain intact.
+    @discardableResult
+    func deleteTweet(mid: String) -> [String] {
+        let deletedTweetIds: Set<String> = context.performAndWait {
+            var deletedTweetIds: Set<String> = [mid]
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            request.predicate = NSPredicate(format: "tid == %@", mid)
-            // Delete ALL instances of this tweet (might be in multiple caches)
-            if let cdTweets = try? context.fetch(request) {
-                for cdTweet in cdTweets {
-                    if let tweetId = cdTweet.tid {
-                        Task { @MainActor in
-                            self.clearHeightCache(for: tweetId)
-                        }
+            guard let cdTweets = try? context.fetch(request) else {
+                return deletedTweetIds
+            }
+
+            for cdTweet in cdTweets {
+                let shouldDelete: Bool
+                if cdTweet.tid == mid {
+                    shouldDelete = true
+                } else if let record = try? decodeTweetRecord(from: cdTweet) {
+                    shouldDelete = isPureRetweet(record, of: mid)
+                } else {
+                    shouldDelete = false
+                }
+
+                guard shouldDelete else { continue }
+                if let tweetId = cdTweet.tid {
+                    deletedTweetIds.insert(tweetId)
+                    Task { @MainActor in
+                        self.clearHeightCache(for: tweetId)
                     }
-                    context.delete(cdTweet)
                 }
-                if !cdTweets.isEmpty {
-                    print("DEBUG: [TweetCacheManager] Deleted \(cdTweets.count) cache entries for tweet: \(mid)")
-                }
+                context.delete(cdTweet)
+            }
+
+            if !deletedTweetIds.isEmpty {
+                print("DEBUG: [TweetCacheManager] Deleted cache entries for tweet IDs: \(deletedTweetIds)")
                 try? context.save()
             }
+            return deletedTweetIds
         }
+        return Array(deletedTweetIds)
     }
 
     /// Remove one tweet's membership from one cached list while preserving copies
