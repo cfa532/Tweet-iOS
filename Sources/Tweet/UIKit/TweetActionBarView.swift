@@ -587,32 +587,9 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return items
     }
 
-    /// Share items for the detail view's dropdown menu (TweetMenu): uses the
-    /// author's provider-IP entry URL (`.providerIP`), reachable even without
-    /// the dtweet.com / check_upgrade domains. See DEEPLINKING.md.
-    @MainActor
-    static func buildDetailShareItems(tweet: Tweet, hproseInstance: HproseInstance, parentTweet: Tweet? = nil) async -> [Any]? {
-        let helper = TweetActionBarView(frame: .zero)
-        helper.isInDetailView = true
-        helper.shareLinkStyleOverride = .providerIP
-        helper.parentTweet = parentTweet
-
-        guard let publicIPv4BaseUrl = await Self.getPublicIPv4BaseUrl(
-            for: tweet,
-            hproseInstance: hproseInstance
-        ) else {
-            return nil
-        }
-        if let author = tweet.author, let url = URL(string: publicIPv4BaseUrl) {
-            author.baseUrl = url
-        }
-
-        helper.attachmentPreviewImage = await helper.loadAttachmentPreviewImage(for: tweet, hproseInstance: hproseInstance)
-        return await helper.buildShareItems(for: tweet, hproseInstance: hproseInstance)
-    }
-
-    /// Share items for a feed tweet's dropdown menu: uses the domain returned
-    /// by `check_upgrade`, without applying the user's profile-level override.
+    /// Share items for a tweet's dropdown menu, in the feed and in the detail
+    /// view alike: uses the domain returned by `check_upgrade`, without applying
+    /// the user's profile-level override.
     @MainActor
     static func buildFeedMenuShareItems(tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
         let helper = TweetActionBarView(frame: .zero)
@@ -626,9 +603,11 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// Share-URL policy (see DEEPLINKING.md):
     /// - `.deeplink`   action-bar share button — `http://dtweet.com/#tweet/{mid}/{authorId}`;
     ///                 the OS opens the app when installed, browsers land on the web app.
-    /// - `.webDomain`  feed dropdown-menu share — domain delivered by the backend's
-    ///                 `check_upgrade` (`hproseInstance.backendDomainToShare`).
-    /// - `.providerIP` detail-view dropdown menu — the author's provider-IP entry URL.
+    /// - `.webDomain`  dropdown-menu share, feed and detail view alike — domain
+    ///                 delivered by the backend's `check_upgrade`
+    ///                 (`hproseInstance.backendDomainToShare`).
+    /// - `.providerIP` the author's provider-IP entry URL. No share action selects
+    ///                 this today; kept as the DNS-free fallback format.
     static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, style: TweetShareLinkStyle, parentTweet: Tweet? = nil) -> String {
         var shareText = ""
 
@@ -668,8 +647,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             }
             urlText = "\(domain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         case .providerIP:
-            // buildDetailShareItems validates this immediately before sharing.
-            // Keep this guard as defense in depth against future direct callers.
+            // No share action selects this style today. The guard stays so any
+            // future caller can only produce a validated public-IPv4 URL.
             guard let baseUrlString = publicIPv4BaseURL(
                 from: tweet.author?.baseUrl?.absoluteString
             ) else {
@@ -687,9 +666,27 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         return shareText
     }
 
-    /// Get a strictly public IPv4 base URL for detail-menu sharing. Domains,
-    /// IPv6, Tailscale/RFC 6598, private, loopback, link-local, multicast, and
-    /// documentation/reserved IPv4 ranges are never returned.
+    /// Host part of a `.providerIP` share URL: a strictly public IPv4 base URL.
+    /// Domains, IPv6, Tailscale/RFC 6598, private, loopback, link-local, multicast,
+    /// and documentation/reserved IPv4 ranges are never returned.
+    ///
+    /// Currently has no callers — both dropdown menus share the `.webDomain` link.
+    /// Kept, with `.providerIP` in `buildShareText`, for a link that works without
+    /// DNS. To bring that style back, resolve the host here first and hand it to
+    /// `buildShareText(style: .providerIP)`, which composes:
+    ///
+    ///     http://{public IPv4[:port]}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}
+    ///
+    /// - host: the author's cached `baseUrl` when it already is a public IPv4,
+    ///   otherwise a fresh `getProviderIP(v4Only: true)`; nil when neither
+    ///   qualifies, so the caller must handle "no public IPv4 available".
+    /// - `/entry`: Leither's SPA entry point. It needs `aid` + `ver` as *query*
+    ///   params to load the app bundle, which is why they sit before the `#`.
+    /// - the route lives in the hash so the node serves `/entry` and the SPA router
+    ///   resolves `#/tweet/...` client-side. Comment params append inside the hash.
+    ///
+    /// Note it writes the resolved IPv4 back to `author.baseUrl`, so a caller
+    /// changes the shared `User` singleton's read route as a side effect.
     private static func getPublicIPv4BaseUrl(for tweet: Tweet, hproseInstance: HproseInstance) async -> String? {
         guard let author = tweet.author else {
             return nil

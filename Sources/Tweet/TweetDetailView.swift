@@ -1812,21 +1812,14 @@ struct TweetDetailView: View {
                 ),
                 onShareTap: {
                     Task {
-                        let items = await TweetActionBarView.buildDetailShareItems(
+                        // Same link as the feed tweet's dropdown menu: the
+                        // check_upgrade domain (see DEEPLINKING.md).
+                        let items = await TweetActionBarView.buildFeedMenuShareItems(
                             tweet: displayTweet,
                             hproseInstance: hproseInstance
                         )
                         await MainActor.run {
-                            if let items {
-                                menuShareItems = ShareSheetData(items: items)
-                            } else {
-                                toastMessage = NSLocalizedString(
-                                    "No public IPv4 address is available for this tweet.",
-                                    comment: "Detail share public IPv4 unavailable"
-                                )
-                                toastIsError = true
-                                showToast = true
-                            }
+                            menuShareItems = ShareSheetData(items: items)
                         }
                     }
                 },

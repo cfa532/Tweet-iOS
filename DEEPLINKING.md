@@ -276,8 +276,13 @@ JavaScript asset and the app will render an empty/error page.
 | Share action | URL format | Rationale |
 |---|---|---|
 | Tweet action-bar share buttons | `http://dtweet.com/#tweet/{mid}/{authorId}` | Standard app-link URL with browser fallback, in feed, detail, comment, media, and fullscreen contexts. |
-| Feed dropdown menu to share | `http://{check_upgrade domain}/#tweet/{mid}/{authorId}` | Uses the backend-controlled domain and TweetWeb's external share-link format, with `dtweet.com` as fallback. |
-| Detail-view dropdown menu to share | `http://{author public IPv4}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}` | Uses only a validated public IPv4; private, Tailscale, IPv6, domain, and reserved addresses are rejected. |
+| Dropdown menu to share, feed and detail view alike | `http://{check_upgrade domain}/#tweet/{mid}/{authorId}` | Uses the backend-controlled domain and TweetWeb's external share-link format, with `dtweet.com` as fallback. |
+
+The provider-IP format —
+`http://{author public IPv4}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}`
+— is no longer selected by any share action. It remains implemented as the
+DNS-free format; see `getPublicIPv4BaseUrl` in `TweetActionBarView.swift` for how
+the URL is composed and which addresses the validator rejects.
 
 Comment shares append:
 
@@ -307,8 +312,9 @@ Sources/Tweet/UIKit/TweetActionBarView.swift
 ```
 
 Defines `TweetShareLinkStyle` and `buildShareText`. Every action bar uses the
-dtweet deep-link style, feed dropdown sharing uses the `check_upgrade` domain,
-and detail dropdown sharing uses provider-IP format.
+dtweet deep-link style, and dropdown sharing — feed and detail view alike — uses
+the `check_upgrade` domain via `buildFeedMenuShareItems`. The provider-IP style
+remains defined as the DNS-free fallback format but no share action selects it.
 
 ```text
 Sources/Tweet/TweetActionButtonsView.swift
