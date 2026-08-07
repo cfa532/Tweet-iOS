@@ -873,7 +873,11 @@ class TweetCellContentView: UIView {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let shareTweet = await self.resolveOriginalTweet(for: tweet, hproseInstance: hproseInstance)
+                // A quote tweet shares itself; only a pure retweet (no own
+                // content) stands in for the original.
+                let shareTweet = Self.hasOwnContent(tweet)
+                    ? tweet
+                    : await self.resolveOriginalTweet(for: tweet, hproseInstance: hproseInstance)
                 let items = await TweetActionBarView.buildFeedMenuShareItems(
                     tweet: shareTweet,
                     hproseInstance: hproseInstance
@@ -916,10 +920,8 @@ class TweetCellContentView: UIView {
                 guard let self, let pvc = self.parentViewController else { return }
                 Task { @MainActor [weak self, weak pvc] in
                     guard let self, let pvc else { return }
-                    let hasOwnContent = (tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                        || (tweet.attachments?.isEmpty == false)
                     let editTweet: Tweet
-                    if hasOwnContent {
+                    if Self.hasOwnContent(tweet) {
                         editTweet = tweet
                     } else {
                         editTweet = await self.resolveOriginalTweet(
@@ -1098,6 +1100,14 @@ class TweetCellContentView: UIView {
         }
 
         return UIMenu(title: "", children: actions)
+    }
+
+    /// True for a regular tweet or a quote tweet; false for a pure retweet,
+    /// whose cell renders the original tweet's content instead of its own.
+    @MainActor
+    private static func hasOwnContent(_ tweet: Tweet) -> Bool {
+        (tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            || (tweet.attachments?.isEmpty == false)
     }
 
     @MainActor
