@@ -8335,16 +8335,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ///   - nodeId: The node ID to resolve IPs for
     ///   - v4Only: Whether to request IPv4 addresses only
     ///   - forceHealthCheck: Whether to bypass a cached health result for a pooled IP
+    ///   - usePool: Whether NodePool may serve and record this resolution. The pool
+    ///     caches read-access nodes only, so write-route resolution passes `false`:
+    ///     it never reuses a pooled entry and never writes one back. Mutations are
+    ///     rare compared to reads, so resolving hostIds[0] fresh costs nothing.
     /// - Returns: A healthy IP address for the node, or nil if none found
     func getHostIP(
         _ nodeId: String,
         v4Only: Bool = false,
-        forceHealthCheck: Bool = false
+        forceHealthCheck: Bool = false,
+        usePool: Bool = true
     ) async -> String? {
         hproseDebug("DEBUG: [getHostIP] Resolving IPs for node \(nodeId)")
-        
+
         // Step 0: Check NodePool first for cached IP
-        if let pooledIP = NodePool.shared.getIPForNode(nodeMid: nodeId) {
+        if usePool, let pooledIP = NodePool.shared.getIPForNode(nodeMid: nodeId) {
             hproseDebug("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
             
             // Test if pooled IP is still healthy
@@ -8366,7 +8371,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         
         // First attempt with current appUser client
         if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
-            NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
+            if usePool { NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip) }
             return ip
         }
         
@@ -8410,8 +8415,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // Retry with refreshed appUser
             hproseWarning("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")
             if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
-                NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
-                hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
+                if usePool {
+                    NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
+                    hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
+                }
                 return ip
             }
             

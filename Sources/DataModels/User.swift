@@ -635,12 +635,13 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
 
         print("DEBUG: [resolveWritableUrl] Resolving fresh IP for writable host \(hostId)")
 
-        // Always go through getHostIP — it validates any NodePool-cached entry with a
-        // health check before returning it, so stale IPs are rejected automatically.
-        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: true),
+        // NodePool caches read-access nodes (hostIds[1]) only, so the write route is
+        // resolved with `usePool: false`: no pooled entry is reused and none is
+        // recorded. Writes are rare next to reads, so a fresh resolution per write
+        // is cheap and keeps the pool free of write-host entries.
+        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: true, usePool: false),
            let url = URL(string: "http://\(hostIP)") {
             print("DEBUG: [resolveWritableUrl] ✅ Health-checked IP: \(hostIP)")
-            NodePool.shared.updateNodeIP(nodeMid: hostId, newIP: "http://\(hostIP)")
             self.writableUrl = url
             self.writableUrlResolvedAt = Date()
             return url
