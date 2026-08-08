@@ -1301,10 +1301,26 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         entry: entry
                     )
                 } catch {
-                    if hasTimeoutCause(error) {
-                        hproseWarning("DEBUG: [fetchUserTweets] Timeout again via \(userBaseUrlStr ?? "nil"); not refreshing route for operation timeout")
+                    guard !Task.isCancelled, hasTimeoutCause(error) else { throw error }
+
+                    // The address answers health probes but cannot serve this read.
+                    // Move to the next advertised address of the same access node
+                    // rather than hammering the one that just timed out twice.
+                    hproseWarning("DEBUG: [fetchUserTweets] Timeout again via \(userBaseUrlStr ?? "nil"); looking for an alternate address of the same access node")
+                    guard await switchToAlternateRoute(
+                        for: user,
+                        attemptedBaseUrl: userBaseUrlStr,
+                        logPrefix: "fetchUserTweets"
+                    ) else {
+                        hproseWarning("DEBUG: [fetchUserTweets] No alternate address for \(userMid); not retrying the same address")
+                        throw error
                     }
-                    throw error
+                    return try await fetchUserTweetsFromCurrentRoute(
+                        user: user,
+                        pageNumber: pageNumber,
+                        pageSize: pageSize,
+                        entry: entry
+                    )
                 }
             }
             hproseWarning("DEBUG: [fetchUserTweets] Failed via \(userBaseUrlStr ?? "nil"); refreshing route and retrying once for \(userMid): \(error)")
@@ -1973,6 +1989,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             )
         }
 
+        var failedHostPort: String?
         if let currentBaseUrl, !currentBaseUrl.isEmpty {
             let currentHostPort = normalizeHostPort(currentBaseUrl)
             hproseDebug("DEBUG: [ProfileRoute] Fresh health check for user \(userMid) at \(currentHostPort)")
@@ -1988,20 +2005,27 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             guard !Task.isCancelled else { return false }
 
             hproseWarning("DEBUG: [ProfileRoute] Current route is unhealthy for user \(userMid): \(currentHostPort)")
+            failedHostPort = currentHostPort
             invalidateIPCacheForBaseUrl(currentBaseUrl)
-            if let accessNodeMid {
-                await MainActor.run {
-                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: currentBaseUrl)
-                }
+            if let accessNodeMid,
+               let pooledIP = NodePool.shared.getIPForNode(nodeMid: accessNodeMid),
+               normalizeHostPort(pooledIP) == currentHostPort {
+                // Evict only when the pool still points at the address that just
+                // failed. A newer entry describes a different, untested route.
+                NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: pooledIP)
             }
+            clientPool.clear(for: "\(ensureHttpPrefix(currentHostPort))/webapi/")
         }
 
+        // Fall back to the next advertised address of the same access node before
+        // widening the search to provider discovery.
         var replacementIP: String?
         if let accessNodeMid {
             replacementIP = await getHostIP(
                 accessNodeMid,
                 v4Only: false,
-                forceHealthCheck: true
+                forceHealthCheck: true,
+                excludedIP: failedHostPort
             )
         }
         if replacementIP == nil {
@@ -2016,7 +2040,49 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
 
         await applyBaseUrlIfNeeded(user, url: replacementURL, reason: "profile health repair")
+        if let accessNodeMid {
+            NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: normalizeHostPort(replacementIP))
+        }
+        await MainActor.run { TweetCacheManager.shared.saveUser(user) }
         hproseDebug("DEBUG: [ProfileRoute] Repaired route for user \(userMid): \(replacementURL.absoluteString)")
+        return true
+    }
+
+    /// A successful health probe does not prove that every RPC is usable on that
+    /// address. After a profile read fails on the current route, try another advertised
+    /// and reachable address for the same access node. The attempted address is only
+    /// excluded from this lookup; it is not marked unhealthy or blacklisted.
+    /// - Returns: true when the user was moved to a different address.
+    private func switchToAlternateRoute(
+        for user: User,
+        attemptedBaseUrl: String?,
+        logPrefix: String
+    ) async -> Bool {
+        guard let attemptedBaseUrl, !attemptedBaseUrl.isEmpty else { return false }
+        let (userMid, userHostIds) = await MainActor.run { (user.mid, user.hostIds) }
+        guard let accessNodeMid = userHostIds.flatMap({ $0.count > 1 ? $0[1] : nil }) else { return false }
+
+        let attemptedHostPort = normalizeHostPort(attemptedBaseUrl)
+        guard let alternateIP = await getHostIP(
+            accessNodeMid,
+            v4Only: false,
+            forceHealthCheck: true,
+            excludedIP: attemptedHostPort
+        ) else {
+            hproseWarning("DEBUG: [\(logPrefix)] No alternate address for access node \(accessNodeMid) of user \(userMid)")
+            return false
+        }
+
+        let alternateHostPort = normalizeHostPort(alternateIP)
+        guard alternateHostPort != attemptedHostPort,
+              let alternateURL = URL(string: ensureHttpPrefix(alternateIP)) else {
+            return false
+        }
+
+        await applyBaseUrlIfNeeded(user, url: alternateURL, reason: "\(logPrefix) alternate route")
+        NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: alternateHostPort)
+        await MainActor.run { TweetCacheManager.shared.saveUser(user) }
+        hproseWarning("DEBUG: [\(logPrefix)] Switched route for user \(userMid): \(attemptedHostPort) -> \(alternateHostPort)")
         return true
     }
 
@@ -8335,6 +8401,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ///   - nodeId: The node ID to resolve IPs for
     ///   - v4Only: Whether to request IPv4 addresses only
     ///   - forceHealthCheck: Whether to bypass a cached health result for a pooled IP
+    ///   - excludedIP: An address to leave out of this lookup. A successful health probe
+    ///     does not prove that every RPC is usable on that address, so a caller whose RPC
+    ///     just failed passes the attempted address here to get the *next* advertised
+    ///     address for the same node. The excluded address is only skipped for this
+    ///     lookup; it is not marked unhealthy and not removed from NodePool.
     ///   - usePool: Whether NodePool may serve and record this resolution. The pool
     ///     caches read-access nodes only, so write-route resolution passes `false`:
     ///     it never reuses a pooled entry and never writes one back. Mutations are
@@ -8344,37 +8415,43 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         _ nodeId: String,
         v4Only: Bool = false,
         forceHealthCheck: Bool = false,
+        excludedIP: String? = nil,
         usePool: Bool = true
     ) async -> String? {
         hproseDebug("DEBUG: [getHostIP] Resolving IPs for node \(nodeId)")
+        let excludedKey = excludedIP.map { normalizeHostPort($0) }
 
         // Step 0: Check NodePool first for cached IP
         if usePool, let pooledIP = NodePool.shared.getIPForNode(nodeMid: nodeId) {
-            hproseDebug("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
-            
-            // Test if pooled IP is still healthy
-            let isHealthy = await isServerHealthyWithTimeout(
-                pooledIP,
-                timeout: 5.0,
-                useCache: !forceHealthCheck
-            )
-            
-            if isHealthy {
-                return pooledIP
+            if let excludedKey, normalizeHostPort(pooledIP) == excludedKey {
+                hproseDebug("DEBUG: [getHostIP] Skipping pooled IP \(pooledIP) for node \(nodeId) during alternate-route lookup")
             } else {
-                hproseError("DEBUG: [getHostIP] ❌ Pooled IP \(pooledIP) is unhealthy, removing from pool")
-                NodePool.shared.removeIPFromNode(nodeMid: nodeId, ip: pooledIP)
+                hproseDebug("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
+
+                // Test if pooled IP is still healthy
+                let isHealthy = await isServerHealthyWithTimeout(
+                    pooledIP,
+                    timeout: 5.0,
+                    useCache: !forceHealthCheck
+                )
+
+                if isHealthy {
+                    return pooledIP
+                } else {
+                    hproseError("DEBUG: [getHostIP] ❌ Pooled IP \(pooledIP) is unhealthy, removing from pool")
+                    NodePool.shared.removeIPFromNode(nodeMid: nodeId, ip: pooledIP)
+                }
             }
         }
-        
+
         hproseDebug("DEBUG: [getHostIP] Attempt 1: Resolving IPs from API for node \(nodeId)")
-        
+
         // First attempt with current appUser client
-        if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
+        if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient, excludedIP: excludedIP) {
             if usePool { NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip) }
             return ip
         }
-        
+
         hproseError("DEBUG: [getHostIP] Attempt 1 failed, checking appUser health...")
 
         // First attempt failed - check if appUser is healthy
@@ -8401,30 +8478,44 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 hproseError("DEBUG: [getHostIP] Failed to find entry IP for appUser refresh")
                 return nil
             }
-            
+            let entryClient = clientPool.getClientByIP(for: entryIP)
+
             hproseDebug("DEBUG: [getHostIP] Using entry IP to refresh appUser: \(entryIP)")
-            
+
             // Refresh appUser's IP via entry
-            if let newAppUserIP = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP)) {
-                await applyBaseUrlIfNeeded(appUser, url: URL(string: "http://\(newAppUserIP)")!, reason: "getHostIP appUser refresh")
+            if let newAppUserIP = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: entryClient),
+               let newAppUserURL = URL(string: ensureHttpPrefix(newAppUserIP)) {
+                await applyBaseUrlIfNeeded(appUser, url: newAppUserURL, reason: "getHostIP appUser refresh")
+
+                // Retry with refreshed appUser
+                hproseWarning("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")
+                if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient, excludedIP: excludedIP) {
+                    if usePool {
+                        NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
+                        hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
+                    }
+                    return ip
+                }
+                hproseError("DEBUG: [getHostIP] Attempt 2 also failed via refreshed appUser")
             } else {
                 hproseError("DEBUG: [getHostIP] Failed to refresh appUser IP")
-                return nil
             }
-            
-            // Retry with refreshed appUser
-            hproseWarning("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")
-            if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
+
+            // Attempt 3: ask the entry node itself which addresses serve this node.
+            // Unlike the two attempts above it does not depend on appUser owning a
+            // usable route, so it still answers when appUser cannot be repaired.
+            hproseWarning("DEBUG: [getHostIP] Attempt 3: Resolving node \(nodeId) directly through entry node \(entryIP)")
+            if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: entryClient, excludedIP: excludedIP) {
                 if usePool {
                     NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
-                    hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
+                    hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) resolved via entry node")
                 }
                 return ip
             }
-            
-            hproseError("DEBUG: [getHostIP] Attempt 2 also failed, node IPs not resolvable")
+
+            hproseError("DEBUG: [getHostIP] Node \(nodeId) IPs not resolvable via appUser or entry node")
             return nil
-            
+
         } catch {
             hproseError("DEBUG: [getHostIP] Error during appUser refresh: \(error)")
             return nil
@@ -8436,8 +8527,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ///   - nodeId: The node ID to resolve IPs for
     ///   - v4Only: Whether to request IPv4 addresses only
     ///   - hproseClient: The Hprose client to use for the API call
+    ///   - excludedIP: An advertised address to drop from the candidate list before
+    ///     health-racing them, so an alternate-route lookup never returns the address
+    ///     the caller just failed on.
     /// - Returns: A healthy IP address for the node, or nil if none found
-    private func _getHostIP(_ nodeId: String, v4Only: Bool = false, hproseClient: HproseClient?) async -> String? {
+    private func _getHostIP(_ nodeId: String, v4Only: Bool = false, hproseClient: HproseClient?, excludedIP: String? = nil) async -> String? {
         let entry = "get_node_ips"
         let params = [
             "aid": appId,
@@ -8470,12 +8564,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         
         if let ipList = unwrappedResponse as? [String] {
             // Filter and trim IP addresses
+            let excludedKey = excludedIP.map { normalizeHostPort($0) }
             let ipAddresses = ipList
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            
+                .filter { excludedKey == nil || normalizeHostPort($0) != excludedKey }
+
+            if let excludedKey, ipAddresses.count != ipList.count {
+                hproseDebug("DEBUG: [_getHostIP] Excluded \(excludedKey) from node \(nodeId) candidates")
+            }
             hproseDebug("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
-            
+
             // Test IPs in batches of 4 for faster discovery during high load
             let batchSize = 4
             for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
