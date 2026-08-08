@@ -13,7 +13,12 @@ final class ProfileTweetsViewModel: ObservableObject {
     init(hproseInstance: HproseInstance, user: User, pinnedTweetIds: Set<String>) {
         self.hproseInstance = hproseInstance
         self.user = user
-        self.pinnedTweetIds = pinnedTweetIds
+        // The profile seeds its pinned rows from cache on appear, which is after this view
+        // model is built. Read the same cached list here so the very first cached page is
+        // already filtered instead of rendering pinned tweets twice for a frame.
+        self.pinnedTweetIds = pinnedTweetIds.isEmpty
+            ? Set(TweetCacheManager.shared.cachedPinnedTweets(for: user.mid).map(\.mid))
+            : pinnedTweetIds
     }
     
     func updatePinnedTweetIds(_ newPinnedTweetIds: Set<String>) {
@@ -46,24 +51,26 @@ final class ProfileTweetsViewModel: ObservableObject {
                 pageNumber: page,
                 pageSize: pageSize
             )
-            
-            // Preserve backend page length for pagination; nil entries are non-renderable.
-            let filteredTweets: [Tweet?] = serverTweets.map { (tweet: Tweet?) -> Tweet? in
-                if let tweet = tweet {
-                    guard !TweetDeletionRegistry.shared.isDeleted(tweet.mid) else {
-                        return nil
-                    }
-                    let isPinned = pinnedTweetIds.contains(tweet.mid)
-                    if isPinned {
-                    }
-                    return isPinned ? nil : tweet
-                }
-                return nil
-            }
-            
-            return filteredTweets
+
+            return removingPinnedTweets(from: serverTweets)
         } catch {
             throw error
+        }
+    }
+
+    /// Drops pinned and deleted tweets from a page while preserving its length, so the
+    /// caller's pagination still matches the backend's (nil entries are non-renderable).
+    /// The cached page needs this as much as the server page: a pinned tweet is cached
+    /// under its author's key, and rendering it in the regular list only to pull it out
+    /// once `pinnedTweetIds` arrives is the shift this avoids.
+    func removingPinnedTweets(from tweets: [Tweet?]) -> [Tweet?] {
+        tweets.map { (tweet: Tweet?) -> Tweet? in
+            guard let tweet,
+                  !TweetDeletionRegistry.shared.isDeleted(tweet.mid),
+                  !pinnedTweetIds.contains(tweet.mid) else {
+                return nil
+            }
+            return tweet
         }
     }
 
@@ -185,10 +192,11 @@ struct ProfileTweetsSection<Header: View>: View {
                     print("📋 [PROFILE CACHE LOAD] Fetching page \(page) from cache for \(user.mid)")
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid, isProfileView: true)
+                    let visibleCachedTweets = viewModel.removingPinnedTweets(from: cachedTweets)
                     let elapsed = Date().timeIntervalSince(startTime) * 1000
-                    let validCount = cachedTweets.compactMap { $0 }.count
+                    let validCount = visibleCachedTweets.compactMap { $0 }.count
                     print("✅ [PROFILE CACHE LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms for \(user.mid)")
-                    return cachedTweets
+                    return visibleCachedTweets
                 } else {
                     print("🌐 [PROFILE SERVER LOAD] Fetching page \(page) from server for \(user.mid)")
                     let serverTweets = try await viewModel.fetchTweets(page: page, pageSize: size)

@@ -34,6 +34,9 @@ struct ProfileView: View {
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
     @State private var pinnedTweetIds: Set<String> = []
+    /// Pinned rows are seeded from cache once per profile so the server list doesn't
+    /// re-seed rows the user has since unpinned in this session.
+    @State private var didSeedPinnedTweetsFromCache = false
     
     /// Indicates if avatar is currently being uploaded
     @State private var isUploadingAvatar = false
@@ -152,6 +155,12 @@ struct ProfileView: View {
             .onChange(of: user.mid) { _, _ in
                 // Reset didLoad when user changes so the new user's data is fetched
                 didLoad = false
+                // The pinned list belongs to the previous user; drop it and seed the new
+                // one from cache so no foreign pinned rows survive the swap.
+                pinnedTweets = []
+                pinnedTweetIds = []
+                didSeedPinnedTweetsFromCache = false
+                seedPinnedTweetsFromCacheIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
                 handlePinStatusChanged(notification: notification)
@@ -217,6 +226,7 @@ struct ProfileView: View {
                 // Remove from pinned tweets
                 pinnedTweets.removeAll { $0.mid == deletedTweetId }
                 pinnedTweetIds.remove(deletedTweetId)
+                TweetCacheManager.shared.savePinnedTweetIds(pinnedTweets.map(\.mid), for: user.mid)
                 print("DEBUG: [ProfileView] Removed deleted tweet \(deletedTweetId) from pinned tweets")
             } else {
                 // Tweet was in regular list, will be handled by ProfileTweetsViewModel
@@ -226,6 +236,12 @@ struct ProfileView: View {
     }
     
     private func handleViewAppear() {
+        // Seed pinned rows before the tweet list's cached page lands. That load awaits
+        // Core Data, so this synchronous read wins the race and the pinned rows are in
+        // place from the first paint instead of dropping in on top of regular tweets
+        // when get_pinned_tweets returns.
+        seedPinnedTweetsFromCacheIfNeeded()
+
         // Ensure navigation is visible when view appears
         isNavigationVisible = true
         NotificationCenter.default.post(
@@ -768,11 +784,19 @@ struct ProfileView: View {
                 profileTweetsRefreshToken += 1
             }
         }
-        await refreshProfileData()
+
+        // Pinned rows sit above everything else, so making them wait for the user
+        // refresh costs a whole extra round trip before they can be placed — long
+        // enough for the regular tweets to render first and then be pushed down.
+        // get_pinned_tweets only needs a healthy route, which is validated above.
+        async let pinnedRefresh: Void = refreshPinnedTweets()
+        async let profileRefresh: Void = refreshProfileData(includePinnedTweets: false)
+        _ = await (pinnedRefresh, profileRefresh)
     }
 
-    private func refreshProfileData() async {
+    private func refreshProfileData(includePinnedTweets: Bool = true) async {
         var refreshedProfileUser: User?
+        var didRouteChange = false
         let profileUserId = user.mid
         let cachedRoute = user.baseUrl?.absoluteString ?? ""
         let hproseInstance = hproseInstance
@@ -791,6 +815,7 @@ struct ProfileView: View {
                 refreshedProfileUser = userData
                 let refreshedRoute = userData.baseUrl?.absoluteString ?? ""
                 if refreshedRoute != cachedRoute {
+                    didRouteChange = true
                     await MainActor.run {
                         profileTweetsRefreshToken += 1
                     }
@@ -810,7 +835,11 @@ struct ProfileView: View {
             print("DEBUG: [ProfileView] Skipping pinned tweet refresh because user fetch failed for \(profileUserId)")
             return
         }
-        
+
+        // A caller that ran the pinned read alongside this one used the pre-refresh
+        // route, so redo it when the refresh moved the profile to a different node.
+        guard includePinnedTweets || didRouteChange else { return }
+
         await refreshPinnedTweets()
     }
 
@@ -851,6 +880,28 @@ struct ProfileView: View {
         }
     }
     
+    /// Renders the last known pinned list straight from cache, without waiting for the server.
+    private func seedPinnedTweetsFromCacheIfNeeded() {
+        guard !didSeedPinnedTweetsFromCache, pinnedTweets.isEmpty else { return }
+        didSeedPinnedTweetsFromCache = true
+
+        let cachedPinnedTweetIds = TweetCacheManager.shared.cachedPinnedTweetIds(for: user.mid)
+        guard !cachedPinnedTweetIds.isEmpty else {
+            print("DEBUG: [ProfileView] No cached pinned list for \(user.mid); pinned rows wait for the server")
+            return
+        }
+
+        let cachedPinnedTweets = TweetCacheManager.shared.cachedPinnedTweets(for: user.mid)
+        guard !cachedPinnedTweets.isEmpty else {
+            print("DEBUG: [ProfileView] Cached pinned IDs \(cachedPinnedTweetIds) are no longer in the tweet cache for \(user.mid)")
+            return
+        }
+
+        pinnedTweets = cachedPinnedTweets
+        pinnedTweetIds = Set(cachedPinnedTweets.map(\.mid))
+        print("DEBUG: [ProfileView] Seeded \(cachedPinnedTweets.count) pinned tweet(s) from cache for \(user.mid)")
+    }
+
     private func refreshPinnedTweets() async {
         let profileUser = user
         let hproseInstance = hproseInstance
@@ -859,14 +910,21 @@ struct ProfileView: View {
         do {
             let pinnedTweets = try await hproseInstance.getPinnedTweets(user: profileUser)
             print("DEBUG: [ProfileView] Got \(pinnedTweets.count) pinned tweets from server")
-            
+
             let pinnedTweetIds = pinnedTweets.map(\.mid)
-            
+
             print("DEBUG: [ProfileView] Final pinned tweets count: \(pinnedTweets.count), IDs: \(pinnedTweetIds)")
-            
+
             await MainActor.run {
                 self.pinnedTweetIds = Set(pinnedTweetIds)
                 self.pinnedTweets = pinnedTweets
+                // Persist so the next open renders these rows immediately. The bodies go
+                // into the ordinary tweet cache under the author's key; a pinned tweet can
+                // be older than the first cached profile page and would not be there otherwise.
+                for tweet in pinnedTweets {
+                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                }
+                TweetCacheManager.shared.savePinnedTweetIds(pinnedTweetIds, for: profileUser.mid)
                 print("DEBUG: [ProfileView] Updated pinned tweets state - count: \(self.pinnedTweets.count), IDs: \(self.pinnedTweetIds)")
             }
         } catch {
@@ -888,6 +946,7 @@ struct ProfileView: View {
             pinnedTweetIds.insert(tweetId)
             if !pinnedTweets.contains(where: { $0.mid == tweetId }) {
                 pinnedTweets.insert(tweet, at: 0)
+                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
             }
         } else {
             guard pinnedTweetIds.contains(tweetId)
@@ -897,6 +956,8 @@ struct ProfileView: View {
             pinnedTweetIds.remove(tweetId)
             pinnedTweets.removeAll { $0.mid == tweetId }
         }
+
+        TweetCacheManager.shared.savePinnedTweetIds(pinnedTweets.map(\.mid), for: user.mid)
     }
     
     // MARK: - Block User Handling

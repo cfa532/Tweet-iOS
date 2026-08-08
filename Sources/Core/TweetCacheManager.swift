@@ -304,6 +304,7 @@ final class TweetCacheManager: @unchecked Sendable {
         saveAccessTimes()
         print("DEBUG: [TweetCacheManager] Access times cleared")
         TweetHeightCache.shared.clearAll()
+        clearAllCachedPinnedTweetIds()
 
         // Final sweep: clear any remaining caches that might not be tweet-associated
         Task { @MainActor in
@@ -945,7 +946,8 @@ extension TweetCacheManager {
             }
         }
         TweetHeightCache.shared.clearAll()
-        
+        clearAllCachedPinnedTweetIds()
+
         // Also clear all users for soft restart
         clearAllUsers()
     }
@@ -1002,6 +1004,58 @@ extension TweetCacheManager {
                 try? context.save()
                 print("[TweetCacheManager] Cleared cache for user: \(userId)")
             }
+        }
+        clearCachedPinnedTweetIds(for: userId)
+    }
+}
+
+// MARK: - Pinned Tweet IDs
+extension TweetCacheManager {
+    /// A profile's pinned list is a handful of IDs, so it lives in UserDefaults instead of
+    /// Core Data. The tweet bodies themselves come from the ordinary tweet cache; this list
+    /// only records which of them are pinned, and in what order, so a profile can render its
+    /// pinned rows on open instead of waiting for `get_pinned_tweets` to return and inserting
+    /// rows above content the user is already reading.
+    private static let pinnedTweetIdsKeyPrefix = "pinnedTweetIds_"
+
+    private static func pinnedTweetIdsKey(for userId: String) -> String {
+        "\(pinnedTweetIdsKeyPrefix)\(userId)"
+    }
+
+    func cachedPinnedTweetIds(for userId: String) -> [String] {
+        UserDefaults.standard.stringArray(forKey: Self.pinnedTweetIdsKey(for: userId)) ?? []
+    }
+
+    /// The cached pinned list resolved to tweets, in stored order. IDs whose body is no
+    /// longer cached are dropped: a caller that pinned such an ID would hide the tweet
+    /// from the regular list without rendering anything in its place.
+    @MainActor
+    func cachedPinnedTweets(for userId: String) -> [Tweet] {
+        let tweetIds = cachedPinnedTweetIds(for: userId)
+        guard !tweetIds.isEmpty else { return [] }
+        return tweetIds.compactMap { fetchTweetSync(mid: $0) }
+    }
+
+    /// Stores the pinned list in server order. An empty list removes the key so a user who
+    /// unpinned everything doesn't keep a stale entry around.
+    func savePinnedTweetIds(_ tweetIds: [String], for userId: String) {
+        let key = Self.pinnedTweetIdsKey(for: userId)
+        if tweetIds.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(tweetIds, forKey: key)
+        }
+    }
+
+    func clearCachedPinnedTweetIds(for userId: String) {
+        UserDefaults.standard.removeObject(forKey: Self.pinnedTweetIdsKey(for: userId))
+    }
+
+    func clearAllCachedPinnedTweetIds() {
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix(Self.pinnedTweetIdsKeyPrefix) {
+            defaults.removeObject(forKey: key)
         }
     }
 }
