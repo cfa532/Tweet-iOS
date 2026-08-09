@@ -749,6 +749,10 @@ private struct DetailSingletonVideoPlayerView: View {
 
     @ObservedObject private var manager = DetailVideoManager.shared
     @State private var handoffThumbnail: UIImage?
+    /// True once AVPlayerViewController has its first frame of the current item on screen.
+    /// The manager's isPlaybackRendering only means the item is decoding — a freshly built
+    /// AVPlayerViewController is still a black surface for several frames after that.
+    @State private var isNativeSurfaceReadyForDisplay = false
 
     private var isThisVideoLoaded: Bool {
         manager.currentVideoMid == mid && manager.currentPlayer?.currentItem != nil
@@ -795,6 +799,7 @@ private struct DetailSingletonVideoPlayerView: View {
 
     private var shouldShowPlaceholder: Bool {
         isNativePlaybackSurfaceDeferred
+            || isNativePlaybackSurfaceBlank
             || didThisVideoFailToLoad
             || !isThisVideoLoaded
             || isThisVideoPreparing
@@ -816,6 +821,15 @@ private struct DetailSingletonVideoPlayerView: View {
         !requiresLayerBackedPlaybackSurface && !shouldMountNativePlaybackSurface
     }
 
+    /// The native controller is mounted but has not put a frame up yet. Dropping the
+    /// placeholder in the same transaction that builds AVPlayerViewController exposes
+    /// its black backing view until the first frame lands.
+    private var isNativePlaybackSurfaceBlank: Bool {
+        !requiresLayerBackedPlaybackSurface
+            && shouldMountNativePlaybackSurface
+            && !isNativeSurfaceReadyForDisplay
+    }
+
     var body: some View {
         ZStack {
             Color.black
@@ -825,7 +839,9 @@ private struct DetailSingletonVideoPlayerView: View {
                     if requiresLayerBackedPlaybackSurface {
                         DetailLayerVideoPlayerView(player: player)
                     } else if shouldMountNativePlaybackSurface {
-                        DetailAVPlayerView(player: player)
+                        DetailAVPlayerView(player: player) { isReady in
+                            isNativeSurfaceReadyForDisplay = isReady
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -857,6 +873,18 @@ private struct DetailSingletonVideoPlayerView: View {
             if handoffThumbnail == nil {
                 handoffThumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid)
             }
+        }
+        .onChange(of: shouldMountNativePlaybackSurface) { _, isMounted in
+            if !isMounted {
+                isNativeSurfaceReadyForDisplay = false
+            }
+        }
+        .onChange(of: manager.currentPlayer) { _, _ in
+            isNativeSurfaceReadyForDisplay = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .videoPlayerItemReplaced)) { notification in
+            guard notification.userInfo?["mediaID"] as? String == mid else { return }
+            isNativeSurfaceReadyForDisplay = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in
             recoverVisibleVideoAfterForeground(reason: "videoInfrastructureRestarted")
@@ -1021,6 +1049,9 @@ private struct DetailLayerVideoPlayerView: View {
 
 private struct DetailAVPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
+    /// Reports whether the controller currently has a video frame on screen, so the
+    /// caller can keep its placeholder up instead of exposing the black backing view.
+    let onReadyForDisplayChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -1029,12 +1060,34 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate, @preconcurrency AVPlayerViewControllerDelegate {
         var player: AVPlayer?
+        var onReadyForDisplayChange: ((Bool) -> Void)?
         private var wasPlayingBeforeSurfaceTap = false
         private var fullscreenMuteObserver: NSKeyValueObservation?
         private var fullscreenVolumeObserver: NSKeyValueObservation?
+        private var readyForDisplayObserver: NSKeyValueObservation?
 
         func attach(player: AVPlayer) {
             self.player = player
+        }
+
+        func observeReadyForDisplay(on playerViewController: AVPlayerViewController) {
+            readyForDisplayObserver?.invalidate()
+            readyForDisplayObserver = playerViewController.observe(
+                \.isReadyForDisplay,
+                options: [.new]
+            ) { [weak self] _, change in
+                guard let isReady = change.newValue else { return }
+                Task { @MainActor in
+                    self?.onReadyForDisplayChange?(isReady)
+                }
+            }
+
+            // Seed the current value out of band: makeUIViewController runs inside a
+            // SwiftUI update, so the callback cannot mutate state synchronously here.
+            let isReadyNow = playerViewController.isReadyForDisplay
+            Task { @MainActor [weak self] in
+                self?.onReadyForDisplayChange?(isReadyNow)
+            }
         }
 
         @objc func handleSurfaceTap(_ recognizer: UITapGestureRecognizer) {
@@ -1172,6 +1225,8 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         let coordinator = context.coordinator
         vc.delegate = coordinator
         coordinator.attach(player: player)
+        coordinator.onReadyForDisplayChange = onReadyForDisplayChange
+        coordinator.observeReadyForDisplay(on: vc)
         let surfaceTap = UITapGestureRecognizer(
             target: coordinator,
             action: #selector(Coordinator.handleSurfaceTap(_:))
@@ -1187,6 +1242,7 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
         context.coordinator.attach(player: player)
+        context.coordinator.onReadyForDisplayChange = onReadyForDisplayChange
         configureAudiblePlayback(for: player)
         if vc.player !== player {
             vc.player = player
