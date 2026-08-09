@@ -5,7 +5,7 @@
  * - /.well-known/assetlinks.json             -> Android App Links
  * - browser navigations                      -> redirected to the HTTP
  *   TweetWeb host, so users without the app see the real web page.
- *   Legacy /tweet/* and profile paths are canonicalized to /#tweet/* and
+ *   Legacy /tweet/* and author paths are canonicalized to /#tweet/* and
  *   /#author/* respectively.
  * - non-navigation requests                  -> reverse-proxied to Leither
  *
@@ -33,7 +33,7 @@ const APP_STORE_ID = "6751131431";
 // at the server; nginx's dtweet.com.conf (*.dtweet.com) proxies to Leither :8080
 // preserving the Host header, so Leither domain routing can take over later.
 const ORIGIN = "http://dl.dtweet.com";
-const BROWSER_FALLBACK_ORIGIN = "http://t1.www3.shop";
+const BROWSER_FALLBACK_ORIGIN = "http://t1.w3w3.store";
 const STATIC_ASSETS = new Set([
   "/index_entry.js",
   "/hprose.js",
@@ -106,9 +106,9 @@ function appleAppSiteAssociation() {
           appIDs: IOS_BUNDLE_IDS.map((b) => `${IOS_TEAM_ID}.${b}`),
           components: [
             { "/": "/", "#": "tweet/*" },
+            { "/": "/", "#": "author/*" },
             { "/": "/tweet/*" },
-            { "/": "/user/*" },
-            { "/": "/profile/*" },
+            { "/": "/author/*" },
           ],
         },
       ],
@@ -136,8 +136,7 @@ function isHtmlNavigation(request) {
 }
 
 async function proxyToTweetWeb(request, url) {
-  // App deep-link paths use /user|/profile; TweetWeb's external route is #author.
-  const path = url.pathname.replace(/^\/(user|profile)(\/|$)/, "/author$2");
+  const path = url.pathname;
 
   // App users never get here: iOS and Android claim supported dtweet.com links
   // before browser navigation. Browser fallback uses a separate HTTP host so

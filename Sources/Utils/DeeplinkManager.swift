@@ -221,8 +221,8 @@ class DeeplinkManager: ObservableObject {
             return .tweet(tweetId: tweetId, authorId: authorId)
         }
         
-        // Handle hash fragment formats: #/tweet/{tweetId}/{authorId} and
-        // #tweet/{tweetId}/{authorId}.
+        // Handle hash fragment formats such as #tweet/{tweetId}/{authorId}
+        // and #author/{userId}.
         if let fragment = url.fragment {
             let fragmentComponents = fragment.components(separatedBy: "/").filter { !$0.isEmpty }
             if fragmentComponents.count >= 2 && fragmentComponents[0] == "tweet" {
@@ -232,16 +232,16 @@ class DeeplinkManager: ObservableObject {
                     : ""
                 return .tweet(tweetId: tweetId, authorId: authorId)
             }
+            if fragmentComponents.count >= 2 && fragmentComponents[0] == "author" {
+                return .user(userId: fragmentComponents[1].components(separatedBy: "?")[0])
+            }
         }
         
-        // Handle user profile URLs if they exist
-        // Format: /user/{userId} or /profile/{userId}
-        if pathComponents.count >= 2 {
-            if pathComponents[0] == "user" || pathComponents[0] == "profile" {
-                let userId = pathComponents[1]
-                print("[DeeplinkManager] ✅ Parsed user deeplink - userId: \(userId)")
-                return .user(userId: userId)
-            }
+        // Handle user profile URLs: /author/{userId}
+        if pathComponents.count >= 2 && pathComponents[0] == "author" {
+            let userId = pathComponents[1]
+            print("[DeeplinkManager] ✅ Parsed user deeplink - userId: \(userId)")
+            return .user(userId: userId)
         }
         
         print("[DeeplinkManager] ⚠️ Could not parse HTTP URL - unknown format")
