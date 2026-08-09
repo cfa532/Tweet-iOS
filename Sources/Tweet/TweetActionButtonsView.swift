@@ -557,10 +557,13 @@ struct TweetActionButtonsView: View {
                         // If we don't have a preloaded preview, generate it now
                         if attachmentPreviewImage == nil {
                             print("DEBUG: [SHARE] No preloaded preview, generating now...")
-                            
-                            // Generate preview (will return quickly if it fails or succeeds)
-                            let preview = await loadAttachmentPreviewImage()
-                            
+
+                            // Capped: the sheet must not sit behind a seek or a
+                            // cold asset load. No preview means the app icon.
+                            let preview = await loadAttachmentPreviewImage(
+                                timeout: TweetActionBarView.sharePreviewTimeout
+                            )
+
                             await MainActor.run {
                                 attachmentPreviewImage = preview
                                 print("DEBUG: [SHARE] Preview image generated: \(preview != nil ? "YES" : "NO")")
@@ -748,6 +751,13 @@ struct TweetActionButtonsView: View {
         }
     }
     
+    /// `loadAttachmentPreviewImage` capped at `timeout`; returns nil when it expires.
+    private func loadAttachmentPreviewImage(timeout: TimeInterval) async -> UIImage? {
+        await withSharePreviewDeadline(timeout) {
+            await self.loadAttachmentPreviewImage()
+        }
+    }
+
     private func loadAttachmentPreviewImage() async -> UIImage? {
         print("DEBUG: [SHARE] loadAttachmentPreviewImage called for tweet: \(tweet.mid)")
         print("DEBUG: [SHARE] Tweet has attachments: \(tweet.attachments?.count ?? 0)")
@@ -1225,10 +1235,14 @@ struct TweetActionButtonsView: View {
             }
         } // swiftlint:disable:this line_length
         
-        // Try capturing at exact position first, then with small offsets
-        let retryTimes = [0.0, 0.1, 0.3, 0.5]
-        
+        // Try capturing at exact position first, then with one small offset.
+        // Budget matters: this runs while the share sheet is held back, so the
+        // whole loop must stay under `sharePreviewTimeout`. A frame that isn't
+        // buffered within ~1s isn't worth the wait — the app icon stands in.
+        let retryTimes = [0.0, 0.2]
+
         for retryOffset in retryTimes {
+            if Task.isCancelled { return nil }
             // CRITICAL FIX: Check if player item was replaced during capture
             let currentItem = await MainActor.run { player.currentItem }
             guard currentItem === playerItem else {
@@ -1269,10 +1283,11 @@ struct TweetActionButtonsView: View {
             
             // Wait for segment to load at this time position
             var attempts = 0
-            let maxAttempts = 50 // 5 seconds total (50 * 0.1s)
+            let maxAttempts = 8 // 0.8 seconds total (8 * 0.1s)
             var hasDataAtTime = false
-            
+
             while attempts < maxAttempts {
+                if Task.isCancelled { return nil }
                 hasDataAtTime = await MainActor.run { () -> Bool in
                     // CRITICAL FIX: Check if player item was replaced
                     guard player.currentItem === playerItem else {
@@ -1312,8 +1327,9 @@ struct TweetActionButtonsView: View {
             }
             
             // Additional wait after segment is loaded to ensure pixel buffer is ready
-            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
-            
+            try? await Task.sleep(nanoseconds: 120_000_000) // 0.12 seconds
+            if Task.isCancelled { return nil }
+
             // Try to capture frame at this time position
             // CRITICAL: All CVBuffer operations must happen within MainActor.run to avoid Sendable warnings
             // The pixel buffer is converted to UIImage (which is Sendable) before leaving this context
@@ -1384,7 +1400,7 @@ struct TweetActionButtonsView: View {
             }
         }
         
-        print("DEBUG: [SHARE] Failed to capture frame at all retry positions (0.1s, 0.3s, 0.5s)")
+        print("DEBUG: [SHARE] Failed to capture frame at all retry positions (+0.0s, +0.2s)")
         return nil
     }
     

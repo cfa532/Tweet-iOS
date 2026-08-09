@@ -11,6 +11,50 @@ import SwiftUI
 import Combine
 import AVFoundation
 
+/// Runs `work`, returning its result, or nil once `timeout` elapses.
+///
+/// `work` runs unstructured and is deliberately *not* awaited when the deadline
+/// wins: share-preview generation can sit inside an AVFoundation asset load or a
+/// blocking hprose RPC that ignores cancellation, and a task group would keep the
+/// caller waiting on precisely the cases this deadline exists to escape. The task
+/// is cancelled — cancellation-aware paths bail early — and otherwise left to
+/// finish on its own, off the caller's critical path.
+func withSharePreviewDeadline(
+    _ timeout: TimeInterval,
+    work: @escaping @Sendable () async -> UIImage?
+) async -> UIImage? {
+    let workTask = Task { await work() }
+    let winner = SharePreviewDeadlineClaim()
+
+    return await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
+        Task {
+            let image = await workTask.value
+            if winner.claim() { continuation.resume(returning: image) }
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if winner.claim() {
+                workTask.cancel()
+                continuation.resume(returning: nil)
+            }
+        }
+    }
+}
+
+/// One-shot flag so exactly one racer resumes the continuation.
+private final class SharePreviewDeadlineClaim: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
+    }
+}
+
 /// Which URL a share action embeds — see DEEPLINKING.md for the policy.
 enum TweetShareLinkStyle {
     /// `http://dtweet.com/#tweet/{mid}/{authorId}` — public fragment-form share URL;
@@ -514,7 +558,11 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             // Load attachment preview if available
             if attachmentPreviewImage == nil {
                 print("DEBUG: [SHARE] Loading attachment preview...")
-                let preview = await loadAttachmentPreviewImage(for: tweet, hproseInstance: hprose)
+                let preview = await loadAttachmentPreviewImage(
+                    for: tweet,
+                    hproseInstance: hprose,
+                    timeout: Self.sharePreviewTimeout
+                )
                 await MainActor.run {
                     self.attachmentPreviewImage = preview
                     print("DEBUG: [SHARE] Preview image loaded: \(preview != nil ? "YES" : "NO")")
@@ -590,11 +638,33 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// Share items for a tweet's dropdown menu, in the feed and in the detail
     /// view alike: uses the domain returned by `check_upgrade`, without applying
     /// the user's profile-level override.
+    ///
+    /// Pass `isInDetailView` from the detail screen so the preview reads the frame
+    /// off `DetailVideoManager`'s on-screen player. Without it the lookup falls
+    /// through to the feed's cached player — detail deliberately does not share
+    /// players with MediaCell — and pays for a seek plus a buffer wait to
+    /// reproduce a frame that is already on screen.
     @MainActor
-    static func buildFeedMenuShareItems(tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
+    static func buildFeedMenuShareItems(
+        tweet: Tweet,
+        hproseInstance: HproseInstance,
+        isInDetailView: Bool = false
+    ) async -> [Any] {
         let helper = TweetActionBarView(frame: .zero)
         helper.shareLinkStyleOverride = .webDomain
-        helper.attachmentPreviewImage = await helper.loadAttachmentPreviewImage(for: tweet, hproseInstance: hproseInstance)
+        helper.isInDetailView = isInDetailView
+
+        // Grab the on-screen frame synchronously, off the output the player
+        // already has attached. On a hit this skips the async load entirely.
+        helper.captureVideoFrameBeforePause(for: tweet)
+
+        if helper.attachmentPreviewImage == nil {
+            helper.attachmentPreviewImage = await helper.loadAttachmentPreviewImage(
+                for: tweet,
+                hproseInstance: hproseInstance,
+                timeout: Self.sharePreviewTimeout
+            )
+        }
         return await helper.buildShareItems(for: tweet, hproseInstance: hproseInstance)
     }
 
@@ -757,6 +827,23 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             return false
         default:
             return true
+        }
+    }
+
+    /// Ceiling on how long a share action waits for its preview image.
+    /// Generating one can need a seek plus a segment fetch, or a cold asset load
+    /// over IPFS; the share sheet must not sit behind that. `buildShareItems`
+    /// already falls back to the app icon when there is no preview.
+    static let sharePreviewTimeout: TimeInterval = 1.5
+
+    /// `loadAttachmentPreviewImage` capped at `timeout`; returns nil when it expires.
+    private func loadAttachmentPreviewImage(
+        for tweet: Tweet,
+        hproseInstance: HproseInstance,
+        timeout: TimeInterval
+    ) async -> UIImage? {
+        await withSharePreviewDeadline(timeout) {
+            await self.loadAttachmentPreviewImage(for: tweet, hproseInstance: hproseInstance)
         }
     }
 
@@ -1062,10 +1149,14 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             }
         }
 
-        // Try capturing at current position first, then with small offsets
-        let retryOffsets = [0.0, 0.1, 0.3, 0.5]
+        // Try capturing at current position first, then with one small offset.
+        // Budget matters: this runs while the share sheet is held back, so the
+        // whole loop must stay under `sharePreviewTimeout`. A frame that isn't
+        // buffered within ~1s isn't worth the wait — the app icon stands in.
+        let retryOffsets = [0.0, 0.2]
 
         for retryOffset in retryOffsets {
+            if Task.isCancelled { return nil }
             let currentItem = await MainActor.run { player.currentItem }
             guard currentItem === playerItem else { return nil }
 
@@ -1087,12 +1178,13 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             let didSeek = await seekCompleted.value
             guard didSeek else { continue }
 
-            // Wait for segment to load
+            // Wait for segment to load (8 × 0.1s = 0.8s per offset)
             var attempts = 0
-            let maxAttempts = 50
+            let maxAttempts = 8
             var hasDataAtTime = false
 
             while attempts < maxAttempts {
+                if Task.isCancelled { return nil }
                 hasDataAtTime = await MainActor.run { () -> Bool in
                     guard player.currentItem === playerItem else { return false }
                     let currentTime = playerItem.currentTime()
@@ -1113,7 +1205,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
             if !hasDataAtTime { continue }
 
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            if Task.isCancelled { return nil }
 
             let initialImage = await MainActor.run { () -> UIImage? in
                 guard player.currentItem === playerItem else { return nil }

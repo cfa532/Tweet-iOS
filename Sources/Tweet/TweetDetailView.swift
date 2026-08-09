@@ -1872,7 +1872,8 @@ struct TweetDetailView: View {
                         // check_upgrade domain (see DEEPLINKING.md).
                         let items = await TweetActionBarView.buildFeedMenuShareItems(
                             tweet: displayTweet,
-                            hproseInstance: hproseInstance
+                            hproseInstance: hproseInstance,
+                            isInDetailView: true
                         )
                         await MainActor.run {
                             menuShareItems = ShareSheetData(items: items)
