@@ -298,6 +298,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
     
     /// If the transport layer returned a JSON object as a string, parse it so v2 unwrapping works.
+    /// Render a boolean for an RPC parameter.
+    ///
+    /// The Leither transport carries strings only, so a boolean sent from a client
+    /// reaches the backend already stringified — which is why handlers compare against
+    /// "true", and why get_tweet's `fromdetailview` accepts nothing else. Send the
+    /// string the backend actually receives rather than leaning on that coercion, so
+    /// the wire format is visible at the call site. Matches TweetWeb and Android.
+    nonisolated static func rpcBool(_ value: Bool) -> String {
+        value ? "true" : "false"
+    }
+
     nonisolated private static func jsonObjectIfEncodedAsString(_ value: Any?) -> Any? {
         guard let s = value as? String,
               let data = s.data(using: .utf8),
@@ -1243,7 +1254,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
 
         var accessParams = requestParams
-        accessParams["homeupdated"] = true
+        accessParams["homeupdated"] = Self.rpcBool(true)
 
         let accessClient = clientPool.getClientByIP(for: accessIP, timeout: 30)
 
@@ -1494,7 +1505,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "appuserid": appUserMid
         ]
         if fromDetailView {
-            params["fromdetailview"] = true
+            params["fromdetailview"] = Self.rpcBool(true)
             if let authorHostId {
                 params["authorhostid"] = authorHostId
             }
@@ -3700,7 +3711,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "tweetid": tweetMid,
                 "authorid": storageAuthorId,
                 "userhostid": appHostId as Any,
-                "isfavorite": isFavorite
+                "isfavorite": Self.rpcBool(isFavorite)
             ]
             let rawResponse = await invokeRunMApp(using: client, entry: "toggle_favorite", params: params)
             // Hprose syncInvoke returns the error object (not throws) on failure
@@ -3766,7 +3777,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "tweetid": tweetMid,
                 "authorid": storageAuthorId,
                 "userhostid": appHostId as Any,
-                "isbookmarked": isBookmarked
+                "isbookmarked": Self.rpcBool(isBookmarked)
             ]
             let rawResponse = await invokeRunMApp(using: client, entry: "toggle_bookmark", params: params)
             // Hprose syncInvoke returns the error object (not throws) on failure
