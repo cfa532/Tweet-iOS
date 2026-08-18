@@ -21,6 +21,41 @@ extension String {
     }
 }
 
+// MARK: - Comment spinner cap
+
+/// Hard cap on how long a comment spinner may block a detail screen.
+let maxCommentSpinnerSeconds: TimeInterval = 6
+
+/// Runs `work` but stops *waiting* on it after `seconds`, returning either way.
+///
+/// Why not `withTaskGroup` + `Task.sleep`: `invokeRunMApp` bridges a blocking hprose
+/// call, so cancellation cannot interrupt an in-flight socket read, and a task group
+/// awaits its children on exit — a structured timeout would still sit here until the
+/// read returned. Running `work` unstructured and waiting on a one-shot signal lets the
+/// caller give up on schedule while the work finishes in the background, so its results
+/// still land in the list when they arrive.
+@MainActor
+func runWithSpinnerCap(
+    seconds: TimeInterval = maxCommentSpinnerSeconds,
+    _ work: @escaping @MainActor () async -> Void
+) async {
+    var signal: AsyncStream<Void>.Continuation!
+    let settled = AsyncStream<Void> { signal = $0 }
+    let finish = signal!
+
+    Task {
+        await work()
+        finish.finish()
+    }
+    let cap = Task {
+        try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        finish.finish()
+    }
+
+    for await _ in settled {}
+    cap.cancel()
+}
+
 // MARK: - Gadget Utility
 final class Gadget: Sendable {
     static let shared = Gadget()

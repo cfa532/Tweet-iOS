@@ -16,6 +16,11 @@ struct CommentListUIKitView: View {
     let commentFetcher: @Sendable (UInt, UInt) async throws -> [Tweet?]
     let notifications: [CommentListNotification]
     var hasUserScrolled: Binding<Bool> = .constant(true)
+    /// Bound to the parent's pull-to-refresh flag. A refresh rewrites `comments`
+    /// from the parent, which makes the table re-display its last row and fire
+    /// `onReachBottom`; without this gate that starts a load-more against a page
+    /// cursor the refresh has already invalidated.
+    var isRefreshing: Binding<Bool> = .constant(false)
     let commentsVideoCoordinator: CommentsVideoPlaybackCoordinator
     let onAvatarTap: (User) -> Void
     let onShowLogin: () -> Void
@@ -40,6 +45,7 @@ struct CommentListUIKitView: View {
             parentTweet: parentTweet,
             hproseInstance: hproseInstance,
             commentsVideoCoordinator: commentsVideoCoordinator,
+            commentCount: parentTweet.commentCount ?? 0,
             isLoading: isLoading,
             isLoadingMore: isLoadingMore,
             initialLoadComplete: initialLoadComplete,
@@ -119,7 +125,9 @@ struct CommentListUIKitView: View {
 
     private func refreshComments() async {
         guard !isLoading else { return }
-        await performInitialLoad()
+        // Capped: the fetch keeps running past the cap and fills the list when it
+        // lands, but the spinner does not follow it.
+        await runWithSpinnerCap { await performInitialLoad() }
         await MainActor.run {
             isLoading = false
         }
@@ -147,7 +155,14 @@ struct CommentListUIKitView: View {
 
                 await MainActor.run {
                     if !validComments.isEmpty {
-                        comments.append(contentsOf: validComments)
+                        // Merge by mid. Offset pagination over a list other users
+                        // are still posting to can re-serve a comment that page N
+                        // already returned, so an unfiltered append duplicates rows
+                        // (and duplicate mids break `ForEach(id: \.element.mid)` in
+                        // the SwiftUI sibling). Matches Android's `loadComments` and
+                        // TweetDetailView's own `refreshComments`.
+                        let existingIds = Set(comments.map { $0.mid })
+                        comments.append(contentsOf: validComments.filter { !existingIds.contains($0.mid) })
                     }
 
                     if newComments.count < pageSize {
@@ -184,7 +199,8 @@ struct CommentListUIKitView: View {
     }
 
     private func handleReachBottom() {
-        guard initialLoadComplete, !isLoading, !isLoadingMore, hasMoreComments else { return }
+        guard initialLoadComplete, !isLoading, !isLoadingMore, !isRefreshing.wrappedValue,
+              hasMoreComments else { return }
         loadMoreComments()
     }
 
@@ -208,6 +224,7 @@ private struct CommentListTableRepresentable: UIViewControllerRepresentable {
     let parentTweet: Tweet
     let hproseInstance: HproseInstance
     let commentsVideoCoordinator: CommentsVideoPlaybackCoordinator
+    let commentCount: Int
     let isLoading: Bool
     let isLoadingMore: Bool
     let initialLoadComplete: Bool
@@ -270,6 +287,7 @@ private struct CommentListTableRepresentable: UIViewControllerRepresentable {
             parentTweet: parentTweet,
             hproseInstance: hproseInstance,
             commentsVideoCoordinator: commentsVideoCoordinator,
+            commentCount: commentCount,
             isLoading: isLoading,
             isLoadingMore: isLoadingMore,
             initialLoadComplete: initialLoadComplete,
@@ -302,6 +320,7 @@ private final class CommentListTableViewController: UIViewController, UITableVie
     private weak var parentTweet: Tweet?
     private weak var hproseInstance: HproseInstance?
     private weak var commentsVideoCoordinator: CommentsVideoPlaybackCoordinator?
+    private var commentCount = 0
     private var isLoading = false
     private var isLoadingMore = false
     private var initialLoadComplete = false
@@ -379,6 +398,7 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         parentTweet: Tweet,
         hproseInstance: HproseInstance,
         commentsVideoCoordinator: CommentsVideoPlaybackCoordinator,
+        commentCount: Int,
         isLoading: Bool,
         isLoadingMore: Bool,
         initialLoadComplete: Bool,
@@ -396,6 +416,7 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         self.parentTweet = parentTweet
         self.hproseInstance = hproseInstance
         self.commentsVideoCoordinator = commentsVideoCoordinator
+        self.commentCount = commentCount
         self.isLoading = isLoading
         self.isLoadingMore = isLoadingMore
         self.initialLoadComplete = initialLoadComplete
@@ -433,15 +454,17 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         comments.isEmpty
     }
 
+    /// Display order, shared with Android `TweetDetailScreen` and Web `TweetDetail.vue`:
+    /// comments in hand win; otherwise the parent's `commentCount` decides whether an
+    /// empty list is worth waiting for. That counter is a convenience value and can
+    /// disagree with reality, so it only governs whether to *wait* — the page-0 fetch
+    /// runs regardless and fills the list if the count was wrong.
     private var rows: [Row] {
         if comments.isEmpty {
-            if isLoading {
+            if isLoading && commentCount > 0 {
                 return [.status(.loading)]
             }
-            if initialLoadComplete {
-                return [.status(.empty)]
-            }
-            return []
+            return [.status(.empty)]
         }
         return comments.map { .comment($0) }
     }

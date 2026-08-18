@@ -34,7 +34,10 @@ final class TweetCacheManager: @unchecked Sendable {
     }
 
     private let coreDataManager = CoreDataManager.shared
-    private let maxCacheAge: TimeInterval = 14 * 24 * 60 * 60 // 14 days (2 weeks) for auto-cleanup
+    // 30 days, matching Android's TweetCacheManager.CACHE_EXPIRATION_TIME. Comment lists
+    // are cached as tweets bucketed under their parent's mid, so they expire on this clock
+    // too — keeping both clients' cached content on the same lifetime.
+    private let maxCacheAge: TimeInterval = 30 * 24 * 60 * 60
     private let maxCacheSize: Int = 5000 // Maximum number of tweets to cache
     private nonisolated(unsafe) var cleanupTimer: Timer?
     
@@ -173,7 +176,7 @@ final class TweetCacheManager: @unchecked Sendable {
         // perform (not performAndWait): the hourly timer fires on the main run loop and
         // cleanup has no completion dependency, so don't block main on the CoreData queue.
         context.perform { [self] in
-            // Delete expired tweets (2 weeks old, excluding private tweets)
+            // Delete expired tweets (30 days old, excluding private tweets)
             deleteExpiredTweets()
             
             // Save access times after cleanup
@@ -772,7 +775,7 @@ extension TweetCacheManager {
                     let lastAccess = lockedAccessTime(for: tweetId) ?? (cdTweet.timeCached ?? Date.distantPast)
                     
                     if lastAccess < expirationDate {
-                        // Tweet hasn't been accessed in 2 weeks - delete it and its media
+                        // Tweet hasn't been accessed in 30 days - delete it and its media
                         print("DEBUG: [TweetCacheManager] Deleting expired tweet: \(tweetId) (last access: \(lastAccess))")
                         
                         // Delete associated media files

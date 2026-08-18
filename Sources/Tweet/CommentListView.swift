@@ -17,18 +17,24 @@ struct CommentListNotification {
 @available(iOS 16.0, *)
 struct CommentListView<RowView: View>: View {
     // MARK: - Properties
-    let title: String
     let commentFetcher: @Sendable (UInt, UInt) async throws -> [Tweet?]
-    let showTitle: Bool
+    /// The parent's own comment counter. A convenience value that can disagree with
+    /// reality, so it only governs whether an empty list is worth waiting for — the
+    /// page-0 fetch runs regardless and fills the list if the count was wrong.
+    let commentCount: Int
     let rowView: (Tweet) -> RowView
     let notifications: [CommentListNotification]
-    let isEmbedded: Bool // When true, don't use ScrollView (for nested scroll situations)
     let externalRefreshToken: Int
     // Bound to a parent-owned flag (driven by the parent's UIScrollView
     // observer) that flips to true on the first real user pan. Used to
     // suppress the open-time auto-probe's "No more comments" flash. The
     // default is a non-functional constant binding for non-embedded usage.
     var hasUserScrolled: Binding<Bool> = .constant(true)
+    /// Bound to the parent's pull-to-refresh flag when embedded. A refresh rewrites
+    /// `comments` from the parent, which re-displays the last row and fires
+    /// `onReachBottom`; without this gate that starts a load-more against a page
+    /// cursor the refresh has already invalidated.
+    var isRefreshing: Binding<Bool> = .constant(false)
     private let pageSize: UInt = 10
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -51,74 +57,41 @@ struct CommentListView<RowView: View>: View {
 
     // MARK: - Initialization
     init(
-        title: String,
         comments: Binding<[Tweet]>,
         commentFetcher: @escaping @Sendable (UInt, UInt) async throws -> [Tweet?],
-        showTitle: Bool = true,
+        commentCount: Int,
         notifications: [CommentListNotification]? = nil,
-        isEmbedded: Bool = false,
         externalRefreshToken: Int = 0,
         hasUserScrolled: Binding<Bool> = .constant(true),
+        isRefreshing: Binding<Bool> = .constant(false),
         rowView: @escaping (Tweet) -> RowView
     ) {
-        self.title = title
         self._comments = comments
         self.commentFetcher = commentFetcher
-        self.showTitle = showTitle
+        self.commentCount = commentCount
         self.notifications = notifications ?? []
-        self.isEmbedded = isEmbedded
         self.externalRefreshToken = externalRefreshToken
         self.hasUserScrolled = hasUserScrolled
+        self.isRefreshing = isRefreshing
         self.rowView = rowView
     }
 
     // MARK: - Body
+    // Always nested inside the host screen's own ScrollView (CommentDetailView), so this
+    // never scrolls itself and never owns a refresh control — the host does both.
     var body: some View {
-        ScrollViewReader { proxy in
             ZStack {
-                if isEmbedded {
-                    // When embedded, don't use ScrollView to avoid nested scroll issues
                     CommentListContentView(
                         comments: $comments,
                         rowView: { comment in
                             rowView(comment)
                         },
-                        hasMoreComments: hasMoreComments,
                         isLoadingMore: isLoadingMore,
                         isLoading: isLoading,
-                        initialLoadComplete: initialLoadComplete,
+                        commentCount: commentCount,
                         showNoMoreComments: showNoMoreComments,
                         onReachBottom: { handleReachBottom() }
                     )
-                } else {
-                    // Standalone mode: use ScrollView
-                    ScrollView {
-                        CommentListContentView(
-                            comments: $comments,
-                            rowView: { comment in
-                                rowView(comment)
-                            },
-                            hasMoreComments: hasMoreComments,
-                            isLoadingMore: isLoadingMore,
-                            isLoading: isLoading,
-                            initialLoadComplete: initialLoadComplete,
-                            showNoMoreComments: showNoMoreComments,
-                            onReachBottom: { handleReachBottom() }
-                        )
-                    }
-                    .refreshable {
-                        let startTime = Date()
-                        await refreshComments()
-                        
-                        // Ensure pull-to-refresh spinner shows for at least 0.5 seconds
-                        let elapsedTime = Date().timeIntervalSince(startTime)
-                        let minimumDuration: TimeInterval = 0.5
-                        if elapsedTime < minimumDuration {
-                            let remainingTime = minimumDuration - elapsedTime
-                            try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
-                        }
-                    }
-                }
                 if showToast {
                     VStack {
                         Spacer()
@@ -164,7 +137,6 @@ struct CommentListView<RowView: View>: View {
                     hasMoreComments = true
                 }
             }
-        }
     }
 
     // MARK: - Methods
@@ -192,9 +164,11 @@ struct CommentListView<RowView: View>: View {
 
     func refreshComments() async {
         guard !isLoading else { return }
-        
-        await performInitialLoad()
-        
+
+        // Capped: the fetch keeps running past the cap and fills the list when it
+        // lands, but the spinner does not follow it.
+        await runWithSpinnerCap { await performInitialLoad() }
+
         // Set loading to false after refresh completes
         await MainActor.run {
             isLoading = false
@@ -233,7 +207,12 @@ struct CommentListView<RowView: View>: View {
                 
                 await MainActor.run {
                     if !validComments.isEmpty {
-                        comments.append(contentsOf: validComments)
+                        // Merge by mid. Offset pagination over a list other users are
+                        // still posting to can re-serve a comment that page N already
+                        // returned, and a duplicate mid breaks the `ForEach(id:
+                        // \.element.mid)` below. Matches CommentListUIKitView.
+                        let existingIds = Set(comments.map { $0.mid })
+                        comments.append(contentsOf: validComments.filter { !existingIds.contains($0.mid) })
                     }
                     
                     // Use the same logic as TweetListView
@@ -283,7 +262,8 @@ struct CommentListView<RowView: View>: View {
     // load-more fetch when something is fetchable. The "No more comments"
     // flash and the open-time suppression live in `showNoMoreMessage`.
     private func handleReachBottom() {
-        guard initialLoadComplete, !isLoading, !isLoadingMore, hasMoreComments else { return }
+        guard initialLoadComplete, !isLoading, !isLoadingMore, !isRefreshing.wrappedValue,
+              hasMoreComments else { return }
         loadMoreComments()
     }
 
@@ -321,10 +301,9 @@ struct CommentListView<RowView: View>: View {
 struct CommentListContentView<RowView: View>: View {
     @Binding var comments: [Tweet]
     let rowView: (Tweet) -> RowView
-    let hasMoreComments: Bool
     let isLoadingMore: Bool
     let isLoading: Bool
-    let initialLoadComplete: Bool
+    let commentCount: Int
     let showNoMoreComments: Bool
     let onReachBottom: () -> Void
 
@@ -332,8 +311,10 @@ struct CommentListContentView<RowView: View>: View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0)
 
-            // Show loading state
-            if isLoading && comments.isEmpty {
+            // Display order, shared with Android `TweetDetailScreen` and Web
+            // `TweetDetail.vue`: comments in hand win, then `commentCount` decides
+            // whether an empty list is worth waiting on a spinner for.
+            if comments.isEmpty && isLoading && commentCount > 0 {
                 VStack(spacing: 16) {
                     ProgressView()
                         .scaleEffect(1.2)
@@ -343,8 +324,8 @@ struct CommentListContentView<RowView: View>: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-            } else if initialLoadComplete && comments.isEmpty {
-                // Show empty state when loading is complete but no comments
+            } else if comments.isEmpty {
+                // Nothing to show and nothing worth waiting for
                 VStack(spacing: 16) {
                     Image(systemName: "bubble.left")
                         .font(.system(size: 48))

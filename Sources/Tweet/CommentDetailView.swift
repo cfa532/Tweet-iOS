@@ -99,6 +99,16 @@ struct CommentDetailView: View {
     @State private var showLoginSheet = false
     @State private var replies: [Tweet] = []
     @State private var repliesRefreshToken = 0
+    /// True while a pull-to-refresh fetch is in flight. Stays true until the fetch
+    /// actually finishes — not until the refresh control comes down — because its job
+    /// is to keep the replies list from paginating against a page cursor the refresh
+    /// is in the middle of invalidating.
+    @State private var isPullRefreshing = false
+    // Replies cache context, mirroring TweetDetailView's comment cache context.
+    @State private var hasServedCachedRepliesForCurrentComment = false
+    @State private var currentRepliesCommentId = ""
+    @State private var initialLoadCommentId = ""
+    @State private var refreshTimer: Timer?
     
     // Reply editor states
     @State private var showReplyEditor = true
@@ -141,7 +151,7 @@ struct CommentDetailView: View {
                 }
             }
             .refreshable {
-                await refreshCommentAndReplies()
+                await runCappedPullRefresh()
             }
             .background(Color(.systemBackground))
             
@@ -184,7 +194,15 @@ struct CommentDetailView: View {
             DetailVideoManager.shared.activateForDetail()
             DetailVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
         }
+        .onChange(of: replies.count) { _, _ in
+            TweetDetailCommentsCache.shared.setComments(replies, for: comment.mid)
+        }
+        .onChange(of: comment.mid) { _, _ in
+            configureRepliesCacheContextIfNeeded()
+        }
         .onDisappear {
+            refreshTimer?.invalidate()
+            refreshTimer = nil
             // Keep feed autoplay suppressed until the outgoing player's fade and
             // handoff are complete.
             DetailVideoManager.shared.deactivate(audioFadeDuration: 0.35) {
@@ -192,7 +210,51 @@ struct CommentDetailView: View {
             }
         }
         .task {
-            await syncComment()
+            setupInitialData()
+        }
+    }
+
+    /// Mirrors TweetDetailView.setupInitialData.
+    private func setupInitialData() {
+        configureRepliesCacheContextIfNeeded()
+
+        // The server syncs the comment and its replies when this detail-view read
+        // completes. Keep one owner for the ordered read so replies are fetched
+        // exactly once, after that sync opportunity.
+        if initialLoadCommentId != comment.mid {
+            initialLoadCommentId = comment.mid
+            Task { await loadInitialServerData() }
+        }
+
+        // Periodically reload the current provider without triggering a cross-node sync.
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
+            Task { @MainActor in
+                await syncComment(isInitialLoad: false)
+            }
+        }
+    }
+
+    private func loadInitialServerData() async {
+        await syncComment(isInitialLoad: true)
+        // A failed comment read must not prevent a best-effort replies refresh.
+        await refreshReplies()
+    }
+
+    /// Mirrors TweetDetailView.configureCommentCacheContextIfNeeded.
+    private func configureRepliesCacheContextIfNeeded() {
+        let commentId = comment.mid
+        if currentRepliesCommentId == commentId {
+            return
+        }
+
+        currentRepliesCommentId = commentId
+        hasServedCachedRepliesForCurrentComment = false
+        initialLoadCommentId = ""
+        if let cachedReplies = TweetDetailCommentsCache.shared.comments(for: commentId) {
+            replies = cachedReplies
+            hasServedCachedRepliesForCurrentComment = true
+        } else {
+            replies = []
         }
     }
     
@@ -291,17 +353,39 @@ struct CommentDetailView: View {
     
     private var repliesListView: some View {
         CommentListView<CommentItemView>(
-            title: "Replies",
             comments: $replies,
             commentFetcher: { page, size in
+                let subject = await MainActor.run { comment }
+
+                if page == 0 {
+                    let subjectMid = await MainActor.run { subject.mid }
+                    let alreadyServed = await MainActor.run { hasServedCachedRepliesForCurrentComment }
+                    if !alreadyServed {
+                        let cached = await TweetDetailCommentsCache.shared.persistedComments(for: subjectMid)
+                        if !cached.isEmpty {
+                            await MainActor.run {
+                                hasServedCachedRepliesForCurrentComment = true
+                                replies = cached
+                            }
+                            return cached.map { Optional($0) }
+                        }
+                    }
+                }
+
                 let fetched = try await hproseInstance.fetchComments(
-                    comment,
+                    subject,
                     pageNumber: page,
                     pageSize: size
                 )
+                if page == 0 {
+                    await MainActor.run {
+                        hasServedCachedRepliesForCurrentComment = true
+                        TweetDetailCommentsCache.shared.setComments(fetched.compactMap { $0 }, for: subject.mid)
+                    }
+                }
                 return fetched
             },
-            showTitle: false,
+            commentCount: comment.commentCount ?? 0,
             notifications: [
                 CommentListNotification(
                     name: .newCommentAdded,
@@ -335,8 +419,8 @@ struct CommentDetailView: View {
                     }
                 )
             ],
-            isEmbedded: true, // Embedded in CommentDetailView's ScrollView, avoid nested scrolling
             externalRefreshToken: repliesRefreshToken,
+            isRefreshing: $isPullRefreshing,
             rowView: { reply in
                 CommentItemView(
                     parentTweet: comment,
@@ -356,14 +440,30 @@ struct CommentDetailView: View {
     // top-level tweets. bypassCache is required for fromDetailView to actually reach the
     // server — comment is already populated from the feed, so a cache hit would otherwise
     // short-circuit before the sync ever runs.
-    private func syncComment() async {
+    // `fromDetailView` asks the server to sync/provide the comment on the DHT. That only
+    // needs to happen once per detail-view open, not on every periodic re-read — same
+    // split as TweetDetailView.doReadTweet(isInitialLoad:).
+    private func syncComment(isInitialLoad: Bool) async {
         if let refreshed = try? await hproseInstance.getTweet(
-            tweetId: comment.mid, authorId: comment.authorId, bypassCache: true, fromDetailView: true
+            tweetId: comment.mid, authorId: comment.authorId, bypassCache: true,
+            fromDetailView: isInitialLoad
         ) {
             try? comment.update(from: refreshed)
         }
     }
 
+    /// Every RPC below has a 15s client timeout, so the control is capped rather than
+    /// left to follow the fetch. `isPullRefreshing` clears when the fetch actually
+    /// finishes, keeping the list from paginating underneath it past the cap.
+    private func runCappedPullRefresh() async {
+        await MainActor.run { isPullRefreshing = true }
+        await runWithSpinnerCap {
+            await refreshCommentAndReplies()
+            isPullRefreshing = false
+        }
+    }
+
+    // Pull-to-refresh: sync the latest comment state, then reload replies.
     private func refreshCommentAndReplies() async {
         if let refreshed = try? await hproseInstance.refreshTweet(
             tweetId: comment.mid,
@@ -372,13 +472,45 @@ struct CommentDetailView: View {
             try? comment.update(from: refreshed)
         }
 
-        if let refreshedReplies = try? await hproseInstance.fetchComments(
-            comment,
-            pageNumber: 0,
-            pageSize: 10
-        ) {
-            replies = refreshedReplies.compactMap { $0 }
-            repliesRefreshToken += 1
-        }
+        await refreshReplies()
+    }
+
+    /// READ replies page-by-page until overlap or end, mirroring
+    /// TweetDetailView.refreshComments. Walking pages catches the case where more than
+    /// one page of replies accrued since the last load, and prepending (rather than
+    /// replacing page 0) keeps replies already in hand — including the cached ones.
+    private func refreshReplies() async {
+        do {
+            var allNewReplies: [Tweet] = []
+            var currentPage: UInt = 0
+            let pageSize: UInt = 20
+            var hasOverlap = false
+
+            while !hasOverlap {
+                let freshReplies = try await hproseInstance.fetchComments(
+                    comment, pageNumber: currentPage, pageSize: pageSize
+                )
+
+                let validReplies = freshReplies.compactMap { $0 }
+                if validReplies.isEmpty { break }
+
+                let existingIds = Set(replies.map { $0.mid })
+                let newOnThisPage = validReplies.filter { !existingIds.contains($0.mid) }
+                if newOnThisPage.count < validReplies.count { hasOverlap = true }
+                allNewReplies.append(contentsOf: newOnThisPage)
+                if freshReplies.count < pageSize { break }
+                currentPage += 1
+            }
+
+            await MainActor.run {
+                if !allNewReplies.isEmpty {
+                    replies.insert(contentsOf: allNewReplies, at: 0)
+                    TweetDetailCommentsCache.shared.setComments(replies, for: comment.mid)
+                    // The child's page cursor is now behind by `allNewReplies.count`;
+                    // resetting it keeps load-more aligned with the server's paging.
+                    repliesRefreshToken += 1
+                }
+            }
+        } catch {}
     }
 }

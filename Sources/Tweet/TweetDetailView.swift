@@ -3,19 +3,54 @@ import AVKit
 import Combine
 import UIKit
 
+/// Comment list per detail-screen subject, keyed by that subject's mid.
+///
+/// Shared with `CommentDetailView`, whose subject is a comment and whose "comments" are
+/// that comment's replies — the same relationship one level down.
+///
+/// Two tiers, mirroring Android: an in-process dictionary for same-session reopens, and
+/// Core Data underneath so a cold start serves comments from disk instead of spinning on
+/// the network. The durable rows are bucketed under the parent's mid, exactly as
+/// Android's `TweetCacheManager.saveCommentsByParent` does, which also means they expire
+/// with every other cached tweet in `deleteExpiredTweets()` rather than needing a purge
+/// of their own.
 @MainActor
-private final class TweetDetailCommentsCache {
+final class TweetDetailCommentsCache {
     static let shared = TweetDetailCommentsCache()
+    /// Matches Android's `getCachedCommentsByParent` limit.
+    private static let persistedLimit: UInt = 200
     private var commentsByParentTweetId: [String: [Tweet]] = [:]
 
     private init() {}
 
+    /// In-memory copy only. Callers that can await should prefer `persistedComments`.
     func comments(for parentTweetId: String) -> [Tweet]? {
         commentsByParentTweetId[parentTweetId]
     }
 
+    /// Memory first, then the durable copy. Mirrors Android
+    /// `TweetCacheManager.getCachedCommentsByParent`.
+    func persistedComments(for parentTweetId: String) async -> [Tweet] {
+        if let inMemory = commentsByParentTweetId[parentTweetId], !inMemory.isEmpty {
+            return inMemory
+        }
+        let stored = await TweetCacheManager.shared.fetchCachedTweets(
+            for: parentTweetId,
+            page: 0,
+            pageSize: Self.persistedLimit
+        ).compactMap { $0 }
+        let sorted = stored.sorted { $0.timestamp > $1.timestamp }
+        if !sorted.isEmpty {
+            commentsByParentTweetId[parentTweetId] = sorted
+        }
+        return sorted
+    }
+
     func setComments(_ comments: [Tweet], for parentTweetId: String) {
         commentsByParentTweetId[parentTweetId] = comments
+        for comment in comments {
+            TweetCacheManager.shared.saveTweet(comment, userId: parentTweetId)
+        }
     }
 }
 
@@ -1329,6 +1364,11 @@ struct TweetDetailView: View {
     // BottomBarScrollTracker observing the parent UIScrollView. Used by
     // CommentListView to suppress the open-time auto-probe's flash.
     @State private var hasUserScrolledComments = false
+    /// True while a pull-to-refresh fetch is in flight. Stays true until the fetch
+    /// actually finishes — not until the refresh control comes down — because its
+    /// job is to keep the comment list from paginating against a page cursor the
+    /// refresh is in the middle of invalidating.
+    @State private var isPullRefreshing = false
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var menuShareItems: ShareSheetData?
@@ -1458,7 +1498,7 @@ struct TweetDetailView: View {
                     }
                     .coordinateSpace(name: "commentsScroll")
                     .refreshable {
-                        await refreshTweetAndComments()
+                        await runCappedPullRefresh()
                     }
                     .safeAreaInset(edge: .top, spacing: 0) {
                         // Floating navigation bar — pure UIKit, driven directly by KVO.
@@ -1959,16 +1999,17 @@ struct TweetDetailView: View {
                 let parentTweet = await MainActor.run { displayTweet }
 
                 if page == 0 {
-                    let cachedComments: [Tweet]? = await MainActor.run {
-                        guard !hasServedCachedCommentsForCurrentParentTweet else { return nil }
-                        guard let cached = TweetDetailCommentsCache.shared.comments(for: parentTweet.mid),
-                              !cached.isEmpty else { return nil }
-                        hasServedCachedCommentsForCurrentParentTweet = true
-                        comments = cached
-                        return cached
-                    }
-                    if let cachedComments {
-                        return cachedComments.map { Optional($0) }
+                    let parentMid = await MainActor.run { parentTweet.mid }
+                    let alreadyServed = await MainActor.run { hasServedCachedCommentsForCurrentParentTweet }
+                    if !alreadyServed {
+                        let cached = await TweetDetailCommentsCache.shared.persistedComments(for: parentMid)
+                        if !cached.isEmpty {
+                            await MainActor.run {
+                                hasServedCachedCommentsForCurrentParentTweet = true
+                                comments = cached
+                            }
+                            return cached.map { Optional($0) }
+                        }
                     }
                 }
 
@@ -2009,6 +2050,7 @@ struct TweetDetailView: View {
                 )
             ],
             hasUserScrolled: $hasUserScrolledComments,
+            isRefreshing: $isPullRefreshing,
             commentsVideoCoordinator: commentsVideoCoordinator,
             onAvatarTap: { user in
                 selectedCommentUserForNavigation = user
@@ -2103,6 +2145,18 @@ struct TweetDetailView: View {
             ) {
                 await MainActor.run { try? tweet.update(from: refreshed) }
             }
+        }
+    }
+
+    /// `refreshComments` walks comment pages until it overlaps what we already have and
+    /// every RPC on the way has a 15s client timeout, so the control is capped rather
+    /// than left to follow the fetch. `isPullRefreshing` clears when the fetch actually
+    /// finishes, keeping the list from paginating underneath it past the cap.
+    private func runCappedPullRefresh() async {
+        await MainActor.run { isPullRefreshing = true }
+        await runWithSpinnerCap {
+            await refreshTweetAndComments()
+            isPullRefreshing = false
         }
     }
 
