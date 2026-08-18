@@ -23,6 +23,7 @@ struct ProfileView: View {
     @State private var showChatScreen = false
     @State private var chatNavigationPath = NavigationPath()
     @State private var showBlockUserMenu = false
+    @State private var profileShareData: ShareSheetData?
     @State private var previousScrollOffset: CGFloat = 0
     @State private var didLoad = false
     /// Bumped when stale-IP recovery changes this profile's read route so tweets reload without clearing cached content.
@@ -119,6 +120,9 @@ struct ProfileView: View {
                         blockUserDisplayName
                     )
                 )
+            }
+            .sheet(item: $profileShareData) { data in
+                ShareSheetView(items: data.items)
             }
     }
     
@@ -404,9 +408,9 @@ struct ProfileView: View {
     
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        if !isAppUser {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 12) {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            HStack(spacing: 12) {
+                if !isAppUser {
                     Button {
                         if hproseInstance.appUser.isGuest {
                             onShowLogin?()
@@ -417,8 +421,16 @@ struct ProfileView: View {
                         Image(systemName: "message")
                             .foregroundColor(XTheme.accentColor)
                     }
+                }
 
-                    Menu {
+                Menu {
+                    Button {
+                        profileShareData = ShareSheetData(items: [profileShareText])
+                    } label: {
+                        Label(NSLocalizedString("Share Profile", comment: "Share profile menu item"), systemImage: "square.and.arrow.up")
+                    }
+
+                    if !isAppUser {
                         Button(role: .destructive) {
                             guard !hproseInstance.appUser.isGuest else {
                                 onShowLogin?()
@@ -428,17 +440,37 @@ struct ProfileView: View {
                         } label: {
                             Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
                         }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .rotationEffect(.degrees(90))
-                            .foregroundColor(XTheme.textColor)
-                            .font(.system(size: 16, weight: .medium))
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
                     }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .rotationEffect(.degrees(90))
+                        .foregroundColor(XTheme.textColor)
+                        .font(.system(size: 16, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
             }
         }
+    }
+
+    /// Display name + the profile's fragment-form share URL:
+    /// `http://dtweet.com/#author/{userId}`. Same domain and hash-route shape as
+    /// the tweet share link (`#tweet/{mid}/{authorId}`), so iOS Universal Links
+    /// open the app when installed and `DeeplinkManager` routes the `#author/`
+    /// fragment to this profile; browsers get the web app via the Worker.
+    private var profileShareText: String {
+        let displayName = user.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let handle = user.username?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = ""
+        if let displayName, !displayName.isEmpty {
+            text = displayName
+        } else if let handle, !handle.isEmpty {
+            text = "@\(handle)"
+        }
+        if !text.isEmpty {
+            text += "\n\n"
+        }
+        return text + "\(AppConfig.shareDomain)/#author/\(user.mid)"
     }
     
     private var profileEditSheet: some View {

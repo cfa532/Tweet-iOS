@@ -363,6 +363,7 @@
 "Delete Tweet" = "删除推文";
 "Delete Comment" = "删除评论";
 "Block User" = "屏蔽用户";
+"Share Profile" = "分享主页";
 "Mute User" = "静音用户";
 "Report User" = "举报用户";
 "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "您确定要删除与 %@ 的聊天吗？这将永久删除此对话中的所有消息。";

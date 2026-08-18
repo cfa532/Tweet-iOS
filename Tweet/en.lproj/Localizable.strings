@@ -139,6 +139,7 @@
 // MARK: - Profile Menu
 "Delete Account" = "Delete Account";
 "Block User" = "Block User";
+"Share Profile" = "Share Profile";
 "Are you sure you want to logout?" = "Are you sure you want to logout?";
 "Are you sure you want to delete your account?" = "Are you sure you want to delete your account?";
 "This action cannot be undone." = "This action cannot be undone.";

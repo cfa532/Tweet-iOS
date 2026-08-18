@@ -358,6 +358,7 @@
 "Delete Tweet" = "ツイートを削除";
 "Delete Comment" = "コメントを削除";
 "Block User" = "ユーザーをブロック";
+"Share Profile" = "プロフィールを共有";
 "Mute User" = "ユーザーをミュート";
 "Report User" = "ユーザーを報告";
 "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "%@とのチャットを削除してもよろしいですか？この会話のすべてのメッセージが永久に削除されます。";
