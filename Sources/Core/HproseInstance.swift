@@ -8655,14 +8655,23 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         
         if let ipList = unwrappedResponse as? [String] {
-            // Filter and trim IP addresses
+            // Filter and trim IP addresses. Nodes advertise every address they are
+            // bound to, including Tailscale CGNAT (100.64.0.0/10) and LAN addresses
+            // that are unreachable — or, worse, reachable but wrong — from another
+            // network. Only public literals are route candidates, matching
+            // _getProviderIP.
             let excludedKey = excludedIP.map { normalizeHostPort($0) }
-            let ipAddresses = ipList
+            let publicIPs = ipList
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
+                .filter { Gadget.isValidPublicIpAddress($0) }
+            let ipAddresses = publicIPs
                 .filter { excludedKey == nil || normalizeHostPort($0) != excludedKey }
 
-            if let excludedKey, ipAddresses.count != ipList.count {
+            if publicIPs.count != ipList.count {
+                hproseDebug("DEBUG: [_getHostIP] Dropped \(ipList.count - publicIPs.count) non-public address(es) advertised by node \(nodeId)")
+            }
+            if let excludedKey, ipAddresses.count != publicIPs.count {
                 hproseDebug("DEBUG: [_getHostIP] Excluded \(excludedKey) from node \(nodeId) candidates")
             }
             hproseDebug("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")

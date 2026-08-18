@@ -127,12 +127,25 @@ final class NodePool: @unchecked Sendable {
         }
     }
     
+    /// Rejects routes that can never work off the advertising machine's own
+    /// network: Tailscale CGNAT (100.64.0.0/10), RFC 1918 LANs, loopback,
+    /// link-local. A private address that health-checks fine on the developer's
+    /// tailnet would be cached here and then fail for every other user.
+    /// Hostnames pass through — `baseUrl` is a domain in normal operation
+    /// (see `AppConfig.baseUrl`), and only IP literals can be judged private.
+    private static func isUnroutable(_ normalizedIP: String, nodeMid: String) -> Bool {
+        guard Gadget.isPrivateHostAddress(normalizedIP) else { return false }
+        print("DEBUG: [NodePool] 🚫 Rejecting private address \(normalizedIP) for node \(nodeMid)")
+        return true
+    }
+
     /// Update node in pool with new IP (replaces entire IP list)
     /// Called after successfully resolving a new IP for a user
     func updateNodeIP(nodeMid: String, newIP: String) {
+        let normalizedIP = NodeInfo.normalizeIP(newIP)
+        guard !Self.isUnroutable(normalizedIP, nodeMid: nodeMid) else { return }
+
         queue.async(flags: .barrier) {
-            let normalizedIP = NodeInfo.normalizeIP(newIP)
-            
             if var node = self.nodes[nodeMid] {
                 // Replace IP list with new IP
                 node.ips = [normalizedIP]
@@ -157,9 +170,10 @@ final class NodePool: @unchecked Sendable {
     /// Add IP to node's IP list (doesn't replace existing IPs)
     /// Used when discovering additional valid IPs for a node
     func addIPToNode(nodeMid: String, ip: String) {
+        let normalizedIP = NodeInfo.normalizeIP(ip)
+        guard !Self.isUnroutable(normalizedIP, nodeMid: nodeMid) else { return }
+
         queue.async(flags: .barrier) {
-            let normalizedIP = NodeInfo.normalizeIP(ip)
-            
             if var node = self.nodes[nodeMid] {
                 // Only add if not already in list
                 if !node.hasIP(normalizedIP) {

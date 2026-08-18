@@ -142,76 +142,106 @@ final class Gadget: Sendable {
 //        }
 //    }
     
-    // 100.64.0.0/10 — RFC 6598 CGNAT / Tailscale (second octet 64–127)
-    private static func isRFC6598Address(_ ip: String) -> Bool {
-        guard ip.starts(with: "100.") else { return false }
-        let parts = ip.split(separator: ".")
-        guard parts.count >= 2, let second = Int(parts[1]) else { return false }
-        return (64...127).contains(second)
+    /// IPv4 octets, or nil when `ip` is not a dotted-quad literal.
+    private static func ipv4Octets(_ ip: String) -> [Int]? {
+        let parts = ip.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var octets: [Int] = []
+        octets.reserveCapacity(4)
+        for part in parts {
+            guard !part.isEmpty, part.count <= 3, part.allSatisfy({ $0.isNumber }),
+                  let value = Int(part), (0...255).contains(value) else { return nil }
+            octets.append(value)
+        }
+        return octets
     }
 
-    // Helper function to check if an IP is private
+    /// True for any address that is not routable on the public internet: RFC 1918
+    /// LANs, RFC 6598 / Tailscale CGNAT space, loopback, link-local, multicast and
+    /// reserved space, plus their IPv6 equivalents. Expects a bare address with no
+    /// port — use `isPrivateHostAddress(_:)` for `host:port` strings.
     static func isPrivateIP(_ ip: String) -> Bool {
-        // IPv4 private ranges
-        if ip.starts(with: "10.") ||
-           ip.starts(with: "192.168.") ||
-           ip.range(of: "^172\\.(1[6-9]|2[0-9]|3[0-1])\\.", options: .regularExpression) != nil ||
-           isRFC6598Address(ip) { // RFC 6598 Shared Address Space (Tailscale)
-            return true
+        let address = ip.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+
+        if isIPv6Address(address) {
+            // IPv4-mapped IPv6 (::ffff:10.0.0.1) is classified by its IPv4 half.
+            if let mappedStart = address.range(of: "::ffff:", options: [.anchored]),
+               address[mappedStart.upperBound...].contains(".") {
+                return isPrivateIP(String(address[mappedStart.upperBound...]))
+            }
+
+            // Loopback (::1) and unspecified (::)
+            if address == "::1" || address == "::" { return true }
+            // Unique local fc00::/7 — includes Tailscale's fd7a:115c:a1e0::/48
+            if address.hasPrefix("fc") || address.hasPrefix("fd") { return true }
+            // Link-local fe80::/10
+            if address.hasPrefix("fe8") || address.hasPrefix("fe9") ||
+               address.hasPrefix("fea") || address.hasPrefix("feb") { return true }
+            // Multicast ff00::/8
+            if address.hasPrefix("ff") { return true }
+            return false
         }
-        
-        // IPv6 private ranges (fc00::/7 - unique local addresses)
-        if ip.lowercased().starts(with: "fc") || ip.lowercased().starts(with: "fd") {
-            return true
+
+        guard let octets = ipv4Octets(address) else { return false }
+        switch octets[0] {
+        case 0: return true                                    // 0.0.0.0/8 "this network"
+        case 10: return true                                   // 10.0.0.0/8 private
+        case 100: return (64...127).contains(octets[1])         // 100.64.0.0/10 CGNAT — Tailscale
+        case 127: return true                                  // 127.0.0.0/8 loopback
+        case 169: return octets[1] == 254                       // 169.254.0.0/16 link-local
+        case 172: return (16...31).contains(octets[1])          // 172.16.0.0/12 private
+        case 192: return octets[1] == 168                       // 192.168.0.0/16 private
+        case 224...255: return true                            // multicast + reserved + broadcast
+        default: return false
         }
-        
-        // IPv6 link-local (fe80::/10)
-        if ip.lowercased().starts(with: "fe8") ||
-           ip.lowercased().starts(with: "fe9") ||
-           ip.lowercased().starts(with: "fea") ||
-           ip.lowercased().starts(with: "feb") {
-            return true
-        }
-        
-        return false
     }
 
-    // Check if an IP is a valid public IP address
+    /// True when `hostPort` ("1.2.3.4:8002", "[fd7a::1]:8002", or a bare address)
+    /// resolves to a private/non-routable IP literal. Hostnames return false —
+    /// they are not IP literals, so this can't judge them; use it to *reject*
+    /// private addresses, not to require public ones.
+    static func isPrivateHostAddress(_ hostPort: String) -> Bool {
+        guard let host = hostComponent(of: hostPort) else { return false }
+        return isPrivateIP(host)
+    }
+
+    /// Strips scheme, brackets and port, yielding the bare host of a `host:port`
+    /// string. Returns nil when the input is malformed.
+    static func hostComponent(of fullIp: String) -> String? {
+        var value = fullIp.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let schemeRange = value.range(of: "://") {
+            value = String(value[schemeRange.upperBound...])
+        }
+        if let slash = value.firstIndex(of: "/") {
+            value = String(value[..<slash])
+        }
+        guard !value.isEmpty else { return nil }
+
+        if value.hasPrefix("[") {
+            // Bracketed IPv6, with or without a port: [::1] / [::1]:8002
+            guard let endBracket = value.firstIndex(of: "]") else { return nil }
+            return String(value[value.index(after: value.startIndex)..<endBracket])
+        }
+        // A bare IPv6 literal has several colons; a host:port pair has exactly one.
+        let parts = value.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        if value.filter({ $0 == ":" }).count == 1, parts.count == 2 {
+            return parts[0].isEmpty ? nil : String(parts[0])
+        }
+        return value
+    }
+
+    /// True only for a public, internet-routable IP literal. Accepts `host:port`
+    /// and bracketed IPv6. Hostnames are rejected — this requires a literal
+    /// address, so use it where an IP is expected (server-advertised node and
+    /// provider address lists). IPv6 is allowed as long as it is public.
     static func isValidPublicIpAddress(_ fullIp: String) -> Bool {
-        // Extract clean IP address from the full IP string (which may include port)
-        let cleanIP: String
-        
-        if fullIp.hasPrefix("[") && fullIp.contains("]:") {
-            // IPv6 with port, e.g. [240e:391:edf:ad90:b25a:daff:fe87:21d4]:8002
-            if let endBracket = fullIp.firstIndex(of: "]") {
-                cleanIP = String(fullIp[fullIp.index(after: fullIp.startIndex)..<endBracket])
-            } else {
-                return false
-            }
-        } else if fullIp.contains(":") && !fullIp.contains("]:") && !fullIp.contains("[") {
-            // IPv4 with port, e.g. 60.163.239.184:8002
-            let parts = fullIp.split(separator: ":", maxSplits: 1)
-            if parts.count == 2 {
-                cleanIP = String(parts[0])
-            } else {
-                return false
-            }
-        } else {
-            // No port specified, use the full string
-            cleanIP = fullIp.hasPrefix("[") && fullIp.hasSuffix("]") ? 
-                String(fullIp.dropFirst().dropLast()) : fullIp
-        }
-        
+        guard let cleanIP = hostComponent(of: fullIp) else { return false }
+
         if isIPv6Address(cleanIP) {
-            // For IPv6, check if it's NOT a private address
-            return !isPrivateIP(cleanIP)
-        } else {
-            let ipv4Regex = "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
-            guard cleanIP.range(of: ipv4Regex, options: .regularExpression) != nil else { return false }
-            let octets = cleanIP.split(separator: ".").compactMap { UInt8($0) }
-            guard octets.count == 4 else { return false }
             return !isPrivateIP(cleanIP)
         }
+        guard ipv4Octets(cleanIP) != nil else { return false }
+        return !isPrivateIP(cleanIP)
     }
 
     // Check if an IP is IPv6
