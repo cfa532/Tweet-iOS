@@ -20,7 +20,19 @@ import Foundation
 extension HproseClient: @unchecked @retroactive Sendable {}
 
 final class HproseClientPool: @unchecked Sendable {
+    /// One pool per process. `HproseInstance.clientPool` points here, and
+    /// `HproseTransport` reaches it directly to gate invocations.
+    static let shared = HproseClientPool()
+
     private var sharedClients: [String: HproseHttpClient] = [:]
+    /// In-flight invocation count per client, keyed by object identity. An entry
+    /// only exists between `beginInvocation` and `endInvocation`, i.e. only while
+    /// the caller holds a strong reference, so the identity can never be recycled
+    /// out from under us.
+    private var activeInvocations: [ObjectIdentifier: Int] = [:]
+    /// Clients dropped from the pool whose last invocation hasn't returned yet.
+    /// Held strongly so they stay alive until they can be closed safely.
+    private var retiredClients: [ObjectIdentifier: HproseHttpClient] = [:]
     private let lock = NSLock()
 
     /// Get a shared client for a specific IP (host[:port]). Default 5s timeout for health checks.
@@ -34,32 +46,87 @@ final class HproseClientPool: @unchecked Sendable {
         return sharedClient(urlString: "\(url)/webapi/", timeout: timeout)
     }
 
-    /// Close and remove all shared clients (e.g. on logout, so stale sessions
+    /// Retire and remove all shared clients (e.g. on logout, so stale sessions
     /// from the previous user's nodes don't linger).
     func clear() {
         lock.lock()
-        let clients = sharedClients.values
+        let clients = Array(sharedClients.values)
         sharedClients.removeAll()
+        let closeNow = markRetiredLocked(clients)
         lock.unlock()
 
-        for client in clients {
-            client.close(false) // finishTasksAndInvalidate: let in-flight RPCs complete
-        }
+        closeNow.forEach { $0.close(false) }
     }
 
-    /// Close and remove shared clients for a specific endpoint URL (all timeout classes).
+    /// Retire and remove shared clients for a specific endpoint URL (all timeout classes).
     func clear(for urlString: String) {
         lock.lock()
         let matchingKeys = sharedClients.keys.filter { $0.hasPrefix("\(urlString)|") }
         let clients = matchingKeys.compactMap { sharedClients.removeValue(forKey: $0) }
+        let closeNow = markRetiredLocked(clients)
         lock.unlock()
 
-        for client in clients {
-            client.close(false)
+        closeNow.forEach { $0.close(false) }
+    }
+
+    // MARK: - Invocation Gate
+
+    /// Registers an in-flight invocation on `client`, returning false when the
+    /// client is no longer the pool's live client for its endpoint.
+    ///
+    /// A retired client's NSURLSession has been (or is about to be) invalidated,
+    /// and `-[NSURLSession dataTaskWithRequest:]` raises an uncatchable
+    /// NSGenericException on an invalidated session. Because clients are shared,
+    /// a caller can be holding one at the moment another code path retires it
+    /// (an unhealthy route being evicted, logout, background memory release), so
+    /// every invocation must check in here first. The check and the retire both
+    /// run under `lock`, and a retired client is only closed once its in-flight
+    /// count reaches zero — so no invocation can ever reach an invalidated session.
+    func beginInvocation(on client: HproseClient) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard sharedClients.values.contains(where: { $0 === client }) else { return false }
+        activeInvocations[ObjectIdentifier(client), default: 0] += 1
+        return true
+    }
+
+    /// Balances `beginInvocation`. Closes the client if it was retired while this
+    /// invocation was in flight and this was the last one outstanding.
+    func endInvocation(on client: HproseClient) {
+        let id = ObjectIdentifier(client)
+
+        lock.lock()
+        let remaining = (activeInvocations[id] ?? 1) - 1
+        if remaining > 0 {
+            activeInvocations[id] = remaining
+        } else {
+            activeInvocations.removeValue(forKey: id)
         }
+        let drained = remaining > 0 ? nil : retiredClients.removeValue(forKey: id)
+        lock.unlock()
+
+        // finishTasksAndInvalidate: this client is out of the pool and idle.
+        drained?.close(false)
     }
 
     // MARK: - Private
+
+    /// Marks removed clients as retired. Returns the ones that are idle and can be
+    /// closed immediately; the rest are parked in `retiredClients` and closed by
+    /// `endInvocation` when their last in-flight call returns. Caller holds `lock`.
+    private func markRetiredLocked(_ clients: [HproseHttpClient]) -> [HproseHttpClient] {
+        var closeNow: [HproseHttpClient] = []
+        for client in clients {
+            let id = ObjectIdentifier(client)
+            if (activeInvocations[id] ?? 0) > 0 {
+                retiredClients[id] = client
+            } else {
+                closeNow.append(client)
+            }
+        }
+        return closeNow
+    }
 
     private func sharedClient(urlString: String, timeout: TimeInterval) -> HproseClient {
         let key = "\(urlString)|\(timeout)"

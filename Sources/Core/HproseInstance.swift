@@ -230,7 +230,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
     
     // MARK: - Client Pool Management
-    let clientPool = HproseClientPool()
+    let clientPool = HproseClientPool.shared
     
     private var lastInitializationAddresses: String?
     @MainActor private var lastLoggedUpgradeDomain: String?
