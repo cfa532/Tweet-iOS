@@ -2856,6 +2856,15 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
             clearCurrentVideo()
         }
 
+        // The infrastructure-restart reload target belongs to the detail view that
+        // requested it. A newly appearing detail view must never inherit it: the
+        // previous view's player is already gone, so `handleReloadVisibleVideosOnly`
+        // would treat the stale request as "player missing, reload it" and start the
+        // old video with no surface attached — audible playback behind a detail view
+        // that has no video at all. Whichever video this view wants re-registers it
+        // through loadVideo() moments from now.
+        lastRequestedDetailVideo = nil
+
         // CRITICAL: Always call beginDetailViewSession() to increment count
         // even if manager is already active (multiple detail views can be active during transitions)
         beginDetailViewSession()
@@ -4596,6 +4605,11 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
     func clearCurrentVideo(preserveSharedFeedPlayback: Bool = false) {
         audioVolumeRamp.cancel(restoringVolume: 1)
         let pendingLoadMid = currentVideoMid
+
+        // Clearing the video ends this surface's interest in it, so drop the
+        // infrastructure-restart reload target too. (clearBrokenPlayer() deliberately
+        // keeps it — that path tears the player down expecting to rebuild it.)
+        lastRequestedDetailVideo = nil
 
         // Save playback state before clearing — but only if time is valid.
         if let player = currentPlayer,
