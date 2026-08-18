@@ -33,6 +33,7 @@ class MediaGridUIView: UIView {
 
     private var hasInitialized: Bool = false
     private var cancellables = Set<AnyCancellable>()
+    private var interfaceStyleTraitRegistration: UITraitChangeRegistration?
 
     // Track whether layout needs recalculation
     private var needsFrameRecalculation: Bool = false
@@ -59,6 +60,24 @@ class MediaGridUIView: UIView {
         super.init(frame: frame)
         clipsToBounds = true
         layer.cornerRadius = 8
+        layer.borderWidth = 1 / UIScreen.main.scale
+        applyBorderColor()
+        interfaceStyleTraitRegistration = registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: MediaGridUIView, _) in
+            view.applyBorderColor()
+        }
+    }
+
+    /// A step darker than `XTheme.border` in light mode. In dark mode "darker" would sink the
+    /// border into the background, so it goes slightly lighter instead — same intent: a bit more
+    /// pronounced than the standard theme border.
+    private static let gridBorderColor = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.259, green: 0.278, blue: 0.294, alpha: 1.0)
+            : UIColor(red: 0.690, green: 0.729, blue: 0.753, alpha: 1.0)
+    }
+
+    private func applyBorderColor() {
+        layer.borderColor = Self.gridBorderColor.cgColor
     }
 
     required init?(coder: NSCoder) {
