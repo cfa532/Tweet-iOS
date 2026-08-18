@@ -639,7 +639,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         // resolved with `usePool: false`: no pooled entry is reused and none is
         // recorded. Writes are rare next to reads, so a fresh resolution per write
         // is cheap and keeps the pool free of write-host entries.
-        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: true, usePool: false),
+        // IPv6 write routes are fine; only share URLs need a v4 literal.
+        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: false, usePool: false),
            let url = URL(string: "http://\(hostIP)") {
             print("DEBUG: [resolveWritableUrl] ✅ Health-checked IP: \(hostIP)")
             self.writableUrl = url

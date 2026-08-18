@@ -1329,7 +1329,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let accessHostId = hostIds[1]
         guard accessHostId != homeHostId else { return }
 
-        guard let accessIP = await getHostIP(accessHostId, v4Only: true) else {
+        // IPv6 routes are fine for RPC; only share URLs need a v4 literal.
+        guard let accessIP = await getHostIP(accessHostId, v4Only: false) else {
             hproseError("ERROR: [update_following_tweets] Unable to resolve access host \(accessHostId)")
             return
         }
@@ -2442,7 +2443,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                previousAccessNodeMid != currentAccessNodeMid {
                 hproseDebug("DEBUG: [processUserDataResponse] Access node changed for \(userMid): \(previousAccessNodeMid) -> \(currentAccessNodeMid); resolving new node before updating NodePool")
 
-                if let accessIP = await getHostIP(currentAccessNodeMid, v4Only: true),
+                // IPv6 routes are fine for RPC; only share URLs need a v4 literal.
+                if let accessIP = await getHostIP(currentAccessNodeMid, v4Only: false),
                    let accessUrl = URL(string: ensureHttpPrefix(accessIP)) {
                     await applyBaseUrlIfNeeded(fetchedUser, url: accessUrl, reason: "access node changed")
                     await MainActor.run { NodePool.shared.updateNodeIP(nodeMid: currentAccessNodeMid, newIP: accessUrl.absoluteString) }
