@@ -328,6 +328,7 @@ private final class CommentListTableViewController: UIViewController, UITableVie
     private var hasSentReachBottomForCommentIds = Set<String>()
     private var lastReportedVideoCommentIds = Set<String>()
     private var contentSizeObservation: NSKeyValueObservation?
+    private var lastReportedContentHeight: CGFloat = -1
     private var visibilityDisplayLink: CADisplayLink?
     private var lastVisibilitySampleTime: CFTimeInterval = 0
     private var isVisibilityUpdateScheduled = false
@@ -442,7 +443,7 @@ private final class CommentListTableViewController: UIViewController, UITableVie
             }
         }
 
-        reportContentHeight()
+        reportContentHeight(forceLayout: reloadedRows)
         if reloadedRows {
             scheduleCommentVideoVisibilityUpdate()
         } else {
@@ -469,10 +470,30 @@ private final class CommentListTableViewController: UIViewController, UITableVie
         return comments.map { .comment($0) }
     }
 
-    private func reportContentHeight() {
-        tableView.layoutIfNeeded()
+    /// Publishes the table's full content height to SwiftUI, which sizes this
+    /// representable's frame.
+    ///
+    /// `forceLayout` is opt-in on purpose. The table is `isScrollEnabled = false` and
+    /// framed to its entire `contentSize`, so every row counts as visible and a
+    /// `layoutIfNeeded()` lays out the WHOLE comment list synchronously — O(n) in
+    /// comments, and it ran on all three callers. Two of them never needed it:
+    /// `viewDidLayoutSubviews` runs immediately after a layout pass, and the
+    /// `contentSize` KVO fires *because* of one (forcing layout there also re-entered
+    /// this method through its own notification). Only a row-set change genuinely has
+    /// to settle the new geometry before the height can be read.
+    ///
+    /// The unchanged-height guard closes the other half of the loop: publishing a
+    /// height invalidates the SwiftUI graph, which calls `updateUIViewController`,
+    /// which lands back here. Re-publishing an identical value kept that cycle alive
+    /// for no benefit.
+    private func reportContentHeight(forceLayout: Bool = false) {
+        if forceLayout {
+            tableView.layoutIfNeeded()
+        }
         let minimumHeight: CGFloat = comments.isEmpty && !initialLoadComplete ? 148 : 1
         let height = max(minimumHeight, tableView.contentSize.height)
+        guard abs(height - lastReportedContentHeight) > 0.5 else { return }
+        lastReportedContentHeight = height
         onHeightChange?(height)
     }
 

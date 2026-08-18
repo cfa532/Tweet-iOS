@@ -147,12 +147,27 @@ struct ReplyEditorView: View {
             }
         }
         .toolbar {
-            // Keyboard accessory: always provide an explicit "Done".
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button(NSLocalizedString("Done", comment: "Dismiss keyboard")) {
-                    isTextFieldFocused = false
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            // Keyboard accessory: an explicit "Done" whenever the editor is open.
+            //
+            // Gated on isExpanded on purpose. A `.keyboard` placement registers a
+            // keyboard input-accessory view, and registering one pulls up the whole
+            // text-input stack (TextInputUI, libmecabra, libChineseTokenizer,
+            // InputAnalytics, ContactsAutocomplete and the data-detector app-suite
+            // family — ~130 dylibs). Attached unconditionally it ran on the outer
+            // VStack, so merely OPENING a tweet detail paid that dlopen on the main
+            // thread (~890ms on device) even though the editor was still the collapsed
+            // "Post your reply..." button with no text input in it at all.
+            //
+            // The collapsed state has nothing to accept keyboard input, so it has no
+            // use for the accessory; expanding is what actually raises the keyboard,
+            // and there the cost is masked by the presentation animation.
+            if isExpanded {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button(NSLocalizedString("Done", comment: "Dismiss keyboard")) {
+                        isTextFieldFocused = false
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
                 }
             }
         }
