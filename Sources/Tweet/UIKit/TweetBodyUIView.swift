@@ -293,7 +293,7 @@ class TweetBodyUIView: UIView {
                 screenWidth
                 - cellHorizontalPadding
                 - 3 // mainStack leading
-                - 42 // avatar
+                - 46 // avatar
                 - 4 // avatar/content spacing
             )
             let textWidth: CGFloat

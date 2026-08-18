@@ -843,7 +843,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             if isPureRetweet {
                 // PURE RETWEET: Get attachments from original tweet, use retweet's ID for positioning
-                // Only use cached tweets (non-blocking) - will be added later when fetched by TweetItemView
+                // Only use cached tweets (non-blocking) - will be added later when the cell fetches it
                 if let originalTweetId = tweet.originalTweetId {
                     let originalTweet = resolveMediaTweet(originalTweetId)
 

@@ -202,10 +202,10 @@ class TweetCellContentView: UIView {
         separatorView.translatesAutoresizingMaskIntoConstraints = false
         avatarView.translatesAutoresizingMaskIntoConstraints = false
 
-        // Retweet banner: aligned with content column (avatar 42 + spacing 4 from mainStack leading)
+        // Retweet banner: aligned with content column (avatar 46 + spacing 4 from mainStack leading)
         NSLayoutConstraint.activate([
             retweetBanner.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            retweetBanner.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 49), // 3 + 42 + 4
+            retweetBanner.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 53), // 3 + 46 + 4
             retweetBanner.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
         ])
 
@@ -219,8 +219,8 @@ class TweetCellContentView: UIView {
             mainStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             mainStack.bottomAnchor.constraint(equalTo: separatorView.topAnchor, constant: -8),
 
-            avatarView.widthAnchor.constraint(equalToConstant: 42),
-            avatarView.heightAnchor.constraint(equalToConstant: 42),
+            avatarView.widthAnchor.constraint(equalToConstant: 46),
+            avatarView.heightAnchor.constraint(equalToConstant: 46),
 
             separatorView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             separatorView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
@@ -487,7 +487,7 @@ class TweetCellContentView: UIView {
 
         // Avatar
         if let author = tweet.author {
-            avatarView.configure(user: author, size: 42)
+            avatarView.configure(user: author, size: 46)
             avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
         } else {
             avatarView.onTap = nil
@@ -500,7 +500,7 @@ class TweetCellContentView: UIView {
                 .first()
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] author in
-                    self?.avatarView.configure(user: author, size: 42)
+                    self?.avatarView.configure(user: author, size: 46)
                     self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
                 }
                 .store(in: &cancellables)
@@ -614,7 +614,7 @@ class TweetCellContentView: UIView {
 
         // Avatar from original tweet's author
         if let author = originalTweet.author {
-            avatarView.configure(user: author, size: 42)
+            avatarView.configure(user: author, size: 46)
             avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
         }
 
@@ -624,7 +624,7 @@ class TweetCellContentView: UIView {
             .first()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] author in
-                self?.avatarView.configure(user: author, size: 42)
+                self?.avatarView.configure(user: author, size: 46)
                 self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
             }
             .store(in: &cancellables)
@@ -663,7 +663,7 @@ class TweetCellContentView: UIView {
 
         // Avatar from quoting tweet's author
         if let author = tweet.author {
-            avatarView.configure(user: author, size: 42)
+            avatarView.configure(user: author, size: 46)
             avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
         }
 
@@ -673,7 +673,7 @@ class TweetCellContentView: UIView {
             .first()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] author in
-                self?.avatarView.configure(user: author, size: 42)
+                self?.avatarView.configure(user: author, size: 46)
                 self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
             }
             .store(in: &cancellables)

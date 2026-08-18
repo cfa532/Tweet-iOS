@@ -13,8 +13,8 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
     private init() {}
 
     /// Content width for the standard feed layout.
-    /// Formula: UIScreen.main.bounds.width - leadingPadding - trailingPadding - 3 - 42 - 4
-    ///          = screenWidth - 65 (assuming default 8+8 cell padding).
+    /// Formula: UIScreen.main.bounds.width - leadingPadding - trailingPadding - 3 - 46 - 4
+    ///          = screenWidth - 69 (assuming default 8+8 cell padding).
     /// Set from the main thread before the first feed render.
     private let lock = NSLock()
     private var _standardContentWidth: CGFloat = 0

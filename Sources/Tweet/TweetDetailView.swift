@@ -1790,6 +1790,13 @@ struct TweetDetailView: View {
         }
     }
     
+    /// Gray rules between the stacked media attachments and below the last one. The
+    /// column layout leaves exactly this much space between items and the same amount
+    /// of padding sits under the column, so the color behind shows through as both the
+    /// bottom rule and the dividers. The media stays full-bleed horizontally.
+    private static let mediaBorderThickness: CGFloat = 1.5
+    private static let mediaBorderColor = Color(uiColor: .systemGray)
+
     private var mediaSection: some View {
         Group {
             if let attachments = displayTweet.attachments,
@@ -1812,7 +1819,10 @@ struct TweetDetailView: View {
                         }
 
                         if !mediaAttachments.isEmpty {
-                            DetailMediaColumnLayout(aspectRatios: mediaAspectRatios) {
+                            DetailMediaColumnLayout(
+                                aspectRatios: mediaAspectRatios,
+                                spacing: Self.mediaBorderThickness
+                            ) {
                                 ForEach(mediaAttachments.indices, id: \.self) { idx in
                                     let attachment = mediaAttachments[idx]
                                     let origIdx = attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? idx
@@ -1858,6 +1868,12 @@ struct TweetDetailView: View {
                                     .background(Color.black)
                                 }
                             }
+                            // Each item paints an opaque background over its own rect, so the
+                            // color behind shows only in the gaps the layout leaves between
+                            // items and in the padding under the column: dividers plus a
+                            // bottom rule closing off the media.
+                            .padding(.bottom, Self.mediaBorderThickness)
+                            .background(Self.mediaBorderColor)
                         }
                     }
                     .frame(maxWidth: .infinity)

@@ -315,7 +315,7 @@ class TweetTableViewController: UITableViewController {
     /// entirely and forcing full CoreText typesetting on first render regardless.
     private func syncPrewarmerContentWidthIfNeeded() {
         let padding = leadingPadding + trailingPadding
-        let contentWidth = currentRowLayoutWidth - padding - 3 - 42 - 4
+        let contentWidth = currentRowLayoutWidth - padding - 3 - 46 - 4
         guard contentWidth > 1 else { return }
         if abs(TweetHeightPrewarmer.shared.standardContentWidth - contentWidth) > 0.5 {
             TweetHeightPrewarmer.shared.standardContentWidth = contentWidth
@@ -2597,7 +2597,7 @@ class TweetTableViewController: UITableViewController {
         // the ~7 visible rows) still runs the accurate calculateTweetHeight and populates the
         // cache, so the estimate is only used once per tweet.
         let padding = leadingPadding + trailingPadding
-        let contentWidth = layoutWidth - padding - 3 - 42 - 4
+        let contentWidth = layoutWidth - padding - 3 - 46 - 4
 
         let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil
         let hasOwnContent = (tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
@@ -2852,7 +2852,7 @@ class TweetTableViewController: UITableViewController {
             effectiveRowWidth
             - cellHorizontalPadding
             - 3 /* leading */
-            - 42 /* avatar */
+            - 46 /* avatar */
             - 4 /* stack spacing */
         )
 
@@ -4012,7 +4012,7 @@ class TweetTableViewController: UITableViewController {
     /// Falls back to per-feed content width in case it differs from the global standardContentWidth
     /// (e.g., custom padding on iPad). All skipping/caching logic is in TweetHeightPrewarmer.
     private func scheduleHeightPrewarm(for tweets: [Tweet]) {
-        let contentWidth = currentRowLayoutWidth - (leadingPadding + trailingPadding) - 3 - 42 - 4
+        let contentWidth = currentRowLayoutWidth - (leadingPadding + trailingPadding) - 3 - 46 - 4
         guard contentWidth > 1 else { return }
         TweetHeightPrewarmer.shared.prewarmFeedTweets(tweets, contentWidth: contentWidth)
     }
