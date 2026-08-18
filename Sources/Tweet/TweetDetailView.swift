@@ -393,10 +393,15 @@ struct SelectableTextView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
-        textView.attributedText = makeAttributedString(text)
-        textView.backgroundColor = .clear
+        // isEditable must be cleared BEFORE any text is assigned. On a still-editable
+        // text view, setAttributedText: runs the editable-input path, which reaches
+        // +[UIDictationController sharedInstance] -> +[UIDictationConnection
+        // isDictationAvailable] and dlopens AssistantServices on the main thread —
+        // ~840ms on device, and it lands mid-scroll because SwiftUI builds this view
+        // lazily during a layout pass.
         textView.isEditable = false
         textView.isSelectable = true
+        textView.backgroundColor = .clear
         textView.isScrollEnabled = false
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
@@ -407,6 +412,7 @@ struct SelectableTextView: UIViewRepresentable {
         ]
         textView.delegate = context.coordinator
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.attributedText = makeAttributedString(text)
         return textView
     }
 

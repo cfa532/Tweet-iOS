@@ -11,6 +11,22 @@ import CryptoKit
 import ImageIO
 
 // MARK: - Image Cache Manager
+/// Force-decodes an image so its bitmap is ready before it ever reaches a CALayer.
+///
+/// `UIImage(data:)` and `UIImage(contentsOfFile:)` keep the JPEG compressed until
+/// something actually draws it. For a cached image that "something" is the
+/// CoreAnimation commit, so the decode runs on the MAIN thread inside
+/// `CA::Layer::prepare_contents` -> `CA::Render::copy_image` -> ImageIO, and the
+/// first one also drags in the hardware-decode stack
+/// (`CMPhoto` -> `VTPixelTransferSessionCreate` -> `MTLCreateSystemDefaultDevice`
+/// -> dlopen of the Metal drivers). Measured ~700ms on device.
+///
+/// Only call this off the main thread; decoding here is the whole point.
+private func decodedForDisplay(_ image: UIImage) -> UIImage {
+    image.preparingForDisplay() ?? image
+}
+
+
 class ImageCacheManager: @unchecked Sendable {
     static let shared = ImageCacheManager()
     private let cache = NSCache<NSString, UIImage>()
@@ -516,7 +532,7 @@ class ImageCacheManager: @unchecked Sendable {
         // This is the source of the 227ms hang when called from main thread
         let fileURL = getCompressedCacheFileURL(for: key)
         if let data = try? Data(contentsOf: fileURL),
-           let image = UIImage(data: data) {
+           let image = UIImage(data: data).map(decodedForDisplay) {
             // Cache in memory for next time (NSCache is thread-safe)
             cacheImageInMemory(image, forKey: cacheKey)
             return image
@@ -565,7 +581,7 @@ class ImageCacheManager: @unchecked Sendable {
         // Check disk cache (synchronous I/O - only use in async contexts)
         let fileURL = getCompressedCacheFileURL(for: mid)
         if let data = try? Data(contentsOf: fileURL),
-           let image = UIImage(data: data) {
+           let image = UIImage(data: data).map(decodedForDisplay) {
             cacheImageInMemory(image, forKey: cacheKey)
             return image
         }
@@ -583,7 +599,7 @@ class ImageCacheManager: @unchecked Sendable {
         let targetImage: UIImage
         if let downsampled = downsampleImageData(data, maxDimension: maxDownsampleDimension) {
             targetImage = downsampled
-        } else if let fallback = UIImage(data: data) {
+        } else if let fallback = UIImage(data: data).map(decodedForDisplay) {
             targetImage = fallback
         } else {
             print("DEBUG: [ImageCacheManager] Failed to create UIImage from data for \(key)")
@@ -813,7 +829,7 @@ class ImageCacheManager: @unchecked Sendable {
                     return nil
                 }
                 
-                let image = UIImage(contentsOfFile: downloadResult.0.path)
+                let image = UIImage(contentsOfFile: downloadResult.0.path).map(decodedForDisplay)
                 if image == nil {
                     print("Error loading original image from disk (nil) at \(downloadResult.0)")
                 }
@@ -867,7 +883,7 @@ class ImageCacheManager: @unchecked Sendable {
         }
 
         let fileURL = getOriginalCacheFileURL(for: key)
-        if let image = UIImage(contentsOfFile: fileURL.path) {
+        if let image = UIImage(contentsOfFile: fileURL.path).map(decodedForDisplay) {
             cacheImageInMemory(image, forKey: cacheKey)
             return image
         }
