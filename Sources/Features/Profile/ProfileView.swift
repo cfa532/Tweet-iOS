@@ -881,6 +881,15 @@ struct ProfileView: View {
     }
     
     /// Renders the last known pinned list straight from cache, without waiting for the server.
+    ///
+    /// `cachedPinnedTweets` resolves IDs to `Tweet`s, which merges them into the Tweet/User
+    /// singletons and publishes on those ObservableObjects. Both callers here run from
+    /// SwiftUI callbacks (`.onAppear`, the `user.mid` `.onChange`) that can execute inside a
+    /// view update, and publishing there is undefined behavior. So: read the IDs
+    /// synchronously — a plain UserDefaults read that publishes nothing — to close the
+    /// double-seed guard immediately, then resolve the bodies on the next main-actor turn,
+    /// outside the update. The hop still wins the race this seeding exists for, since the
+    /// tweet list's cached page awaits Core Data.
     private func seedPinnedTweetsFromCacheIfNeeded() {
         guard !didSeedPinnedTweetsFromCache, pinnedTweets.isEmpty else { return }
         didSeedPinnedTweetsFromCache = true
@@ -891,15 +900,23 @@ struct ProfileView: View {
             return
         }
 
-        let cachedPinnedTweets = TweetCacheManager.shared.cachedPinnedTweets(for: user.mid)
-        guard !cachedPinnedTweets.isEmpty else {
-            print("DEBUG: [ProfileView] Cached pinned IDs \(cachedPinnedTweetIds) are no longer in the tweet cache for \(user.mid)")
-            return
-        }
+        let seededUserMid = user.mid
+        Task { @MainActor in
+            let cachedPinnedTweets = TweetCacheManager.shared.cachedPinnedTweets(for: seededUserMid)
+            guard !cachedPinnedTweets.isEmpty else {
+                print("DEBUG: [ProfileView] Cached pinned IDs \(cachedPinnedTweetIds) are no longer in the tweet cache for \(seededUserMid)")
+                return
+            }
+            // The server list can land while this hop is pending; it wins over the cache.
+            guard pinnedTweets.isEmpty else {
+                print("DEBUG: [ProfileView] Pinned rows already populated for \(seededUserMid); skipping cache seed")
+                return
+            }
 
-        pinnedTweets = cachedPinnedTweets
-        pinnedTweetIds = Set(cachedPinnedTweets.map(\.mid))
-        print("DEBUG: [ProfileView] Seeded \(cachedPinnedTweets.count) pinned tweet(s) from cache for \(user.mid)")
+            pinnedTweets = cachedPinnedTweets
+            pinnedTweetIds = Set(cachedPinnedTweets.map(\.mid))
+            print("DEBUG: [ProfileView] Seeded \(cachedPinnedTweets.count) pinned tweet(s) from cache for \(seededUserMid)")
+        }
     }
 
     private func refreshPinnedTweets() async {

@@ -16,8 +16,15 @@ final class ProfileTweetsViewModel: ObservableObject {
         // The profile seeds its pinned rows from cache on appear, which is after this view
         // model is built. Read the same cached list here so the very first cached page is
         // already filtered instead of rendering pinned tweets twice for a frame.
+        //
+        // IDs only, never `cachedPinnedTweets`: this initializer runs inside
+        // ProfileTweetsSection.init, i.e. during a SwiftUI view update, and
+        // materializing the tweets would merge them into the Tweet/User singletons and
+        // publish from within that update. `cachedPinnedTweetIds` is a plain UserDefaults
+        // read. It can include an ID whose body is no longer cached, which is harmless
+        // here — that tweet can't appear in the cached page this set filters either.
         self.pinnedTweetIds = pinnedTweetIds.isEmpty
-            ? Set(TweetCacheManager.shared.cachedPinnedTweets(for: user.mid).map(\.mid))
+            ? Set(TweetCacheManager.shared.cachedPinnedTweetIds(for: user.mid))
             : pinnedTweetIds
     }
     
