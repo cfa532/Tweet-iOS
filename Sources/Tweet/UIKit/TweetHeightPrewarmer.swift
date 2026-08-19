@@ -1,5 +1,13 @@
 import UIKit
 
+/// Immutable hand-off from the background typesetter to the main actor. NSAttributedString
+/// is not Sendable, but this instance is created inside the detached task, never mutated
+/// afterwards, and only ever read on the main actor.
+private struct PrewarmedText: @unchecked Sendable {
+    let attributed: NSAttributedString
+    let height: CGFloat
+}
+
 /// Global singleton that pre-computes tweet text heights as tweets arrive from
 /// the network or CoreData cache. Uses TextKit1 (NSLayoutManager + boundingRect)
 /// off the main thread — safe and within ~0–1 pt of UILabel/TextKit2.
@@ -136,18 +144,30 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
             let height = ceil(bounds.height)
 
             // Keep the prewarmed height authoritative for both UITableView's estimate and
-            // its first displayed height. Publishing only the immutable numeric result avoids
-            // sending the background-built attributed string across the actor boundary; the
-            // visible cell still builds the final UILabel/"More..." text on the main actor.
+            // its first displayed height — AND hand over the string that was just typeset.
+            //
+            // Publishing the height alone is a false economy: heightForRowAt then returns from
+            // this cache without building the attributed string, so TweetBodyUIView.configure
+            // rebuilds the very same string on the main thread, on the one frame the row
+            // appears. The measurement moves off the critical frame but the typesetting — the
+            // expensive half — silently moves INTO it. Measured on device: the saving in
+            // dequeueReusableCell reappeared almost exactly in configure.
+            let payload = PrewarmedText(attributed: attrStr, height: height)
             await MainActor.run {
                 guard let tweet = Tweet.getInstance(for: mid),
-                      tweet.content == content,
-                      tweet.cachedMeasuredTextWidth != width || tweet.cachedMeasuredTextHeight < 0 else {
+                      tweet.content == content else { return }
+
+                if tweet.cachedContentAttributedString == nil || tweet.cachedContentWidth != width {
+                    tweet.cachedContentAttributedString = payload.attributed
+                    tweet.cachedContentWidth = width
+                }
+
+                guard tweet.cachedMeasuredTextWidth != width || tweet.cachedMeasuredTextHeight < 0 else {
                     return
                 }
-                tweet.cachedMeasuredTextHeight = height
+                tweet.cachedMeasuredTextHeight = payload.height
                 tweet.cachedMeasuredTextWidth = width
-                cache.set(height, tweetId: mid, width: width)
+                cache.set(payload.height, tweetId: mid, width: width)
             }
         }
     }

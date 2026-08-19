@@ -14,8 +14,11 @@ class AppState: ObservableObject {
         HproseInstance.shared.preferenceHelper = PreferenceHelper()
 
         // Cache screen width for background tweet height pre-warming.
-        // Formula: screenWidth - 8(leading) - 8(trailing) - 3 - 42(avatar) - 4 = screenWidth - 65.
-        TweetHeightPrewarmer.shared.standardContentWidth = UIScreen.main.bounds.width - 65
+        // Formula: screenWidth - 8(leading) - 8(trailing) - 3 - 46(avatar) - 4 = screenWidth - 69.
+        // Must track the avatar width used by the feed cell; a stale value here keys every
+        // launch-window prewarm to a width the table never queries, so each row pays the full
+        // measurement on the scroll frame that first shows it.
+        TweetHeightPrewarmer.shared.standardContentWidth = UIScreen.main.bounds.width - 69
 
         // Must complete before canShowCachedContent so the feed loads with the
         // real appUser (correct cache key, non-guest path, correct pagination).

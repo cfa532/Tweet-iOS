@@ -3751,10 +3751,49 @@ class TweetTableViewController: UITableViewController {
         )
         guard !preloadRows.isEmpty else { return }
 
+        // Warm the text of rows about to appear. heightForRowAt is cache-first, and a miss
+        // runs the full calculateTweetHeight synchronously INSIDE dequeueReusableCell — 4-8ms
+        // on the single frame the row enters, which on its own overruns the frame budget and
+        // costs a vsync. The feed then advances two frames' worth of pixels in one frame,
+        // which is the residual scroll shake. Measuring ahead turns that into a cache hit.
+        prewarmUpcomingRowHeights()
+
         if videoCoordinator.canRunDirectionalImagePreloads() {
             preloadImagesForRows(preloadRows, allowNetwork: false)
         }
     }
+
+    /// Text prewarm reaches further ahead than the image preload window: the cost being avoided
+    /// lands on one frame, so the measurement has to finish well before the row is dequeued.
+    /// TweetHeightPrewarmer skips anything already measured, so repeat calls across scroll
+    /// frames are cheap.
+    private func prewarmUpcomingRowHeights() {
+        guard let visibleIndexPaths = tableView.indexPathsForVisibleRows,
+              let firstVisible = visibleIndexPaths.first?.row,
+              let lastVisible = visibleIndexPaths.last?.row else { return }
+
+        let totalRows = pinnedTweets.count + tweets.count
+        guard totalRows > 0 else { return }
+
+        let rows: [Int]
+        if isScrollingBackward {
+            let nearest = firstVisible - 1
+            guard nearest >= 0 else { return }
+            rows = Array(stride(from: nearest, through: max(0, nearest - heightPrewarmRowCount + 1), by: -1))
+        } else {
+            let nearest = lastVisible + 1
+            guard nearest < totalRows else { return }
+            rows = Array(nearest...min(totalRows - 1, nearest + heightPrewarmRowCount - 1))
+        }
+
+        let upcoming = rows.compactMap { tweetForRow($0) }
+        guard !upcoming.isEmpty else { return }
+        scheduleHeightPrewarm(for: upcoming)
+    }
+
+    /// Rows ahead of the viewport to typeset text for. Deliberately deeper than the image
+    /// preload window — a text-measurement miss costs a dropped frame, an image miss does not.
+    private let heightPrewarmRowCount = 8
 
     private func directionalPreloadRows(firstVisibleRow: Int, lastVisibleRow: Int) -> [Int] {
         let totalRows = pinnedTweets.count + tweets.count
