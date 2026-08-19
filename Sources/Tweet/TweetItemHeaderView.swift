@@ -178,6 +178,13 @@ struct TweetMenu: View {
         var actions = [UIAction(title: truncatedTweetId(tweet.mid), image: UIImage(systemName: "doc.on.clipboard")) { _ in
             UIPasteboard.general.string = tweet.mid
         }]
+        // Pin/Unpin sits above Share, matching the feed cell's menu order.
+        if tweet.authorId == appUser.mid {
+            let pinTitle = isCurrentlyPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
+            actions.append(UIAction(title: pinTitle, image: UIImage(systemName: isCurrentlyPinned ? "pin.slash" : "pin")) { _ in
+                togglePin()
+            })
+        }
         actions.append(UIAction(title: NSLocalizedString("Share", comment: "Menu item"), image: UIImage(systemName: "square.and.arrow.up")) { _ in
             onShareTap?()
         })
@@ -189,6 +196,11 @@ struct TweetMenu: View {
                 showFilterSheet = true
             }
         })
+        if Gadget.isResearchAdminUser(appUser) {
+            actions.append(UIAction(title: NSLocalizedString("Edit content (admin)", comment: "Admin research menu"), image: UIImage(systemName: "pencil.line")) { _ in
+                showAdminEditSheet = true
+            })
+        }
         if tweet.authorId != appUser.mid {
             actions.append(UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"), image: UIImage(systemName: "flag")) { _ in
                 guard requireAuthenticatedForWrite() else { return }
@@ -199,16 +211,7 @@ struct TweetMenu: View {
                 }
             })
         }
-        if Gadget.isResearchAdminUser(appUser) {
-            actions.append(UIAction(title: NSLocalizedString("Edit content (admin)", comment: "Admin research menu"), image: UIImage(systemName: "pencil.line")) { _ in
-                showAdminEditSheet = true
-            })
-        }
         if tweet.authorId == appUser.mid {
-            let pinTitle = isCurrentlyPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
-            actions.append(UIAction(title: pinTitle, image: UIImage(systemName: isCurrentlyPinned ? "pin.slash" : "pin")) { _ in
-                togglePin()
-            })
             let privacyTitle = tweet.isPrivate == true ? NSLocalizedString("Make Public", comment: "Menu item") : NSLocalizedString("Make Private", comment: "Menu item")
             actions.append(UIAction(title: privacyTitle, image: UIImage(systemName: tweet.isPrivate == true ? "globe" : "lock")) { _ in
                 togglePrivacy()

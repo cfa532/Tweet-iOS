@@ -865,6 +865,69 @@ class TweetCellContentView: UIView {
         }
         actions.append(copyAction)
 
+        // Pin/Unpin (only for own tweets) — sits above Share; the detail view's
+        // menu mirrors this order.
+        if tweet.authorId == hproseInstance.appUser.mid {
+            let pinTitle = isPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
+            let pinIcon = isPinned ? "pin.slash" : "pin"
+            let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { [weak self] _ in
+                guard !hproseInstance.appUser.isGuest else {
+                    self?.onShowLogin?()
+                    return
+                }
+                let intendedPinStatus = !isPinned
+                NotificationCenter.default.post(
+                    name: .tweetPinStatusChanged,
+                    object: nil,
+                    userInfo: ["tweetId": tweet.mid, "isPinned": intendedPinStatus]
+                )
+
+                Task {
+                    do {
+                        if let newPinStatus = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
+                            if newPinStatus != intendedPinStatus {
+                                NotificationCenter.default.post(
+                                    name: .tweetPinStatusChanged,
+                                    object: nil,
+                                    userInfo: ["tweetId": tweet.mid, "isPinned": newPinStatus]
+                                )
+                            }
+                        } else {
+                            NotificationCenter.default.post(
+                                name: .tweetPinStatusChanged,
+                                object: nil,
+                                userInfo: ["tweetId": tweet.mid, "isPinned": isPinned]
+                            )
+                            NotificationCenter.default.post(
+                                name: .errorOccurred,
+                                object: NSError(
+                                    domain: "PinToggle",
+                                    code: -1,
+                                    userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")]
+                                )
+                            )
+                        }
+                    } catch {
+                        print("Pin toggle failed: \(error)")
+                        NotificationCenter.default.post(
+                            name: .tweetPinStatusChanged,
+                            object: nil,
+                            userInfo: ["tweetId": tweet.mid, "isPinned": isPinned]
+                        )
+                        NotificationCenter.default.post(
+                            name: .errorOccurred,
+                            object: NSError(
+                                domain: "PinToggle",
+                                code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: ErrorMessageHelper.userFriendlyMessage(from: error)]
+                            )
+                        )
+                    }
+                }
+            }
+            actions.append(pinAction)
+        }
+
         // Feed-menu sharing deliberately uses the backend domain returned by
         // check_upgrade; action-bar sharing uses dtweet.com instead.
         let shareAction = UIAction(
@@ -959,67 +1022,7 @@ class TweetCellContentView: UIView {
             actions.append(reportAction)
         }
 
-        // Pin/Unpin (only for own tweets)
         if tweet.authorId == hproseInstance.appUser.mid {
-            let pinTitle = isPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
-            let pinIcon = isPinned ? "pin.slash" : "pin"
-            let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { [weak self] _ in
-                guard !hproseInstance.appUser.isGuest else {
-                    self?.onShowLogin?()
-                    return
-                }
-                let intendedPinStatus = !isPinned
-                NotificationCenter.default.post(
-                    name: .tweetPinStatusChanged,
-                    object: nil,
-                    userInfo: ["tweetId": tweet.mid, "isPinned": intendedPinStatus]
-                )
-
-                Task {
-                    do {
-                        if let newPinStatus = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
-                            if newPinStatus != intendedPinStatus {
-                                NotificationCenter.default.post(
-                                    name: .tweetPinStatusChanged,
-                                    object: nil,
-                                    userInfo: ["tweetId": tweet.mid, "isPinned": newPinStatus]
-                                )
-                            }
-                        } else {
-                            NotificationCenter.default.post(
-                                name: .tweetPinStatusChanged,
-                                object: nil,
-                                userInfo: ["tweetId": tweet.mid, "isPinned": isPinned]
-                            )
-                            NotificationCenter.default.post(
-                                name: .errorOccurred,
-                                object: NSError(
-                                    domain: "PinToggle",
-                                    code: -1,
-                                    userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")]
-                                )
-                            )
-                        }
-                    } catch {
-                        print("Pin toggle failed: \(error)")
-                        NotificationCenter.default.post(
-                            name: .tweetPinStatusChanged,
-                            object: nil,
-                            userInfo: ["tweetId": tweet.mid, "isPinned": isPinned]
-                        )
-                        NotificationCenter.default.post(
-                            name: .errorOccurred,
-                            object: NSError(
-                                domain: "PinToggle",
-                                code: -1,
-                                userInfo: [NSLocalizedDescriptionKey: ErrorMessageHelper.userFriendlyMessage(from: error)]
-                            )
-                        )
-                    }
-                }
-            }
-            actions.append(pinAction)
-
             // Privacy Toggle
             let privacyTitle = tweet.isPrivate == true ?
                 NSLocalizedString("Make Public", comment: "Menu item") :
@@ -1048,7 +1051,6 @@ class TweetCellContentView: UIView {
                 }
             }
             actions.append(privacyAction)
-
         }
 
         // Delete — shown for own tweets, or for any tweet when allowDeleteAll is true (main feed)
