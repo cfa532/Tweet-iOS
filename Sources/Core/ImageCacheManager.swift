@@ -22,8 +22,30 @@ import ImageIO
 /// -> dlopen of the Metal drivers). Measured ~700ms on device.
 ///
 /// Only call this off the main thread; decoding here is the whole point.
+///
+/// The decode itself is pinned to `.userInitiated`. Callers arrive at three
+/// different priorities — visible cells at `.userInitiated`, directional
+/// preloads at `.utility`, SwiftUI `Task {}` at default — and
+/// `preparingForDisplay()` serializes on shared ImageIO/CoreGraphics state (on
+/// the first call, on the one-time Metal/VideoToolbox dlopen described above).
+/// A visible-cell decode then blocks behind a preload's, which is the priority
+/// inversion the Thread Performance Checker flags here. With one floor there is
+/// no lower-QoS decode left to wait on. `enforceQoS` only ever raises, so a
+/// main-thread caller stays user-interactive, and the work item runs inline on
+/// the calling thread — no hop, no extra queue.
 private func decodedForDisplay(_ image: UIImage) -> UIImage {
-    image.preparingForDisplay() ?? image
+    let box = DecodedImageBox()
+    DispatchWorkItem(qos: .userInitiated, flags: .enforceQoS) {
+        box.image = image.preparingForDisplay()
+    }.perform()
+    return box.image ?? image
+}
+
+/// Carries the decode result out of the `DispatchWorkItem` closure, which has to
+/// be `@Sendable`. The work item runs synchronously and inline, so the box is
+/// never touched concurrently.
+private final class DecodedImageBox: @unchecked Sendable {
+    var image: UIImage?
 }
 
 
@@ -37,9 +59,21 @@ class ImageCacheManager: @unchecked Sendable {
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
     private let maxDownsampleDimension: CGFloat = 1024
     
+    // The four queues below are locks, not work queues: every block is a short
+    // dictionary mutation. They all carry an explicit `.userInitiated` floor.
+    //
+    // Without one, a queue's QoS is unspecified and `async` blocks run at the
+    // QoS of whichever thread submitted them — so a `.utility` preload's
+    // bookkeeping sits on the queue at `.utility`, and the next `.userInitiated`
+    // reader blocks behind it in `sync`. That is the priority inversion the
+    // Thread Performance Checker reports for `loadOriginalImage`'s
+    // `requestsQueue.sync(flags: .barrier)`. The floor applies to `async` only
+    // (raise-only, and `sync` still runs at the caller's QoS), which is exactly
+    // what is wanted: no enqueued block is ever below a waiting reader.
+
     // Permanent image IDs (from bookmarks/favorites - never expire)
     private var permanentImageIDs: Set<String> = []
-    private let permanentImageIDsQueue = DispatchQueue(label: "com.tweet.permanentImageIDs")
+    private let permanentImageIDsQueue = DispatchQueue(label: "com.tweet.permanentImageIDs", qos: .userInitiated)
     
     // Avatar cache key tracking (for memory protection)
     private var avatarCacheKeys: Set<String> = []
@@ -51,17 +85,17 @@ class ImageCacheManager: @unchecked Sendable {
     private let recentImageProtectionInterval: TimeInterval = 10 * 60
     private let maxRecentImageCacheCount = 80
     private let maxRecentImageCacheCost = 160 * 1024 * 1024
-    private let cacheKeysQueue = DispatchQueue(label: "com.tweet.cacheKeys", attributes: .concurrent)
+    private let cacheKeysQueue = DispatchQueue(label: "com.tweet.cacheKeys", qos: .userInitiated, attributes: .concurrent)
     
     // Request deduplication: Track ongoing requests to prevent duplicate downloads
     private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
-    private let requestsQueue = DispatchQueue(label: "com.zz.imagecache.requests", attributes: .concurrent)
+    private let requestsQueue = DispatchQueue(label: "com.zz.imagecache.requests", qos: .userInitiated, attributes: .concurrent)
     
     // Avatar loading throttling
     private let maxConcurrentAvatarLoads = 4 // Balanced for stable network performance
     private var activeAvatarLoads: [String: Task<UIImage?, Never>] = [:]
     private var pendingAvatarRequests: [(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL, continuation: CheckedContinuation<UIImage?, Never>)] = []
-    private let avatarQueue = DispatchQueue(label: "com.zz.imagecache.avatars", attributes: .concurrent)
+    private let avatarQueue = DispatchQueue(label: "com.zz.imagecache.avatars", qos: .userInitiated, attributes: .concurrent)
     
     private func memoryDuplicateBlockState() -> (blocked: Bool, percentage: Double, threshold: Double) {
         let manager = MemoryCapManager.shared
@@ -126,7 +160,18 @@ class ImageCacheManager: @unchecked Sendable {
         NotificationCenter.default.removeObserver(self)
     }
     
+    /// Pinned to `.userInitiated` for the same reason as `decodedForDisplay`:
+    /// `kCGImageSourceShouldCacheImmediately` decodes right here, on the same
+    /// shared ImageIO state, and this path runs from `.utility` preloads.
     private func downsampleImageData(_ data: Data, maxDimension: CGFloat) -> UIImage? {
+        let box = DecodedImageBox()
+        DispatchWorkItem(qos: .userInitiated, flags: .enforceQoS) {
+            box.image = Self.downsampleImageDataNow(data, maxDimension: maxDimension)
+        }.perform()
+        return box.image
+    }
+
+    private static func downsampleImageDataNow(_ data: Data, maxDimension: CGFloat) -> UIImage? {
         let sourceOptions: [CFString: Any] = [
             kCGImageSourceShouldCache: false
         ]
