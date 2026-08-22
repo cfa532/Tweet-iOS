@@ -60,6 +60,8 @@ struct TweetTableView: UIViewControllerRepresentable {
         var lastHeaderWasPresent: Bool?
         var lastHeaderRefreshToken: Int?
         var lastTrimRequestToken: Int?
+        var lastAppliedInterfaceIsDark: Bool?
+        var lastAppliedColorScheme: ColorScheme?
         weak var controller: TweetTableViewController?
 
         @MainActor
@@ -111,24 +113,51 @@ struct TweetTableView: UIViewControllerRepresentable {
         let coordinator = context.coordinator
         uiViewController.isDarkModeEnabled = isDarkMode
         uiViewController.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
-        uiViewController.applyTheme()
+
+        // SwiftUI re-runs this on every body evaluation of TweetListView, and that view
+        // owns a dozen pieces of @State (isLoading, showToast, pagination, trim tokens…),
+        // so it runs often and while scrolling. Everything below therefore has to be free
+        // when nothing relevant changed.
+        //
+        // applyTheme() assigns overrideUserInterfaceStyle on three views — each assignment
+        // propagates a trait change through the whole subtree — and then walks every
+        // visible cell. Unconditional, that was a trait-propagation storm on every state
+        // change; it only has work to do when the interface style actually flips.
+        // (The controller registers for UITraitUserInterfaceStyle changes and re-applies
+        // in viewWillAppear, so a system appearance flip is covered without this call.)
+        if coordinator.lastAppliedInterfaceIsDark != isDarkMode
+            || coordinator.lastAppliedColorScheme != colorScheme {
+            coordinator.lastAppliedInterfaceIsDark = isDarkMode
+            coordinator.lastAppliedColorScheme = colorScheme
+            uiViewController.applyTheme()
+        }
 
         // Update when row identity or render-affecting state changes.
-        let currentTweetRenderKeys = tweets.map {
-            TweetRenderKey(id: $0.mid, isPrivate: $0.isPrivate == true)
-        }
+        // Compared element-wise against the stored keys rather than by building a fresh
+        // [TweetRenderKey] first: the feed holds hundreds of rows, and materializing that
+        // array (plus two more [String]s for the id comparison) on every single SwiftUI
+        // update was pure allocation churn in the steady state, where nothing changed.
         let previousTweetRenderKeys = coordinator.lastTweetRenderKeys
-        if coordinator.lastTweetRenderKeys != currentTweetRenderKeys {
-            coordinator.lastTweetRenderKeys = currentTweetRenderKeys
-            let sameTweetIds = previousTweetRenderKeys.map(\.id) == currentTweetRenderKeys.map(\.id)
+        let tweetsChanged = previousTweetRenderKeys.count != tweets.count
+            || !zip(previousTweetRenderKeys, tweets).allSatisfy {
+                $0.id == $1.mid && $0.isPrivate == ($1.isPrivate == true)
+            }
+        if tweetsChanged {
+            let sameTweetIds = previousTweetRenderKeys.count == tweets.count
+                && zip(previousTweetRenderKeys, tweets).allSatisfy { $0.id == $1.mid }
+            coordinator.lastTweetRenderKeys = tweets.map {
+                TweetRenderKey(id: $0.mid, isPrivate: $0.isPrivate == true)
+            }
             uiViewController.updateTweets(tweets, reloadSameOrderRows: sameTweetIds)
         }
 
         // Only update pinned tweets if they actually changed
-        let currentPinnedTweetIds = pinnedTweets.map { $0.mid }
-        let pinnedVisibilityChanged = coordinator.lastPinnedTweetIds.isEmpty != currentPinnedTweetIds.isEmpty
-        if coordinator.lastPinnedTweetIds != currentPinnedTweetIds {
-            coordinator.lastPinnedTweetIds = currentPinnedTweetIds
+        let previousPinnedTweetIds = coordinator.lastPinnedTweetIds
+        let pinnedChanged = previousPinnedTweetIds.count != pinnedTweets.count
+            || !zip(previousPinnedTweetIds, pinnedTweets).allSatisfy { $0 == $1.mid }
+        let pinnedVisibilityChanged = previousPinnedTweetIds.isEmpty != pinnedTweets.isEmpty
+        if pinnedChanged {
+            coordinator.lastPinnedTweetIds = pinnedTweets.map { $0.mid }
             uiViewController.updatePinnedTweets(pinnedTweets)
         }
 

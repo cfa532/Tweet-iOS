@@ -30,7 +30,12 @@ class TweetCellContentView: UIView {
     private let headerView = TweetHeaderUIView()
     private let bodyView = TweetBodyUIView()
     private let actionBar = TweetActionBarView()
-    private let embeddedTweetView = EmbeddedTweetUIView()
+    /// Built on first use. Only quote tweets ever show one, but every cell used to
+    /// construct it eagerly — and an EmbeddedTweetUIView contains a whole second
+    /// TweetBodyUIView (media grid, labels, hosting containers), so each cell paid for a
+    /// full duplicate body subtree it usually never displays. That showed up as a 141ms
+    /// stall inside cellForRowAt, all of it under TweetTableViewCell.init.
+    private var embeddedTweetView: EmbeddedTweetUIView?
     private let separatorView: UIView = {
         let v = UIView()
         v.backgroundColor = XTheme.border.withAlphaComponent(0.7)
@@ -106,13 +111,13 @@ class TweetCellContentView: UIView {
     var cellHorizontalPadding: CGFloat = 16 {
         didSet {
             bodyView.cellHorizontalPadding = cellHorizontalPadding
-            embeddedTweetView.cellHorizontalPadding = cellHorizontalPadding
+            embeddedTweetView?.cellHorizontalPadding = cellHorizontalPadding
         }
     }
     var rowWidth: CGFloat? {
         didSet {
             bodyView.rowWidth = rowWidth
-            embeddedTweetView.rowWidth = rowWidth
+            embeddedTweetView?.rowWidth = rowWidth
         }
     }
 
@@ -168,15 +173,9 @@ class TweetCellContentView: UIView {
         retweetBannerHeightConstraint = retweetBanner.heightAnchor.constraint(equalToConstant: 0)
         retweetBannerHeightConstraint?.isActive = true
 
-        // Embedded tweet wrapper: offsets embedded tweet -4pt leading to match old SwiftUI .padding(.leading, -4)
-        embeddedTweetWrapper.addSubview(embeddedTweetView)
-        embeddedTweetView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            embeddedTweetView.topAnchor.constraint(equalTo: embeddedTweetWrapper.topAnchor),
-            embeddedTweetView.bottomAnchor.constraint(equalTo: embeddedTweetWrapper.bottomAnchor),
-            embeddedTweetView.leadingAnchor.constraint(equalTo: embeddedTweetWrapper.leadingAnchor, constant: -4),
-            embeddedTweetView.trailingAnchor.constraint(equalTo: embeddedTweetWrapper.trailingAnchor),
-        ])
+        // The embedded tweet itself is installed into this wrapper on first use, by
+        // ensureEmbeddedTweetView(). The wrapper stays in the column either way so the
+        // stack's arranged-subview order and custom spacing never change.
 
         // Build content column: [header, body, embeddedWrapper, actionBar]
         // Note: retweetBanner is NOT in contentColumn — it's above mainStack
@@ -234,6 +233,33 @@ class TweetCellContentView: UIView {
         // Don't activate - only activate when hidden
     }
 
+    /// Installs the embedded-tweet view into its wrapper the first time a quote tweet
+    /// needs one, carrying over every setting that was forwarded while it did not exist.
+    @discardableResult
+    private func ensureEmbeddedTweetView() -> EmbeddedTweetUIView {
+        if let embeddedTweetView { return embeddedTweetView }
+
+        let view = EmbeddedTweetUIView()
+        embeddedTweetView = view
+
+        // -4pt leading offset matches the old SwiftUI .padding(.leading, -4).
+        embeddedTweetWrapper.addSubview(view)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: embeddedTweetWrapper.topAnchor),
+            view.bottomAnchor.constraint(equalTo: embeddedTweetWrapper.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: embeddedTweetWrapper.leadingAnchor, constant: -4),
+            view.trailingAnchor.constraint(equalTo: embeddedTweetWrapper.trailingAnchor),
+        ])
+
+        // Replay the state the eager instance would already have had.
+        view.cellHorizontalPadding = cellHorizontalPadding
+        view.rowWidth = rowWidth
+        view.videoCoordinator = videoCoordinator
+        view.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
+        return view
+    }
+
     func applyTheme() {
         backgroundColor = XTheme.background
         separatorView.backgroundColor = XTheme.border.withAlphaComponent(0.7)
@@ -286,7 +312,7 @@ class TweetCellContentView: UIView {
 
         // Check if tap is on embedded tweet view (quoted tweet)
         // Note: For pure retweets, embeddedTweetWrapper is hidden; for quoted tweets it's visible
-        if !embeddedTweetWrapper.isHidden {
+        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
             let wrapperLocation = gesture.location(in: embeddedTweetWrapper)
             if embeddedTweetView.frame.contains(wrapperLocation) {
                 // Embedded tweet handles its own tap
@@ -377,14 +403,14 @@ class TweetCellContentView: UIView {
 
         // Propagate per-feed coordinator to subviews
         bodyView.videoCoordinator = videoCoordinator
-        embeddedTweetView.videoCoordinator = videoCoordinator
+        embeddedTweetView?.videoCoordinator = videoCoordinator
 
         // Forward content expansion callback (set before early return so it's always current)
         bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
         bodyView.onContentDidChangeHeightAsync = { [weak self] in
             self?.onContentDidChangeHeightAsync?()
         }
-        embeddedTweetView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
+        embeddedTweetView?.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
         separatorView.isHidden = isLastItem
         if let commentParentTweet {
@@ -687,7 +713,8 @@ class TweetCellContentView: UIView {
         bodyView.onTweetBodyTap = { [weak self] in self?.navigateToTweetDetail(tweet, source: "quotedBodyMoreTap") }
         updateBodyToActionSpacing()
 
-        // Embedded tweet
+        // Embedded tweet — the one path that actually needs the view, so build it here.
+        let embeddedTweetView = ensureEmbeddedTweetView()
         if let embeddedTweet {
             embeddedTweetView.configure(tweet: embeddedTweet, quotingTweetId: tweet.mid,
                                          parentViewController: parentViewController)
@@ -1236,7 +1263,7 @@ class TweetCellContentView: UIView {
         bodyView.mediaGridView.isGridVisible = visible
 
         // Also forward to embedded tweet's media grid if it's visible
-        if !embeddedTweetWrapper.isHidden {
+        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
             embeddedTweetView.setMediaVisible(visible)
         }
     }
@@ -1246,7 +1273,7 @@ class TweetCellContentView: UIView {
         var result = bodyView.mediaGridView.onScreenVideoIdentifiers(
             visibleRect: visibleRect, coordinateSpace: coordinateSpace
         )
-        if !embeddedTweetWrapper.isHidden {
+        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
             result += embeddedTweetView.onScreenVideoIdentifiers(
                 visibleRect: visibleRect, coordinateSpace: coordinateSpace
             )
@@ -1263,7 +1290,7 @@ class TweetCellContentView: UIView {
         var continuePlayback = bodyResult.continuePlayback
         var playable = bodyResult.playable
 
-        if !embeddedTweetWrapper.isHidden {
+        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
             let embeddedResult = embeddedTweetView.mediaVisibilityIdentifiers(
                 visibleRect: visibleRect,
                 coordinateSpace: coordinateSpace
@@ -1278,14 +1305,14 @@ class TweetCellContentView: UIView {
 
     func refreshVideoLayersAfterForeground() {
         bodyView.mediaGridView.refreshVideoLayersAfterForeground()
-        if !embeddedTweetWrapper.isHidden {
+        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
             embeddedTweetView.refreshVideoLayersAfterForeground()
         }
     }
 
     func prepareMediaForBackground(aggressive: Bool = false) {
         bodyView.mediaGridView.prepareMediaForBackground(aggressive: aggressive)
-        if !embeddedTweetWrapper.isHidden {
+        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
             embeddedTweetView.prepareMediaForBackground(aggressive: aggressive)
         }
     }
@@ -1306,7 +1333,7 @@ class TweetCellContentView: UIView {
         headerView.prepareForReuse()
         bodyView.prepareForReuse()
         actionBar.prepareForReuse()
-        embeddedTweetView.prepareForReuse()
+        embeddedTweetView?.prepareForReuse()
 
         showRetweetBanner(false)
 

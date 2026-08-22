@@ -229,6 +229,27 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         return now.timeIntervalSince(createdAt) >= logRetentionInterval
     }
 
+    /// Pays `print`'s one-time Swift-runtime cost on a background queue instead of on
+    /// whichever thread happens to log first.
+    ///
+    /// `print` does not know its argument's type statically: `_print_unlocked` asks, at
+    /// runtime, whether the boxed value conforms to `TextOutputStreamable` /
+    /// `CustomStringConvertible`. The first such question for a given (type, protocol)
+    /// pair walks the protocol-conformance records of every loaded image, and with this
+    /// many linked frameworks that measured ~127ms — landing, in practice, on the main
+    /// actor inside the feed's server-load path, where it cost a frame.
+    ///
+    /// Printing into a `String` sink runs exactly the same lookups and emits nothing, so
+    /// the caches are warm by the time any real log line runs. The three types cover what
+    /// the app actually prints: every call site passes one interpolated `String`, and
+    /// `Int`/`Bool` cover the multi-argument form.
+    private static func warmPrintConformanceCaches() {
+        DispatchQueue.global(qos: .utility).async {
+            var sink = ""
+            print("", 0, false, separator: "", terminator: "", to: &sink)
+        }
+    }
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Lock app to portrait orientation by default
         AppDelegate.lockOrientation(.portrait)
@@ -236,6 +257,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Mirror all print()/NSLog output to Documents so overnight troubleshooting
         // logs survive app backgrounding and relaunches.
         Self.redirectConsoleToLogFile()
+
+        Self.warmPrintConformanceCaches()
 
         // Register background tasks before application finishes launching
         registerBackgroundTasks()
