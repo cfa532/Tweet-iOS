@@ -14,10 +14,26 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
                           downloadable: Bool? = nil) -> Tweet {
         instanceLock.lock()
-        defer { instanceLock.unlock() }
-        
-        if let existingInstance = instances[mid] {
-            // Update existing instance with new values
+        guard let existingInstance = instances[mid] else {
+            let newInstance = Tweet(mid: mid, authorId: authorId, content: content, timestamp: timestamp, title: title,
+                                  originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, parentTweetId: parentTweetId, author: author,
+                                  favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
+                                  retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
+                                  isPrivate: isPrivate, downloadable: downloadable)
+            instances[mid] = newInstance
+            instanceLock.unlock()
+            return newInstance
+        }
+        // Release before mutating: applying the update notifies observers, and a
+        // subscriber that reaches back into getInstance would deadlock this non-recursive
+        // lock. The registry itself is all this lock guards.
+        instanceLock.unlock()
+
+        // Update existing instance with new values. Routed through
+        // applyRenderAffectingUpdate so a changed body drops the typeset text and the
+        // measured heights — feed cells that were not bound at this moment would
+        // otherwise keep rendering the old string at the old height.
+        existingInstance.applyRenderAffectingUpdate {
             if let content = content { existingInstance.content = content }
             if let title = title { existingInstance.title = title }
             if let parentTweetId = parentTweetId { existingInstance.parentTweetId = parentTweetId }
@@ -30,18 +46,10 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             if let attachments = attachments { existingInstance.attachments = attachments }
             if let isPrivate = isPrivate { existingInstance.isPrivate = isPrivate }
             if let downloadable = downloadable { existingInstance.downloadable = downloadable }
-            return existingInstance
         }
-        
-        let newInstance = Tweet(mid: mid, authorId: authorId, content: content, timestamp: timestamp, title: title,
-                              originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, parentTweetId: parentTweetId, author: author,
-                              favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
-                              retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
-                              isPrivate: isPrivate, downloadable: downloadable)
-        instances[mid] = newInstance
-        return newInstance
+        return existingInstance
     }
-    
+
     static func clearInstance(mid: MimeiId) {
         instanceLock.lock()
         defer { instanceLock.unlock() }
@@ -135,7 +143,78 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     // TRANSIENT: Cached sizeThatFits result to avoid repeated TextKit layout passes
     var cachedMeasuredTextHeight: CGFloat = -1
     var cachedMeasuredTextWidth: CGFloat = 0
-    
+
+    // MARK: - Render caches
+
+    /// The fields that decide what a tweet renders as: the typeset string, the measured
+    /// text height, and every height derived from them. Kept on the model, next to the
+    /// caches it guards, so that every mutation path can compare before/after — a view
+    /// layer observer only ever sees the changes that land while a cell happens to be
+    /// bound to this tweet.
+    struct RenderSignature: Equatable {
+        struct Attachment: Equatable {
+            let mid: String
+            let type: String
+            let size: Int64?
+            let fileName: String?
+            let timestamp: Date
+            let aspectRatio: Float?
+            let url: String?
+
+            init(_ attachment: MimeiFileType) {
+                mid = attachment.mid
+                type = attachment.type.rawValue
+                size = attachment.size
+                fileName = attachment.fileName
+                timestamp = attachment.timestamp
+                aspectRatio = attachment.aspectRatio
+                url = attachment.url
+            }
+        }
+
+        let content: String?
+        let title: String?
+        let attachments: [Attachment]?
+
+        @MainActor
+        init(_ tweet: Tweet) {
+            content = tweet.content
+            title = tweet.title
+            attachments = tweet.attachments?.map(Attachment.init)
+        }
+    }
+
+    /// Drops every cache keyed on this tweet's rendered body: the typeset string, the
+    /// measured text height, the row height on the instance, the height persisted across
+    /// launches, and the background pre-warmed estimate.
+    ///
+    /// This has to run at the point of mutation. The caches live on the singleton, so
+    /// they outlive any cell: a tweet whose body changes while its feed cell is not
+    /// realized (opened from another feed, a deep link, a notification) would otherwise
+    /// re-render the stale string at the stale height for as long as the instance lives,
+    /// and `TweetHeightCache` would carry the wrong height across restarts.
+    func invalidateRenderCaches() {
+        cachedContentAttributedString = nil
+        cachedContentWidth = 0
+        cachedMeasuredTextHeight = -1
+        cachedMeasuredTextWidth = 0
+        cachedHeight = nil
+        cachedHeightWidth = 0
+        TweetHeightCache.shared.removeHeight(for: mid)
+        TweetHeightPrewarmer.shared.invalidate(tweetId: mid)
+    }
+
+    /// Applies `updates` as a single observable batch, then invalidates the render caches
+    /// if the body actually changed. Use this for every path that writes server or cache
+    /// data onto an existing instance.
+    func applyRenderAffectingUpdate(_ updates: () -> Void) {
+        let before = RenderSignature(self)
+        performBatchUpdate(updates)
+        if RenderSignature(self) != before {
+            invalidateRenderCaches()
+        }
+    }
+
     /// Update all attachments with the current author's baseUrl snapshot.
     private func updateAttachmentsAuthor() {
         guard let author = author else { return }
@@ -299,7 +378,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     /// - Parameter other: Tweet object containing the new values
     /// - Throws: DecodingError if the update fails
     func update(from other: Tweet) throws {
-        performBatchUpdate {
+        applyRenderAffectingUpdate {
             // Update all properties except author
             if let content = other.content { self.content = content }
             if let title = other.title { self.title = title }
@@ -386,7 +465,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
 
             
             // Update this instance with the new values
-            performBatchUpdate {
+            applyRenderAffectingUpdate {
                 if let content = tempTweet.content { self.content = content }
                 if let title = tempTweet.title { self.title = title }
                 if let parentTweetId = tempTweet.parentTweetId { self.parentTweetId = parentTweetId }
@@ -649,8 +728,9 @@ extension Array where Element == Tweet {
                 // Use existing update method (cleaner, DRY)
                 try? existingTweet.update(from: newTweet)
 
-                // NOTE: No need to invalidate cachedHeight
-                // Tweet content is immutable - height never changes after first render
+                // update(from:) invalidates the render caches itself when the body
+                // actually changed, so a server-side edit doesn't leave this row
+                // rendering the old typeset string at the old height.
 
                 // No array mutation - tweet stays at same index, SwiftUI recomposes
             } else {

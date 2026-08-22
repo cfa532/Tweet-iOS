@@ -23,38 +23,10 @@ private let _tweetBodyURLDetector: NSDataDetector? = try? NSDataDetector(
 )
 
 class TweetBodyUIView: UIView {
-    private struct AttachmentRenderSignature: Equatable {
-        let mid: String
-        let type: String
-        let size: Int64?
-        let fileName: String?
-        let timestamp: Date
-        let aspectRatio: Float?
-        let url: String?
-
-        init(_ attachment: MimeiFileType) {
-            mid = attachment.mid
-            type = attachment.type.rawValue
-            size = attachment.size
-            fileName = attachment.fileName
-            timestamp = attachment.timestamp
-            aspectRatio = attachment.aspectRatio
-            url = attachment.url
-        }
-    }
-
-    private struct BodyRenderSignature: Equatable {
-        let content: String?
-        let title: String?
-        let attachments: [AttachmentRenderSignature]?
-
-        @MainActor
-        init(_ tweet: Tweet) {
-            content = tweet.content
-            title = tweet.title
-            attachments = tweet.attachments?.map(AttachmentRenderSignature.init)
-        }
-    }
+    // The body renders exactly the fields Tweet.RenderSignature covers, and the model
+    // invalidates its render caches against that same signature. One definition keeps
+    // "what this view draws" and "what invalidates the caches it draws from" in step.
+    private typealias BodyRenderSignature = Tweet.RenderSignature
 
     // Internal stack view to manage all content
     private let contentStack: UIStackView = {
@@ -356,15 +328,11 @@ class TweetBodyUIView: UIView {
                     let newSignature = BodyRenderSignature(tweet)
                     guard previousSignature != newSignature else { return }
 
+                    // Normally the mutation site already did this (see
+                    // Tweet.applyRenderAffectingUpdate). Repeat it for the paths that
+                    // write the body directly on the instance; it is idempotent.
                     if previousSignature?.content != newSignature.content {
-                        tweet.cachedContentAttributedString = nil
-                        tweet.cachedContentWidth = 0
-                        tweet.cachedMeasuredTextHeight = -1
-                        tweet.cachedMeasuredTextWidth = 0
-                        tweet.cachedHeight = nil
-                        tweet.cachedHeightWidth = 0
-                        TweetHeightCache.shared.removeHeight(for: tweet.mid)
-                        TweetHeightPrewarmer.shared.invalidate(tweetId: tweet.mid)
+                        tweet.invalidateRenderCaches()
                     }
 
                     self.configure(
@@ -397,6 +365,23 @@ class TweetBodyUIView: UIView {
            bodyRenderSignature == newBodyRenderSignature {
             return
         }
+        // Same tweet, same media, only the text moved — an in-place edit rather than
+        // cell reuse. Tearing the grid down here would cancel the in-flight image loads,
+        // clear the decoded images, and reset `isGridVisible`; nothing re-runs the
+        // visibility pass outside a scroll, so the media sat as empty grey tiles until
+        // the row was next realized. Leaving it intact lets MediaGridUIView.configure
+        // take its `isSameGrid` path and keep what is already on screen.
+        let isMediaContextUnchanged = currentTweetId == tweet.mid
+            && currentCellTweetId == cellTweetId
+            && currentIsEmbedded == isEmbedded
+            && bodyRenderSignature?.attachments == newBodyRenderSignature.attachments
+        // Same tweet, but its attachments really did change, so the grid has to be rebuilt.
+        // Remember that it was on screen: the rebuild resets `isGridVisible`, and the feed
+        // only re-runs its visibility pass while scrolling.
+        let wasVisibleGridRebuiltInPlace = !isMediaContextUnchanged
+            && currentTweetId == tweet.mid
+            && mediaGridView.isGridVisible
+
         currentTweetId = tweet.mid
         currentCellTweetId = cellTweetId
         currentIsEmbedded = isEmbedded
@@ -410,7 +395,9 @@ class TweetBodyUIView: UIView {
         contentLabel.lineBreakMode = .byTruncatingTail
 
         // Clean up media grid and reset document content for reuse
-        mediaGridView.prepareForReuse()
+        if !isMediaContextUnchanged {
+            mediaGridView.prepareForReuse()
+        }
         audioContainerView.isHidden = true
         audioHostingController?.rootView = AnyView(EmptyView())
         documentContainerView.isHidden = true
@@ -465,6 +452,14 @@ class TweetBodyUIView: UIView {
                     shouldLoadVideo: true,
                     parentViewController: parentViewController
                 )
+            }
+
+            // Put back the visibility the rebuild cleared, and start the image loads the
+            // next scroll pass would have started. Videos are left to the coordinator,
+            // which owns autoplay.
+            if wasVisibleGridRebuiltInPlace {
+                mediaGridView.isGridVisible = true
+                mediaGridView.markImageCellsVisibleIfNeeded()
             }
 
             // Caption for single video

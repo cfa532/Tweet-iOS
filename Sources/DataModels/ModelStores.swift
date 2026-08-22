@@ -152,7 +152,7 @@ final class TweetStore {
 
     @discardableResult
     func update(_ tweet: Tweet, with record: TweetRecord) -> Tweet {
-        tweet.performBatchUpdate {
+        tweet.applyRenderAffectingUpdate {
             if let content = record.content { tweet.content = content }
             if let title = record.title { tweet.title = title }
             if let parentTweetId = record.parentTweetId { tweet.parentTweetId = parentTweetId }

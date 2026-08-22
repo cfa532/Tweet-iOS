@@ -208,17 +208,14 @@ final class TweetCacheManager: @unchecked Sendable {
     @MainActor
     private func clearHeightCache(for tweetId: String) {
         if let tweet = Tweet.getInstance(for: tweetId) {
-            tweet.cachedHeight = nil
-            tweet.cachedHeightWidth = 0
+            // Clears the typeset string and the measured text height too — a cached
+            // payload that changed means the body changed, so the row must re-typeset,
+            // not just re-measure.
+            tweet.invalidateRenderCaches()
+        } else {
+            TweetHeightCache.shared.removeHeight(for: tweetId)
+            TweetHeightPrewarmer.shared.invalidate(tweetId: tweetId)
         }
-        TweetHeightCache.shared.removeHeight(for: tweetId)
-    }
-
-    @MainActor
-    private func clearHeightCache(for tweet: Tweet) {
-        tweet.cachedHeight = nil
-        tweet.cachedHeightWidth = 0
-        clearHeightCache(for: tweet.mid)
     }
 
     /// Delete media files associated with a tweet

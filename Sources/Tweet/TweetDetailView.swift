@@ -2127,13 +2127,13 @@ struct TweetDetailView: View {
                 if let refreshed = try? await hproseInstance.getTweet(
                     tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true
                 ) {
-                    await MainActor.run { originalTweet = refreshed }
+                    await MainActor.run { adoptRefreshedOriginal(refreshed) }
                 }
             } else {
                 async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad)
                 async let originalResult = hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true)
                 if let refreshed = try? await tweetResult { await MainActor.run { try? tweet.update(from: refreshed) } }
-                if let refreshedOriginal = try? await originalResult { await MainActor.run { originalTweet = refreshedOriginal } }
+                if let refreshedOriginal = try? await originalResult { await MainActor.run { adoptRefreshedOriginal(refreshedOriginal) } }
             }
         } else {
             if let refreshed = try? await hproseInstance.getTweet(
@@ -2142,6 +2142,20 @@ struct TweetDetailView: View {
                 await MainActor.run { try? tweet.update(from: refreshed) }
             }
         }
+    }
+
+    /// Adopts a freshly fetched original tweet.
+    ///
+    /// `Tweet.getInstance` is a singleton registry, but instances get evicted
+    /// (`clearInstance` on a feed trim, `cleanupOldInstances` over the cap), so a refresh
+    /// can hand back a *different* object than the one a feed cell is already bound to.
+    /// Copying onto the incumbent first keeps that cell live; the detail view then points
+    /// at the registered instance so both sides converge.
+    private func adoptRefreshedOriginal(_ refreshed: Tweet) {
+        if let incumbent = originalTweet, incumbent !== refreshed {
+            try? incumbent.update(from: refreshed)
+        }
+        originalTweet = refreshed
     }
 
     // SYNC: refresh_tweet on hostIds[1], which pulls from hostIds[0] if they differ
@@ -2153,13 +2167,13 @@ struct TweetDetailView: View {
                 if let refreshed = try? await hproseInstance.refreshTweet(
                     tweetId: originalTweetId, authorId: originalAuthorId
                 ) {
-                    await MainActor.run { originalTweet = refreshed }
+                    await MainActor.run { adoptRefreshedOriginal(refreshed) }
                 }
             } else {
                 async let tweetResult = hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId)
                 async let originalResult = hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId)
                 if let refreshed = try? await tweetResult { await MainActor.run { try? tweet.update(from: refreshed) } }
-                if let refreshedOriginal = try? await originalResult { await MainActor.run { originalTweet = refreshedOriginal } }
+                if let refreshedOriginal = try? await originalResult { await MainActor.run { adoptRefreshedOriginal(refreshedOriginal) } }
             }
         } else {
             if let refreshed = try? await hproseInstance.refreshTweet(

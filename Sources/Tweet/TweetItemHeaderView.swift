@@ -37,24 +37,15 @@ struct AdminTweetContentEditSheet: View {
                                         tweetAuthorId: tweet.authorId
                                     )
                                     await MainActor.run {
-                                        tweet.performBatchUpdate {
+                                        // applyRenderAffectingUpdate drops the typeset
+                                        // text and every derived height, so feed and
+                                        // detail both re-render the new content.
+                                        tweet.applyRenderAffectingUpdate {
                                             tweet.content = text
-                                            // Invalidate rendered text cache so feed/detail re-render
-                                            // uses the new content immediately.
-                                            tweet.cachedContentAttributedString = nil
-                                            tweet.cachedContentWidth = 0
-                                            tweet.cachedMeasuredTextHeight = -1
-                                            tweet.cachedMeasuredTextWidth = 0
-                                            tweet.cachedHeight = nil
                                         }
                                         if let singleton = Tweet.getInstance(for: tweet.mid), singleton !== tweet {
-                                            singleton.performBatchUpdate {
+                                            singleton.applyRenderAffectingUpdate {
                                                 singleton.content = text
-                                                singleton.cachedContentAttributedString = nil
-                                                singleton.cachedContentWidth = 0
-                                                singleton.cachedMeasuredTextHeight = -1
-                                                singleton.cachedMeasuredTextWidth = 0
-                                                singleton.cachedHeight = nil
                                             }
                                         }
                                         TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
