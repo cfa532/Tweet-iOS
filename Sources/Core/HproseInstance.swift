@@ -63,16 +63,60 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private var heavyCallLastAttemptAt: [String: Date] = [:]
     private let heavyCallLock = NSLock()
 
+    private static let appManifestRefreshKey = "refresh_app_manifest"
+
+    /// True when the node rejected the request because it does not publish the app
+    /// manifest id we sent as `aid`.
+    ///
+    /// Matched on the message as well as the domain because `HproseErrorDomain` code 3 is
+    /// the transport's generic application error — the text is the only thing that
+    /// distinguishes "your app id is stale" from any other server-side failure.
+    private static func isMissingAppManifest(_ response: Any?) -> Bool {
+        guard let error = response as? NSError, error.domain == "HproseErrorDomain" else {
+            return false
+        }
+        return error.localizedDescription.localizedCaseInsensitiveContains("no manifest for app")
+    }
+
     private func invokeRunMApp(
         using client: HproseClient,
         entry: String,
         params: [String: Any],
         priority: DispatchQoS.QoSClass = .userInitiated
     ) async -> Any? {
-        await HproseTransport.invokeRunMApp(
+        let response = await HproseTransport.invokeRunMApp(
             using: client,
             entry: entry,
             params: params,
+            priority: priority
+        )
+
+        // Every runMApp carries `aid`, the app's manifest id, so a stale one fails all of
+        // them — feed, node/provider discovery, user refresh, writes — with the same
+        // error, and nothing else in the app re-reads it. Recovering here rather than at
+        // ~45 call sites is the only place that covers them all. findEntryIP() re-reads
+        // the id from the app URL over plain HTTP, so this cannot recurse back into
+        // runMApp. Debounced through the shared heavy-call cooldown: a stale id fails
+        // every in-flight call at once and one refresh serves all of them.
+        guard Self.isMissingAppManifest(response),
+              shouldAttemptHeavyCall(Self.appManifestRefreshKey, interval: 30) else {
+            return response
+        }
+
+        let previousAppId = appId
+        _ = try? await findEntryIP()
+        guard appId != previousAppId else {
+            hproseError("DEBUG: [invokeRunMApp] Node rejects app id \(appId) and discovery returned the same id; \(entry) cannot proceed")
+            return response
+        }
+
+        hproseWarning("DEBUG: [invokeRunMApp] App manifest id changed \(previousAppId) -> \(appId); retrying \(entry)")
+        var retryParams = params
+        retryParams["aid"] = appId
+        return await HproseTransport.invokeRunMApp(
+            using: client,
+            entry: entry,
+            params: retryParams,
             priority: priority
         )
     }
@@ -421,6 +465,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// Returns the unwrapped data if success, throws error if failure
     nonisolated private static func unwrapV2Response(_ response: Any?) throws -> Any? {
         let normalizedRoot = normalizeHproseContainers(jsonObjectIfEncodedAsString(response))
+
+        // The transport hands back a server-side failure as an NSError *value* rather than
+        // throwing it. Returning that as data meant every caller then reported its own
+        // generic "invalid response format", which is what hid the real message —
+        // "no manifest for app <appId> ver last" — behind a parse error at ~8 call sites.
+        if let error = normalizedRoot as? NSError {
+            throw error
+        }
+
         guard let dict = normalizedRoot as? [String: Any] else {
             return normalizedRoot
         }
@@ -884,6 +937,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 if let user = user {
                     hproseInfo("✅ [INIT] Cached baseUrl is valid - skipping findEntryIP()")
                     fetchedUser = user  // Save for later use
+
+                    // The cached route answers, so the entry node isn't needed for
+                    // connectivity — but findEntryIP() is also the ONLY place `appId` (the
+                    // app's manifest id, sent as `aid` on every runMApp) is re-read from
+                    // the server. Skipping it entirely meant a logged-in client with a
+                    // working cached baseUrl kept sending the id it was compiled with, and
+                    // once the server stopped publishing that id every single RPC came
+                    // back "no manifest for app <id>" — permanently, across relaunches,
+                    // because the cached baseUrl kept on looking valid. Refresh it in the
+                    // background so this path keeps its startup speed.
+                    Task.detached(priority: .utility) { [weak self] in
+                        _ = try? await self?.findEntryIP()
+                    }
                 } else {
                     hproseWarning("⚠️ [INIT] Cached baseUrl returned nil user - falling back to findEntryIP()")
                     entryIP = nil
@@ -1178,6 +1244,26 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return legacyCachedTweets
         }
 
+        // Gate the following-tweets sync BEFORE resolving its client.
+        // followingTweetsHomeClient() resolves hostIds[0] fresh on every call — the write
+        // route is deliberately never pooled — so it costs a get_node_ips round trip plus
+        // health checks, and it throws outright when the node can't be resolved. Running
+        // it ahead of this gate meant the debounce could never prevent that work: every
+        // caller paid the round trip, and while the write host was unresolvable every
+        // caller also surfaced "Upload server not responding", once per attempt, with no
+        // cooldown ever applying. Gating first also lets a failed attempt start the
+        // cooldown, which is what stops the retry storm.
+        if isFollowingTweetUpdate {
+            guard appSnap.mid != Constants.GUEST_ID,
+                  await onFollowingTweetsRpcStarted?() != false,
+                  shouldAttemptHeavyCall(
+                    HproseInstance.updateFollowingTweetsEntry,
+                    ignoreDebounce: ignoreFollowingTweetsDebounce
+                  ) else {
+                return []
+            }
+        }
+
         let client: HproseClient?
         if isFollowingTweetUpdate {
             client = try await followingTweetsHomeClient()
@@ -1201,19 +1287,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         if isFollowingTweetUpdate {
             params["hostid"] = appSnap.hostIds?.first
-            guard appSnap.mid != Constants.GUEST_ID,
-                  await onFollowingTweetsRpcStarted?() != false,
-                  shouldAttemptHeavyCall(
-                    HproseInstance.updateFollowingTweetsEntry,
-                    ignoreDebounce: ignoreFollowingTweetsDebounce
-                  ) else {
-                return []
-            }
         }
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
+            hproseWarning("DEBUG: [fetchTweetFeed] Unexpected response for entry \(entry): \(responseShapeDescription(unwrappedResponse))")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchTweetFeed"])
         }
         
@@ -2686,8 +2765,27 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             
             return nil
         }
-        hproseWarning("DEBUG: [_getProviderIP] Invalid IpList response format")
+        hproseWarning("DEBUG: [_getProviderIP] Invalid IpList response format for mid \(mid): \(responseShapeDescription(unwrappedResponse))")
         return nil
+    }
+
+    /// Compact, length-capped rendering of an unexpected response, for failure logs.
+    /// Names the runtime type first — that alone usually separates "the node sent an
+    /// error dict" from "the list came back JSON-encoded as a string".
+    private func responseShapeDescription(_ value: Any?) -> String {
+        guard let value else { return "nil" }
+        var body: String
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+           let string = String(data: data, encoding: .utf8) {
+            body = string
+        } else {
+            body = String(describing: value)
+        }
+        if body.count > 500 {
+            body = String(body.prefix(500)) + "…(truncated)"
+        }
+        return "\(Swift.type(of: value)): \(body)"
     }
 
     private func providerIPDebugDescription(_ value: Any?) -> String {
@@ -8559,9 +8657,20 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let isAppUserHealthy = await isServerHealthyWithTimeout(appUserIP, timeout: 5.0)
         
         if isAppUserHealthy {
-            // AppUser is healthy but still couldn't get IPs - node might not exist
-            hproseWarning("DEBUG: [getHostIP] AppUser is healthy but node IPs not found - node may not exist")
-            return nil
+            // AppUser answered but gave us no usable address for this node. That is not
+            // proof the node is gone — the entry node keeps its own registry and answers
+            // without depending on appUser owning a usable route. Returning nil here (as
+            // this used to) skipped that perfectly good lookup whenever appUser merely
+            // looked healthy, which is what left writes failing with "Upload server not
+            // responding" — resolveWritableUrl has no other way to reach hostIds[0].
+            hproseWarning("DEBUG: [getHostIP] AppUser is healthy but returned no usable IPs for node \(nodeId) - falling back to entry node")
+            return await hostIPFromEntryNode(
+                nodeId,
+                v4Only: v4Only,
+                excludedIP: excludedIP,
+                usePool: usePool,
+                entryClient: nil
+            )
         }
         
         // AppUser is unhealthy - refresh it and retry
@@ -8598,12 +8707,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // Attempt 3: ask the entry node itself which addresses serve this node.
             // Unlike the two attempts above it does not depend on appUser owning a
             // usable route, so it still answers when appUser cannot be repaired.
-            hproseWarning("DEBUG: [getHostIP] Attempt 3: Resolving node \(nodeId) directly through entry node \(entryIP)")
-            if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: entryClient, excludedIP: excludedIP) {
-                if usePool {
-                    NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
-                    hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) resolved via entry node")
-                }
+            if let ip = await hostIPFromEntryNode(
+                nodeId,
+                v4Only: v4Only,
+                excludedIP: excludedIP,
+                usePool: usePool,
+                entryClient: entryClient
+            ) {
                 return ip
             }
 
@@ -8616,6 +8726,50 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
     }
     
+    /// Resolves `nodeId` through the entry node.
+    ///
+    /// The entry node keeps its own address registry, so this answers whether or not
+    /// appUser owns a usable route — which makes it the right fallback both when appUser
+    /// is unhealthy and when it responds without a usable address list.
+    ///
+    /// - Parameter entryClient: an already-resolved entry client, when the caller has one.
+    ///   `findEntryIP()` fetches and parses the app URL's HTML, so it is not cheap enough
+    ///   to repeat within a single resolution.
+    private func hostIPFromEntryNode(
+        _ nodeId: String,
+        v4Only: Bool,
+        excludedIP: String?,
+        usePool: Bool,
+        entryClient: HproseClient?
+    ) async -> String? {
+        let client: HproseClient
+        if let entryClient {
+            client = entryClient
+        } else {
+            do {
+                guard let entryIP = try await findEntryIP() else {
+                    hproseError("DEBUG: [getHostIP] Failed to find entry IP to resolve node \(nodeId)")
+                    return nil
+                }
+                client = clientPool.getClientByIP(for: entryIP)
+                hproseDebug("DEBUG: [getHostIP] Resolving node \(nodeId) directly through entry node \(entryIP)")
+            } catch {
+                hproseError("DEBUG: [getHostIP] Error finding entry IP for node \(nodeId): \(error)")
+                return nil
+            }
+        }
+
+        guard let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: client, excludedIP: excludedIP) else {
+            hproseError("DEBUG: [getHostIP] Entry node could not resolve node \(nodeId)")
+            return nil
+        }
+        if usePool {
+            NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
+            hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) resolved via entry node")
+        }
+        return ip
+    }
+
     /// Internal helper that performs the actual IP resolution and health checking
     /// - Parameters:
     ///   - nodeId: The node ID to resolve IPs for
@@ -8733,7 +8887,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseDebug("DEBUG: [_getHostIP] No IPs available in response")
             return nil
         }
-        hproseWarning("DEBUG: [_getHostIP] Invalid IpList response format")
+        // Log the shape we actually got. "Invalid format" on its own says nothing about
+        // whether the node sent a dict, an error string, or a JSON-encoded list, which is
+        // the first thing you need in order to tell a server problem from a parse gap.
+        hproseWarning("DEBUG: [_getHostIP] Invalid IpList response format for node \(nodeId): \(responseShapeDescription(unwrappedResponse))")
         return nil
     }
     
