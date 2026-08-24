@@ -10,6 +10,17 @@ import SwiftUI
 import Combine
 import Darwin
 
+/// EXPERIMENT (not shipped): let Auto Layout size every row instead of computing the
+/// height deterministically — the closest UIKit analogue to Compose's `LazyColumn`, which
+/// the Android client uses and which needs no height calculation at all.
+///
+/// Enable with TWEET_SELF_SIZING=1. The point is to find out whether the deterministic
+/// height calculator is earning its keep, or whether UIKit can be trusted to measure.
+enum FeedLayoutMode {
+    nonisolated(unsafe) static let selfSizing =
+        ProcessInfo.processInfo.environment["TWEET_SELF_SIZING"] != nil
+}
+
 struct BackgroundFeedResumeSnapshot: Codable {
     let feedIdentifier: String
     let appUserId: String
@@ -2595,6 +2606,15 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight + dividerHeight
         }
 
+        if FeedLayoutMode.selfSizing {
+            // The real "delete the calculator" configuration: never compute a height, and
+            // for a row never yet displayed give UIKit a flat guess, exactly what a
+            // LazyColumn would have (nothing). Everything below this line is the machinery
+            // under test.
+            return TweetHeightCache.shared.getHeight(for: tweet.mid, width: layoutWidth)
+                .map { $0 + dividerHeight } ?? 400
+        }
+
         // Use persisted height cache (survives app restarts) as second-best estimate.
         // This prevents scroll jumps for previously-viewed tweets on cold start.
         // NOTE: Do NOT set tweet.cachedHeight here — persisted heights may be stale
@@ -3091,6 +3111,10 @@ class TweetTableViewController: UITableViewController {
         // Let Auto Layout measure this presentation-specific card rather than polluting
         // the shared Tweet height cache used by ordinary comment screens.
         if tweet.originalTweetId == nil, effectiveEmbeddedTweetId(for: tweet) != nil {
+            return UITableView.automaticDimension
+        }
+
+        if FeedLayoutMode.selfSizing {
             return UITableView.automaticDimension
         }
 
