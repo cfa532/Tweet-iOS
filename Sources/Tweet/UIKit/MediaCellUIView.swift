@@ -427,6 +427,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     /// Debounce task that delays player acquisition during fast scroll.
     /// Cancelled if the cell scrolls off-screen before the short acquisition grace elapses.
     private var playerAcquireDebounceTask: Task<Void, Never>?
+    /// Retry timer for a primary whose cold player acquisition was deferred because the
+    /// feed was still moving. See `deferPrimaryAcquireWhileScrolling`.
+    private var primaryAcquireRetryTask: Task<Void, Never>?
 
     /// Fallback task: if item.status stays .unknown after deferring to statusKVO,
     /// enable network and kick playback after a delay (same as deadlock fix).
@@ -602,6 +605,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
         playerAcquireDebounceTask?.cancel()
+        primaryAcquireRetryTask?.cancel()
         playerAcquireDebounceTask = nil
         retryButton.isHidden = true
         replayButton.isHidden = true
@@ -1577,6 +1581,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     return
                 }
                 self.playerAcquireDebounceTask?.cancel()
+                self.primaryAcquireRetryTask?.cancel()
                 self.playerAcquireDebounceTask = nil
                 if self.attachCachedPlayerIfAvailable(reason: "preloadNotification") {
                     return
@@ -1614,6 +1619,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
         playerAcquireDebounceTask?.cancel()
+        primaryAcquireRetryTask?.cancel()
         playerAcquireDebounceTask = nil
         applyFeedMuteState(to: cachedPlayer, mid: mid)
 
@@ -1641,6 +1647,37 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var shouldDeferPlayerWorkForFastScroll: Bool {
         guard !coordinatorWantsToPlay else { return false }
         return (videoCoordinator ?? .shared).isFeedScrollTooFastForPlayerWork
+    }
+
+    /// Creating an AVPlayer and attaching its layer costs 100–350ms of main-thread time.
+    /// `shouldDeferPlayerWorkForFastScroll` deliberately exempts the coordinator-selected
+    /// primary — but the primary is chosen as the TOPMOST visible video when scrolling
+    /// down, so the one video guaranteed to do this work mid-scroll was the only one with
+    /// no protection. That is the reported symptom exactly: jitter only when a tweet with
+    /// video moves up close to the top of the screen.
+    ///
+    /// Defers the COLD acquisition only. Every cheap path in handleCoordinatorPlayCommand
+    /// above this point — live handoff, cached player, replay seek — still runs
+    /// immediately, so a video whose player already exists starts with no delay.
+    ///
+    /// Retries itself rather than waiting to be re-driven by the coordinator, so a primary
+    /// can never end up permanently without a player if the scroll never formally stops.
+    private func deferPrimaryAcquireWhileScrolling() -> Bool {
+        guard (videoCoordinator ?? .shared).isFeedScrollTooFastForPlayerWork else {
+            primaryAcquireRetryTask?.cancel()
+            primaryAcquireRetryTask = nil
+            return false
+        }
+        guard primaryAcquireRetryTask == nil else { return true }
+
+        primaryAcquireRetryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard let self else { return }
+            self.primaryAcquireRetryTask = nil
+            guard !Task.isCancelled, self.coordinatorWantsToPlay, self.isVisible else { return }
+            self.handleCoordinatorPlayCommand()
+        }
+        return true
     }
 
     private func schedulePlayerAcquireIfNeeded() {
@@ -3400,6 +3437,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             if self.player == nil,
                setupPlayerTask == nil,
                let context = currentVideoContext(requireLoadableVisibleVideo: true) {
+                guard !deferPrimaryAcquireWhileScrolling() else { return }
                 acquirePlayer(
                     attachment: context.attachment,
                     url: context.url,
@@ -4354,6 +4392,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func detachFinishedPlayer(for mid: String) {
         playerAcquireDebounceTask?.cancel()
+        primaryAcquireRetryTask?.cancel()
         playerAcquireDebounceTask = nil
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
@@ -5384,6 +5423,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     // The visible feed player may be borrowed by detail, but feed-only
                     // acquisition work must not land after ownership has transferred.
                     playerAcquireDebounceTask?.cancel()
+        primaryAcquireRetryTask?.cancel()
                     playerAcquireDebounceTask = nil
                     setupPlayerTask?.cancel()
                     setupPlayerTask = nil
@@ -5436,6 +5476,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
             // Cancel in-flight player acquisition task
             playerAcquireDebounceTask?.cancel()
+        primaryAcquireRetryTask?.cancel()
             playerAcquireDebounceTask = nil
             setupPlayerTask?.cancel()
             setupPlayerTask = nil
@@ -6076,6 +6117,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         // Cancel any pending debounce — prevents player acquisition after cleanup.
         playerAcquireDebounceTask?.cancel()
+        primaryAcquireRetryTask?.cancel()
         playerAcquireDebounceTask = nil
 
         let hasWork =

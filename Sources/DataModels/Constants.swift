@@ -68,7 +68,15 @@ enum FeedPlaybackTuning {
     /// coordinator-selected primary (coordinatorWantsToPlay) is exempt, so slow-scroll
     /// autoplay is unaffected. Deferred cells self-recover: the throttled visibility
     /// passes re-enter setVisible → schedulePlayerAcquireIfNeeded as velocity decays.
-    static let playerAcquireMaxScrollVelocity: CGFloat = 800
+    /// Feed speed above which AVPlayer creation/attachment is deferred, in pt/s.
+    ///
+    /// 800 pt/s is 13pt per frame at 60Hz — still very visibly moving, so the gate opened
+    /// while a 100–350ms block would still cost 6–24 dropped frames and a large lurch.
+    /// The error a deferred-work block puts on screen is velocity × duration, so for a
+    /// ~200ms acquisition to stay under ~30pt of displacement the feed has to be under
+    /// roughly 150 pt/s. Below this the list is coasting to a stop, which is also when the
+    /// user has settled on the video they want playing.
+    static let playerAcquireMaxScrollVelocity: CGFloat = 150
 }
 
 enum UserContentType: String {
