@@ -4102,9 +4102,16 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // KVO: player item status — tracks logical readiness (for coordinator play commands)
         // NOTE: .initial removed — it fires the callback synchronously during observe() setup,
         // causing a main-thread hitch. Initial state is checked manually in configurePlayer().
-        playerItemStatusObserver = playerItem.observe(\.status, options: [.old, .new]) { [weak self] item, change in
+        playerItemStatusObserver = playerItem.observe(\.status, options: [.old, .new]) { [weak self, weak player] item, change in
             DispatchQueue.main.async {
                 guard let self else { return }
+                // The hop to main means this block can outlive the cell's interest in this
+                // item: the cell may have been reused, or handed a different player, between
+                // the status change and now. Without this the callback drives transitionTo,
+                // spinner and cover work for a video the cell is no longer showing — UIKit
+                // work on the frame the bytes happen to land, for nothing. The sibling
+                // loadedTimeRanges observer already guards exactly this way.
+                guard let player, self.player === player, player.currentItem === item else { return }
                 guard let mid = self.attachment?.mid else { return }
 
                 if item.status == .readyToPlay {

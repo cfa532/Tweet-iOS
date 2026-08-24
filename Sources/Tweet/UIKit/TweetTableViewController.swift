@@ -1635,6 +1635,10 @@ class TweetTableViewController: UITableViewController {
     }
     
     func updateTweets(_ newTweets: [Tweet], reloadSameOrderRows: Bool = false) {
+        // A held pagination array is only valid against the state it was diffed from. Any
+        // other update (prepend, delete, reorder) supersedes it — re-applying it later
+        // could resurrect a deleted row. The append branch below re-arms it.
+        pendingScrollDeferredTweets = nil
         let oldCount = tweets.count
         let oldTweets = tweets
 
@@ -1814,6 +1818,13 @@ class TweetTableViewController: UITableViewController {
             if newIdsPrefix == getOldIds() {
                 guard tableView.window != nil else {
                     needsFullReloadAfterAttach = true
+                    return
+                }
+                // Hold the append until the scroll stops — unless the user is close enough
+                // to the end that they would actually run out of rows, in which case the
+                // content matters more than the frame.
+                if isScrollInteractionActive, !isRunningLowOnRowsBelowViewport() {
+                    pendingScrollDeferredTweets = newTweets
                     return
                 }
                 scheduleHeightPrewarm(for: Array(newTweets.dropFirst(oldCount)))
@@ -2036,6 +2047,14 @@ class TweetTableViewController: UITableViewController {
         triggerAutoLoadMore()
     }
 
+    /// True when so few rows remain below the viewport that withholding freshly paginated
+    /// rows would leave the user scrolling into the end of the list.
+    private func isRunningLowOnRowsBelowViewport() -> Bool {
+        guard let lastVisibleRow = tableView.indexPathsForVisibleRows?.last?.row else { return true }
+        let totalRows = pinnedTweets.count + tweets.count
+        return max(0, totalRows - 1 - lastVisibleRow) < loadMoreTriggerRows
+    }
+
     /// Widens the load-more trigger distance during fast flings. A user flinging quickly
     /// through a long feed can cover a page's worth of rows before the network round-trip
     /// for the next page completes, hitting the bottom spinner mid-gesture. Scaling the
@@ -2051,6 +2070,20 @@ class TweetTableViewController: UITableViewController {
     }
 
     private var needsHeaderUpdate = false
+
+    /// Rows that arrived from pagination while the feed was moving. Appending is not a
+    /// jump risk — new rows go below the viewport — but the table pass plus the estimate
+    /// query for every new row is main-actor work landing on a frame that is already
+    /// building cells. Held here and applied at scroll stop, like
+    /// `pendingHeightRelayoutTweetIds`.
+    private var pendingScrollDeferredTweets: [Tweet]?
+
+    /// Applies pagination rows that were held back during the scroll.
+    private func flushScrollDeferredTweets() {
+        guard let pending = pendingScrollDeferredTweets else { return }
+        pendingScrollDeferredTweets = nil
+        updateTweets(pending)
+    }
 
     private var isScrollInteractionActive: Bool {
         tableView.isTracking
@@ -3414,6 +3447,7 @@ class TweetTableViewController: UITableViewController {
         // (if not decelerating, scroll has stopped - save now to survive app termination)
         if !decelerate {
             videoCoordinator.currentScrollVelocityY = 0
+            flushScrollDeferredTweets()
             performPendingHeightRelayout()
             saveScrollPositionIfNeeded()
             runScrollStopPreloadWhenIdle()
@@ -3442,6 +3476,7 @@ class TweetTableViewController: UITableViewController {
 
         // Deceleration skipped video visibility updates — do one final update now
         updateVisibleTweetsForVideoPlayback()
+        flushScrollDeferredTweets()
         performPendingHeightRelayout()
         showPendingBarsAfterScrollIfNeeded()
 
