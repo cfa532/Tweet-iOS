@@ -1021,11 +1021,27 @@ class TweetBodyUIView: UIView {
         UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
+    /// True if `text` contains a character every URL form NSDataDetector recognises must
+    /// have: a dot (domain) or a colon (scheme). Cheap byte scan, no allocation.
+    ///
+    /// Worth the check because `NSDataDetector` is far from free on CJK text — it drops
+    /// into CoreNLP language identification (`liblangid`), which showed up on device as a
+    /// 122ms main-thread block inside `renderTextContent` during scroll. Chinese prose
+    /// ends sentences with U+3002 IDEOGRAPHIC FULL STOP, not ASCII '.', so a feed of
+    /// Chinese text without links skips the scanner entirely.
+    private nonisolated static func mayContainLink(_ text: String) -> Bool {
+        for byte in text.utf8 where byte == UInt8(ascii: ".") || byte == UInt8(ascii: ":") {
+            return true
+        }
+        return false
+    }
+
     private nonisolated static func applyDetectedLinks(to attributedString: NSMutableAttributedString, in range: NSRange) {
         guard range.location >= 0,
               range.length > 0,
               NSMaxRange(range) <= attributedString.length,
-              let detector = _tweetBodyURLDetector else {
+              let detector = _tweetBodyURLDetector,
+              mayContainLink(attributedString.string) else {
             return
         }
 

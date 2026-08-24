@@ -29,6 +29,20 @@ enum MenuSymbol {
         cache[name] = image
         return image
     }
+
+    /// Same, for symbols that need a point size. Keyed on both, since a configuration
+    /// produces a different rendition.
+    @MainActor
+    static func image(_ name: String, pointSize: CGFloat) -> UIImage? {
+        let key = "\(name)@\(pointSize)"
+        if let cached = cache[key] { return cached }
+        guard let image = UIImage(
+            systemName: name,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize)
+        ) else { return nil }
+        cache[key] = image
+        return image
+    }
 }
 
 class TweetCellContentView: UIView {

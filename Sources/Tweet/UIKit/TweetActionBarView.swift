@@ -1355,11 +1355,14 @@ private class ActionButtonView: UIView {
         }
     }
 
+    private var iconPointSize: CGFloat = 16
+
     init(icon: String, pointSize: CGFloat = 16) {
         super.init(frame: .zero)
+        iconPointSize = pointSize
         let config = UIImage.SymbolConfiguration(pointSize: pointSize)
         iconView.preferredSymbolConfiguration = config
-        iconView.image = UIImage(systemName: icon)
+        iconView.image = MenuSymbol.image(icon)
         setupViews()
     }
 
@@ -1413,8 +1416,11 @@ private class ActionButtonView: UIView {
         countLabel.text = count > 0 ? formatCount(count) : ""
     }
 
+    /// Called on every configure — heart, bookmark and retweet all swap between filled
+    /// and unfilled states — so this must not hit CoreUI's asset catalog each time.
+    /// A device trace showed those lookups as a 136ms main-thread block.
     func setIcon(_ systemName: String) {
-        iconView.image = UIImage(systemName: systemName, withConfiguration: iconView.preferredSymbolConfiguration)
+        iconView.image = MenuSymbol.image(systemName, pointSize: iconPointSize)
     }
 }
 
