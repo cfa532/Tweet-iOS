@@ -241,6 +241,10 @@ class TweetTableViewController: UITableViewController {
     private var savedScrollPosition: CGFloat?
     private var didAttemptInitialSavedScrollPositionRestore = false
     private var isScrollingToTop: Bool = false
+    /// Set while a scroll-to-top is in flight, so the layout pass that runs when the nav
+    /// bars finish expanding can re-pin the offset to the final inset.
+    /// See `scrollToTop()`.
+    private var isSettlingScrollToTop: Bool = false
     private enum PendingScrollRequest {
         case top
         case firstRegularTweet
@@ -927,22 +931,45 @@ class TweetTableViewController: UITableViewController {
         }
         isScrollingToTop = true
 
-        // Scroll to the absolute top of the table view with animation
-        // Use the top of the content including any table header view
-        // Calculate the proper top position accounting for content inset
-        let topInset = tableView.adjustedContentInset.top
+        // Reveal the app header BEFORE starting the scroll animation.
+        //
+        // The header is not a content inset — it is a SwiftUI sibling above this table
+        // whose height collapses to 0 when the user scrolls down (HomeViewModel's
+        // isNavigationVisible). Left alone, the sequence was: animate towards the top →
+        // HomeViewModel.handleScroll sees `offset <= 10` and expands the header → the
+        // table's frame changes mid-animation → UIScrollView CANCELS the in-flight
+        // setContentOffset animation. The scroll stops wherever it had got to, roughly a
+        // header height short — the reported "stops in the middle of the first tweet".
+        // A second tap works because the header is already expanded by then, so no layout
+        // change interrupts the animation.
+        //
+        // Posting .showBarsAfterScrollEnd up front expands the header instantly (that
+        // observer deliberately does not animate) and stamps lastVisibilityChangeTime,
+        // whose 0.35s cooldown also suppresses the late handleScroll expansion. The
+        // layout change therefore happens before the animation rather than during it.
+        //
+        // Requesting it here rather than via showBarsWithoutAnimation deliberately skips
+        // the bar-appearance anchor: that machinery holds a row still while the bars
+        // expand mid-coast, which is the opposite of what a scroll-to-top wants.
+        endBarAppearanceCompensation()
+        NotificationCenter.default.post(
+            name: .showBarsAfterScrollEnd,
+            object: nil,
+            userInfo: ["animated": false]
+        )
 
-        // If there's a table header, we want to show it, so scroll to -topInset
-        // This positions the header at the top of the visible area (below nav bar)
-        let targetOffset = CGPoint(x: 0, y: -topInset)
-        tableView.setContentOffset(targetOffset, animated: true)
+        // Belt and braces: the header expansion above still resizes this table, so let the
+        // next layout passes re-pin the offset in case the animation is disturbed anyway.
+        isSettlingScrollToTop = true
+        tableView.setContentOffset(
+            CGPoint(x: 0, y: -tableView.adjustedContentInset.top),
+            animated: true
+        )
 
-        // Also ensure we're at the exact top by forcing layout
-        tableView.layoutIfNeeded()
-
-        // Reset flag after animation completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        // Reset flags once the animation and any header relayout have settled.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.isScrollingToTop = false
+            self?.isSettlingScrollToTop = false
         }
     }
 
@@ -1162,6 +1189,18 @@ class TweetTableViewController: UITableViewController {
             if currentOffset < -topInset && !hasSavedPosition {
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
                 lastScrollOffset = -topInset
+            }
+        }
+
+        // A scroll-to-top is in flight and the app header's expansion resizes this table.
+        // Re-pin so the feed lands on the true top rather than wherever a cancelled
+        // animation left it. Abandoned as soon as the user touches the list.
+        if isSettlingScrollToTop, !isUserDragging, !tableView.isTracking {
+            let settledTop = -tableView.adjustedContentInset.top
+            if abs(tableView.contentOffset.y - settledTop) > 0.5 {
+                tableView.setContentOffset(CGPoint(x: 0, y: settledTop), animated: false)
+                lastScrollOffset = settledTop
+                lastContentOffset = settledTop
             }
         }
 
