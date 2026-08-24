@@ -35,6 +35,7 @@
 | -------- | ----------- |
 | [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md) | IP resolution, retries, and network fallback behavior |
 | [MEMORY_MANAGEMENT.md](./MEMORY_MANAGEMENT.md) | Memory pressure handling and cleanup strategies |
+| [FEED_ROW_HEIGHTS.md](./FEED_ROW_HEIGHTS.md) | How feed row heights are computed and cached, and why they must match Auto Layout exactly |
 
 ---
 

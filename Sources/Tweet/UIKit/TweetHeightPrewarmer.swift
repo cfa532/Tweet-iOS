@@ -136,12 +136,30 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
             let attrStr = TweetBodyUIView.makeContentAttributedStringBackground(
                 content: content, availableWidth: width
             )
-            let bounds = attrStr.boundingRect(
-                with: CGSize(width: width, height: .greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading],
-                context: nil
+            // Lay the string out in a real text container instead of calling
+            // boundingRect(with:options:context:). boundingRect returns the union of the
+            // line fragment rects and leaves out the paragraph style's 3pt lineSpacing
+            // BETWEEN lines, so it under-measured every multi-line tweet by
+            // 3 * (lines - 1) — a flat 18pt for the 7-line maximum. That is the number
+            // estimatedHeightForRowAt banks for a row, and it disagreed by a whole line
+            // gap with the UILabel measurement heightForRowAt later produced, so
+            // contentSize moved under the scroll every time such a row was realized.
+            //
+            // Also honours maxContentLines, which boundingRect ignored entirely.
+            let textStorage = NSTextStorage(attributedString: attrStr)
+            let textContainer = NSTextContainer(
+                size: CGSize(width: width, height: .greatestFiniteMagnitude)
             )
-            let height = ceil(bounds.height)
+            textContainer.lineFragmentPadding = 0
+            textContainer.maximumNumberOfLines = TweetBodyUIView.maxContentLines
+            textContainer.lineBreakMode = .byTruncatingTail
+            let layoutManager = NSLayoutManager()
+            layoutManager.addTextContainer(textContainer)
+            textStorage.addLayoutManager(layoutManager)
+            layoutManager.ensureLayout(for: textContainer)
+            // Not rounded up: calculateTweetHeight consumes this as the label's height and
+            // must report exactly what Auto Layout will lay the label out to.
+            let height = layoutManager.usedRect(for: textContainer).height
 
             // Keep the prewarmed height authoritative for both UITableView's estimate and
             // its first displayed height — AND hand over the string that was just typeset.

@@ -9,6 +9,28 @@ import UIKit
 import SwiftUI
 import Combine
 
+/// Shared SF Symbol cache for the row menus.
+///
+/// `UIImage(systemName:)` is not a cheap accessor — it goes through CoreUI and does an
+/// asset-catalog rendition lookup. The tweet menu builds ~9 actions, each with its own
+/// symbol, and its cache key includes the tweet id, so every cell reuse rebuilt the whole
+/// menu inside `cellForRowAt`. On a device trace that was a **133ms** main-thread block
+/// during deceleration, all of it under `CUIStructuredThemeStore lookupAssetForKey:` —
+/// for a popover the user had not opened.
+///
+/// UIImage is immutable and thread-safe to share, so one lookup per symbol is enough.
+enum MenuSymbol {
+    @MainActor private static var cache: [String: UIImage] = [:]
+
+    @MainActor
+    static func image(_ name: String) -> UIImage? {
+        if let cached = cache[name] { return cached }
+        guard let image = UIImage(systemName: name) else { return nil }
+        cache[name] = image
+        return image
+    }
+}
+
 class TweetCellContentView: UIView {
     private static let authorLoadQueue = DispatchQueue(label: "TweetCellContentView.authorLoad")
     private static var authorCacheLoadsInFlight = Set<String>()
@@ -887,7 +909,7 @@ class TweetCellContentView: UIView {
 
         // Copy Tweet ID
         let truncatedId = String(tweet.mid.prefix(8)) + "..."
-        let copyAction = UIAction(title: truncatedId, image: UIImage(systemName: "doc.on.clipboard")) { _ in
+        let copyAction = UIAction(title: truncatedId, image: MenuSymbol.image("doc.on.clipboard")) { _ in
             UIPasteboard.general.string = tweet.mid
         }
         actions.append(copyAction)
@@ -897,7 +919,7 @@ class TweetCellContentView: UIView {
         if tweet.authorId == hproseInstance.appUser.mid {
             let pinTitle = isPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
             let pinIcon = isPinned ? "pin.slash" : "pin"
-            let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { [weak self] _ in
+            let pinAction = UIAction(title: pinTitle, image: MenuSymbol.image(pinIcon)) { [weak self] _ in
                 guard !hproseInstance.appUser.isGuest else {
                     self?.onShowLogin?()
                     return
@@ -959,7 +981,7 @@ class TweetCellContentView: UIView {
         // check_upgrade; action-bar sharing uses dtweet.com instead.
         let shareAction = UIAction(
             title: NSLocalizedString("Share", comment: "Menu item"),
-            image: UIImage(systemName: "square.and.arrow.up")
+            image: MenuSymbol.image("square.and.arrow.up")
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -988,7 +1010,7 @@ class TweetCellContentView: UIView {
 
         // Filter Content
         let filterAction = UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"),
-                                     image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { [weak self] _ in
+                                     image: MenuSymbol.image("line.3.horizontal.decrease.circle")) { [weak self] _ in
             guard !hproseInstance.appUser.isGuest else {
                 self?.onShowLogin?()
                 return
@@ -1005,7 +1027,7 @@ class TweetCellContentView: UIView {
         if showsAdminEdit {
             let editAction = UIAction(
                 title: NSLocalizedString("Edit content (admin)", comment: "Admin research menu"),
-                image: UIImage(systemName: "pencil.line")
+                image: MenuSymbol.image("pencil.line")
             ) { [weak self] _ in
                 guard let self, let pvc = self.parentViewController else { return }
                 Task { @MainActor [weak self, weak pvc] in
@@ -1033,7 +1055,7 @@ class TweetCellContentView: UIView {
         // Report (only for others' tweets)
         if tweet.authorId != hproseInstance.appUser.mid {
             let reportAction = UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"),
-                                        image: UIImage(systemName: "flag"),
+                                        image: MenuSymbol.image("flag"),
                                         attributes: .destructive) { [weak self] _ in
                 guard !hproseInstance.appUser.isGuest else {
                     self?.onShowLogin?()
@@ -1055,7 +1077,7 @@ class TweetCellContentView: UIView {
                 NSLocalizedString("Make Public", comment: "Menu item") :
                 NSLocalizedString("Make Private", comment: "Menu item")
             let privacyIcon = tweet.isPrivate == true ? "globe" : "lock"
-            let privacyAction = UIAction(title: privacyTitle, image: UIImage(systemName: privacyIcon)) { [weak self] _ in
+            let privacyAction = UIAction(title: privacyTitle, image: MenuSymbol.image(privacyIcon)) { [weak self] _ in
                 guard !hproseInstance.appUser.isGuest else {
                     self?.onShowLogin?()
                     return
@@ -1083,7 +1105,7 @@ class TweetCellContentView: UIView {
         // Delete — shown for own tweets, or for any tweet when allowDeleteAll is true (main feed)
         if showDelete {
             let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: "Menu item"),
-                                        image: UIImage(systemName: "trash"),
+                                        image: MenuSymbol.image("trash"),
                                         attributes: .destructive) { [weak self] _ in
                 guard !hproseInstance.appUser.isGuest else {
                     self?.onShowLogin?()
@@ -1198,7 +1220,7 @@ class TweetCellContentView: UIView {
         var actions: [UIAction] = []
 
         let truncatedId = String(comment.mid.prefix(8)) + "..."
-        actions.append(UIAction(title: truncatedId, image: UIImage(systemName: "doc.on.clipboard")) { _ in
+        actions.append(UIAction(title: truncatedId, image: MenuSymbol.image("doc.on.clipboard")) { _ in
             UIPasteboard.general.string = comment.mid
         })
 
@@ -1208,7 +1230,7 @@ class TweetCellContentView: UIView {
 
         let deleteAction = UIAction(
             title: NSLocalizedString("Delete", comment: "Menu item"),
-            image: UIImage(systemName: "trash"),
+            image: MenuSymbol.image("trash"),
             attributes: .destructive
         ) { [weak self] _ in
             guard !hproseInstance.appUser.isGuest else {

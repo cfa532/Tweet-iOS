@@ -85,7 +85,80 @@ After these fixes:
 - network failures should not leave growing temp/task residue
 - avatars should remain stable during partial cache release
 
-## 3) Historical UIKit Migration Context
+## 3) Feed Pagination Must Be Driven by Content, Not by State Transitions
+
+### The failure
+
+A device trace showed the main feed fetching **63 pages (~230 "valid" tweets) while the user
+had scrolled past 22 rows** — roughly ten times the content actually needed, each page a
+server round trip plus a table mutation landing mid-scroll. It is a scroll-**down**-only
+cost, because auto-load only fires near the bottom, which is why it read as "scroll down is
+rougher than scroll up".
+
+### Why it ran away
+
+Two mechanisms combined:
+
+1. The chained auto-load check fires on the `isLoadingMore` **state transition**
+   (`updateLoadingState` → `scheduleAutoLoadMoreCheck`), not on content arriving.
+2. `appendTweetsPreservingOrder` dedupes by tweet id. A ranked server feed hands back tweets
+   the client already holds under a new page number, so a "valid" page can add **zero** rows.
+
+Zero new rows means the remaining-rows-below-viewport measure never moves, so the threshold
+stays crossed and the next page is requested the instant the previous one lands. The loop
+can only end when the server finally returns a partial page.
+
+### The rule
+
+> An automatic page that added nothing does not earn another automatic page.
+
+`triggerAutoLoadMoreIfNeeded` records the row count when it issues an automatic load and
+refuses to chain if the count did not grow. The user scrolling again goes through the
+gesture-driven branch, which is separately capped per gesture. Screen-filling at launch is
+unaffected: pages that genuinely add rows still chain.
+
+### Related rule for merges
+
+`Tweet.update(from:)` guards every write on the value actually differing. Assigning a
+`@Published` property publishes whether or not the value changed, and this path runs for
+every tweet a paginated response re-delivers — unguarded, one merge woke every bound cell
+(body, action bar, header) for rows whose content was byte-identical, during a scroll.
+
+## 4) One-Time Framework Initialisation Must Not Land in `cellForRowAt`
+
+Several scroll lurches turned out not to be *our* work at all, but the first call into a
+system framework, paid inside `cellForRowAt` inside the CA commit — so the whole frame is
+lost and the list jumps by however far the coast had travelled.
+
+Found with `MainThreadStallSampler` (in `TweetTableViewCell.swift`) lowered to a 40ms
+threshold. Its default 120ms is tuned for hangs and steps straight over this class of bug —
+**lower the threshold when chasing a lurch rather than a freeze.**
+
+| Cost | Trigger | Fix |
+| --- | --- | --- |
+| **133ms** `CUIStructuredThemeStore lookupAssetForKey:` | `createTweetMenu` builds ~9 `UIAction`s, each with `UIImage(systemName:)`; its cache key includes the tweet id, so every cell reuse rebuilt it | `MenuSymbol` cache in `TweetCellContentView` — one CoreUI lookup per symbol, process-wide |
+| **145ms** `FigVideoContainerLayer initWithUUID:` | the process's first `AVPlayerLayer()`, built lazily by the first video row dequeued | `AppDelegate.warmVideoLayerRuntime()` pays it at launch |
+| **61ms** `liblangid` / CoreNLP `identifyLanguage` | `NSDataDetector` link scanning inside `makeContentAttributedString`, reached from `heightForRowAt` | not fixed — it is a `TweetHeightPrewarmer` miss; see below |
+| **40–316ms** `libhvf` / `libFontParser` glyph paths | CoreGraphics rasterising CJK glyph outlines during `CALayer _display` | not fixed; heavily simulator-inflated |
+
+### The rule
+
+> Anything that is expensive exactly once per process should be made to happen at launch,
+> where a stall is invisible, rather than lazily on whatever frame first needs it.
+
+`AppDelegate` already had this pattern for Swift's protocol-conformance caches
+(`warmPrintConformanceCaches`, ~127ms). Video-layer registration now joins it.
+
+### Residual
+
+The two unfixed rows above are both **prewarm misses**: `TweetHeightPrewarmer` normally
+typesets off the main thread, but a fast fling can outrun it, and a miss is expensive
+because `makeContentAttributedString` binary-searches the truncation point with a full
+`sizeThatFits` per iteration *and* runs `NSDataDetector` over the text. Measured on the
+simulator, where both CoreText and glyph rasterisation cost far more than on device —
+profile there before optimising further.
+
+## 5) Historical UIKit Migration Context
 
 This section preserves lightweight historical context from the feed migration period.
 
@@ -104,7 +177,8 @@ The feed moved from SwiftUI-heavy cell composition toward UIKit-first rendering 
 
 For current behavior, rely on:
 
-- `../ARCHITECTURE.md`
-- `../VIDEO_PLAYBACK_PIPELINE.md`
-- `../MEMORY_MANAGEMENT.md`
-- `../NETWORK_RESILIENCE.md`
+- `./ARCHITECTURE.md`
+- `./VIDEO_PLAYBACK_PIPELINE.md`
+- `./MEMORY_MANAGEMENT.md`
+- `./NETWORK_RESILIENCE.md`
+- `./FEED_ROW_HEIGHTS.md`

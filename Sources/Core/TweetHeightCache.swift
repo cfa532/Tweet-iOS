@@ -6,13 +6,28 @@ import UIKit
 final class TweetHeightCache: NSObject, @unchecked Sendable {
     static let shared = TweetHeightCache()
 
-    private let userDefaultsKey = "TweetHeightCache.v5"
+    /// Bump whenever the row-height CALCULATION changes, not just the storage format.
+    ///
+    /// `heightForRowAt` serves this cache ahead of `calculateTweetHeight`, and `willDisplay`
+    /// re-persists whatever height UIKit actually laid the cell out at — which came from
+    /// this cache. So a stale entry is self-sustaining: it is re-blessed on every display
+    /// and the sub-pixel reconcile in `performPendingHeightRelayout` drops anything within
+    /// 1.5pt. Without a version bump, an installed user would keep heights produced by the
+    /// previous calculator indefinitely and never see the fix.
+    ///
+    /// v6: heights now match the cell's Auto Layout exactly (see docs/FEED_ROW_HEIGHTS.md).
+    private let userDefaultsKey = "TweetHeightCache.v6"
+    private let supersededUserDefaultsKeys = [
+        "TweetHeightCache", "TweetHeightCache.v2", "TweetHeightCache.v3",
+        "TweetHeightCache.v4", "TweetHeightCache.v5",
+    ]
     private let maxEntries = 2000
     private var heights: [String: CGFloat] = [:]
     private let lock = NSLock()
 
     private override init() {
         super.init()
+        removeSupersededVersions()
         loadFromDisk()
         NotificationCenter.default.addObserver(
             self,
@@ -45,17 +60,17 @@ final class TweetHeightCache: NSObject, @unchecked Sendable {
         trimIfNeededLocked()
     }
 
+    /// Drops the persisted heights for one tweet.
+    ///
+    /// Deliberately does NOT write to disk: this runs from willDisplay/didEndDisplaying
+    /// while the feed is scrolling, and saveToDisk() JSON-encodes the whole table (up to
+    /// `maxEntries`) on the main thread — a dropped frame every time a row's height was
+    /// invalidated mid-scroll. The background/terminate observers persist the result.
     func removeHeight(for mid: String) {
         lock.lock()
-        let keysToRemove = heights.keys
-            .filter { $0 == mid || $0.hasPrefix("\(mid)|") }
-        for key in keysToRemove {
+        defer { lock.unlock() }
+        for key in heights.keys where key == mid || key.hasPrefix("\(mid)|") {
             heights.removeValue(forKey: key)
-        }
-        lock.unlock()
-
-        if !keysToRemove.isEmpty {
-            saveToDisk()
         }
     }
 
@@ -78,6 +93,15 @@ final class TweetHeightCache: NSObject, @unchecked Sendable {
 
         if let data = try? JSONEncoder().encode(toSave) {
             UserDefaults.standard.set(data, forKey: userDefaultsKey)
+        }
+    }
+
+    /// Drops blobs written under an earlier calculator so they do not sit in UserDefaults
+    /// forever after a version bump.
+    private func removeSupersededVersions() {
+        let defaults = UserDefaults.standard
+        for key in supersededUserDefaultsKeys where defaults.object(forKey: key) != nil {
+            defaults.removeObject(forKey: key)
         }
     }
 

@@ -712,6 +712,66 @@ class TweetBodyUIView: UIView {
     // nonisolated: constant values, safe to read from background threads.
     nonisolated static let contentFont = UIFont.systemFont(ofSize: 16)
     nonisolated static let maxContentLines = 7
+    /// Paragraph lineSpacing applied to every content string. UILabel adds it BETWEEN
+    /// lines, so an n-line label is `n * lineHeight + (n - 1) * contentLineSpacing`.
+    nonisolated static let contentLineSpacing: CGFloat = 3
+
+    /// Sub-millisecond height estimate used before the real (CoreText) measurement lands.
+    ///
+    /// Advances characters by script instead of assuming one average width for all of
+    /// them: a CJK/fullwidth glyph in this font is a full em (16pt) while Latin averages
+    /// about half that, so a flat 8.5pt per character counted roughly twice as many
+    /// characters per line as a Chinese tweet actually fits — the estimate came out whole
+    /// lines short, and `contentSize` then jumped every time such a row was realized.
+    /// Also adds the lineSpacing that sits between the lines.
+    nonisolated static func estimatedTextHeight(for content: String, availableWidth: CGFloat) -> CGFloat {
+        let width = max(1, availableWidth)
+        let wideAdvance = contentFont.pointSize
+        let narrowAdvance = wideAdvance / 2
+        var consumed: CGFloat = 0
+        var lines = 1
+
+        for scalar in content.unicodeScalars {
+            if scalar == "\n" {
+                lines += 1
+                consumed = 0
+                if lines >= maxContentLines { break }
+                continue
+            }
+            let advance = isWideScalar(scalar) ? wideAdvance : narrowAdvance
+            if consumed + advance > width {
+                lines += 1
+                consumed = 0
+                if lines >= maxContentLines { break }
+            }
+            consumed += advance
+        }
+
+        let capped = max(1, min(maxContentLines, lines))
+        return CGFloat(capped) * contentFont.lineHeight
+            + CGFloat(capped - 1) * contentLineSpacing
+    }
+
+    /// True for scripts whose glyphs occupy a full em in this font.
+    nonisolated private static func isWideScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x1100...0x115F,   // Hangul Jamo
+             0x2E80...0x303E,   // CJK radicals, Kangxi, CJK symbols & punctuation
+             0x3041...0x33FF,   // Kana, Hangul compatibility Jamo, CJK compatibility
+             0x3400...0x4DBF,   // CJK Extension A
+             0x4E00...0x9FFF,   // CJK Unified Ideographs
+             0xA000...0xA4CF,   // Yi
+             0xAC00...0xD7A3,   // Hangul syllables
+             0xF900...0xFAFF,   // CJK compatibility ideographs
+             0xFE30...0xFE6F,   // CJK compatibility forms
+             0xFF00...0xFF60,   // Fullwidth forms
+             0xFFE0...0xFFE6,
+             0x20000...0x3FFFD: // CJK Extension B and beyond
+            return true
+        default:
+            return scalar.properties.isEmojiPresentation
+        }
+    }
 
     /// Text beyond this point can never be useful for the seven-line feed preview. Keeping
     /// truncation layout bounded prevents unusually large remote content from making CoreText
@@ -750,7 +810,7 @@ class TweetBodyUIView: UIView {
         let maxLines = maxContentLines
 
         let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = 3
+        paragraphStyle.lineSpacing = contentLineSpacing
         paragraphStyle.lineBreakMode = .byWordWrapping
 
         let textAttributes: [NSAttributedString.Key: Any] = [
@@ -804,7 +864,7 @@ class TweetBodyUIView: UIView {
 
         // Build final attributed string
         let bodyPs = NSMutableParagraphStyle()
-        bodyPs.lineSpacing = 3
+        bodyPs.lineSpacing = contentLineSpacing
         bodyPs.lineBreakMode = .byWordWrapping
 
         let result = NSMutableAttributedString(string: bodyText, attributes: [
@@ -824,7 +884,7 @@ class TweetBodyUIView: UIView {
 
     nonisolated static func makeFullContentAttributedString(content: String) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = 3
+        paragraphStyle.lineSpacing = contentLineSpacing
         paragraphStyle.lineBreakMode = .byWordWrapping
 
         let result = NSMutableAttributedString(string: content, attributes: [
@@ -850,7 +910,7 @@ class TweetBodyUIView: UIView {
         let layoutContent = contentForTruncationLayout(content)
 
         let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = 3
+        paragraphStyle.lineSpacing = contentLineSpacing
         paragraphStyle.lineBreakMode = .byWordWrapping
 
         let textAttributes: [NSAttributedString.Key: Any] = [
@@ -913,7 +973,7 @@ class TweetBodyUIView: UIView {
         }
 
         let bodyPs = NSMutableParagraphStyle()
-        bodyPs.lineSpacing = 3
+        bodyPs.lineSpacing = contentLineSpacing
         bodyPs.lineBreakMode = .byWordWrapping
 
         let result = NSMutableAttributedString(string: bodyText, attributes: [

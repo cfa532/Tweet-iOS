@@ -128,6 +128,10 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         didSet {
             // When author changes, snapshot the new baseUrl onto all attachments.
             updateAttachmentsAuthor()
+            // The header text is built from the author's name/username, so a different
+            // author can change how many lines it wraps to.
+            cachedHeaderHeight = -1
+            cachedHeaderWidth = 0
         }
     }
     
@@ -143,6 +147,11 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     // TRANSIENT: Cached sizeThatFits result to avoid repeated TextKit layout passes
     var cachedMeasuredTextHeight: CGFloat = -1
     var cachedMeasuredTextWidth: CGFloat = 0
+    // TRANSIENT: Cached header ("name @username · time") label height. The header label
+    // wraps to two lines, so its height is not a constant — but measuring it on every
+    // height calculation would put a TextKit pass on the scroll critical path.
+    var cachedHeaderHeight: CGFloat = -1
+    var cachedHeaderWidth: CGFloat = 0
 
     // MARK: - Render caches
 
@@ -198,6 +207,8 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         cachedContentWidth = 0
         cachedMeasuredTextHeight = -1
         cachedMeasuredTextWidth = 0
+        cachedHeaderHeight = -1
+        cachedHeaderWidth = 0
         cachedHeight = nil
         cachedHeightWidth = 0
         TweetHeightCache.shared.removeHeight(for: mid)
@@ -377,21 +388,36 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     /// Updates the tweet instance with values from another tweet
     /// - Parameter other: Tweet object containing the new values
     /// - Throws: DecodingError if the update fails
+    /// Merges server values onto this instance.
+    ///
+    /// Every write here is guarded on the value actually differing. Assigning a `@Published`
+    /// property publishes whether or not the value changed, and this runs for each tweet a
+    /// paginated response hands back that the feed already holds — which, on a ranked feed,
+    /// is most of them. Unguarded, one merge woke every bound cell (body, action bar,
+    /// header) for a row whose content was byte-identical, mid-scroll.
     func update(from other: Tweet) throws {
         applyRenderAffectingUpdate {
             // Update all properties except author
-            if let content = other.content { self.content = content }
-            if let title = other.title { self.title = title }
-            if let parentTweetId = other.parentTweetId { self.parentTweetId = parentTweetId }
-            if let favorites = other.favorites { self.favorites = favorites }
-            self.favoriteCount = other.favoriteCount
-            self.bookmarkCount = other.bookmarkCount
-            self.retweetCount = other.retweetCount
-            self.commentCount = other.commentCount
-            if let attachments = other.attachments { self.attachments = attachments }
-            if let isPrivate = other.isPrivate { self.isPrivate = isPrivate }
-            if let downloadable = other.downloadable { self.downloadable = downloadable }
-            self.timestamp = other.timestamp
+            if let content = other.content, content != self.content { self.content = content }
+            if let title = other.title, title != self.title { self.title = title }
+            if let parentTweetId = other.parentTweetId, parentTweetId != self.parentTweetId {
+                self.parentTweetId = parentTweetId
+            }
+            if let favorites = other.favorites, favorites != self.favorites { self.favorites = favorites }
+            if other.favoriteCount != self.favoriteCount { self.favoriteCount = other.favoriteCount }
+            if other.bookmarkCount != self.bookmarkCount { self.bookmarkCount = other.bookmarkCount }
+            if other.retweetCount != self.retweetCount { self.retweetCount = other.retweetCount }
+            if other.commentCount != self.commentCount { self.commentCount = other.commentCount }
+            if let attachments = other.attachments, !attachments.elementsEqual(
+                self.attachments ?? [], by: { $0.mid == $1.mid && $0.type == $1.type }
+            ) {
+                self.attachments = attachments
+            }
+            if let isPrivate = other.isPrivate, isPrivate != self.isPrivate { self.isPrivate = isPrivate }
+            if let downloadable = other.downloadable, downloadable != self.downloadable {
+                self.downloadable = downloadable
+            }
+            if other.timestamp != self.timestamp { self.timestamp = other.timestamp }
         }
     }
     

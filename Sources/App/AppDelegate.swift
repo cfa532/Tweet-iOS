@@ -250,6 +250,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
 
+    /// Pays CoreMedia's one-time video-layer registration at launch instead of mid-scroll.
+    ///
+    /// The first `AVPlayerLayer()` in the process initialises a `FigVideoContainerLayer`,
+    /// which runs `fig_note_initialize_category_with_default_work_cf` behind a dispatch
+    /// barrier. Measured at **145ms**, and because feed cells build their player view
+    /// lazily it landed inside `cellForRowAt` the first time a video row was dequeued —
+    /// one hard lurch per session, always while scrolling down into fresh rows.
+    ///
+    /// Must be on the main thread (CALayer). The layer is discarded immediately; only the
+    /// process-wide registration it triggers is wanted.
+    private static func warmVideoLayerRuntime() {
+        _ = AVPlayerLayer()
+    }
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Lock app to portrait orientation by default
         AppDelegate.lockOrientation(.portrait)
@@ -259,6 +273,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         Self.redirectConsoleToLogFile()
 
         Self.warmPrintConformanceCaches()
+        Self.warmVideoLayerRuntime()
 
         // Register background tasks before application finishes launching
         registerBackgroundTasks()

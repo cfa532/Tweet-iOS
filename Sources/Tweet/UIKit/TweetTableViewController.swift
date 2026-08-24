@@ -109,6 +109,10 @@ class TweetTableViewController: UITableViewController {
     private let minimumProfileTweetsForInitialFill = 5
     private var autoLoadMoreCountDuringCurrentScrollGesture: Int = 0
     private let maxAutoLoadMorePerScrollGesture: Int = 2
+    /// Row count when the last automatic page was requested. A page that comes back with
+    /// nothing the feed did not already have must not chain straight into another one —
+    /// see `triggerAutoLoadMoreIfNeeded`.
+    private var rowCountAtLastAutoLoad: Int?
     
     // Spinner timing
     private var isLoading: Bool = false
@@ -1998,8 +2002,23 @@ class TweetTableViewController: UITableViewController {
         if countsTowardScrollGestureLimit {
             guard autoLoadMoreCountDuringCurrentScrollGesture < maxAutoLoadMorePerScrollGesture else { return }
             autoLoadMoreCountDuringCurrentScrollGesture += 1
+        } else if let rowCountAtLastAutoLoad, totalRows <= rowCountAtLastAutoLoad {
+            // The chained (non-gesture) path is driven by the isLoadingMore transition, not
+            // by content arriving. When a page merges entirely into rows the feed already
+            // has — the server's ranked feed hands back the same tweets under a new page
+            // number, and appendTweetsPreservingOrder dedupes them — the row count does not
+            // move, `remainingRows` stays under the threshold, and this fires again the
+            // instant the page lands. That is an unbounded request loop: it only ends when
+            // the server finally returns a partial page. Observed on device: 63 pages and
+            // ~230 "valid" tweets fetched while the user had scrolled past 22 rows, each
+            // one a round trip plus a table mutation landing mid-scroll.
+            //
+            // So: a page that added nothing does not earn another automatic page. The user
+            // scrolling again goes through the branch above, which is capped per gesture.
+            return
         }
 
+        rowCountAtLastAutoLoad = totalRows
         triggerAutoLoadMore()
     }
 
@@ -2662,36 +2681,54 @@ class TweetTableViewController: UITableViewController {
         let mediaAttachments = attachments.filter { TweetBodyUIView.isMediaType($0.type) }
         let documentAttachments = attachments.filter { TweetBodyUIView.isDocumentType($0.type) }
 
-        if !audioAttachments.isEmpty {
-            bodyHeight += hasTextContent ? 8 : 4
-            bodyHeight += TweetBodyUIView.audioPlaylistHeight
+        var hasCaptionLabel = false
+        if mediaAttachments.count == 1 {
+            let attachment = mediaAttachments[0]
+            if attachment.type == .video || attachment.type == .hls_video {
+                let hasTitle = tweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                let hasFileName = attachment.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                hasCaptionLabel = hasTitle || (hasFileName && !hasTextContent)
+            }
         }
 
-        var hasCaptionLabel = false
+        // TweetBodyUIView.contentStack is a UIStackView over
+        // [contentLabel, audioContainer, mediaContainer, captionLabel, documentContainer].
+        // A hidden arranged subview contributes NEITHER its height NOR the custom spacing
+        // that follows it, so the gaps have to be counted between consecutive VISIBLE
+        // items — not once per attachment kind. Every gap configure() installs is 8pt
+        // except media → caption, which is 2pt.
+        enum Item { case text, audio, media, caption, docs }
+        var visible: [(Item, CGFloat)] = []
+        if hasTextContent {
+            // Height already added by the caller; only its position in the stack matters.
+            visible.append((.text, 0))
+        }
+        if !audioAttachments.isEmpty {
+            visible.append((.audio, TweetBodyUIView.audioPlaylistHeight))
+        }
         if !mediaAttachments.isEmpty {
-            bodyHeight += 8
-            bodyHeight += MediaGridViewModel.calculateHeight(
+            // MediaGridUIView reports ceil() of this as its intrinsic height, so the row
+            // calculator has to round the same way or every media row is a fraction short.
+            visible.append((.media, ceil(MediaGridViewModel.calculateHeight(
                 for: mediaAttachments,
                 gridWidth: max(10, contentWidth - 2)
-            )
-            if mediaAttachments.count == 1 {
-                let attachment = mediaAttachments[0]
-                if attachment.type == .video || attachment.type == .hls_video {
-                    let hasTitle = tweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                    let hasFileName = attachment.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                    if hasTitle || (hasFileName && !hasTextContent) {
-                        bodyHeight += 2 + ceil(UIFont.systemFont(ofSize: 14).lineHeight)
-                        hasCaptionLabel = true
-                    }
-                }
-            }
+            ))))
+        }
+        if hasCaptionLabel {
+            // Single line, so the label's fitting height is the font's line height.
+            visible.append((.caption, UIFont.systemFont(ofSize: 14).lineHeight))
+        }
+        if !documentAttachments.isEmpty {
+            visible.append((.docs, TweetBodyUIView.documentAttachmentsHeight(for: documentAttachments)))
         }
 
-        if !documentAttachments.isEmpty {
-            if hasTextContent || !audioAttachments.isEmpty || !mediaAttachments.isEmpty {
-                bodyHeight += 8
+        var previous: Item?
+        for (item, height) in visible {
+            if let previous {
+                bodyHeight += (previous == .media && item == .caption) ? 2 : 8
             }
-            bodyHeight += TweetBodyUIView.documentAttachmentsHeight(for: documentAttachments)
+            bodyHeight += height
+            previous = item
         }
 
         return hasCaptionLabel
@@ -2715,6 +2752,8 @@ class TweetTableViewController: UITableViewController {
         prewarmTextHeight: CGFloat? = nil
     ) -> CGFloat {
         var height: CGFloat = isPureRetweet ? 26 : 16
+        // Must stay a constant: this runs for every row of an inserted page. See the
+        // note in calculateTweetHeight.
         height += ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
         height += 2 // contentColumn spacing after header
 
@@ -2725,14 +2764,14 @@ class TweetTableViewController: UITableViewController {
            !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             hasTextContent = true
             if let prewarmH = prewarmTextHeight {
-                // Background boundingRect measurement — TextKit1, within ~1pt of UILabel.
-                bodyHeight += ceil(prewarmH)
+                // Background TextKit1 layout — within ~1pt of UILabel. Used as-is: rounding
+                // it here would make this estimate disagree with the calculateTweetHeight
+                // that heightForRowAt runs for the same tweet a moment later.
+                bodyHeight += prewarmH
             } else {
-                // Fallback: approximate character width for 16pt system font (mixed script).
-                let approxCharsPerLine = max(1, Int(contentWidth / 8.5))
-                let lineCount = max(1, min(TweetBodyUIView.maxContentLines,
-                                           (content.count + approxCharsPerLine - 1) / approxCharsPerLine))
-                bodyHeight += ceil(CGFloat(lineCount) * TweetBodyUIView.contentFont.lineHeight)
+                bodyHeight += TweetBodyUIView.estimatedTextHeight(
+                    for: content, availableWidth: contentWidth
+                )
             }
         }
 
@@ -2758,17 +2797,16 @@ class TweetTableViewController: UITableViewController {
                     let embeddedWidth = embeddedContentWidth
                     if embeddedTweet.cachedMeasuredTextWidth == embeddedWidth,
                        embeddedTweet.cachedMeasuredTextHeight >= 0 {
-                        embeddedBodyH += ceil(embeddedTweet.cachedMeasuredTextHeight)
+                        embeddedBodyH += embeddedTweet.cachedMeasuredTextHeight
                     } else if let prewarmHeight = TweetHeightPrewarmer.shared.get(
                         tweetId: embeddedTweet.mid,
                         width: embeddedWidth
                     ) {
-                        embeddedBodyH += ceil(prewarmHeight)
+                        embeddedBodyH += prewarmHeight
                     } else {
-                        let charsPerLine = max(1, Int(embeddedWidth / 8.5))
-                        let lineCount = max(1, min(TweetBodyUIView.maxContentLines,
-                                                   ((embeddedTweet.content?.count ?? 0) + charsPerLine - 1) / charsPerLine))
-                        embeddedBodyH += ceil(CGFloat(lineCount) * TweetBodyUIView.contentFont.lineHeight)
+                        embeddedBodyH += TweetBodyUIView.estimatedTextHeight(
+                            for: embeddedTweet.content ?? "", availableWidth: embeddedWidth
+                        )
                     }
                 }
                 _ = addAttachmentHeights(
@@ -2838,12 +2876,6 @@ class TweetTableViewController: UITableViewController {
             height += 16
         }
 
-        // Header: stackView height = tallest label's single-line height.
-        // Uses .preferredFont(.headline) which varies with Dynamic Type.
-        let headerHeight = ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
-        height += headerHeight
-        height += 2 // contentColumn spacing after header
-
         // Body: text + media
         // TweetBodyUIView layout: contentStack.top = bodyView.top + 2 (always)
         // contentLabel → media: customSpacing = 8 when text visible
@@ -2855,6 +2887,25 @@ class TweetTableViewController: UITableViewController {
             - 46 /* avatar */
             - 4 /* stack spacing */
         )
+
+        // Header: single-line height of .headline.
+        //
+        // The label is `numberOfLines = 2`, so this under-reports a header whose
+        // name + @username + timestamp wraps. Measuring it properly was tried and
+        // REVERTED: `measuredHeaderHeight` runs a UILabel/CoreText pass, and
+        // `estimatedHeightForRowAt` is called for EVERY row when a paginated page is
+        // inserted — 10-20 cold tweets at once, on the main thread, inside
+        // `updateTweets`. Measured on device: an 837ms stall and a 395ms
+        // `cellForRowAt`. A per-tweet cache does not help, because the rows being
+        // inserted are precisely the ones whose cache is cold.
+        //
+        // Safe to approximate here: both this and `roughHeightEstimate` use the same
+        // constant, so it is a uniform offset, never an estimate-vs-actual MISMATCH —
+        // and mismatch is what moves the list. Fixing it properly means measuring the
+        // header off the main thread in TweetHeightPrewarmer, not inline.
+        let headerHeight = ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
+        height += headerHeight
+        height += 2 // contentColumn spacing after header
 
         // bodyHeight mirrors TweetBodyUIView's contentStack Auto Layout
         var bodyHeight: CGFloat = 2 // contentStack.top offset (always present)
@@ -2893,8 +2944,14 @@ class TweetTableViewController: UITableViewController {
                 measuredTextHeight = Self.measurementLabel.sizeThatFits(CGSize(width: contentWidth, height: .greatestFiniteMagnitude)).height
                 displayTweet.cachedMeasuredTextHeight = measuredTextHeight
                 displayTweet.cachedMeasuredTextWidth = contentWidth
+                // Republish into the prewarmer so estimatedHeightForRowAt can never keep
+                // serving a background measurement that this UILabel pass has superseded:
+                // the two caches are read by different code paths for the same row, and a
+                // disagreement between them shows up as contentSize moving mid-scroll.
+                TweetHeightPrewarmer.shared.set(measuredTextHeight,
+                                                tweetId: displayTweet.mid, width: contentWidth)
             }
-            bodyHeight += ceil(measuredTextHeight)
+            bodyHeight += measuredTextHeight
         }
 
         let hasCaptionLabel = addAttachmentHeights(
@@ -2961,8 +3018,10 @@ class TweetTableViewController: UITableViewController {
                         embeddedTextHeight = Self.measurementLabel.sizeThatFits(CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude)).height
                         embeddedTweet.cachedMeasuredTextHeight = embeddedTextHeight
                         embeddedTweet.cachedMeasuredTextWidth = embeddedWidth
+                        TweetHeightPrewarmer.shared.set(embeddedTextHeight,
+                                                        tweetId: embeddedTweet.mid, width: embeddedWidth)
                     }
-                    embeddedBodyH += ceil(embeddedTextHeight)
+                    embeddedBodyH += embeddedTextHeight
                 }
 
                 _ = addAttachmentHeights(
@@ -3307,6 +3366,7 @@ class TweetTableViewController: UITableViewController {
         estimatedScrollVelocityY = 0
         lastScrollEventTimestamp = 0
         autoLoadMoreCountDuringCurrentScrollGesture = 0
+        rowCountAtLastAutoLoad = nil
         lastCallbackOffset = scrollView.contentOffset.y
         videoCoordinator.onScrollStarted()
         updateVisibleTweetsForVideoPlayback()
