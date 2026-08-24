@@ -421,6 +421,9 @@ class TweetTableViewController: UITableViewController {
         super.viewDidLoad()
 
         MainThreadStallSampler.shared.startIfNeeded()
+        // Unambiguous record of which row-height model this run used — a perf log is
+        // useless if you cannot tell from it whether the experiment was switched on.
+        print("📐 [FEED LAYOUT] mode=\(FeedLayoutMode.selfSizing ? "SELF-SIZING (no height calculator)" : "deterministic heights")")
 
         interfaceStyleTraitRegistration = registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: TweetTableViewController, _) in
             controller.applyTheme()
