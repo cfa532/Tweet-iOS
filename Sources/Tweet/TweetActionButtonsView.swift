@@ -882,7 +882,9 @@ struct TweetActionButtonsView: View {
     }
     
     /// Synchronously capture the current video frame before overlay pauses playback.
-    /// Uses the AVPlayerItemVideoOutput already attached by MediaCellUIView.
+    /// Reads the AVPlayerItemVideoOutput the playing view already attached — MediaCellUIView
+    /// in the feed, DetailVideoManager in the detail view. The fullscreen player carries no
+    /// output, so there the async path captures from the singleton player instead.
     /// Sets attachmentPreviewImage directly so the async load is skipped.
     private func captureVideoFrameBeforePause() {
         // Resolve the source tweet (retweet → original)
@@ -897,16 +899,26 @@ struct TweetActionButtonsView: View {
             return
         }
 
-        guard let firstAttachment = sourceTweet.attachments?.first,
-              (firstAttachment.type == .video || firstAttachment.type == .hls_video) else { return }
+        // Fullscreen shares the media the browser is currently on, matching the
+        // selection loadAttachmentPreviewImage makes; everywhere else it is the first.
+        let attachments = sourceTweet.attachments
+        let selectedAttachment: MimeiFileType?
+        if isFullScreen, let mediaIndex = currentMediaIndex, let attachments, mediaIndex < attachments.count {
+            selectedAttachment = attachments[mediaIndex]
+        } else {
+            selectedAttachment = attachments?.first
+        }
 
-        let mediaID = firstAttachment.mid
+        guard let attachment = selectedAttachment,
+              (attachment.type == .video || attachment.type == .hls_video) else { return }
+
+        let mediaID = attachment.mid
 
         // For detail view, capture from DetailVideoManager
         if isInDetailView,
            let player = DetailVideoManager.shared.currentPlayer,
            DetailVideoManager.shared.currentVideoMid == mediaID {
-            if let frame = Self.syncCaptureFrame(from: player) {
+            if let frame = VideoFrameExtractor.currentDisplayedFrame(from: player) {
                 VideoLastFrameCache.shared.set(frame, for: mediaID)
                 attachmentPreviewImage = cropToCenter(image: frame)
             }
@@ -916,38 +928,21 @@ struct TweetActionButtonsView: View {
         // For fullscreen, capture from FullScreenVideoManager
         if isFullScreen,
            let player = FullScreenVideoManager.shared.singletonPlayer {
-            if let frame = Self.syncCaptureFrame(from: player) {
+            if let frame = VideoFrameExtractor.currentDisplayedFrame(from: player) {
                 VideoLastFrameCache.shared.set(frame, for: mediaID)
                 attachmentPreviewImage = cropToCenter(image: frame)
             }
             return
         }
 
-        // For feed, get player from SharedAssetCache
-        guard let player = SharedAssetCache.shared.getCachedPlayer(for: mediaID) else { return }
-        if let frame = Self.syncCaptureFrame(from: player) {
+        // For the feed, the on-screen player belongs to the media cell: feed cells always
+        // build an independent AVPlayer, so SharedAssetCache usually does not hold it.
+        guard let player = MediaCellUIView.displayedFeedPlayer(for: mediaID)
+                ?? SharedAssetCache.shared.getCachedPlayer(for: mediaID) else { return }
+        if let frame = VideoFrameExtractor.currentDisplayedFrame(from: player) {
             VideoLastFrameCache.shared.set(frame, for: mediaID)
             attachmentPreviewImage = cropToCenter(image: frame)
         }
-    }
-
-    /// Synchronously grab the current frame from a player's existing video output.
-    private static func syncCaptureFrame(from player: AVPlayer) -> UIImage? {
-        guard let playerItem = player.currentItem,
-              playerItem.status == .readyToPlay,
-              !playerItem.loadedTimeRanges.isEmpty else { return nil }
-
-        // Find the AVPlayerItemVideoOutput already attached by MediaCellUIView
-        guard let videoOutput = playerItem.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first else { return nil }
-
-        let currentTime = playerItem.currentTime()
-        guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else { return nil }
-
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        guard width > 0, height > 0, width < 10000, height < 10000 else { return nil }
-
-        return VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720)
     }
 
     private func generateVideoPreviewImage(for url: URL, mediaID: String, isHLS: Bool = false) async -> UIImage? {
@@ -955,9 +950,20 @@ struct TweetActionButtonsView: View {
         let startTime = Date()
         print("DEBUG: [SHARE] Using mediaID: \(mediaID)")
 
-        // Check VideoLastFrameCache — populated by captureVideoFrameBeforePause()
-        // at the moment the share button was tapped, before the overlay paused videos.
-        if let cachedFrame = VideoLastFrameCache.shared.image(for: mediaID) {
+        // In the feed the cached frame IS what is on screen behind the share sheet:
+        // either the frame captureVideoFrameBeforePause() just took, or the cover the
+        // cell preserved when playback paused. Detail and fullscreen are different —
+        // they play their own item, and the cached frame there dates from before that
+        // screen opened (for fullscreen, the transition poster). Fullscreen also
+        // carries no AVPlayerItemVideoOutput at all, so the tap-time capture can never
+        // read it. When either player is on screen, capture the frame it is showing
+        // now and keep the cached frame only as the fallback.
+        let cachedFrame = VideoLastFrameCache.shared.image(for: mediaID)
+        let hasLiveOnScreenPlayer = (isFullScreen && FullScreenVideoManager.shared.singletonPlayer != nil)
+            || (isInDetailView
+                && DetailVideoManager.shared.currentPlayer != nil
+                && DetailVideoManager.shared.currentVideoMid == mediaID)
+        if let cachedFrame, !hasLiveOnScreenPlayer {
             let elapsed = Date().timeIntervalSince(startTime)
             print("DEBUG: [SHARE] Using VideoLastFrameCache frame for \(mediaID) in \(String(format: "%.2f", elapsed))s")
             return cropToCenter(image: cachedFrame)
@@ -1061,7 +1067,7 @@ struct TweetActionButtonsView: View {
                 }
             }
             print("DEBUG: [SHARE] No usable cached player for HLS video, skipping preview")
-            return nil
+            return cachedFrame.map { cropToCenter(image: $0) }
         }
         
         // For regular videos, try to use cached player first to get current position
@@ -1105,13 +1111,13 @@ struct TweetActionButtonsView: View {
             // Check if video has valid duration
             guard durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite else {
                 print("DEBUG: [SHARE] Invalid video duration: \(durationSeconds)")
-                return nil
+                return cachedFrame.map { cropToCenter(image: $0) }
             }
             
             // Check if video has tracks
             guard !tracks.isEmpty else {
                 print("DEBUG: [SHARE] Video has no tracks, cannot generate preview")
-                return nil
+                return cachedFrame.map { cropToCenter(image: $0) }
             }
             
             // Fallback: Capture at 1 second, or at 10% of duration if video is shorter than 10 seconds
@@ -1129,7 +1135,7 @@ struct TweetActionButtonsView: View {
             let elapsed = Date().timeIntervalSince(startTime)
             print("DEBUG: [SHARE] Failed to load asset for preview after \(String(format: "%.2f", elapsed))s: \(error.localizedDescription)")
         }
-        return nil
+        return cachedFrame.map { cropToCenter(image: $0) }
     }
     
     // Track active captures per player to prevent concurrent captures

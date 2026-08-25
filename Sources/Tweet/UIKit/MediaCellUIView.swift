@@ -252,6 +252,23 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         enforceIndependentFeedPlayerLimit(excluding: owner)
     }
 
+    /// The independent feed player that is currently showing `mediaID`, if a cell owns one.
+    ///
+    /// Feed cells always build their own AVPlayer (`usesIndependentPlayerInstance` is `true`),
+    /// so `SharedAssetCache.getCachedPlayer(for:)` generally does NOT hold the player that is
+    /// on screen. Anything that needs the frame the viewer is actually looking at — the share
+    /// preview — has to ask this registry instead. A visible cell wins over an off-screen one
+    /// when a tweet and its retweet both render the same video.
+    static func displayedFeedPlayer(for mediaID: String) -> AVPlayer? {
+        var offScreenPlayer: AVPlayer?
+        for entry in independentFeedPlayerEntries.values where entry.mediaID == mediaID {
+            guard let owner = entry.owner, let player = entry.player else { continue }
+            if owner.isVisible { return player }
+            if offScreenPlayer == nil { offScreenPlayer = player }
+        }
+        return offScreenPlayer
+    }
+
     private static func unregisterIndependentFeedPlayer(owner: MediaCellUIView) {
         independentFeedPlayerEntries.removeValue(forKey: ObjectIdentifier(owner))
     }

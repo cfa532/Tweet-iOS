@@ -407,6 +407,44 @@ enum VideoFrameExtractor {
         return downscale(image, maxDimension: maxDimension)
     }
     
+    /// The frame the player is showing right now, read off the
+    /// `AVPlayerItemVideoOutput` the playing view already attached.
+    ///
+    /// `copyPixelBuffer(forItemTime:)` hands back a frame only when one is decoded
+    /// for that exact time and has not been vended already, so a single call at
+    /// `currentTime()` comes back empty whenever the owning view's own capture took
+    /// that buffer first, or the clock has moved past the newest decoded frame. Ask
+    /// for the frame due at the current host time, then walk back over recently
+    /// decoded times — the same candidate list the cover captures use.
+    ///
+    /// Returns nil when the item carries no video output — MediaCellUIView and
+    /// DetailVideoManager attach one, the fullscreen singleton player does not — or
+    /// when nothing is decoded; the caller then has to fall back to a seek-based
+    /// capture or a cached frame.
+    static func currentDisplayedFrame(from player: AVPlayer, maxDimension: CGFloat = 720) -> UIImage? {
+        guard let item = player.currentItem,
+              let output = item.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first else { return nil }
+
+        var candidateTimes: [CMTime] = []
+        let hostItemTime = output.itemTime(forHostTime: CACurrentMediaTime())
+        if hostItemTime.isValid { candidateTimes.append(hostItemTime) }
+
+        let itemTimeNow = item.currentTime()
+        if itemTimeNow.isValid, itemTimeNow.seconds.isFinite {
+            for delta in [0.0, -0.08, -0.20, -0.40] {
+                let time = CMTime(seconds: max(0, itemTimeNow.seconds + delta), preferredTimescale: 600)
+                if time.isValid { candidateTimes.append(time) }
+            }
+        }
+
+        for time in candidateTimes {
+            guard let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil),
+                  let image = makeDownscaledUIImage(from: pixelBuffer, maxDimension: maxDimension) else { continue }
+            return image
+        }
+        return nil
+    }
+
     /// Downscale without changing aspect ratio.
     static func downscale(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
         let size = image.size

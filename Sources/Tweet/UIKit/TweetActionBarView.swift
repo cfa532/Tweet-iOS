@@ -940,7 +940,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     // MARK: - Video Preview Generation
 
     /// Synchronously capture the current video frame before overlay pauses playback.
-    /// Uses the AVPlayerItemVideoOutput already attached by MediaCellUIView.
+    /// Reads the AVPlayerItemVideoOutput the playing view already attached — MediaCellUIView
+    /// in the feed, DetailVideoManager in the detail view.
     /// Sets attachmentPreviewImage directly so the async load is skipped.
     private func captureVideoFrameBeforePause(for tweet: Tweet) {
         // Resolve the source tweet (retweet → original)
@@ -964,45 +965,37 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         if isInDetailView,
            let player = DetailVideoManager.shared.currentPlayer,
            DetailVideoManager.shared.currentVideoMid == mediaID {
-            if let frame = Self.syncCaptureFrame(from: player, mediaID: mediaID) {
+            if let frame = VideoFrameExtractor.currentDisplayedFrame(from: player) {
                 VideoLastFrameCache.shared.set(frame, for: mediaID)
                 attachmentPreviewImage = cropToCenter(image: frame)
             }
             return
         }
 
-        // For feed, get player from SharedAssetCache
-        guard let player = SharedAssetCache.shared.getCachedPlayer(for: mediaID) else { return }
-        if let frame = Self.syncCaptureFrame(from: player, mediaID: mediaID) {
+        // For the feed, the on-screen player belongs to the media cell: feed cells always
+        // build an independent AVPlayer, so SharedAssetCache usually does not hold it.
+        guard let player = MediaCellUIView.displayedFeedPlayer(for: mediaID)
+                ?? SharedAssetCache.shared.getCachedPlayer(for: mediaID) else { return }
+        if let frame = VideoFrameExtractor.currentDisplayedFrame(from: player) {
             VideoLastFrameCache.shared.set(frame, for: mediaID)
             attachmentPreviewImage = cropToCenter(image: frame)
         }
     }
 
-    /// Synchronously grab the current frame from a player's existing video output.
-    private static func syncCaptureFrame(from player: AVPlayer, mediaID: String) -> UIImage? {
-        guard let playerItem = player.currentItem,
-              playerItem.status == .readyToPlay,
-              !playerItem.loadedTimeRanges.isEmpty else { return nil }
-
-        // Find the AVPlayerItemVideoOutput already attached by MediaCellUIView
-        guard let videoOutput = playerItem.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first else { return nil }
-
-        let currentTime = playerItem.currentTime()
-        guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else { return nil }
-
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        guard width > 0, height > 0, width < 10000, height < 10000 else { return nil }
-
-        return VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720)
-    }
-
     private func generateVideoPreviewImage(for url: URL, mediaID: String, isHLS: Bool = false, tweet: Tweet) async -> UIImage? {
 
-        // Check VideoLastFrameCache — populated by captureVideoFrameBeforePause()
-        // at the moment the share button was tapped, before the overlay paused videos.
-        if let cachedFrame = VideoLastFrameCache.shared.image(for: mediaID) {
+        // In the feed the cached frame IS what is on screen behind the share sheet:
+        // either the frame captureVideoFrameBeforePause() just took, or the cover the
+        // cell preserved when playback paused. The detail view is different — it plays
+        // its own item, and its cached frame is usually the cover from before the
+        // detail view opened, so serving it would show a moment the viewer has already
+        // watched past. When the detail player is on screen, read the frame it is
+        // showing now and keep the cached frame only as the fallback.
+        let cachedFrame = VideoLastFrameCache.shared.image(for: mediaID)
+        let hasLiveDetailPlayer = isInDetailView
+            && DetailVideoManager.shared.currentPlayer != nil
+            && DetailVideoManager.shared.currentVideoMid == mediaID
+        if let cachedFrame, !hasLiveDetailPlayer {
             return cropToCenter(image: cachedFrame)
         }
 
@@ -1043,7 +1036,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                     }
                 }
             }
-            return nil
+            return cachedFrame.map { cropToCenter(image: $0) }
         }
 
         // For regular videos, try cached player
@@ -1071,8 +1064,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             let tracks = try await asset.load(.tracks)
             let durationSeconds = CMTimeGetSeconds(duration)
 
-            guard durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite else { return nil }
-            guard !tracks.isEmpty else { return nil }
+            guard durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite else {
+                return cachedFrame.map { cropToCenter(image: $0) }
+            }
+            guard !tracks.isEmpty else { return cachedFrame.map { cropToCenter(image: $0) } }
 
             let captureTime = min(1.0, durationSeconds * 0.1)
             if let image = try? await captureFrame(from: asset, at: captureTime) {
@@ -1080,7 +1075,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             }
         } catch {}
 
-        return nil
+        return cachedFrame.map { cropToCenter(image: $0) }
     }
 
     // MARK: - Frame Capture
