@@ -127,7 +127,23 @@ struct ProfileView: View {
     }
     
     private var contentWithNavigation: some View {
-        mainContentView
+        // The list runs full-bleed under the nav bar, and reserves the bar's height as a
+        // CONTENT inset instead of letting the bar push its frame down.
+        //
+        // Two things fall out of that. The bar showing and hiding no longer changes the
+        // table's geometry, which is what used to throw the content 54pt in a single frame.
+        // And the strip behind the bar now belongs to the table, so dimming the bar
+        // actually reveals the tweets underneath it — with the bar pushing the frame, that
+        // strip was outside the table and only ever showed page background, which made the
+        // dimming pointless.
+        //
+        // The inset is read from the proxy rather than hardcoded: ignoring the container
+        // safe area makes this reader span the bar, and safeAreaInsets.top is then exactly
+        // the height it now covers.
+        GeometryReader { proxy in
+            mainContentView(topContentInset: proxy.safeAreaInsets.top)
+        }
+        .ignoresSafeArea(.container, edges: .top)
             .onAppear {
                 // Keep the hosted SwiftUI profile header in sync with the app user's follow list.
                 // Guest followings are content seeds, not authenticated relationships.
@@ -148,7 +164,19 @@ struct ProfileView: View {
             .toolbar {
                 toolbarContent
             }
-            .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
+            // The nav bar is never removed from the layout, only dimmed.
+            //
+            // Toggling `.toolbar(.visible/.hidden)` changed the table's geometry: the bar's
+            // 54pt left and re-entered the safe area, and UIKit does not adjust contentOffset
+            // to match. Measured mid-drag with the finger steady at 10pt/frame, the content
+            // moved 64pt in the single frame the bar vanished, and the reveal was worse —
+            // the bar's return and the compensation for it landed in different frames, so
+            // the content dropped 54pt and snapped back up 54pt instead of holding still.
+            //
+            // Keeping the bar mounted makes the geometry constant, so there is nothing to
+            // compensate. It fades to the same 0.3 the bottom bar uses and stays hit-testable,
+            // so its controls remain usable while dimmed.
+            .toolbarBackground(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
             .task(id: user.mid) {
                 guard !didLoad else { return }
                 didLoad = true
@@ -271,7 +299,7 @@ struct ProfileView: View {
     
     // MARK: - View Components
     
-    private var mainContentView: some View {
+    private func mainContentView(topContentInset: CGFloat) -> some View {
         ZStack {
             VStack(spacing: 0) {
                 ProfileTweetsSection(
@@ -303,6 +331,7 @@ struct ProfileView: View {
                     routeRefreshToken: profileTweetsRefreshToken,
                     resyncedTweets: resyncedTweets,
                     resyncedTweetsToken: resyncedTweetsToken,
+                    topContentInset: topContentInset,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
@@ -450,6 +479,18 @@ struct ProfileView: View {
                         .contentShape(Rectangle())
                 }
             }
+            // Matches the bottom bar in ContentView: dimmed on scroll-down but still
+            // interactive, rather than removed. allowsHitTesting is explicit because the
+            // point of dimming instead of hiding is that these stay tappable.
+            //
+            // The back button is deliberately NOT dimmed with them. It is the system one,
+            // and styling it means navigationBarBackButtonHidden + a replacement — which
+            // was tried and measured to kill the interactive swipe-back gesture (an edge
+            // swipe popped the view with the system button, and did nothing without it).
+            // A solid chevron next to faded controls is the cheaper of the two costs.
+            .opacity(isNavigationVisible ? 1.0 : 0.3)
+            .allowsHitTesting(true)
+            .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
         }
     }
 
