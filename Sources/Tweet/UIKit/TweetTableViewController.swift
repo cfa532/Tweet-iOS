@@ -4346,10 +4346,17 @@ class TweetTableViewController: UITableViewController {
         guard !isTableViewUpdating else { return }
         guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
 
-        // Calculate the actual user-visible rect, excluding areas behind translucent bars.
-        // adjustedContentInset accounts for navigation bar, status bar, and toolbar.
+        // A video counts as on screen until it leaves the table's own top border. The
+        // header floating over the main feed is deliberately ignored: its height sits in
+        // contentInset.top only to keep the table's geometry constant while it hides (see
+        // setTopContentInset), and the rows under it are drawn and visible. Measuring from
+        // the inset instead released the player — showing the cover, or grey where none had
+        // been captured — while up to the header's full 89pt of the video was still on
+        // screen. Every other feed sits below its nav bar with a top inset of 0, so nothing
+        // changes for them. The BOTTOM inset stays excluded: that band is the tab bar, which
+        // is always mounted and really does cover it.
         let insets = tableView.adjustedContentInset
-        let visibleTop = tableView.contentOffset.y + insets.top
+        let visibleTop = tableView.contentOffset.y
         let visibleBottom = tableView.contentOffset.y + tableView.bounds.height - insets.bottom
         let visibleRect = CGRect(x: 0, y: visibleTop, width: tableView.bounds.width, height: max(0, visibleBottom - visibleTop))
 

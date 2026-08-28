@@ -371,16 +371,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         invalidateVisibleVideoCache()
     }
 
-    /// Compute the user-visible rect using adjustedContentInset (accounts for nav bar, toolbar, tab bar).
-    /// This is the single source of truth for visibility calculations across the coordinator.
-    private func computeVisibleRect() -> CGRect? {
-        guard let tableView = tableView, tableView.window != nil else { return nil }
-        let insets = tableView.adjustedContentInset
-        let top = tableView.contentOffset.y + insets.top
-        let bottom = tableView.contentOffset.y + tableView.bounds.height - insets.bottom
-        return CGRect(x: 0, y: top, width: tableView.bounds.width, height: max(0, bottom - top))
-    }
-
     /// Stored observer tokens for proper cleanup
     private nonisolated(unsafe) var notificationObservers: [NSObjectProtocol] = []
     
