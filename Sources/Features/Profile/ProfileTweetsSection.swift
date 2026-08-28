@@ -145,8 +145,6 @@ struct ProfileTweetsSection<Header: View>: View {
     let headerRefreshToken: Int
     let resyncedTweets: [Tweet]
     let resyncedTweetsToken: Int
-    /// Room reserved at the top for the nav bar floating over this list.
-    let topContentInset: CGFloat
     @StateObject private var viewModel: ProfileTweetsViewModel
     let header: () -> Header
 
@@ -166,7 +164,6 @@ struct ProfileTweetsSection<Header: View>: View {
         headerRefreshToken: Int = 0,
         resyncedTweets: [Tweet] = [],
         resyncedTweetsToken: Int = 0,
-        topContentInset: CGFloat = 0,
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
     ) {
         self.pinnedTweets = pinnedTweets
@@ -184,7 +181,6 @@ struct ProfileTweetsSection<Header: View>: View {
         self.headerRefreshToken = headerRefreshToken
         self.resyncedTweets = resyncedTweets
         self.resyncedTweetsToken = resyncedTweetsToken
-        self.topContentInset = topContentInset
         self.header = header
         self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
             hproseInstance: hproseInstance,
@@ -241,7 +237,6 @@ struct ProfileTweetsSection<Header: View>: View {
             onScroll: onScroll,
             leadingPadding: 5,
             trailingPadding: 7,
-            topContentInset: topContentInset,
             pinnedTweets: pinnedTweets,
             feedIdentifier: "profile_\(user.mid)",
             externalRefreshToken: routeRefreshToken,

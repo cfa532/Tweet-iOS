@@ -127,23 +127,10 @@ struct ProfileView: View {
     }
     
     private var contentWithNavigation: some View {
-        // The list runs full-bleed under the nav bar, and reserves the bar's height as a
-        // CONTENT inset instead of letting the bar push its frame down.
-        //
-        // Two things fall out of that. The bar showing and hiding no longer changes the
-        // table's geometry, which is what used to throw the content 54pt in a single frame.
-        // And the strip behind the bar now belongs to the table, so dimming the bar
-        // actually reveals the tweets underneath it — with the bar pushing the frame, that
-        // strip was outside the table and only ever showed page background, which made the
-        // dimming pointless.
-        //
-        // The inset is read from the proxy rather than hardcoded: ignoring the container
-        // safe area makes this reader span the bar, and safeAreaInsets.top is then exactly
-        // the height it now covers.
-        GeometryReader { proxy in
-            mainContentView(topContentInset: proxy.safeAreaInsets.top)
-        }
-        .ignoresSafeArea(.container, edges: .top)
+        // The list sits below the bar, not under it, so the bar's background is simply
+        // solid — nothing passes beneath it to show through, and nothing scrolls under it
+        // to trigger the navigation bar's progressive scroll-edge effect.
+        mainContentView
             .onAppear {
                 // Keep the hosted SwiftUI profile header in sync with the app user's follow list.
                 // Guest followings are content seeds, not authenticated relationships.
@@ -174,9 +161,11 @@ struct ProfileView: View {
             // the content dropped 54pt and snapped back up 54pt instead of holding still.
             //
             // Keeping the bar mounted makes the geometry constant, so there is nothing to
-            // compensate. It fades to the same 0.3 the bottom bar uses and stays hit-testable,
-            // so its controls remain usable while dimmed.
-            .toolbarBackground(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
+            // compensate. Its controls fade to the same 0.3 the bottom bar uses and stay
+            // hit-testable, so they remain usable while dimmed.
+            //
+            // Solid in both states, over the status bar as well as the bar itself.
+            .toolbarBackground(.visible, for: .navigationBar)
             .task(id: user.mid) {
                 guard !didLoad else { return }
                 didLoad = true
@@ -299,7 +288,7 @@ struct ProfileView: View {
     
     // MARK: - View Components
     
-    private func mainContentView(topContentInset: CGFloat) -> some View {
+    private var mainContentView: some View {
         ZStack {
             VStack(spacing: 0) {
                 ProfileTweetsSection(
@@ -331,7 +320,6 @@ struct ProfileView: View {
                     routeRefreshToken: profileTweetsRefreshToken,
                     resyncedTweets: resyncedTweets,
                     resyncedTweetsToken: resyncedTweetsToken,
-                    topContentInset: topContentInset,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
@@ -435,8 +423,54 @@ struct ProfileView: View {
         .animation(.easeInOut(duration: 0.3), value: showToast)
     }
     
+    /// The profile name, leftmost in the bar and right after the back chevron.
+    ///
+    /// `.principal` was tried first and is centred by the navigation bar whatever alignment
+    /// its content asks for. This placement is only safe because the system back button is
+    /// left in place: hiding it to draw a custom chevron was measured to kill the
+    /// interactive swipe-back gesture, so nothing here touches it.
+    ///
+    /// The bar wraps each item in a glass capsule by default, which reads as a control. The
+    /// name is a label, so the backdrop is dropped where the OS offers that — the modifier
+    /// is iOS 26 only, and on older systems the capsule simply stays.
+    @ToolbarContentBuilder
+    private var profileNameToolbarItem: some ToolbarContent {
+        if #available(iOS 26.0, *) {
+            ToolbarItem(placement: .navigationBarLeading) {
+                profileNameLabel
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .navigationBarLeading) {
+                profileNameLabel
+            }
+        }
+    }
+
+    /// Absent rather than transparent when the bar is expanded. At opacity 0 the label
+    /// still occupies its slot and the bar draws its capsule around it, leaving an empty
+    /// pill beside the chevron. `handleScroll` flips `isNavigationVisible` inside
+    /// `withAnimation`, so this still fades rather than popping.
+    @ViewBuilder
+    private var profileNameLabel: some View {
+        if !isNavigationVisible {
+            Text(user.name ?? user.username ?? "")
+                .font(.headline)
+                .foregroundColor(XTheme.textColor)
+                .lineLimit(1)
+                // Without fixedSize the leading slot sizes the label to a sliver and the
+                // name renders as one character plus an ellipsis. The cap keeps a long name
+                // from crowding the trailing controls.
+                .fixedSize()
+                .frame(maxWidth: 180, alignment: .leading)
+                .transition(.opacity)
+        }
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        profileNameToolbarItem
+
         ToolbarItem(placement: .navigationBarTrailing) {
             HStack(spacing: 12) {
                 if !isAppUser {
@@ -479,16 +513,20 @@ struct ProfileView: View {
                         .contentShape(Rectangle())
                 }
             }
-            // Matches the bottom bar in ContentView: dimmed on scroll-down but still
-            // interactive, rather than removed. allowsHitTesting is explicit because the
-            // point of dimming instead of hiding is that these stay tappable.
+            // Dimmed on scroll-down but still interactive, rather than removed.
+            // allowsHitTesting is explicit because the point of dimming instead of hiding
+            // is that these stay tappable.
+            //
+            // Deliberately lighter than the bottom bar's 0.3: these sit on an opaque bar
+            // beside a solid back chevron and the profile name, so they can stay more
+            // present without reading as clutter.
             //
             // The back button is deliberately NOT dimmed with them. It is the system one,
             // and styling it means navigationBarBackButtonHidden + a replacement — which
             // was tried and measured to kill the interactive swipe-back gesture (an edge
             // swipe popped the view with the system button, and did nothing without it).
             // A solid chevron next to faded controls is the cheaper of the two costs.
-            .opacity(isNavigationVisible ? 1.0 : 0.3)
+            .opacity(isNavigationVisible ? 1.0 : 0.5)
             .allowsHitTesting(true)
             .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
         }
