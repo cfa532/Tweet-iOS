@@ -85,6 +85,9 @@ class EmbeddedTweetUIView: UIView {
     }
 
     var onTap: ((Tweet) -> Void)?
+    /// Opens the embedded tweet's author. The avatar owns its own tap recognizer, so
+    /// without this the tap is swallowed here and never reaches `onTap` either.
+    var onAvatarTap: ((User) -> Void)?
     var onContentExpanded: (() -> Void)?
     /// Called after async tweet load completes so the parent cell can trigger immediate height check.
     var onAsyncConfigured: (() -> Void)?
@@ -197,7 +200,9 @@ class EmbeddedTweetUIView: UIView {
         // Configure subviews
         if let author = tweet.author {
             avatarView.configure(user: author, size: 32)
+            avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
         } else {
+            avatarView.onTap = nil
             // Author not yet loaded — subscribe to update avatar when it arrives
             tweet.$author
                 .compactMap { $0 }
@@ -205,6 +210,7 @@ class EmbeddedTweetUIView: UIView {
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] author in
                     self?.avatarView.configure(user: author, size: 32)
+                    self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
                 }
                 .store(in: &cancellables)
         }
@@ -363,6 +369,7 @@ class EmbeddedTweetUIView: UIView {
         currentTweetId = nil
         loadedTweet = nil
         onTap = nil
+        onAvatarTap = nil
         onContentExpanded = nil
         onAsyncConfigured = nil
         avatarView.prepareForReuse()

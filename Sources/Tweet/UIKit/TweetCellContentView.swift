@@ -766,6 +766,8 @@ class TweetCellContentView: UIView {
             embeddedTweetView.showPlaceholder()
         }
         embeddedTweetView.onTap = { [weak self] t in self?.navigateToTweetDetail(t, source: "embeddedTweetTap") }
+        // The quoted tweet's avatar opens its own author, not this cell's.
+        embeddedTweetView.onAvatarTap = { [weak self] user in self?.onAvatarTap?(user) }
         embeddedTweetView.onAsyncConfigured = { [weak self] in self?.onContentDidChangeHeightAsync?() }
 
         // Action bar on quoting tweet
