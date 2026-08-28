@@ -7,6 +7,9 @@ struct FollowingsTweetView: View {
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
+    /// Height of the app header floating over this feed. Reserved as content inset so
+    /// the header can hide without moving the table.
+    var topContentInset: CGFloat = 0
     
     
     var body: some View {
@@ -74,6 +77,7 @@ struct FollowingsTweetView: View {
             onScrollStateChange: { _, isAtTop, isInteracting in
                 viewModel.updateMainFeedScrollState(isAtTop: isAtTop, isInteracting: isInteracting)
             },
+            topContentInset: topContentInset,
             allowDeleteAll: true,
             preservesScrollPositionOnPrepend: true,
             onAvatarTap: { user in onAvatarTap(user) },

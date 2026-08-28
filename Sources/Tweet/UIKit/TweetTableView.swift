@@ -40,6 +40,9 @@ struct TweetTableView: UIViewControllerRepresentable {
     let onTweetsTrimmed: (([Tweet]) -> Void)?
     let leadingPadding: CGFloat
     let trailingPadding: CGFloat
+    /// Room reserved at the top for chrome that overlays the table (the main feed's
+    /// floating app header). Zero for feeds whose chrome sits above them in a stack.
+    var topContentInset: CGFloat = 0
     let pinnedTweets: [Tweet]
     let feedIdentifier: String
     let videoCoordinator: VideoPlaybackCoordinator
@@ -113,6 +116,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         let coordinator = context.coordinator
         uiViewController.isDarkModeEnabled = isDarkMode
         uiViewController.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
+        uiViewController.setTopContentInset(topContentInset)
 
         // SwiftUI re-runs this on every body evaluation of TweetListView, and that view
         // owns a dozen pieces of @State (isLoading, showToast, pagination, trim tokens…),

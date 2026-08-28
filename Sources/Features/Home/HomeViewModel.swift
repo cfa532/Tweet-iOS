@@ -57,7 +57,58 @@ struct HomeView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Tab Content
+        TabView(selection: $selectedTab) {
+            FollowingsTweetView(
+                onAvatarTap: { user in
+                    navigationPath.append(user)
+                    onNavigateToProfile?()
+                },
+                onTweetTap: { tweet in
+                    navigationPath.append(tweet)
+                },
+                onScroll: { offset, delta in
+                    handleScroll(offset: offset, delta: delta)
+                },
+                onShowLogin: onShowLogin,
+                onShowToast: onShowToast,
+                topContentInset: measuredHeaderHeight ?? 0
+            )
+            .background(XTheme.backgroundColor)
+            .tag(0)
+
+            RecommendedTweetView(onScroll: { offset, delta in
+                handleScroll(offset: offset, delta: delta)
+            })
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(XTheme.backgroundColor)
+            .tag(1)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .padding(.leading, -4)
+        .background(XTheme.backgroundColor)
+        .ignoresSafeArea(.container, edges: .top)
+        // The header FLOATS over the feed; it is not a sibling above it in a stack.
+        //
+        // As a VStack sibling, collapsing it to height 0 moved the feed table's window
+        // origin up by the header's full height (89pt measured). UIKit does not adjust
+        // contentOffset for a frame move, so the whole 89pt landed on the content as
+        // extra motion: mid-drag the list ran at up to 2x the finger for ~0.27s and then
+        // snapped back to tracking it. The reveal direction was already being corrected
+        // for exactly this (the bar-appearance compensation in TweetTableViewController);
+        // the hide direction never was, which is why only scroll-down jumped.
+        //
+        // Now the table is full-bleed and keeps a CONSTANT contentInset.top equal to the
+        // header height (`topContentInset` below), so the header showing or hiding changes
+        // no geometry at all — the table's window origin measured 159 before and 70 after
+        // as a sibling, and a flat 159 as an overlay. Content simply flows under the
+        // collapsed header instead of being pushed by it.
+        //
+        // safeAreaInset was tried first and does NOT work here: SwiftUI lays a
+        // UIViewControllerRepresentable out inside the reduced safe area, so the table's
+        // frame moved exactly as it did in the VStack. The inset has to reach the table
+        // as a real UIScrollView contentInset, which is what topContentInset does.
+        .overlay(alignment: .top) {
             // Header section
             VStack(spacing: 0) {
                 AppHeaderView()
@@ -86,39 +137,11 @@ struct HomeView: View {
                 guard newHeight > 0 else { return }
                 measuredHeaderHeight = newHeight
             }
-            .frame(height: isNavigationVisible ? measuredHeaderHeight : 0)
+            // Translated, not collapsed. Collapsing the height is what used to relayout
+            // everything below it; sliding it up leaves the table's geometry untouched.
+            .offset(y: isNavigationVisible ? 0 : -(measuredHeaderHeight ?? 0))
             .opacity(isNavigationVisible ? 1 : 0)
-            .clipped()
-
-            // Tab Content
-            TabView(selection: $selectedTab) {
-                FollowingsTweetView(
-                    onAvatarTap: { user in
-                        navigationPath.append(user)
-                        onNavigateToProfile?()
-                    },
-                    onTweetTap: { tweet in
-                        navigationPath.append(tweet)
-                    },
-                    onScroll: { offset, delta in
-                        handleScroll(offset: offset, delta: delta)
-                    },
-                    onShowLogin: onShowLogin,
-                    onShowToast: onShowToast
-                )
-                .background(XTheme.backgroundColor)
-                .tag(0)
-
-                RecommendedTweetView(onScroll: { offset, delta in
-                    handleScroll(offset: offset, delta: delta)
-                })
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(XTheme.backgroundColor)
-                .tag(1)
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .padding(.leading, -4)
-            .background(XTheme.backgroundColor)
+            .allowsHitTesting(isNavigationVisible)
         }
         .padding(.top, 8) // Small top padding
         .background(XTheme.backgroundColor)

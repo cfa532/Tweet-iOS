@@ -1260,6 +1260,33 @@ class TweetTableViewController: UITableViewController {
         tableView.verticalScrollIndicatorInsets.bottom = bottomInset
     }
 
+    /// Reserves room at the top for chrome that OVERLAYS the table rather than sitting
+    /// above it in a stack.
+    ///
+    /// The main feed's app header floats over a full-bleed table, so the space it needs
+    /// has to come from the table's own contentInset. Doing it this way is the whole
+    /// point: a content inset does not move the table's frame, so the header can collapse
+    /// and expand without displacing a single row. Laying the header out above the table
+    /// instead moved the table's window origin by the header's full height, and UIKit does
+    /// not adjust contentOffset for that — the entire shift landed on the content as a
+    /// mid-drag jump.
+    ///
+    /// The inset stays CONSTANT while the header shows and hides. Content simply flows
+    /// under the collapsed header, which is what makes the transition free.
+    func setTopContentInset(_ inset: CGFloat) {
+        guard abs(tableView.contentInset.top - inset) > 0.5 else { return }
+
+        // Hold the top of the list still across the change. UIKit leaves contentOffset
+        // alone when contentInset changes, so a table resting at the old top edge would
+        // otherwise appear to jump by the difference.
+        let wasAtTop = tableView.contentOffset.y <= -tableView.adjustedContentInset.top + 1
+        tableView.contentInset.top = inset
+        tableView.verticalScrollIndicatorInsets.top = inset
+        if wasAtTop {
+            tableView.setContentOffset(CGPoint(x: 0, y: -tableView.adjustedContentInset.top), animated: false)
+        }
+    }
+
     func applyTheme() {
         let interfaceStyle: UIUserInterfaceStyle = isDarkModeEnabled ? .dark : .light
         overrideUserInterfaceStyle = interfaceStyle

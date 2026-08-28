@@ -126,6 +126,9 @@ struct TweetListView: View {
     let onScrollStateChange: ((CGFloat, Bool, Bool) -> Void)?
     let leadingPadding: CGFloat  // Leading padding for cells
     let trailingPadding: CGFloat  // Trailing padding for cells
+    /// Room reserved at the top for chrome that overlays the list (the main feed's
+    /// floating app header). Zero for feeds whose chrome sits above them in a stack.
+    var topContentInset: CGFloat = 0
     let pinnedTweets: [Tweet]  // Pinned tweets for video coordination
     let feedIdentifier: String  // Unique identifier for persistent scroll position
     let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
@@ -509,6 +512,7 @@ struct TweetListView: View {
         onScrollStateChange: ((CGFloat, Bool, Bool) -> Void)? = nil,
         leadingPadding: CGFloat = 8,
         trailingPadding: CGFloat = 8,
+        topContentInset: CGFloat = 0,
         pinnedTweets: [Tweet] = [],
         feedIdentifier: String = "mainFeed",
         preserveOrder: Bool = false,
@@ -535,6 +539,7 @@ struct TweetListView: View {
         self.onScrollStateChange = onScrollStateChange
         self.leadingPadding = leadingPadding
         self.trailingPadding = trailingPadding
+        self.topContentInset = topContentInset
         self.pinnedTweets = pinnedTweets
         self.feedIdentifier = feedIdentifier
         self.preserveOrder = preserveOrder
@@ -658,6 +663,7 @@ struct TweetListView: View {
             },
             leadingPadding: leadingPadding,
             trailingPadding: trailingPadding,
+            topContentInset: topContentInset,
             pinnedTweets: pinnedTweets,
             feedIdentifier: feedIdentifier,
             videoCoordinator: videoCoordinator,
