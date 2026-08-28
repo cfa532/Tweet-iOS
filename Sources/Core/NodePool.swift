@@ -42,23 +42,12 @@ final class NodePool: @unchecked Sendable {
             } ?? ips.first
         }
         
-        /// Normalize IP by removing http:// prefix and trailing slashes
+        /// Normalize IP by removing http:// prefix and trailing slashes.
+        /// Shares `Gadget.normalizeHostPort` with the health probe and every route
+        /// comparison in HproseInstance, so a pooled address and a probed address are
+        /// always the same string for the same node.
         static func normalizeIP(_ urlString: String) -> String {
-            var normalized = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-            
-            // Remove protocol
-            if normalized.hasPrefix("http://") {
-                normalized = String(normalized.dropFirst(7))
-            } else if normalized.hasPrefix("https://") {
-                normalized = String(normalized.dropFirst(8))
-            }
-            
-            // Remove trailing slash
-            if normalized.hasSuffix("/") {
-                normalized = String(normalized.dropLast())
-            }
-            
-            return normalized
+            return Gadget.normalizeHostPort(urlString)
         }
     }
     

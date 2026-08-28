@@ -57,6 +57,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private static let heavyCallInterval: TimeInterval = 5 * 60
     @MainActor private var _domainToShare: String = AppConfig.shareDomain
     
+    /// Timeout for every route liveness probe. One value app-wide: `findEntryIP`
+    /// walks candidates one at a time, so this is also the per-candidate cost of a
+    /// node that is down.
+    private static let routeProbeTimeout: TimeInterval = 5.0
+
     // IP Cache: Stores short-lived HEAD health results with 30-second expiry
     private var ipCache: [String: IPCacheEntry] = [:]
     private let ipCacheLock = NSLock()
@@ -752,7 +757,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 for entryIP in candidates {
                     let normalizedEntryIP = normalizeHostPort(entryIP)
                     hproseDebug("DEBUG: [findEntryIP] Testing entry IP: \(normalizedEntryIP)")
-                    if await isServerHealthyWithTimeout(normalizedEntryIP, timeout: 5.0, useCache: false) {
+                    if await isRouteAlive(normalizedEntryIP, forceFresh: true) {
                         HproseInstance.baseUrl = URL(string: "http://\(normalizedEntryIP)")!
                         return normalizedEntryIP
                     }
@@ -899,16 +904,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
 
     private func normalizeHostPort(_ hostPort: String) -> String {
-        var normalized = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.hasPrefix("http://") {
-            normalized = String(normalized.dropFirst(7))
-        } else if normalized.hasPrefix("https://") {
-            normalized = String(normalized.dropFirst(8))
-        }
-        if normalized.hasSuffix("/") {
-            normalized = String(normalized.dropLast())
-        }
-        return normalized
+        return Gadget.normalizeHostPort(hostPort)
     }
     
     ///    - Fetches alphaId user data in background
@@ -2165,11 +2161,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         if let currentBaseUrl, !currentBaseUrl.isEmpty {
             let currentHostPort = normalizeHostPort(currentBaseUrl)
             hproseDebug("DEBUG: [ProfileRoute] Fresh health check for user \(userMid) at \(currentHostPort)")
-            let routeIsHealthy = await isServerHealthyWithTimeout(
-                currentHostPort,
-                timeout: 5.0,
-                useCache: false
-            )
+            let routeIsHealthy = await isRouteAlive(currentHostPort, forceFresh: true)
             if routeIsHealthy {
                 hproseDebug("DEBUG: [ProfileRoute] Current route is healthy for user \(userMid); refreshing profile data")
                 return true
@@ -2201,7 +2193,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             )
         }
         if replacementIP == nil {
-            replacementIP = try? await getProviderIP(userMid, v4Only: false)
+            replacementIP = try? await getProviderIP(userMid, v4Only: false, forceFresh: true)
         }
 
         guard let replacementIP,
@@ -2221,11 +2213,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
 
     /// A successful health probe does not prove that every RPC is usable on that
-    /// address. After a profile read fails on the current route, try another advertised
+    /// address. After a read fails on the current route, try another advertised
     /// and reachable address for the same access node. The attempted address is only
     /// excluded from this lookup; it is not marked unhealthy or blacklisted.
+    ///
+    /// This is the companion to `validateAndRepairProfileRoute`: that one handles a route
+    /// that stopped answering at all, this one handles a route that answers the probe and
+    /// still cannot serve the read — the only evidence of which is the read failing.
     /// - Returns: true when the user was moved to a different address.
-    private func switchToAlternateRoute(
+    func switchToAlternateRoute(
         for user: User,
         attemptedBaseUrl: String?,
         logPrefix: String
@@ -2278,7 +2274,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         hproseWarning("DEBUG: [\(logPrefix)] Fetch-user timeout to \(baseUrlString); checking route health before changing NodePool")
         invalidateIPCacheForBaseUrl(baseUrlString)
         let routeHostPort = normalizeHostPort(baseUrlString)
-        let routeStillHealthy = await isServerHealthyWithTimeout(routeHostPort, timeout: 5.0, useCache: false)
+        let routeStillHealthy = await isRouteAlive(routeHostPort, forceFresh: true)
         if !routeStillHealthy {
             hproseWarning("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failed health check")
             await MainActor.run { NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString) }
@@ -2638,10 +2634,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
     
     /// Get provider IP for a user with health checking.
-    /// - Parameter mid: User's member ID
+    /// - Parameters:
+    ///   - mid: User's member ID
+    ///   - v4Only: Whether to request IPv4 addresses only
+    ///   - forceFresh: Re-probe every candidate instead of trusting a cached verdict.
+    ///     Discovery that follows a failure must pass this: the failing route is often
+    ///     in that same list, cached healthy from minutes ago.
     /// - Returns: A healthy provider IP address, or nil if none found
     /// - Throws: Error if entry discovery itself fails
-    func getProviderIP(_ mid: String, v4Only: Bool = false) async throws -> String? {
+    func getProviderIP(_ mid: String, v4Only: Bool = false, forceFresh: Bool = false) async throws -> String? {
         // Safety check: never try to get provider IP for GUEST_ID
         if mid == Constants.GUEST_ID {
             hproseError("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
@@ -2655,7 +2656,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         let entryClient = clientPool.getClientByIP(for: entryIP)
 
-        let providerIP = try await _getProviderIP(mid, v4Only: v4Only, hproseClient: entryClient)
+        let providerIP = try await _getProviderIP(mid, v4Only: v4Only, hproseClient: entryClient, forceFresh: forceFresh)
         if providerIP == nil {
             hproseWarning("DEBUG: [getProviderIP] No provider IP found for \(mid) - user not found or all IPs unhealthy")
         }
@@ -2665,7 +2666,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private func _getProviderIP(
         _ mid: MimeiId,
         v4Only: Bool = false,
-        hproseClient: HproseClient? = nil
+        hproseClient: HproseClient? = nil,
+        forceFresh: Bool = false
     ) async throws -> String? {
         let entry = "get_provider_ips"
         let params = [
@@ -2728,13 +2730,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                             }
                             
                             
-                            let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0, logFailures: false)
+                            let isHealthy = await self.isRouteAlive(ip, forceFresh: forceFresh, logFailures: false)
 
                             if Task.isCancelled { return nil }
 
-                            if isHealthy {
-                            }
-                            
                             return (ip, isHealthy)
                         }
                     }
@@ -2860,48 +2859,55 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
     
     // MARK: - Health Check Methods
-    
-    /// Checks if a server is healthy using HTTP HEAD request to base URL
-    /// - Parameter hproseClient: The client to check (uses its uri property)
-    /// - Returns: true if server responds to HEAD request, false otherwise
-    /// HEAD probe — takes a raw IP:port string, mirrors TweetWeb isServerHealthy.
-    /// Any HTTP response means the server is reachable; only a network-level error
-    /// (refused, timeout, cancelled) means it is not.
-    /// The timeout is passed directly to URLRequest so there is no extra Task layer.
-    private func isServerHealthy(_ ip: String, timeout: TimeInterval = 5.0, useCache: Bool = true, logFailures: Bool = true) async -> Bool {
-        if useCache, let cachedHealth = getCachedIPHealth(ip, logFailures: logFailures) {
+
+    /// Every route liveness question in the app goes through here, so one policy
+    /// decides them all: a 5s HEAD against `http://<host:port>/`, keyed in the shared
+    /// 30s health cache by the canonical address. Mirrors TweetWeb `isServerHealthy` —
+    /// any HTTP response means reachable; only a network-level error (refused, timeout,
+    /// cancelled) means it is not. The timeout goes straight to URLRequest, so there is
+    /// no extra Task layer.
+    ///
+    /// The address is normalized once, up front, and that one string is used for both
+    /// the request URL and the cache key. Callers hand this both shapes — a
+    /// `baseUrl.absoluteString` carries `http://` while a server address list does not —
+    /// and probing the raw string while caching the normalized one would file a verdict
+    /// for `1.2.3.4:8002` that came from a request which never reached it.
+    ///
+    /// - Parameter forceFresh: skip the cached verdict. Pass it wherever a route is being
+    ///   judged *after* something failed on it: the cached "healthy" is exactly what the
+    ///   failure calls into question.
+    private func isRouteAlive(_ address: String, forceFresh: Bool = false, logFailures: Bool = true) async -> Bool {
+        cleanupExpiredCache()
+
+        let hostPort = normalizeHostPort(address)
+        if !forceFresh, let cachedHealth = getCachedIPHealth(hostPort, logFailures: logFailures) {
             return cachedHealth
         }
 
-        guard let url = URL(string: "http://\(ip)/") else {
-            cacheIP(ip, isHealthy: false, logFailures: logFailures)
+        guard let url = URL(string: "http://\(hostPort)/") else {
+            cacheIP(hostPort, isHealthy: false, logFailures: logFailures)
             return false
         }
 
-        var request = URLRequest(url: url, timeoutInterval: timeout)
+        var request = URLRequest(url: url, timeoutInterval: Self.routeProbeTimeout)
         request.httpMethod = "HEAD"
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
         do {
             _ = try await URLSession.shared.data(for: request)
             // Any response (any status code) means the server is reachable.
-            cacheIP(ip, isHealthy: true)
+            cacheIP(hostPort, isHealthy: true)
             return true
         } catch {
             let nsError = error as NSError
             if nsError.code != NSURLErrorCancelled {
                 if logFailures {
-                    hproseError("DEBUG: [isServerHealthy] ❌ \(ip): \(nsError.domain) \(nsError.code)")
+                    hproseError("DEBUG: [isRouteAlive] ❌ \(hostPort): \(nsError.domain) \(nsError.code)")
                 }
-                cacheIP(ip, isHealthy: false, logFailures: logFailures)
+                cacheIP(hostPort, isHealthy: false, logFailures: logFailures)
             }
             return false
         }
-    }
-
-    private func isServerHealthyWithTimeout(_ ip: String, timeout: TimeInterval = 5.0, useCache: Bool = true, logFailures: Bool = true) async -> Bool {
-        cleanupExpiredCache()
-        return await isServerHealthy(ip, timeout: timeout, useCache: useCache, logFailures: logFailures)
     }
 
     private func mergeTweetFromDict(
@@ -8621,11 +8627,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 hproseDebug("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
 
                 // Test if pooled IP is still healthy
-                let isHealthy = await isServerHealthyWithTimeout(
-                    pooledIP,
-                    timeout: 5.0,
-                    useCache: !forceHealthCheck
-                )
+                let isHealthy = await isRouteAlive(pooledIP, forceFresh: forceHealthCheck)
 
                 if isHealthy {
                     return pooledIP
@@ -8639,7 +8641,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         hproseDebug("DEBUG: [getHostIP] Attempt 1: Resolving IPs from API for node \(nodeId)")
 
         // First attempt with current appUser client
-        if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient, excludedIP: excludedIP) {
+        if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient, excludedIP: excludedIP, forceFresh: forceHealthCheck) {
             if usePool { NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip) }
             return ip
         }
@@ -8654,7 +8656,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return nil
         }
         let appUserIP = baseUrl.port.map { "\(host):\($0)" } ?? host
-        let isAppUserHealthy = await isServerHealthyWithTimeout(appUserIP, timeout: 5.0)
+        let isAppUserHealthy = await isRouteAlive(appUserIP, forceFresh: forceHealthCheck)
         
         if isAppUserHealthy {
             // AppUser answered but gave us no usable address for this node. That is not
@@ -8669,7 +8671,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 v4Only: v4Only,
                 excludedIP: excludedIP,
                 usePool: usePool,
-                entryClient: nil
+                entryClient: nil,
+                forceFresh: forceHealthCheck
             )
         }
         
@@ -8686,13 +8689,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseDebug("DEBUG: [getHostIP] Using entry IP to refresh appUser: \(entryIP)")
 
             // Refresh appUser's IP via entry
-            if let newAppUserIP = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: entryClient),
+            if let newAppUserIP = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: entryClient, forceFresh: forceHealthCheck),
                let newAppUserURL = URL(string: ensureHttpPrefix(newAppUserIP)) {
                 await applyBaseUrlIfNeeded(appUser, url: newAppUserURL, reason: "getHostIP appUser refresh")
 
                 // Retry with refreshed appUser
                 hproseWarning("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")
-                if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient, excludedIP: excludedIP) {
+                if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient, excludedIP: excludedIP, forceFresh: forceHealthCheck) {
                     if usePool {
                         NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
                         hproseInfo("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
@@ -8712,7 +8715,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 v4Only: v4Only,
                 excludedIP: excludedIP,
                 usePool: usePool,
-                entryClient: entryClient
+                entryClient: entryClient,
+                forceFresh: forceHealthCheck
             ) {
                 return ip
             }
@@ -8740,7 +8744,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         v4Only: Bool,
         excludedIP: String?,
         usePool: Bool,
-        entryClient: HproseClient?
+        entryClient: HproseClient?,
+        forceFresh: Bool = false
     ) async -> String? {
         let client: HproseClient
         if let entryClient {
@@ -8759,7 +8764,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
         }
 
-        guard let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: client, excludedIP: excludedIP) else {
+        guard let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: client, excludedIP: excludedIP, forceFresh: forceFresh) else {
             hproseError("DEBUG: [getHostIP] Entry node could not resolve node \(nodeId)")
             return nil
         }
@@ -8778,8 +8783,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ///   - excludedIP: An advertised address to drop from the candidate list before
     ///     health-racing them, so an alternate-route lookup never returns the address
     ///     the caller just failed on.
+    ///   - forceFresh: Re-probe candidates rather than trusting a cached verdict. An
+    ///     alternate-route lookup runs seconds after the read failed, well inside the
+    ///     30s health cache, so without this it can hand back an address last judged
+    ///     healthy before anything went wrong.
     /// - Returns: A healthy IP address for the node, or nil if none found
-    private func _getHostIP(_ nodeId: String, v4Only: Bool = false, hproseClient: HproseClient?, excludedIP: String? = nil) async -> String? {
+    private func _getHostIP(_ nodeId: String, v4Only: Bool = false, hproseClient: HproseClient?, excludedIP: String? = nil, forceFresh: Bool = false) async -> String? {
         let entry = "get_node_ips"
         let params = [
             "aid": appId,
@@ -8849,13 +8858,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                             }
                             
                             
-                            let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0, logFailures: false)
+                            let isHealthy = await self.isRouteAlive(ip, forceFresh: forceFresh, logFailures: false)
 
                             if Task.isCancelled { return nil }
 
-                            if isHealthy {
-                            }
-                            
                             return (ip, isHealthy)
                         }
                     }

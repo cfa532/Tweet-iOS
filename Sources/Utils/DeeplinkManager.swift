@@ -290,35 +290,22 @@ class DeeplinkManager: ObservableObject {
         
         // If not in cache and we have authorId, fetch from server
         if !authorId.isEmpty {
-            // Universal links can arrive while provider/bootstrap state is still
-            // settling. Keep the normal read path, then explicit deeplink recovery,
-            // but give transient startup failures a short bounded retry window.
-            let retryDelays: [UInt64] = [
-                0,
-                300_000_000,
-                1_000_000_000,
-                2_000_000_000
-            ]
-
-            for (attemptIndex, delay) in retryDelays.enumerated() {
-                if delay > 0 {
-                    try? await Task.sleep(nanoseconds: delay)
+            // A tweet is read from its author's node, so that is the route to keep
+            // honest between attempts.
+            guard let tweet = await resolveWithRouteRepair(
+                routeOwnerId: authorId,
+                hproseInstance: hproseInstance,
+                label: "tweet \(tweetId)",
+                fetch: {
+                    await self.fetchDeeplinkTweet(tweetId: tweetId, authorId: authorId, hproseInstance: hproseInstance)
                 }
-
-                if Task.isCancelled {
-                    return false
-                }
-
-                print("[DeeplinkManager] Fetching tweet from server (attempt \(attemptIndex + 1)/\(retryDelays.count))...")
-
-                if let tweet = await fetchDeeplinkTweet(tweetId: tweetId, authorId: authorId, hproseInstance: hproseInstance) {
-                    print("[DeeplinkManager] ✅ Successfully fetched tweet for deeplink")
-                    return await replaceNavigationPath(with: tweet, navigationPath: navigationPath)
-                }
+            ) else {
+                print("[DeeplinkManager] ⚠️ Tweet not found on server after deeplink retries")
+                return false
             }
 
-            print("[DeeplinkManager] ⚠️ Tweet not found on server after deeplink retries")
-            return false
+            print("[DeeplinkManager] ✅ Successfully fetched tweet for deeplink")
+            return await replaceNavigationPath(with: tweet, navigationPath: navigationPath)
         } else {
             print("[DeeplinkManager] ⚠️ Cannot fetch tweet: missing authorId")
             return false
@@ -351,19 +338,93 @@ class DeeplinkManager: ObservableObject {
     /// Navigate to a user profile
     private func navigateToUser(userId: String, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
         print("[DeeplinkManager] Navigating to user: \(userId)")
-        
-        do {
-            if let user = try await hproseInstance.fetchUser(userId) {
-                print("[DeeplinkManager] Successfully fetched user")
-                return await replaceNavigationPath(with: user, navigationPath: navigationPath)
-            } else {
-                print("[DeeplinkManager] User not found")
-                return false
+
+        guard let user = await resolveWithRouteRepair(
+            routeOwnerId: userId,
+            hproseInstance: hproseInstance,
+            label: "user \(userId)",
+            fetch: {
+                do {
+                    return try await hproseInstance.fetchUser(userId)
+                } catch {
+                    print("[DeeplinkManager] Error fetching user: \(error)")
+                    return nil
+                }
             }
-        } catch {
-            print("[DeeplinkManager] Error fetching user: \(error)")
+        ) else {
+            print("[DeeplinkManager] User not found")
             return false
         }
+
+        print("[DeeplinkManager] Successfully fetched user")
+        return await replaceNavigationPath(with: user, navigationPath: navigationPath)
+    }
+
+    /// Universal links can arrive while provider/bootstrap state is still settling, so
+    /// give transient startup failures a short bounded retry window.
+    private static let retryDelays: [UInt64] = [
+        0,
+        300_000_000,
+        1_000_000_000,
+        2_000_000_000
+    ]
+
+    /// Runs `fetch` against the node cached for `routeOwnerId`, repairing that route
+    /// between attempts the way the rest of the app does.
+    ///
+    /// Both deeplink destinations are read from one user's node — a profile from the
+    /// user's own route, a tweet from its author's `baseUrl` — and a link can be opened
+    /// long after that cached route stopped serving. Two different failures need two
+    /// different repairs, so both run:
+    ///
+    /// - `validateAndRepairProfileRoute` before each attempt, the same check `ProfileView`
+    ///   runs on open: probe the current route and, when it is dead, move to the access
+    ///   node's next address and then down the provider list until one answers.
+    /// - `switchToAlternateRoute` after a failed attempt, the same step `fetchUserTweets`
+    ///   takes: a route that passes the probe but still cannot serve the read is only
+    ///   detectable by the read failing, and the probe above will keep clearing it.
+    ///
+    /// Without the second step the retries re-hit the same probe-healthy address every
+    /// time and the deeplink fails with the node right there in the pool.
+    private func resolveWithRouteRepair<T>(
+        routeOwnerId: String,
+        hproseInstance: HproseInstance,
+        label: String,
+        fetch: () async -> T?
+    ) async -> T? {
+        guard !routeOwnerId.isEmpty, routeOwnerId != Constants.GUEST_ID else { return nil }
+
+        for (attemptIndex, delay) in Self.retryDelays.enumerated() {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
+            }
+            guard !Task.isCancelled else { return nil }
+
+            let user = await TweetCacheManager.shared.fetchUser(mid: routeOwnerId)
+            if !(await hproseInstance.validateAndRepairProfileRoute(for: user)) {
+                print("[DeeplinkManager] ⚠️ No healthy route for \(routeOwnerId); trying the cached one anyway")
+            }
+            guard !Task.isCancelled else { return nil }
+
+            let attemptedRoute = user.baseUrl?.absoluteString
+            print("[DeeplinkManager] Fetching \(label) (attempt \(attemptIndex + 1)/\(Self.retryDelays.count)) via \(attemptedRoute ?? "nil")")
+
+            if let value = await fetch() {
+                return value
+            }
+            guard !Task.isCancelled, attemptIndex < Self.retryDelays.count - 1 else { return nil }
+
+            // The read failed on an address the probe just cleared, so the probe cannot
+            // condemn it. Move off it before the next attempt; a false return leaves the
+            // route alone and the next attempt's probe can still widen to discovery.
+            _ = await hproseInstance.switchToAlternateRoute(
+                for: user,
+                attemptedBaseUrl: attemptedRoute,
+                logPrefix: "deeplink"
+            )
+        }
+
+        return nil
     }
 
     private func replaceNavigationPath<T: Hashable>(with value: T, navigationPath: Binding<NavigationPath>) async -> Bool {

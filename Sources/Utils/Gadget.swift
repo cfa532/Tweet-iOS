@@ -205,6 +205,24 @@ final class Gadget: Sendable {
         return isPrivateIP(host)
     }
 
+    /// The app's canonical `host:port` form: trimmed, scheme stripped, no trailing
+    /// slash. Route addresses reach the app in both shapes — `baseUrl.absoluteString`
+    /// carries `http://`, server address lists do not — and every route comparison,
+    /// cache key and health probe has to agree on one of them or the same node reads
+    /// as two different routes.
+    static func normalizeHostPort(_ hostPort: String) -> String {
+        var normalized = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.hasPrefix("http://") {
+            normalized = String(normalized.dropFirst(7))
+        } else if normalized.hasPrefix("https://") {
+            normalized = String(normalized.dropFirst(8))
+        }
+        if normalized.hasSuffix("/") {
+            normalized = String(normalized.dropLast())
+        }
+        return normalized
+    }
+
     /// Strips scheme, brackets and port, yielding the bare host of a `host:port`
     /// string. Returns nil when the input is malformed.
     static func hostComponent(of fullIp: String) -> String? {
