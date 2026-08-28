@@ -1808,7 +1808,18 @@ struct TweetDetailView: View {
                 }
 
                 if !audioAttachments.isEmpty || !mediaAttachments.isEmpty {
-                    LazyVStack(spacing: 1) {
+                    // Deliberately NOT a LazyVStack. It holds at most two children — the
+                    // audio player and the media column — so laziness saves nothing, and
+                    // being lazy inside the detail ScrollView costs correctness: once the
+                    // comments are scrolled to the bottom this column sits far outside the
+                    // realized window and gets discarded. Dragging back re-realizes it, and
+                    // SwiftUI re-resolves the scroll geometry in that same CA commit
+                    // (HostingScrollView.updateContext) and re-applies a contentOffset
+                    // anchored to the content it just rebuilt — a ~1765pt jump back up to
+                    // the media grid, mid-drag, on a tweet with a tall media column.
+                    // DetailMediaColumnLayout needs every subview to compute the layout
+                    // anyway, so nothing here was ever actually deferred.
+                    VStack(spacing: 1) {
                         if !audioAttachments.isEmpty {
                             CompactAudioPlaylistPlayer(
                                 parentTweet: displayTweet,
