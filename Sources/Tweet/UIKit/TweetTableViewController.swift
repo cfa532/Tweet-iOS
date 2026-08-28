@@ -17,7 +17,7 @@ import Darwin
 /// Enable with TWEET_SELF_SIZING=1. The point is to find out whether the deterministic
 /// height calculator is earning its keep, or whether UIKit can be trusted to measure.
 enum FeedLayoutMode {
-    nonisolated(unsafe) static let selfSizing =
+    static let selfSizing =
         ProcessInfo.processInfo.environment["TWEET_SELF_SIZING"] != nil
 }
 
