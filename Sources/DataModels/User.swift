@@ -323,11 +323,6 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
                 throw NSError(domain: "User", code: -2, userInfo: [NSLocalizedDescriptionKey: "Invalid user data: username is empty"])
             }
             
-            // The backend sends a baseUrl derived from hostIds[0]; the app routes by its
-            // own resolution instead. Nothing to preserve here any more — a decoded user
-            // carries no route, and shares this mid's entry in UserRoutes.
-            let instance = getInstance(mid: decodedUser.mid)
-            
             updateUserInstance(with: decodedUser, nilFieldsToClear: explicitNullFields)
             return userInstancesQueue.sync {
                 User.userInstances[decodedUser.mid]!
