@@ -7192,7 +7192,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseError("DEBUG: [registerUser] ERROR: appUser.baseUrl is nil")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized. Please check your connection.", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        // `register` is not an ordinary RPC and must not share their 15s budget. Creating an
+        // account costs two MMCreate calls, a DHT `get_provider_ip` lookup for the username
+        // uniqueness check, an MMBackup, a MiMeiPublish and a node_update_score — all
+        // network-bound and highly variable: 4s to 25s in the entry node's own logs. When the
+        // client gave up first the server still finished, so the account was created while the
+        // app reported a timeout, and the retry then failed with "Username is taken".
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 30)
         let targetUrl = baseUrl.absoluteString
         
         hproseDebug("DEBUG: [registerUser] Sending registration request to server")

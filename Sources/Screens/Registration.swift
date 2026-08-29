@@ -21,7 +21,6 @@ struct RegistrationView: View {
     @State private var alias: String = ""
     @State private var profile: String = ""
     @State private var hostId: String = ""
-    @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
     @State private var isSubmitting = false
     @State private var showToast = false
@@ -151,12 +150,6 @@ struct RegistrationView: View {
                                 showTermsOfService = true
                             }
                         }
-                        
-                        if !hasAcceptedTerms && errorMessage != nil {
-                            Text(LocalizedStringKey("You must accept the Terms of Service to continue."))
-                                .foregroundColor(.red)
-                                .font(.caption)
-                        }
                     }
                     .padding(.vertical, 8)
 
@@ -241,31 +234,14 @@ struct RegistrationView: View {
         // Prevent repeated submission
         guard !isSubmitting else { return }
         
-        // Validation
-        if username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            errorMessage = NSLocalizedString("Username is required.", comment: "Validation error")
+        // Every unmet precondition has to reach the user. These used to assign to an
+        // `errorMessage` that nothing rendered except an inline "accept the Terms" caption,
+        // so a password mismatch or a missing username made the button do nothing at all.
+        // The toast is the same channel a failed registration already reports through.
+        if let validationError = firstValidationError() {
+            showToastMessage(validationError, type: .error)
             return
         }
-        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            errorMessage = NSLocalizedString("Password is required.", comment: "Validation error")
-            return
-        }
-        if password != confirmPassword {
-            errorMessage = NSLocalizedString("Passwords do not match.", comment: "Validation error")
-            return
-        }
-        if hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 0 && hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != Constants.MIMEI_ID_LENGTH {
-            errorMessage = String(format: NSLocalizedString("Host ID must be %d characters if provided.", comment: "Validation error"), Constants.MIMEI_ID_LENGTH)
-            return
-        }
-        
-        // Validate terms acceptance
-        if !hasAcceptedTerms {
-            errorMessage = NSLocalizedString("You must accept the Terms of Service to continue.", comment: "Validation error")
-            return
-        }
-        
-        errorMessage = nil
         
         // Set loading state
         isSubmitting = true
@@ -304,6 +280,27 @@ struct RegistrationView: View {
                 }
             }
         }
+    }
+    
+    /// The first unmet precondition for submitting, or nil when the form is ready to send.
+    private func firstValidationError() -> String? {
+        if username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return NSLocalizedString("Username is required.", comment: "Validation error")
+        }
+        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return NSLocalizedString("Password is required.", comment: "Validation error")
+        }
+        if password != confirmPassword {
+            return NSLocalizedString("Passwords do not match.", comment: "Validation error")
+        }
+        let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedHostId.isEmpty && trimmedHostId.count != Constants.MIMEI_ID_LENGTH {
+            return String(format: NSLocalizedString("Host ID must be %d characters if provided.", comment: "Validation error"), Constants.MIMEI_ID_LENGTH)
+        }
+        if !hasAcceptedTerms {
+            return NSLocalizedString("You must accept the Terms of Service to continue.", comment: "Validation error")
+        }
+        return nil
     }
     
     private func showToastMessage(_ message: String, type: ToastView.ToastType) {
