@@ -1663,29 +1663,21 @@ struct TweetDetailView: View {
             mountNativePlaybackSurfaceIfReady()
         }
         // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
-        // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
+        // Cache restore only. The server read of the original belongs to
+        // doReadTweet(isInitialLoad:), which sends fromDetailView so the node syncs and
+        // provides it; fetching it here as well was a second round trip without the flag.
         .task(id: tweet.originalTweetId) {
             // Load original tweet if this is a retweet/quoted tweet
             guard let originalTweetId = tweet.originalTweetId,
-                  let originalAuthorId = tweet.originalAuthorId else {
+                  tweet.originalAuthorId != nil else {
                 return
             }
             
-            // First, try to restore from cache immediately to prevent layout shifts
+            // Restore from cache immediately to prevent layout shifts while the
+            // detail-view read is still in flight.
             if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
                 await MainActor.run {
                     originalTweet = cachedTweet
-                    hasLoadedOriginalTweet = true
-                }
-            }
-            
-            // Then fetch from server to get the latest version
-            if let originalTweet = try? await hproseInstance.getTweet(
-                tweetId: originalTweetId,
-                authorId: originalAuthorId
-            ) {
-                await MainActor.run {
-                    self.originalTweet = originalTweet
                     hasLoadedOriginalTweet = true
                 }
             }
@@ -2167,6 +2159,9 @@ struct TweetDetailView: View {
             try? incumbent.update(from: refreshed)
         }
         originalTweet = refreshed
+        // The detail-view read is now the only server load of the original, so it is
+        // what marks the load attempt complete for the "Original tweet not found" gate.
+        hasLoadedOriginalTweet = true
     }
 
     // SYNC: refresh_tweet on hostIds[1], which pulls from hostIds[0] if they differ

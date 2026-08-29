@@ -71,10 +71,13 @@ struct CommentDetailViewWithParent: View {
         }
         
         do {
+            // Any read that opens a detail view carries fromDetailView, so the node
+            // syncs and provides the tweet if it isn't a provider yet.
             let parent = try await hproseInstance.getTweet(
                 tweetId: originalTweetId,
                 authorId: originalAuthorId,
-                bypassCache: true
+                bypassCache: true,
+                fromDetailView: true
             )
             await MainActor.run {
                 self.parentTweet = parent
