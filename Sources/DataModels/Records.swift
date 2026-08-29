@@ -247,7 +247,9 @@ struct UserRecord: Codable, Sendable {
     init(user: User) {
         self.init(
             mid: user.mid,
-            baseUrl: user.baseUrl,
+            // The access route, never the root host a write is currently being read
+            // from: that is session state and must not come back on the next launch.
+            baseUrl: UserRoutes.shared.accessRoute(for: user.mid),
             writableUrl: nil,
             name: user.name,
             username: user.username,

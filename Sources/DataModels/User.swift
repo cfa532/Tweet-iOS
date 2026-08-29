@@ -17,17 +17,33 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     
     // MARK: - Properties
     @Published var mid: MimeiId
-    @Published var baseUrl: URL? {
-        didSet {
-            if baseUrl != oldValue && mid == HproseInstance.shared.appUser.mid {
-                schedulePersistIfAppUser()
-            }
+    /// Where this user's reads go. The value lives in `UserRoutes`, not on this object:
+    /// a route belongs to the app's view of the network, not to a user, and every copy,
+    /// cache load and merge of a user used to be able to rewrite it. Assigning here
+    /// records an access-node route; a root host adopted after a successful write
+    /// outranks it until that route fails.
+    var baseUrl: URL? {
+        get { UserRoutes.shared.readRoute(for: mid) }
+        set { routeDidChange(UserRoutes.shared.setAccessRoute(newValue, for: mid)) }
+    }
+
+    /// The resolved root host, refreshed before every mutation. Setting it does not
+    /// change where reads go — `HproseInstance.adoptWriteRouteForReads` does that once a
+    /// write has actually succeeded.
+    var writableUrl: URL? {
+        get { UserRoutes.shared.writableRoute(for: mid) }
+        set { routeDidChange(UserRoutes.shared.setWritableRoute(newValue, for: mid)) }
+    }
+
+    /// `baseUrl` is no longer `@Published`, so anything observing this user through
+    /// SwiftUI has to be told by hand when the route it reads through moves.
+    private func routeDidChange(_ changed: Bool) {
+        guard changed else { return }
+        objectWillChange.send()
+        if mid == HproseInstance.shared.appUser.mid {
+            schedulePersistIfAppUser()
         }
     }
-    @Published var writableUrl: URL?
-    /// Last resolution time for diagnostics only. Writable URLs are not reused
-    /// across calls; writes resolve hostIds[0] fresh before creating a client.
-    var writableUrlResolvedAt: Date?
     @Published var name: String?
     @Published var username: String?
     @Published var password: String?
@@ -219,7 +235,6 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         hasAcceptedTerms: Bool = false
     ) {
         self.mid = mid
-        self.baseUrl = baseUrl
         self.name = name
         self.username = username
         self.password = password
@@ -240,6 +255,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         self.publicKey = publicKey
         self.hasAcceptedTerms = hasAcceptedTerms
         self.cacheStatus = .unknown
+        // Recorded through UserRoutes, so it can only happen once the object exists.
+        if let baseUrl { self.baseUrl = baseUrl }
     }
     
     // MARK: - Factory Methods
@@ -306,11 +323,10 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
                 throw NSError(domain: "User", code: -2, userInfo: [NSLocalizedDescriptionKey: "Invalid user data: username is empty"])
             }
             
-            // CRITICAL: Always preserve the existing baseUrl from the singleton instance
-            // The backend may send a baseUrl from hostId[0], but we need the user's provider IP
-            // which is resolved via getProviderIP(user.mid), not from hostId
+            // The backend sends a baseUrl derived from hostIds[0]; the app routes by its
+            // own resolution instead. Nothing to preserve here any more — a decoded user
+            // carries no route, and shares this mid's entry in UserRoutes.
             let instance = getInstance(mid: decodedUser.mid)
-            decodedUser.baseUrl = instance.baseUrl  // Preserve provider IP, ignore backend baseUrl
             
             updateUserInstance(with: decodedUser, nilFieldsToClear: explicitNullFields)
             return userInstancesQueue.sync {
@@ -355,17 +371,6 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         return trimmed
     }
     
-    static func from(cdUser: CDUser) -> User {
-        // Try to decode the full user object from cache.
-        if let userData = cdUser.userData,
-           let decodedUser = try? JSONDecoder().decode(User.self, from: userData),
-           decodedUser.hasValidUsername {
-            // baseUrl is persisted in cache and should be loaded
-            // Pass true to apply cached baseUrl so avatar can load immediately on app start
-            updateUserInstance(with: decodedUser, true)
-        }
-        return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
-    }
     
     static func updateUserInstance(
         with user: User,
@@ -418,11 +423,10 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         instance.publicKey = user.publicKey ?? instance.publicKey
         instance.agentPublicKey = user.agentPublicKey ?? instance.agentPublicKey
 
-        // Base URLs are only committed from validated routes or cache load, and a cache
-        // load carries the route from before the user's last write — never let it replace
-        // a live route that is the user's own write host.
-        let holdsWriteRoute = instance.baseUrl != nil && instance.baseUrl == instance.writableUrl
-        if shouldUpdateBaseUrl, !holdsWriteRoute, let newBaseUrl = user.baseUrl {
+        // Base URLs are only committed from validated routes or cache load. Both are
+        // access-node routes; a root host adopted after a write outranks them in
+        // UserRoutes, so this cannot undo one.
+        if shouldUpdateBaseUrl, let newBaseUrl = user.baseUrl {
             instance.baseUrl = newBaseUrl
         }
         if let v = user.tweetCount {
@@ -484,9 +488,11 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
         mid = try container.decode(String.self, forKey: .mid)
-        baseUrl = try container.decodeIfPresent(URL.self, forKey: .baseUrl)
+        // Routes are not decoded from a user payload. The backend sends a baseUrl of its
+        // own and the app has always ignored it; where a cached route should be restored
+        // it comes through UserRecord, which records it explicitly.
+        _ = try container.decodeIfPresent(URL.self, forKey: .baseUrl)
         _ = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
-        writableUrl = nil
         name = try container.decodeIfPresent(String.self, forKey: .name)
         username = try container.decodeIfPresent(String.self, forKey: .username)
         password = try container.decodeIfPresent(String.self, forKey: .password)
@@ -527,7 +533,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         try container.encode(mid, forKey: .mid)
         // NOW caching baseUrl for faster app restarts
         // Safe because retry mechanism automatically re-resolves if IP changed
-        try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
+        // The access route: reading from a root host is session state (see UserRoutes).
+        try container.encodeIfPresent(UserRoutes.shared.accessRoute(for: mid), forKey: .baseUrl)
         // Don't cache writableUrl - resolved fresh from hostIds each time
         // try container.encodeIfPresent(writableUrl, forKey: .writableUrl)
         try container.encodeIfPresent(name, forKey: .name)
@@ -647,7 +654,6 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
            let url = URL(string: "http://\(hostIP)") {
             print("DEBUG: [resolveWritableUrl] ✅ Health-checked IP: \(hostIP)")
             self.writableUrl = url
-            self.writableUrlResolvedAt = Date()
             return url
         }
 

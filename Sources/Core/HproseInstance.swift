@@ -190,14 +190,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 Task {
                     do {
                         // Use cached baseUrl for first attempt, retries will force IP re-resolution
-                        if let refreshedUser = try await fetchUser(_appUserId, baseUrl: user.baseUrl?.absoluteString ?? "") {
-                            // Update appUser's baseUrl to match the refreshed user's baseUrl
-                            await MainActor.run {
-                                if refreshedUser.baseUrl != user.baseUrl {
-                                    user.baseUrl = refreshedUser.baseUrl
-                                }
-                            }
-                        }
+                        _ = try await fetchUser(_appUserId, baseUrl: user.baseUrl?.absoluteString ?? "")
                     } catch {
                         hproseError("ERROR: [appUser getter] Failed to refresh appUser: \(error)")
                     }
@@ -209,8 +202,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // Update the singleton instance with new values, then switch to it
             let instance = User.getInstance(mid: newValue.mid)
             Task { @MainActor in
-                // Update the singleton instance with new values
-                instance.baseUrl = newValue.baseUrl
+                // Update the singleton instance with new values. The route is not copied:
+                // it is keyed by mid in UserRoutes, which both objects already share.
                 instance.name = newValue.name
                 instance.username = newValue.username
                 instance.avatar = newValue.avatar
@@ -326,11 +319,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             nodeMid: writeHostId,
             newIP: normalizeHostPort(writableUrl.absoluteString)
         )
+
+        let userMid = await MainActor.run { user.mid }
+        let previousRoute = await MainActor.run { user.baseUrl?.absoluteString ?? "nil" }
+        let changed = await MainActor.run { UserRoutes.shared.readFromWriteHost(for: userMid) }
+        guard changed else { return }
+
         // Printed, not logged at debug level: every other route change is invisible in a
         // device console, which is what made two of these reports impossible to settle.
-        let previousRoute = await MainActor.run { user.baseUrl?.absoluteString ?? "nil" }
-        print("DEBUG: [writeRoute] \(reason): user \(await MainActor.run { user.mid }) \(previousRoute) -> \(writableUrl.absoluteString)")
-        await applyBaseUrlIfNeeded(user, url: writableUrl, reason: "write route (\(reason))")
+        print("DEBUG: [writeRoute] \(reason): user \(userMid) \(previousRoute) -> \(writableUrl.absoluteString)")
+        await MainActor.run {
+            user.resetClients()
+            NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": userMid])
+        }
     }
 
     private func shouldAttemptHeavyCall(
@@ -2168,6 +2169,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             guard !Task.isCancelled else { return false }
 
             hproseWarning("DEBUG: [ProfileRoute] Current route is unhealthy for user \(userMid): \(currentHostPort)")
+            // Reads go back to the access node; the root host stopped answering.
+            UserRoutes.shared.stopReadingFromWriteHost(for: userMid)
             failedHostPort = currentHostPort
             invalidateIPCacheForBaseUrl(currentBaseUrl)
             if let accessNodeMid,
@@ -2227,6 +2230,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ) async -> Bool {
         guard let attemptedBaseUrl, !attemptedBaseUrl.isEmpty else { return false }
         let (userMid, userHostIds) = await MainActor.run { (user.mid, user.hostIds) }
+        UserRoutes.shared.stopReadingFromWriteHost(for: userMid)
         guard let accessNodeMid = userHostIds.flatMap({ $0.count > 1 ? $0[1] : nil }) else { return false }
 
         let attemptedHostPort = normalizeHostPort(attemptedBaseUrl)
@@ -2276,7 +2280,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let routeStillHealthy = await isRouteAlive(routeHostPort, forceFresh: true)
         if !routeStillHealthy {
             hproseWarning("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failed health check")
-            await MainActor.run { NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString) }
+            await MainActor.run {
+                NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+                UserRoutes.shared.stopReadingFromWriteHost(for: user.mid)
+            }
             return
         }
 
@@ -2285,19 +2292,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
     func applyNodePoolBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
         // Phase A (demotion prep): snapshot @MainActor NodePool + User reads.
-        let (poolIP, userMid, userHostIds, currentBaseUrl, writableUrl) = await MainActor.run {
-            (NodePool.shared.getIPFromNode(for: user), user.mid, user.hostIds, user.baseUrl, user.writableUrl)
+        let (poolIP, userMid, userHostIds) = await MainActor.run {
+            (NodePool.shared.getIPFromNode(for: user), user.mid, user.hostIds)
         }
-
-        // A read route that is already this user's own write host was put there by a
-        // successful write (adoptWriteRouteForReads). The pool only ever knows the
-        // access node — the copy that has not caught up yet — so applying it here would
-        // undo the write route before the very next read uses it. Route repair still
-        // moves the user off the write host the moment it stops answering.
-        if let currentBaseUrl, let writableUrl, currentBaseUrl == writableUrl {
-            return currentBaseUrl
-        }
-
         guard let poolIP else {
             return nil
         }
@@ -2512,11 +2509,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // fetch, replace the pool entry only when the user's route differs
             // from what the pool already knows.
             let fetchedUser = await MainActor.run { User.getInstance(mid: userMid) }
-            let (currentAccessNodeMid, fetchedBaseUrlString, fetchedHostIds, fetchedWritableUrlString) = await MainActor.run {
+            let (currentAccessNodeMid, fetchedBaseUrlString, fetchedHostIds) = await MainActor.run {
                 (fetchedUser.hostIds.flatMap { $0.count > 1 ? $0[1] : nil },
-                 fetchedUser.baseUrl?.absoluteString,
-                 fetchedUser.hostIds,
-                 fetchedUser.writableUrl?.absoluteString)
+                 UserRoutes.shared.accessRoute(for: fetchedUser.mid)?.absoluteString,
+                 fetchedUser.hostIds)
             }
             if let previousAccessNodeMid,
                let currentAccessNodeMid,
@@ -2537,10 +2533,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             let ipValid = await MainActor.run { NodePool.shared.isUserIPValid(for: fetchedUser) }
             if let baseUrlString = fetchedBaseUrlString,
                let hostIds = fetchedHostIds, hostIds.count > 1,
-               // A route confirmed on the user's own write host is hostIds[0]'s address.
-               // Filing it under the access node would hand the root host's address to
-               // every other user who reads through that node.
-               baseUrlString != fetchedWritableUrlString,
                !ipValid {
                 let accessNodeMid = hostIds[1]
                 await MainActor.run { NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString) }
@@ -6294,7 +6286,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     await MainActor.run {
                         hproseWarning("DEBUG: [uploadRegularFile] Clearing last writableUrl before retry")
                         appUser.writableUrl = nil
-                        appUser.writableUrlResolvedAt = nil
                     }
                     
                     // Small delay before retry
@@ -7312,9 +7303,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 cloudDrivePort: cloudDrivePort,
                 domainToShare: domainToShareValue
             )
-            // Copy other properties from appUser
-            updatedUser.baseUrl = self.appUser.baseUrl
-            updatedUser.writableUrl = self.appUser.writableUrl
+            // Copy other properties from appUser. Routes are not copied: this object
+            // shares appUser's mid, so it already reads the same entry in UserRoutes.
             updatedUser.username = self.appUser.username
             updatedUser.avatar = self.appUser.avatar
             updatedUser.email = self.appUser.email
@@ -7888,15 +7878,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 hproseWarning("[sendMessage] 🔄 Retry attempt \(attempt): Refreshing sender's baseUrl")
             }
 
-            // Refresh appUser's baseUrl if needed
+            // Refresh appUser's route if needed. fetchUser commits whatever route it
+            // confirms through UserRoutes, so there is nothing to copy back.
             if forceRefresh {
-                if let refreshedUser = try await fetchUser(appUserMid, baseUrl: "") {
-                    await MainActor.run {
-                        if refreshedUser.baseUrl != appUser.baseUrl {
-                            appUser.baseUrl = refreshedUser.baseUrl
-                        }
-                    }
-                }
+                _ = try await fetchUser(appUserMid, baseUrl: "")
             }
 
             // Snapshot the (possibly just-refreshed) sender baseUrl for this attempt.

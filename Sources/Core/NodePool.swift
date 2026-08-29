@@ -9,6 +9,115 @@
 
 import Foundation
 
+/// Where each user's requests currently go.
+///
+/// A route is not a property of a user. It is where the app can reach that user's data
+/// right now, and it changes with node health, discovery and writes. Keeping it on the
+/// User object made every path that copies, caches, merges or re-renders a user a place
+/// the route could be silently rewritten — six such places on iOS alone, each needing to
+/// learn the same rule. This table owns it instead, so a user object cannot carry a
+/// route at all.
+///
+/// Three facts per user, and the precedence between them is the whole rule:
+/// - `access` — the ordinary read route (the access node). Written by discovery, the
+///   node pool, cache loads and route repair. This is the one that gets persisted.
+/// - `writable` — the resolved root host, refreshed before every mutation. Used to build
+///   write clients; on its own it changes nothing about reads.
+/// - `readsFromWriteHost` — set when a write succeeds. While it holds, reads go to the
+///   root host, because the access node has not copied that write yet. Route repair
+///   drops it, which puts the user back on the access route.
+final class UserRoutes: @unchecked Sendable {
+    static let shared = UserRoutes()
+
+    private struct Routes {
+        var access: URL?
+        var writable: URL?
+        var readsFromWriteHost = false
+    }
+
+    private var routes: [MimeiId: Routes] = [:]
+    private let lock = NSLock()
+
+    private init() {}
+
+    private func withRoutes<T>(_ mid: MimeiId, _ body: (inout Routes) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        var entry = routes[mid] ?? Routes()
+        let result = body(&entry)
+        routes[mid] = entry
+        return result
+    }
+
+    /// The route reads should use: the root host while a write is being waited out,
+    /// otherwise the access node.
+    func readRoute(for mid: MimeiId) -> URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = routes[mid] else { return nil }
+        if entry.readsFromWriteHost, let writable = entry.writable { return writable }
+        return entry.access
+    }
+
+    /// The access node route alone. This is what gets written to the cache and recorded
+    /// in NodePool, so neither can ever describe an access node with a root host address.
+    func accessRoute(for mid: MimeiId) -> URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return routes[mid]?.access
+    }
+
+    /// The resolved root host, for building write clients.
+    func writableRoute(for mid: MimeiId) -> URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return routes[mid]?.writable
+    }
+
+    /// - Returns: true when the route reads use changed.
+    @discardableResult
+    func setAccessRoute(_ url: URL?, for mid: MimeiId) -> Bool {
+        withRoutes(mid) { entry in
+            guard entry.access != url else { return false }
+            let before = entry.readsFromWriteHost ? (entry.writable ?? entry.access) : entry.access
+            entry.access = url
+            let after = entry.readsFromWriteHost ? (entry.writable ?? entry.access) : entry.access
+            return before != after
+        }
+    }
+
+    @discardableResult
+    func setWritableRoute(_ url: URL?, for mid: MimeiId) -> Bool {
+        withRoutes(mid) { entry in
+            guard entry.writable != url else { return false }
+            let wasReading = entry.readsFromWriteHost
+            entry.writable = url
+            if url == nil { entry.readsFromWriteHost = false }
+            return wasReading
+        }
+    }
+
+    /// Read from the node that just took a write, until that route stops answering.
+    @discardableResult
+    func readFromWriteHost(for mid: MimeiId) -> Bool {
+        withRoutes(mid) { entry in
+            guard entry.writable != nil, !entry.readsFromWriteHost else { return false }
+            entry.readsFromWriteHost = true
+            return true
+        }
+    }
+
+    /// Called when the current route fails, so recovery starts from the access node.
+    @discardableResult
+    func stopReadingFromWriteHost(for mid: MimeiId) -> Bool {
+        withRoutes(mid) { entry in
+            guard entry.readsFromWriteHost else { return false }
+            entry.readsFromWriteHost = false
+            return true
+        }
+    }
+}
+
 /// Pool of nodes indexed by node MID
 /// Each node maintains an array of valid IP addresses (IPv4 and IPv6)
 /// The pool persists and acts as the source of truth for node connectivity
@@ -189,14 +298,14 @@ final class NodePool: @unchecked Sendable {
     /// Only tracks access node (hostIds[1]) - the node we read data from
     @MainActor
     func updateFromUser(_ user: User) {
-        guard let baseUrlString = user.baseUrl?.absoluteString,
+        // The access route, not whatever route reads are taking: while a write is being
+        // waited out those are the root host's, and filing that address here would
+        // describe the access node with it for every user who shares that node.
+        guard let baseUrlString = UserRoutes.shared.accessRoute(for: user.mid)?.absoluteString,
               let hostIds = user.hostIds,
               hostIds.count > 1 else {
             return
         }
-        // A post-write route is hostIds[0]'s address; recording it here would describe
-        // the access node with the root host's address for every user sharing it.
-        guard user.baseUrl != user.writableUrl else { return }
         
         let normalizedIP = NodeInfo.normalizeIP(baseUrlString)
         let accessNodeMid = hostIds[1]
