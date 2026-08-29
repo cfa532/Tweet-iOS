@@ -322,6 +322,35 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Point a user's reads at the node that just took a write for them.
+    ///
+    /// Writes land on hostIds[0] (the root host) while reads are served by the access
+    /// node hostIds[1], which copies from the root host on its own schedule. A read in
+    /// that window returns the pre-write state, and the user cannot tell whether their
+    /// like, comment or tweet went through. Writes are rare, so moving the read route
+    /// costs little. This is a route hint and nothing more: any later resolution
+    /// (NodePool, health repair, an access-node change) may replace it right away.
+    func adoptWriteRouteForReads(_ user: User, reason: String) async {
+        let (existingWritableUrl, writeHostId) = await MainActor.run {
+            (user.writableUrl, user.hostIds?.first)
+        }
+        guard let writeHostId, !writeHostId.isEmpty else { return }
+
+        // Mutations resolve this immediately before sending. Resolving here covers the
+        // writes that reach the root host by other means (add_tweet routes by hostid).
+        var resolvedUrl = existingWritableUrl
+        if resolvedUrl == nil {
+            resolvedUrl = try? await user.resolveWritableUrl()
+        }
+        guard let writableUrl = resolvedUrl else { return }
+
+        NodePool.shared.updateNodeIP(
+            nodeMid: writeHostId,
+            newIP: normalizeHostPort(writableUrl.absoluteString)
+        )
+        await applyBaseUrlIfNeeded(user, url: writableUrl, reason: "write route (\(reason))")
+    }
+
     private func shouldAttemptHeavyCall(
         _ key: String,
         interval: TimeInterval = HproseInstance.heavyCallInterval,
@@ -3760,6 +3789,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString, timeout: 60)
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        await adoptWriteRouteForReads(actingUser, reason: entry)
 
         if let dataDict = unwrappedResponse as? [String: Any],
            let isFollowing = dataDict["isFollowing"] as? Bool {
@@ -3924,6 +3954,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             if !isFavorite {
                 await finishSavedTweetRemoval(tweetId: tweetMid, list: .favorites, appUserId: appUserMid)
             }
+            // The tweet's counters live on the author's host; the app user's favorites
+            // list lives on its own (userhostid). Both sides were written.
+            await adoptWriteRouteForReads(storageAuthor, reason: "toggle_favorite")
+            await adoptWriteRouteForReads(await MainActor.run { self.appUser }, reason: "toggle_favorite")
             return (updatedTweet, updatedUser)
         } catch {
             if !isFavorite {
@@ -3990,6 +4024,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             if !isBookmarked {
                 await finishSavedTweetRemoval(tweetId: tweetMid, list: .bookmarks, appUserId: appUserMid)
             }
+            // Same split as toggle_favorite: author's host for the tweet, app user's
+            // host for the bookmark list.
+            await adoptWriteRouteForReads(storageAuthor, reason: "toggle_bookmark")
+            await adoptWriteRouteForReads(await MainActor.run { self.appUser }, reason: "toggle_bookmark")
             return (updatedTweet, updatedUser)
         } catch {
             if !isBookmarked {
@@ -4119,6 +4157,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     try await MainActor.run {
                         try tweet.update(from: tweetDict)
                     }
+                    await adoptWriteRouteForReads(author, reason: entry)
                     // Return the updated tweet (same instance, updated in place)
                     return tweet
                 } catch {
@@ -4165,6 +4204,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        await adoptWriteRouteForReads(appUserInstance, reason: entry)
         hproseDebug("[toggleTweetPrivacy] Unwrapped response: \(String(describing: unwrappedResponse))")
 
         // For v2 API: server returns {success: true, data: {isPrivate: bool}}
@@ -4293,6 +4333,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                           userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid delete response from server", comment: "Server response error")])
         }
 
+        await adoptWriteRouteForReads(requestUser, reason: entry)
 
         await removeDeletedTweetLocally(deletedTweetId)
 
@@ -4435,6 +4476,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         _ = try Self.unwrapV2Response(rawResponse)
+        await adoptWriteRouteForReads(requestUser, reason: entry)
     }
     
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
@@ -4510,6 +4552,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
+            await adoptWriteRouteForReads(author, reason: entry)
             await MainActor.run {
                 comment.mid = commentId
                 comment.author = appUser
@@ -4642,6 +4685,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
 
+        await adoptWriteRouteForReads(author, reason: entry)
         return [
             "commentId": deletedCommentId,
             "count": count
@@ -7522,6 +7566,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseError("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
         }
+
+        // add_tweet is stored on hostIds[0]; read the new tweet back from there rather
+        // than from an access node that has not copied it yet.
+        await adoptWriteRouteForReads(await MainActor.run { self.appUser }, reason: "add_tweet")
                 
         // Immediately update appUser tweet count (like favorites/bookmarks)
         await MainActor.run {
@@ -8106,6 +8154,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         let rawResponse = await invokeRunMApp(using: pinClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        await adoptWriteRouteForReads(appUserInstance, reason: entry)
         
         // For v2 API: server returns {success: true, data: {isPinned: bool}}
         // After unwrapV2Response, we get {isPinned: bool}
@@ -8456,6 +8505,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 }
                 hproseDebug("DEBUG: updateUserCore - saved updated user cache for: \(savedMid)")
 
+                await adoptWriteRouteForReads(await MainActor.run { self.appUser }, reason: entry)
                 return true
             } else {
                 let errorMessage = response["reason"] as? String ?? "Unknown registration error."
@@ -8581,6 +8631,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        await adoptWriteRouteForReads(user, reason: entry)
         
         // Server returns avatar MimeiId directly as a String or wrapped in v2 format
         if let confirmedAvatar = unwrappedResponse as? String {
