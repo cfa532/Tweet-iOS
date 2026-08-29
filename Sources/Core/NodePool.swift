@@ -194,6 +194,9 @@ final class NodePool: @unchecked Sendable {
               hostIds.count > 1 else {
             return
         }
+        // A post-write route is hostIds[0]'s address; recording it here would describe
+        // the access node with the root host's address for every user sharing it.
+        guard user.baseUrl != user.writableUrl else { return }
         
         let normalizedIP = NodeInfo.normalizeIP(baseUrlString)
         let accessNodeMid = hostIds[1]

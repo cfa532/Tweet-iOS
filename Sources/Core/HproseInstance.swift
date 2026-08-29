@@ -2315,9 +2315,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
     func applyNodePoolBaseUrlIfAvailable(for user: User, reason: String) async -> URL? {
         // Phase A (demotion prep): snapshot @MainActor NodePool + User reads.
-        let (poolIP, userMid, userHostIds) = await MainActor.run {
-            (NodePool.shared.getIPFromNode(for: user), user.mid, user.hostIds)
+        let (poolIP, userMid, userHostIds, currentBaseUrl, writableUrl) = await MainActor.run {
+            (NodePool.shared.getIPFromNode(for: user), user.mid, user.hostIds, user.baseUrl, user.writableUrl)
         }
+
+        // A read route that is already this user's own write host was put there by a
+        // successful write (adoptWriteRouteForReads). The pool only ever knows the
+        // access node — the copy that has not caught up yet — so applying it here would
+        // undo the write route before the very next read uses it. Route repair still
+        // moves the user off the write host the moment it stops answering.
+        if let currentBaseUrl, let writableUrl, currentBaseUrl == writableUrl {
+            return currentBaseUrl
+        }
+
         guard let poolIP else {
             return nil
         }
@@ -2537,10 +2547,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // fetch, replace the pool entry only when the user's route differs
             // from what the pool already knows.
             let fetchedUser = await MainActor.run { User.getInstance(mid: userMid) }
-            let (currentAccessNodeMid, fetchedBaseUrlString, fetchedHostIds) = await MainActor.run {
+            let (currentAccessNodeMid, fetchedBaseUrlString, fetchedHostIds, fetchedWritableUrlString) = await MainActor.run {
                 (fetchedUser.hostIds.flatMap { $0.count > 1 ? $0[1] : nil },
                  fetchedUser.baseUrl?.absoluteString,
-                 fetchedUser.hostIds)
+                 fetchedUser.hostIds,
+                 fetchedUser.writableUrl?.absoluteString)
             }
             if let previousAccessNodeMid,
                let currentAccessNodeMid,
@@ -2561,6 +2572,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             let ipValid = await MainActor.run { NodePool.shared.isUserIPValid(for: fetchedUser) }
             if let baseUrlString = fetchedBaseUrlString,
                let hostIds = fetchedHostIds, hostIds.count > 1,
+               // A route confirmed on the user's own write host is hostIds[0]'s address.
+               // Filing it under the access node would hand the root host's address to
+               // every other user who reads through that node.
+               baseUrlString != fetchedWritableUrlString,
                !ipValid {
                 let accessNodeMid = hostIds[1]
                 await MainActor.run { NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString) }
