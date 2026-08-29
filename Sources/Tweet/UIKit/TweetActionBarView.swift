@@ -755,8 +755,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// - the route lives in the hash so the node serves `/entry` and the SPA router
     ///   resolves `#/tweet/...` client-side. Comment params append inside the hash.
     ///
-    /// Note it writes the resolved IPv4 back to `author.baseUrl`, so a caller
-    /// changes the shared `User` singleton's read route as a side effect.
+    /// The resolved address is used for the share link only: composing a link must not
+    /// move the author's read route, which the app picks by health and freshness.
     private static func getPublicIPv4BaseUrl(for tweet: Tweet, hproseInstance: HproseInstance) async -> String? {
         guard let author = tweet.author else {
             return nil
@@ -771,11 +771,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         do {
             if let resolvedIP = try await hproseInstance.getProviderIP(author.mid, v4Only: true),
                let ipv4BaseUrl = publicIPv4BaseURL(from: resolvedIP) {
-                if let ipv4URL = URL(string: ipv4BaseUrl) {
-                    await MainActor.run {
-                        author.baseUrl = ipv4URL
-                    }
-                }
                 return ipv4BaseUrl
             }
         } catch {}

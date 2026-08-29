@@ -2118,18 +2118,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
     }
     
-    /// Normalizes URL by removing http:// prefix for comparison
-    private func normalizeIpFromUrl(_ url: String) -> String {
-        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("http://") {
-            return String(trimmed.dropFirst(7))
-        }
-        if trimmed.hasPrefix("https://") {
-            return String(trimmed.dropFirst(8))
-        }
-        return trimmed
-    }
-
     private func invalidateIPCacheForBaseUrl(_ baseUrlString: String?) {
         guard let baseUrlString, !baseUrlString.isEmpty else { return }
         let normalized = normalizeHostPort(baseUrlString)
@@ -2890,16 +2878,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         if ipCache.removeValue(forKey: key) != nil {
             hproseWarning("DEBUG: [IPCache] Invalidated cache for IP: \(key)")
         }
-    }
-    
-    /// Clear all cached IPs (useful for testing or reset)
-    func clearIPCache() {
-        ipCacheLock.lock()
-        defer { ipCacheLock.unlock() }
-        
-        let count = ipCache.count
-        ipCache.removeAll()
-        hproseDebug("DEBUG: [IPCache] Cleared all \(count) cached IPs")
     }
     
     // MARK: - Health Check Methods

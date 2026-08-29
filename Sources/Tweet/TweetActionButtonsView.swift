@@ -1582,7 +1582,9 @@ struct TweetActionButtonsView: View {
     }
     
     /// Get an IPv4-preferred baseUrl for sharing from detail view
-    /// If the current baseUrl is IPv6, resolves IPv4 via getProviderIP and updates user's baseUrl
+    /// If the current baseUrl is IPv6, resolves IPv4 via getProviderIP. The resolved
+    /// address is used for the share link only — composing a link must not move the
+    /// author's read route, which the app picks by health and freshness.
     /// - Parameter tweet: The tweet being shared
     /// - Returns: IPv4 baseUrl string if available; otherwise keeps the current, still-valid baseUrl
     private func getIPv4PreferredBaseUrl(for tweet: Tweet) async -> String {
@@ -1606,15 +1608,6 @@ struct TweetActionButtonsView: View {
             if let ipv4 = try await hproseInstance.getProviderIP(author.mid, v4Only: true) {
                 let ipv4BaseUrl = "http://\(ipv4)"
                 print("DEBUG: [SHARE IPv4] ✅ Resolved IPv4 via getProviderIP: \(ipv4BaseUrl)")
-                
-                // Update author's baseUrl with IPv4
-                if let ipv4URL = URL(string: ipv4BaseUrl) {
-                    await MainActor.run {
-                        author.baseUrl = ipv4URL
-                        print("DEBUG: [SHARE IPv4] Updated author's baseUrl to IPv4")
-                    }
-                }
-                
                 return ipv4BaseUrl
             } else {
                 print("DEBUG: [SHARE IPv4] ⚠️ getProviderIP returned nil, keeping existing baseUrl")
