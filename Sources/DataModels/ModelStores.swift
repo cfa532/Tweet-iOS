@@ -58,7 +58,11 @@ final class UserStore {
         instance.publicKey = record.publicKey ?? instance.publicKey
         instance.agentPublicKey = record.agentPublicKey ?? instance.agentPublicKey
 
-        if shouldUpdateBaseUrl, let baseUrl = record.baseUrl {
+        // A record carries whatever route was current when it was written — for the
+        // cached-tweet loaders, the access node the author used before their last write.
+        // It must not replace a live route that is the user's own write host.
+        let holdsWriteRoute = instance.baseUrl != nil && instance.baseUrl == instance.writableUrl
+        if shouldUpdateBaseUrl, !holdsWriteRoute, let baseUrl = record.baseUrl {
             instance.baseUrl = baseUrl
         }
         instance.tweetCount = record.tweetCount ?? instance.tweetCount

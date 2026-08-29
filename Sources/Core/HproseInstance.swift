@@ -326,6 +326,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             nodeMid: writeHostId,
             newIP: normalizeHostPort(writableUrl.absoluteString)
         )
+        // Printed, not logged at debug level: every other route change is invisible in a
+        // device console, which is what made two of these reports impossible to settle.
+        let previousRoute = await MainActor.run { user.baseUrl?.absoluteString ?? "nil" }
+        print("DEBUG: [writeRoute] \(reason): user \(await MainActor.run { user.mid }) \(previousRoute) -> \(writableUrl.absoluteString)")
         await applyBaseUrlIfNeeded(user, url: writableUrl, reason: "write route (\(reason))")
     }
 

@@ -418,8 +418,11 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         instance.publicKey = user.publicKey ?? instance.publicKey
         instance.agentPublicKey = user.agentPublicKey ?? instance.agentPublicKey
 
-        // Base URLs are only committed from validated routes or cache load.
-        if shouldUpdateBaseUrl, let newBaseUrl = user.baseUrl {
+        // Base URLs are only committed from validated routes or cache load, and a cache
+        // load carries the route from before the user's last write — never let it replace
+        // a live route that is the user's own write host.
+        let holdsWriteRoute = instance.baseUrl != nil && instance.baseUrl == instance.writableUrl
+        if shouldUpdateBaseUrl, !holdsWriteRoute, let newBaseUrl = user.baseUrl {
             instance.baseUrl = newBaseUrl
         }
         if let v = user.tweetCount {
