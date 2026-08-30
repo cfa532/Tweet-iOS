@@ -182,20 +182,69 @@ final class TweetCacheManager: @unchecked Sendable {
             // Save access times after cleanup
             saveAccessTimes()
             
-            // Limit total number of tweets
-            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
-            request.fetchLimit = maxCacheSize
-            
-            if let allTweets = try? context.fetch(request) {
-                // Only delete tweets if we have more than maxCacheSize
-                if allTweets.count > maxCacheSize {
-                    let tweetsToDelete = Array(allTweets[maxCacheSize...])
-                    for tweet in tweetsToDelete {
-                        context.delete(tweet)
-                    }
-                    try? context.save()
-                }
+            trimCacheToSizeLimit()
+        }
+    }
+
+    /// Enforce `maxCacheSize` by dropping the least recently cached rows.
+    ///
+    /// This previously set `fetchLimit = maxCacheSize` and then tested
+    /// `count > maxCacheSize`, which the limit itself made impossible — the cap had
+    /// never deleted a single row, leaving the 30-day expiry as the only bound on cache
+    /// growth. Counting first and fetching only the excess also avoids faulting in every
+    /// cached tweet, blob included, just to trim a handful off the end.
+    ///
+    /// Permanence follows the same rule as `deleteExpiredTweets`: private tweets and
+    /// rows belonging to a bookmark or favorite list are never trimmed, so the cache can
+    /// legitimately sit above the cap.
+    ///
+    /// Rows only — no media is deleted here. A row is one (tweet, cache key) pair and a
+    /// tweet usually has several, so a trimmed row is no evidence its media is unused.
+    /// Video and image caches are reclaimed on their own schedules by
+    /// DiskCacheCleanupManager and ImageCacheManager.
+    private func trimCacheToSizeLimit() {
+        let totalRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+        let total = (try? context.count(for: totalRequest)) ?? 0
+        guard total > maxCacheSize else { return }
+
+        let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: true)]
+        request.fetchLimit = total - maxCacheSize
+        guard let candidates = try? context.fetch(request), !candidates.isEmpty else { return }
+
+        var deletedTweetIds: Set<String> = []
+        for cdTweet in candidates {
+            guard let tweetId = cdTweet.tid,
+                  let record = try? decodeTweetRecord(from: cdTweet) else { continue }
+
+            let isBookmarkOrFavorite = cdTweet.uid?.hasPrefix("bookmark_list_") == true
+                || cdTweet.uid?.hasPrefix("favorite_list_") == true
+            if record.isPrivate == true || isBookmarkOrFavorite { continue }
+
+            context.delete(cdTweet)
+            deletedTweetIds.insert(tweetId)
+        }
+
+        guard !deletedTweetIds.isEmpty else { return }
+        try? context.save()
+
+        // Access times and measured heights are keyed by tweet, not by row, so they may
+        // only be dropped once a tweet's last row is gone.
+        let survivorRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+        survivorRequest.predicate = NSPredicate(format: "tid IN %@", deletedTweetIds)
+        let survivingIds = Set(((try? context.fetch(survivorRequest)) ?? []).compactMap { $0.tid })
+        let fullyRemovedIds = deletedTweetIds.subtracting(survivingIds)
+
+        print("DEBUG: [TweetCacheManager] Trimmed \(deletedTweetIds.count) cached row(s) over the \(maxCacheSize) cap (\(total) before)")
+
+        guard !fullyRemovedIds.isEmpty else { return }
+        for tweetId in fullyRemovedIds {
+            lockedRemoveAccessTime(for: tweetId)
+        }
+        saveAccessTimes()
+        Task { @MainActor in
+            for tweetId in fullyRemovedIds {
+                self.clearHeightCache(for: tweetId)
             }
         }
     }
@@ -648,7 +697,14 @@ extension TweetCacheManager {
     ///                 For bookmarks/favorites, this should be set to preserve server order.
     @MainActor
     func saveTweet(_ tweet: Tweet, userId: String, timeCached: Date? = nil) {
-        let record = TweetRecord(tweet: tweet)
+        saveTweetRecord(TweetRecord(tweet: tweet), userId: userId, timeCached: timeCached)
+    }
+
+    /// Cache a decoded tweet without a `Tweet` object. Everything below already worked
+    /// off the record, so this is the same write path `saveTweet` has always used, minus
+    /// the main-actor snapshot. BackgroundTweetPrefetcher calls it directly: read-ahead
+    /// pages must land in Core Data without creating singletons that pin memory.
+    func saveTweetRecord(_ record: TweetRecord, userId: String, timeCached: Date? = nil) {
         guard !isBlockedByDeletion(record) else { return }
 
         let tweetId = record.mid

@@ -111,6 +111,17 @@ actor NodeConnectionPool {
         preloadsAllowed = true
     }
 
+    /// Whether this node has bandwidth to spare for work nobody is waiting on.
+    /// LocalHTTPServer.recomputePreloadPermission clears it while a primary or visible
+    /// video is still filling its buffer.
+    ///
+    /// Slot counts deliberately do NOT answer this: a lane is held for the whole time a
+    /// video is on screen, so a comfortably buffered player still reads as "active" and
+    /// would gate off-screen work forever.
+    var hasSpareBandwidth: Bool {
+        preloadsAllowed
+    }
+
     private var visibleActive: Int {
         visibleSlots.values.reduce(0, +)
     }
@@ -147,34 +158,46 @@ final class NodePoolRegistry: @unchecked Sendable {
         return pool
     }
 
-    func forceReleaseLowerPriority(primaryMediaID: String?) {
+    /// Snapshot the pools under the lock. Callers that then `await` must go through
+    /// this: NSLock is unavailable inside an async function body.
+    private func allPools() -> [NodeConnectionPool] {
         lock.lock()
-        let allPools = Array(pools.values)
-        lock.unlock()
+        defer { lock.unlock() }
+        return Array(pools.values)
+    }
+
+    func forceReleaseLowerPriority(primaryMediaID: String?) {
+        let pools = allPools()
         Task {
-            for pool in allPools {
+            for pool in pools {
                 await pool.forceReleaseLowerPriority(primaryMediaID: primaryMediaID)
             }
         }
     }
 
     func setPreloadsAllowed(_ allowed: Bool) {
-        lock.lock()
-        let allPools = Array(pools.values)
-        lock.unlock()
+        let pools = allPools()
         Task {
-            for pool in allPools {
+            for pool in pools {
                 await pool.setPreloadsAllowed(allowed)
             }
         }
     }
 
+    /// True when every node has bandwidth to spare. This is the same judgement the
+    /// video subsystem already makes about its own preloads, reused so that a
+    /// BackgroundTweetPrefetcher read-ahead backs off exactly when video preloading does.
+    func hasSpareBandwidth() async -> Bool {
+        for pool in allPools() where await !pool.hasSpareBandwidth {
+            return false
+        }
+        return true
+    }
+
     func resetAllPools() {
-        lock.lock()
-        let allPools = Array(pools.values)
-        lock.unlock()
+        let pools = allPools()
         Task {
-            for pool in allPools {
+            for pool in pools {
                 await pool.reset()
             }
         }

@@ -1610,6 +1610,67 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         return tweets
     }
+
+    /// Fetch one page of the app user's feed straight into the cache.
+    ///
+    /// Deliberately narrower than `fetchTweetFeed`. It decodes to `TweetRecord` and
+    /// writes Core Data without going through `TweetStore.merge`, so no `Tweet` or
+    /// `User` singleton is created: nothing is published into the visible feed, and
+    /// nothing survives in memory once the page is written. It also skips that
+    /// function's background author fetches — read-ahead must not fan out into more
+    /// requests.
+    ///
+    /// There is no route retry either. Nobody is waiting on this page, so a failure is
+    /// simply reported and BackgroundTweetPrefetcher backs off.
+    ///
+    /// - Returns: the number of rows the server returned, nil slots included. A page
+    ///   shorter than `pageSize` means the backend has no more entries.
+    func cacheMainFeedPage(pageNumber: UInt, pageSize: UInt) async throws -> Int {
+        let (appUserMid, appUserBaseUrl) = await MainActor.run {
+            (self.appUser.mid, self.appUser.baseUrl)
+        }
+        guard let baseUrl = appUserBaseUrl else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        }
+
+        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "userid": appUserMid,
+            "pn": pageNumber,
+            "ps": pageSize,
+            "appuserid": appUserMid,
+        ] as [String: Any]
+
+        let rawResponse = await invokeRunMApp(using: client, entry: "get_tweet_feed", params: params)
+        guard let response = try Self.unwrapV2Response(rawResponse) as? [String: Any] else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in cacheMainFeedPage"])
+        }
+
+        let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
+        let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
+        let cache = TweetCacheManager.shared
+        let feedKey = TweetCacheManager.mainFeedCacheKey(appUserId: appUserMid)
+
+        // Originals are filed under their own author, as fetchTweetFeed files them, so a
+        // retweet read from cache can find the tweet it embeds.
+        for dict in originalTweetsData.compactMap({ $0 }) {
+            guard let record = try? TweetRecord.fromDictionary(dict) else { continue }
+            cache.saveTweetRecord(record, userId: record.authorId)
+        }
+
+        for dict in tweetsData.compactMap({ $0 }) {
+            guard let record = try? TweetRecord.fromDictionary(dict) else { continue }
+            // fetchTweetFeed's rule: the feed never carries private tweets.
+            if record.isPrivate == true { continue }
+            cache.saveTweetRecord(record, userId: feedKey)
+        }
+
+        return tweetsData.count
+    }
+
     
     /// Get tweet from the current provider of the tweet.
     /// 

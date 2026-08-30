@@ -100,6 +100,9 @@ struct FollowingsTweetView: View {
             Task {
                 await MainActor.run {
                     viewModel.clearTweets()
+                    // Drop the previous session's cursors before warming this one's feed.
+                    BackgroundTweetPrefetcher.shared.reset()
+                    BackgroundTweetPrefetcher.shared.prefetchMainFeed()
                 }
             }
         }
@@ -108,6 +111,9 @@ struct FollowingsTweetView: View {
             Task {
                 await MainActor.run {
                     viewModel.clearTweets()
+                    // The cursor and the pages behind it belong to the session that
+                    // just ended; the next account must not inherit them.
+                    BackgroundTweetPrefetcher.shared.reset()
                 }
             }
         }
@@ -116,6 +122,9 @@ struct FollowingsTweetView: View {
         }
         .onAppear {
             onScroll?(0, 0)
+            // Read ahead of the visible list while the network is idle, so paging down
+            // the feed paints from cache instead of waiting on a page fetch.
+            BackgroundTweetPrefetcher.shared.prefetchMainFeed()
         }
     }
 }

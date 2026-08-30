@@ -15,7 +15,9 @@ final class VideoLoadingManager: ObservableObject {
 
     @Published private(set) var isInStartupPhase: Bool = true
 
-    private var activeLoadingCount: Int = 0
+    /// Player/asset loads currently in flight, ticket-balanced by SharedAssetCache.
+    /// Read by BackgroundTweetPrefetcher as one half of its "is the network quiet" test.
+    private(set) var activeLoadingCount: Int = 0
     private var loadCountInLastMinute: Int = 0
     private nonisolated(unsafe) var monitoringTimer: Timer?
 
