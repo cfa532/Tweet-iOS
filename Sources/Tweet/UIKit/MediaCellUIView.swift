@@ -5037,6 +5037,12 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // per-cell counter and the static per-mid history) immediately re-exhaust
             // the budget after a single stall, making manual retry fail almost instantly.
             resetFeedPlayerRebuildBudget(clearingHistoryFor: attachment?.mid)
+            // Same reason as the rebuild budget: SharedAssetCache refuses a blacklisted
+            // mid outright, so without this the tap cannot rebuild anything. Automatic
+            // retries deliberately do NOT clear it — the block exists to stop those.
+            if let mid = attachment?.mid {
+                BlackList.shared.clearForManualRetry(MimeiId(mid))
+            }
         }
         let retryReason = isAutomatic ? "automaticTransientRetry" : "manualRetry"
         preserveReleaseCoverForCurrentVideo(reason: retryReason, showCover: isVisible)
@@ -5057,6 +5063,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         retryButton.isHidden = true
         // Clear permanently-failed status so GlobalImageLoadManager will retry
         GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
+        // loadImage checks the blacklist before anything else, so clearing only the
+        // load manager's state leaves the tap silently refused for the rest of the
+        // 30s session block.
+        BlackList.shared.clearForManualRetry(MimeiId(attachment.mid))
         loadImage(attachment: attachment, url: url)
     }
 

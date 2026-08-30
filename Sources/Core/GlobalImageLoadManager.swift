@@ -147,7 +147,10 @@ final class GlobalImageLoadManager: ObservableObject {
     }
     
     /// Load an image with priority and concurrency control
-    func loadImage(request: ImageLoadRequest) {
+    /// - Parameter isRetry: true when called from a scheduled retry rather than from a
+    ///   view asking for the image. A retry is the same attempt continuing, so it must
+    ///   not reset the retry budget below.
+    func loadImage(request: ImageLoadRequest, isRetry: Bool = false) {
         // ✅ CHECK BLACKLIST FIRST - Don't waste resources on known-bad images
         let mediaID = MimeiId(request.attachment.mid)
         if BlackList.shared.isBlacklisted(mediaID) {
@@ -240,8 +243,12 @@ final class GlobalImageLoadManager: ObservableObject {
         }
         
         // If image reappears and we haven't completed it successfully, reset retry count
-        // This allows images to be retried when they come back into view
-        if let currentRetryCount = retryCounts[request.id], currentRetryCount > 0 {
+        // This allows images to be retried when they come back into view.
+        //
+        // Skipped for retries: a scheduled retry re-enters through here, so resetting
+        // would hand it a fresh budget every time and handleLoadFailure would schedule
+        // attempt #1 forever, never reaching the permanent-failure branch.
+        if !isRetry, let currentRetryCount = retryCounts[request.id], currentRetryCount > 0 {
             retryCounts[request.id] = 0
         }
         
@@ -592,10 +599,12 @@ final class GlobalImageLoadManager: ObservableObject {
             let delay = Double(newRetryCount) * 5.0
             let focusedRetryRequest = focusedRetryRequest(for: request)
             
-            // ✅ CRITICAL MEMORY LEAK FIX: Only capture minimal data, NOT completion handlers
-            // Completion handlers may capture views, creating retain cycles via DispatchWorkItem
-            // Instead of capturing the completion handler, we mark request as "needs retry"
-            // and let the cell request it again when it reappears
+            // The work item holds `request` so the retry can actually re-issue the load.
+            // That is safe against the retain cycle this once guarded: the only
+            // class-backed call site (MediaCellUIView) passes a `[weak self]` completion,
+            // and the SwiftUI call sites are value types. The item also lives at most
+            // `delay` seconds and is cancelled by cancelLoad(id:). The focused-fullscreen
+            // branch below has always captured a full request for the same reason.
             let requestId = request.id
             let retryRequestId = focusedRetryRequest?.id
             
@@ -615,17 +624,7 @@ final class GlobalImageLoadManager: ObservableObject {
                     self.permanentlyFailedRequests.remove(focusedRetryRequest.id)
                     self.retryCounts[focusedRetryRequest.id] = newRetryCount
                     print("🔄 [GlobalImageLoadManager] Retrying focused fullscreen image: \(focusedRetryRequest.id)")
-                    self.loadImage(request: focusedRetryRequest)
-                    return
-                }
-                
-                // ✅ MEMORY FIX: Check if request was cancelled before retry
-                // If cancelLoad() was called, don't retry (cell disappeared)
-                if !self.activeLoads.keys.contains(requestId) && 
-                   !self.pendingRequests.contains(where: { $0.id == requestId }) {
-                    print("🧹 [GlobalImageLoadManager] Skipping retry - request was cancelled: \(requestId)")
-                    // Remove from completed so cell can retry when it reappears
-                    self.completedRequests.remove(requestId)
+                    self.loadImage(request: focusedRetryRequest, isRetry: true)
                     return
                 }
                 
@@ -636,12 +635,20 @@ final class GlobalImageLoadManager: ObservableObject {
                     self.retryCounts.removeValue(forKey: requestId)
                     return
                 }
-                
-                // ✅ CRITICAL MEMORY LEAK FIX: Don't capture request or completion handler
-                // Instead, just remove from completedRequests so cell can retry when visible
-                // This prevents memory leak from holding completion handlers in DispatchWorkItem
+
+                // Re-issue the load. There is no cancellation check here on purpose:
+                // cancelLoad(id:) cancels this very work item and drops it from
+                // scheduledRetries, so a cancelled request never reaches this point.
+                //
+                // The guard that used to stand here asked whether the request was still
+                // in activeLoads/pendingRequests. clearActiveLoadState removes a failed
+                // load from both in the same block that schedules this retry, so the
+                // answer was "no" for every genuine failure and the retry was always
+                // skipped. What followed could not have retried anyway: it only removed
+                // the id from completedRequests, which only successes are ever added to.
                 self.completedRequests.remove(requestId)
-                print("🔄 [GlobalImageLoadManager] Retry time reached for \(requestId) - removed from completed, cell will reload when visible")
+                print("🔄 [GlobalImageLoadManager] Retry #\(newRetryCount) for \(requestId)")
+                self.loadImage(request: request, isRetry: true)
             }
             
             scheduledRetries[request.id] = workItem
@@ -762,8 +769,9 @@ final class GlobalImageLoadManager: ObservableObject {
 
         if consecutiveNetworkFailures >= maxConsecutiveFailures {
             print("DEBUG: [GlobalImageLoadManager] Too many consecutive network failures, triggering cleanup")
+            let failingRequestId = request.id
             Task { @MainActor in
-                self.handleNetworkFailureCleanup()
+                self.handleNetworkFailureCleanup(excluding: failingRequestId)
             }
             consecutiveNetworkFailures = 0
         }
@@ -915,19 +923,45 @@ final class GlobalImageLoadManager: ObservableObject {
     }
 
     /// Emergency cleanup during network failures
-    func handleNetworkFailureCleanup() {
+    /// - Parameter exemptRequestId: the load whose failure triggered this cleanup.
+    ///   It has already finished its network attempt and is on its way to its own
+    ///   failure handling. Cancelling it here makes that handler take the
+    ///   `Task.isCancelled` early return, which skips BOTH `completeRequest` and
+    ///   `handleLoadFailure` — so the cell never learns the load failed: its spinner
+    ///   never stops, its retry button never appears, and no retry is ever scheduled.
+    ///   The image is then stuck for good, with no way for the user to ask again.
+    ///   Every other in-flight load is still cancelled, which is what this is for.
+    func handleNetworkFailureCleanup(excluding exemptRequestId: String? = nil) {
         print("DEBUG: [GlobalImageLoadManager] Network failure detected, performing emergency cleanup")
 
         // Cancel all active loads
-        for (requestId, task) in activeLoads {
+        for (requestId, task) in activeLoads where requestId != exemptRequestId {
             print("DEBUG: [GlobalImageLoadManager] Cancelling active load due to network failure: \(requestId)")
             task.cancel()
         }
+
+        // Carry the exempt load's bookkeeping across the reset. Its waiters are other
+        // cells showing the same image; dropping them strands those cells too.
+        let exemptTask = exemptRequestId.flatMap { activeLoads[$0] }
+        let exemptPriority = exemptRequestId.flatMap { activeLoadPriorities[$0] }
+        let exemptWaiters = exemptRequestId.flatMap { activeLoadWaiters[$0] }
+        let exemptKey = exemptRequestId.flatMap { activeLoadKeyById[$0] }
+
         activeLoads.removeAll()
         activeLoadPriorities.removeAll()
         activeLoadWaiters.removeAll()
         activeLoadKeyById.removeAll()
         activeLoadIdByKey.removeAll()
+
+        if let exemptRequestId {
+            if let exemptTask { activeLoads[exemptRequestId] = exemptTask }
+            if let exemptPriority { activeLoadPriorities[exemptRequestId] = exemptPriority }
+            if let exemptWaiters { activeLoadWaiters[exemptRequestId] = exemptWaiters }
+            if let exemptKey {
+                activeLoadKeyById[exemptRequestId] = exemptKey
+                activeLoadIdByKey[exemptKey] = exemptRequestId
+            }
+        }
 
         // Cancel all scheduled retries
         for workItem in scheduledRetries.values {

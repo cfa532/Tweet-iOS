@@ -600,6 +600,9 @@ struct MediaCell: View, @MainActor Equatable, @MainActor MediaCellDelegate {
         imageLoadFailed = false
         isLoading = true
         GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
+        // loadImage checks the blacklist first, so the load manager's state alone is
+        // not enough to make a tap actually retry.
+        BlackList.shared.clearForManualRetry(MimeiId(attachment.mid))
         loadImage()
     }
     

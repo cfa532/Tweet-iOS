@@ -68,6 +68,29 @@ final class BlackList: @unchecked Sendable {
         }
     }
     
+    /// Clear a resource's failure history because the user explicitly asked for it again.
+    ///
+    /// Both gates above exist to stop the app hammering a resource on its own; neither is
+    /// meant to overrule a deliberate tap. Without this a manual retry is silently
+    /// refused by `isBlacklisted` — the 30s session block outlives most taps, and a
+    /// permanently listed resource can never be tried again at all — so the retry button
+    /// looks broken.
+    ///
+    /// The resource gets a clean slate and one honest attempt. If it is genuinely dead
+    /// the counters simply rebuild from the next failure.
+    func clearForManualRetry(_ mimeiId: MimeiId) {
+        queue.sync(flags: .barrier) {
+            sessionBlockedResources.removeValue(forKey: mimeiId)
+            sessionFailureCounts.removeValue(forKey: mimeiId)
+            lastFailureRecordedAt.removeValue(forKey: mimeiId)
+            candidates.removeValue(forKey: mimeiId)
+            let wasPermanent = blacklist.remove(mimeiId) != nil
+            permanentFailureStarts.removeValue(forKey: mimeiId)
+            print("[BlackList] Cleared \(mimeiId) for manual retry\(wasPermanent ? " (was permanently blacklisted)" : "")")
+            saveToStorageLocked()
+        }
+    }
+
     /// Record a successful access to a resource
     func recordSuccess(_ mimeiId: MimeiId) {
         queue.sync(flags: .barrier) {
