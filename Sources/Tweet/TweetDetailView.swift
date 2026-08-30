@@ -1419,6 +1419,58 @@ struct TweetDetailView: View {
         return (url, attachment.mid, attachment.type)
     }
 
+    private var mainTweetVideoMids: [String] {
+        (displayTweet.attachments ?? [])
+            .filter { $0.type == .video || $0.type == .hls_video }
+            .map { $0.mid }
+    }
+
+    /// Everything the main tweet's video wiring is built from: which tweet is on screen,
+    /// which videos it carries, and the author route their URLs are resolved against.
+    ///
+    /// Registering that wiring once, on appear, assumes all three are already settled.
+    /// They are when the view is pushed from a feed cell that just rendered the tweet,
+    /// but not when a deeplink opens it. A deeplink whose tweet is already cached
+    /// navigates on the cached copy alone — no author fetch, no route repair — so the
+    /// author can still be arriving, and with it the only base URL an attachment URL can
+    /// be built from. The media section renders the player the moment that route exists,
+    /// so a snapshot taken before it leaves the player spinning on a video nobody ever
+    /// asked the manager to load; the visibility coordinator cannot rescue it either,
+    /// because it resolves playback through the same snapshot.
+    private var mainTweetVideoWiringKey: String {
+        let route = displayTweet.author?.baseUrl?.absoluteString ?? ""
+        return "\(displayTweet.mid)|\(route)|\(mainTweetVideoMids.joined(separator: ","))"
+    }
+
+    /// Tells the manager which videos belong to the main tweet, and where to read them
+    /// from, so coordinator play/pause notifications can be filtered and resolved.
+    private func registerMainTweetVideoAttachments() {
+        guard let attachments = displayTweet.attachments else { return }
+        DetailVideoManager.shared.setMainTweetAttachments(
+            attachments,
+            baseUrl: displayTweet.author?.baseUrl
+        )
+    }
+
+    /// Starts the main tweet's first video. Safe to re-run: it stands down once the
+    /// coordinator has promoted a different attachment of this same tweet, so following
+    /// a late-arriving route cannot yank playback back to the top video.
+    private func loadInitialMainTweetVideoIfNeeded() {
+        guard let initialVideo = firstMainTweetVideoToAutoplay else { return }
+
+        if let currentMid = DetailVideoManager.shared.currentVideoMid,
+           currentMid != initialVideo.mid,
+           mainTweetVideoMids.contains(currentMid) {
+            return
+        }
+
+        DetailVideoManager.shared.loadVideo(
+            url: initialVideo.url,
+            mid: initialVideo.mid,
+            mediaType: initialVideo.mediaType
+        )
+    }
+
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     
@@ -1691,24 +1743,13 @@ struct TweetDetailView: View {
 
             // Register main tweet video attachments before activating so the coordinator
             // notification observers can filter incoming play/pause commands correctly.
-            if let attachments = displayTweet.attachments {
-                DetailVideoManager.shared.setMainTweetAttachments(
-                    attachments,
-                    baseUrl: displayTweet.author?.baseUrl
-                )
-            }
+            registerMainTweetVideoAttachments()
 
             // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
             DetailVideoManager.shared.activateForDetail()
 
             DetailVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
-            if let initialVideo = firstMainTweetVideoToAutoplay {
-                DetailVideoManager.shared.loadVideo(
-                    url: initialVideo.url,
-                    mid: initialVideo.mid,
-                    mediaType: initialVideo.mediaType
-                )
-            }
+            loadInitialMainTweetVideoIfNeeded()
 
             // Activate comments video playback coordinator
             commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)
@@ -1727,6 +1768,14 @@ struct TweetDetailView: View {
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
             cachedDisplayTweet = nil
+        }
+        .onChange(of: mainTweetVideoWiringKey) { _, _ in
+            // The tweet, its videos or the author's route settled after onAppear. This
+            // runs in the same body evaluation that decides whether the player view can
+            // be rendered at all, so the manager is always wired for the URL on screen.
+            print("DEBUG: [TweetDetailView] Main tweet video wiring changed - re-registering")
+            registerMainTweetVideoAttachments()
+            loadInitialMainTweetVideoIfNeeded()
         }
         .onChange(of: comments.count) { _, _ in
             // Rebuild video list for fullscreen navigation when comments change

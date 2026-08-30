@@ -192,10 +192,24 @@ struct CommentDetailView: View {
         .onAppear {
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
-            
+
+            // Claim the manager's attachment registration from the screen we were pushed
+            // from — it still holds that tweet's videos and route until the last detail
+            // view goes away, and a coordinator notification arriving now must not be
+            // resolved against them.
+            registerCommentVideoAttachments()
+
             // Activate detail video manager
             DetailVideoManager.shared.activateForDetail()
             DetailVideoManager.shared.prepareStartupAudioFade(duration: 0.5)
+            loadSelectedCommentVideoIfNeeded()
+        }
+        .onChange(of: commentVideoWiringKey) { _, _ in
+            // The comment's author route or its selected page changed. Nothing else drives
+            // playback on this screen — there is no visibility coordinator here — so the
+            // load has to follow the selection and the route that resolves its URL.
+            registerCommentVideoAttachments()
+            loadSelectedCommentVideoIfNeeded()
         }
         .onChange(of: replies.count) { _, _ in
             TweetDetailCommentsCache.shared.setComments(replies, for: comment.mid)
@@ -261,6 +275,73 @@ struct CommentDetailView: View {
         }
     }
     
+    private var commentVideoMids: [String] {
+        (comment.attachments ?? [])
+            .filter { $0.type == .video || $0.type == .hls_video }
+            .map { $0.mid }
+    }
+
+    /// The video the pager is currently showing, if that page holds one. `DetailMediaCell`
+    /// gives exactly this page `shouldLoadVideo`, so this is the video whose player the
+    /// singleton manager is expected to be holding.
+    private var selectedCommentVideo: (url: URL, mid: String, mediaType: MediaType)? {
+        guard let attachments = comment.attachments,
+              attachments.indices.contains(selectedMediaIndex),
+              let baseUrl = comment.author?.baseUrl else {
+            return nil
+        }
+
+        let attachment = attachments[selectedMediaIndex]
+        guard attachment.type == .video || attachment.type == .hls_video,
+              let url = attachment.getUrl(baseUrl) else {
+            return nil
+        }
+        return (url, attachment.mid, attachment.type)
+    }
+
+    /// What the video wiring below is derived from: the comment, the page in view, and the
+    /// author route its URL is built from. The route can still be arriving when this view
+    /// opens, and the media section only renders a player once it exists, so the wiring
+    /// has to follow the key rather than snapshot it on appear.
+    private var commentVideoWiringKey: String {
+        let route = comment.author?.baseUrl?.absoluteString ?? ""
+        return "\(comment.mid)|\(route)|\(selectedMediaIndex)|\(commentVideoMids.joined(separator: ","))"
+    }
+
+    /// Registers unconditionally, empty list included: the manager still holds the
+    /// attachments of the screen this one was pushed from until the last detail view goes
+    /// away, and a comment with no video of its own must not leave that registration
+    /// standing for a stray play notification to resolve against.
+    private func registerCommentVideoAttachments() {
+        DetailVideoManager.shared.setMainTweetAttachments(
+            comment.attachments ?? [],
+            baseUrl: comment.author?.baseUrl
+        )
+    }
+
+    /// Loads the video on the selected page. Nothing else on this screen asks the manager
+    /// to load one — there is no visibility coordinator here — so without this a comment
+    /// with a video shows its spinner forever.
+    private func loadSelectedCommentVideoIfNeeded() {
+        guard let video = selectedCommentVideo else {
+            // Paged to an image: the singleton player keeps running until something stops
+            // it, and this screen has no visibility tracking to do that.
+            if let playingMid = DetailVideoManager.shared.currentVideoMid,
+               commentVideoMids.contains(playingMid) {
+                DetailVideoManager.shared.pause()
+            }
+            return
+        }
+
+        guard DetailVideoManager.shared.currentVideoMid != video.mid else { return }
+
+        DetailVideoManager.shared.loadVideo(
+            url: video.url,
+            mid: video.mid,
+            mediaType: video.mediaType
+        )
+    }
+
     private var mediaSection: some View {
         Group {
             if let attachments = comment.attachments, !attachments.isEmpty {
