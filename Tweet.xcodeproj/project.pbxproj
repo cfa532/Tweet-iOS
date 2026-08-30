@@ -77,7 +77,6 @@
 		468CF22C2E3A619A00D49038 /* ChatSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */; };
 		468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22D2E3A69F700D49038 /* StartChatView.swift */; };
 		468F19EF2E5FEA850085BFE5 /* VideoLoadingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */; };
-		46BF10022F60A1B00042C1A0 /* BackgroundTweetPrefetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46BF10012F60A1B00042C1A0 /* BackgroundTweetPrefetcher.swift */; };
 		468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
@@ -111,6 +110,7 @@
 		46B95F4C2E0EF77500D81590 /* ImageCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */; };
 		46B95F4E2E0F98CE00D81590 /* ThemeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */; };
 		46B95F502E1269F500D81590 /* IdentifiablePhotosPickerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */; };
+		46BF10022F60A1B00042C1A0 /* BackgroundTweetPrefetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46BF10012F60A1B00042C1A0 /* BackgroundTweetPrefetcher.swift */; };
 		46D9079A2F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */; };
 		46D9079C2F5C00010020F8AA /* CommentListUIKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D9079B2F5C00010020F8AA /* CommentListUIKitView.swift */; };
 		46DEEPLINK2E00000000000001 /* DeeplinkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */; };
@@ -239,7 +239,6 @@
 		468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionManager.swift; sourceTree = "<group>"; };
 		468CF22D2E3A69F700D49038 /* StartChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartChatView.swift; sourceTree = "<group>"; };
 		468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoLoadingManager.swift; sourceTree = "<group>"; };
-		46BF10012F60A1B00042C1A0 /* BackgroundTweetPrefetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundTweetPrefetcher.swift; sourceTree = "<group>"; };
 		468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionManager.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
@@ -273,6 +272,7 @@
 		46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCacheManager.swift; sourceTree = "<group>"; };
 		46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentifiablePhotosPickerItem.swift; sourceTree = "<group>"; };
+		46BF10012F60A1B00042C1A0 /* BackgroundTweetPrefetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundTweetPrefetcher.swift; sourceTree = "<group>"; };
 		46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsVideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
 		46D9079B2F5C00010020F8AA /* CommentListUIKitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentListUIKitView.swift; sourceTree = "<group>"; };
 		46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeeplinkManager.swift; sourceTree = "<group>"; };
@@ -1178,7 +1178,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Tweet/Tweet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 145;
+				CURRENT_PROJECT_VERSION = 146;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1201,7 +1201,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.2.6;
+				MARKETING_VERSION = 2.2.7;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -1237,7 +1237,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Tweet/Tweet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 145;
+				CURRENT_PROJECT_VERSION = 146;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				DEVELOPMENT_TEAM = 96LBXG78A7;
 				ENABLE_PREVIEWS = YES;
@@ -1260,7 +1260,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.2.6;
+				MARKETING_VERSION = 2.2.7;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
