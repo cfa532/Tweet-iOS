@@ -6792,9 +6792,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let hostId = await MainActor.run {
             self.appUser.hostIds?.first
         }
+        // The tweet is created on the author's root node and referenced by their
+        // account, so it goes to the writable route: hostid no longer makes the
+        // backend route the call, and a post arriving anywhere else is refused.
         // Non-idempotent add_tweet can be slow server-side: use a dedicated 240s
         // timeout class instead of mutating the shared 15s client.
-        guard let client = await MainActor.run(body: { self.appUser.baseUrl.map { self.clientPool.getClientByUrl(for: $0.absoluteString, timeout: 240) } }) else {
+        _ = try await self.appUser.resolveWritableUrl()
+        guard let client = await MainActor.run(body: { self.appUser.writableClient(timeout: 240) }) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
         }
             
@@ -7951,8 +7955,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 _ = try await fetchUser(appUserMid, baseUrl: "")
             }
 
-            // Snapshot the (possibly just-refreshed) sender baseUrl for this attempt.
-            let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
+            // The message store is written on the account's root node, so this goes
+            // to the writable route rather than the read route. That route is cached
+            // per user, so a conversation resolves it once: only the first message,
+            // or one sent after a failure, pays for a resolution.
+            let appUserWritableUrl = await MainActor.run { self.appUser.writableUrl }
+            if forceRefresh || appUserWritableUrl == nil {
+                _ = try? await self.appUser.resolveWritableUrl()
+            }
 
             let entry = "message_outgoing"
             let params: [String: Any] = [
@@ -7964,9 +7974,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "msg": message.toJSONString()
             ]
 
-            guard let baseUrl = appUserBaseUrl else {
+            guard let senderClient = await self.appUser.writableClient(timeout: 15) else {
                 let errorMsg = "Failed to create client for sender node"
-                hproseError("[sendMessage] ❌ \(errorMsg) - baseUrl: nil")
+                hproseError("[sendMessage] ❌ \(errorMsg) - writableUrl: nil")
                 if attempt < maxRetries {
                     try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
                     continue
@@ -7986,8 +7996,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     )
                 )
             }
-            
-            let senderClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
             let rawResponse = await invokeRunMApp(using: senderClient, entry: entry, params: params)
             let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
@@ -8102,8 +8110,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 )
             }
             
-            // Snapshot recipient's (freshly-fetched) baseUrl for this attempt.
-            let recipientBaseUrl = await MainActor.run { recipient.baseUrl }
+            // The recipient's copy is written on their root node, so this goes to
+            // their writable route. It is cached per user like the sender's, so a
+            // conversation resolves it once rather than per message.
+            let recipientWritableUrl = await MainActor.run { recipient.writableUrl }
+            if forceRefresh || recipientWritableUrl == nil {
+                _ = try? await recipient.resolveWritableUrl()
+            }
 
             let receiptEntry = "message_incoming"
             let receiptParams: [String: Any] = [
@@ -8115,10 +8128,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "msg": message.toJSONString()
             ]
 
-            // Get fresh client (will be recreated if baseUrl changed)
-            guard let rBaseUrl = recipientBaseUrl else {
+            // Get fresh client (will be recreated if the writable route changed)
+            guard let recipientClient = await recipient.writableClient(timeout: 15) else {
                 let errorMsg = "Failed to create client for recipient node"
-                hproseError("[sendMessage] ❌ \(errorMsg) - baseUrl: nil")
+                hproseError("[sendMessage] ❌ \(errorMsg) - writableUrl: nil")
                 if attempt < maxRetries {
                     // Wait before retry
                     try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
@@ -8140,8 +8153,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 )
             }
             
-            let recipientClient = clientPool.getClientByUrl(for: rBaseUrl.absoluteString, timeout: 15)
-
             let rawReceiptResponse = await invokeRunMApp(using: recipientClient, entry: receiptEntry, params: receiptParams)
             let receiptResponseUnwrapped = try? Self.unwrapV2Response(rawReceiptResponse)
             let receiptResponse = receiptResponseUnwrapped ?? Self.normalizeHproseContainers(rawReceiptResponse)
@@ -8298,11 +8309,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// Fetch recent unread messages from a sender (incoming messages only)
     func fetchMessages(senderId: String) async throws -> [ChatMessage] {
         // Phase A (demotion prep): snapshot @MainActor appUser reads.
-        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
-        guard let baseUrl = appUserBaseUrl else {
+        let (appUserMid, appUserWritableUrl) = await MainActor.run { (self.appUser.mid, self.appUser.writableUrl) }
+        // message_fetch marks the conversation read, so it writes and belongs on the
+        // account's root node. The writable route is cached, so this resolves only
+        // when the app has not written for this user yet.
+        if appUserWritableUrl == nil {
+            _ = try await self.appUser.resolveWritableUrl()
+        }
+        guard let client = await self.appUser.writableClient(timeout: 15) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let entry = "message_fetch"
         let params: [String: Any] = [
@@ -8350,13 +8366,18 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// Check for new incoming messages (only check, do not fetch them)
     func checkNewMessages() async throws -> [ChatMessage] {
         // Phase A (demotion prep): snapshot @MainActor appUser reads.
-        let (appUserMid, appUserBaseUrl, appUserIsGuest) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl, self.appUser.isGuest) }
+        let (appUserMid, appUserWritableUrl, appUserIsGuest) = await MainActor.run { (self.appUser.mid, self.appUser.writableUrl, self.appUser.isGuest) }
         guard !appUserIsGuest else { return [] }
 
-        guard let baseUrl = appUserBaseUrl else {
+        // Reads the store message_fetch writes on the root node. Checking through
+        // the read route would count unread messages on a replica that never
+        // receives them.
+        if appUserWritableUrl == nil {
+            _ = try await self.appUser.resolveWritableUrl()
+        }
+        guard let client = await self.appUser.writableClient(timeout: 15) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let entry = "message_check"
         let params: [String: Any] = [
