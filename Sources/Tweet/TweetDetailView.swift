@@ -1452,14 +1452,17 @@ struct TweetDetailView: View {
         )
     }
 
-    /// Starts the main tweet's first video. Safe to re-run: it stands down once the
-    /// coordinator has promoted a different attachment of this same tweet, so following
-    /// a late-arriving route cannot yank playback back to the top video.
+    /// Starts the main tweet's first video. Safe to re-run: it stands down as soon as the
+    /// manager is on any of this tweet's videos.
+    ///
+    /// That covers both an attachment the coordinator promoted and the video this would
+    /// load anyway. The media is content-addressed and served by any reachable node, so a
+    /// route that moves under a working player changes nothing about what it is playing —
+    /// re-loading it would only resume a video the reader had paused.
     private func loadInitialMainTweetVideoIfNeeded() {
         guard let initialVideo = firstMainTweetVideoToAutoplay else { return }
 
         if let currentMid = DetailVideoManager.shared.currentVideoMid,
-           currentMid != initialVideo.mid,
            mainTweetVideoMids.contains(currentMid) {
             return
         }
