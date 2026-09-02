@@ -33,7 +33,7 @@ const APP_STORE_ID = "6751131431";
 // at the server; nginx's dtweet.com.conf (*.dtweet.com) proxies to Leither :8080
 // preserving the Host header, so Leither domain routing can take over later.
 const ORIGIN = "http://dl.dtweet.com";
-const BROWSER_FALLBACK_ORIGIN = "http://t1.w3w3.store";
+const BROWSER_FALLBACK_ORIGIN = "http://t1.w333w.site";
 const STATIC_ASSETS = new Set([
   "/index_entry.js",
   "/hprose.js",

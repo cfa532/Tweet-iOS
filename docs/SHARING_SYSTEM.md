@@ -1,6 +1,6 @@
 # Sharing System
 
-**Last Updated:** August 6, 2026
+**Last Updated:** September 2, 2026
 **Status:** ✅ Production
 
 ---
@@ -12,7 +12,7 @@ where the share action is initiated. Domain-based links are opened by TweetWeb
 when a native app does not claim them. Provider-IP links use the separate
 Leither `entry` form required for direct node access.
 
-The `#` in a domain URL such as `http://t1.www3.shop/#tweet/...` is part of
+The `#` in a domain URL such as `http://t1.w333w.site/#tweet/...` is part of
 TweetWeb's external share-link contract. It does not mean TweetWeb uses Vue
 `createWebHashHistory()` for domain navigation. TweetWeb keeps
 `createWebHistory()` for normal domain routes. Hash routing is reserved for the
@@ -60,7 +60,7 @@ When sharing through the backend-provided domain, the app uses TweetWeb's
 
 **Example:**
 ```
-http://t1.www3.shop/#tweet/abc123/user456
+http://t1.w333w.site/#tweet/abc123/user456
 ```
 
 ---
