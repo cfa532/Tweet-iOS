@@ -60,10 +60,11 @@ export default {
       return response;
     }
 
-    // Keep dl.dtweet.com on HTTPS. Modern browsers upgrade HTTP navigations,
-    // so redirecting HTTPS back to HTTP creates an upgrade/downgrade loop.
-    // Proxy through Cloudflare instead; subrequests to the HTTP origin skip
-    // this route and reach nginx directly.
+    // Keep non-navigation dl.dtweet.com traffic on HTTPS. Redirecting it to
+    // HTTP on the same host creates an upgrade/downgrade loop in modern
+    // browsers. Browser navigations use the separate HTTP fallback host so
+    // TweetWeb can connect to Leither over ws://; other requests proxy through
+    // Cloudflare to the HTTP origin.
     if (url.hostname === "dl.dtweet.com") {
       if (path === "/.well-known/apple-app-site-association" || path === "/apple-app-site-association") {
         return json(appleAppSiteAssociation());
@@ -72,7 +73,7 @@ export default {
         return json(assetLinks());
       }
       if (isHtmlNavigation(request)) {
-        return env.ASSETS.fetch(request);
+        return proxyToTweetWeb(request, url);
       }
       const originUrl = ORIGIN + path + url.search;
       return fetch(originUrl, new Request(originUrl, request));

@@ -5,7 +5,9 @@ compatibility_date = "2026-07-01"
 # Custom domains: Cloudflare auto-creates the DNS records and certificates
 # for the dtweet.com zone in this account.
 # dl.dtweet.com is a plain zone route (its proxied DNS record points at ksbox):
-# the worker only bounces https -> http there; http passes through to origin.
+# static assets and association files return from the Worker, browser HTML
+# redirects to BROWSER_FALLBACK_ORIGIN in src/index.js, and other requests
+# proxy to origin.
 routes = [
   { pattern = "dtweet.com", custom_domain = true },
   { pattern = "www.dtweet.com", custom_domain = true },
