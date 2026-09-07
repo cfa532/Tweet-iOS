@@ -7865,8 +7865,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             hproseDebug("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
 
-            // Test IPs in batches of 4 for faster discovery during high load
-            let batchSize = 4
+            // Test IPs in batches of 2 to limit concurrent network health checks
+            let batchSize = 2
             for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, ipAddresses.count)
                 let batch = Array(ipAddresses[batchStart..<batchEnd])
