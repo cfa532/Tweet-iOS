@@ -178,7 +178,7 @@ class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
 
     /// Dedicated serial queue for the progressive-cache disk scan in preloadPoster
-    /// (progressiveCacheFileForThumbnailIfAvailable reads up to 4MB per call). Using a
+    /// (progressiveCacheFileForThumbnailIfAvailable reads the coverage index). Using a
     /// real background queue instead of Task.detached keeps this blocking file I/O off
     /// Swift's shared cooperative thread pool, which other structured-concurrency work
     /// in the app also draws from — piling several of these onto that pool during a fast
@@ -801,21 +801,8 @@ class SharedAssetCache: ObservableObject {
                 // Check cancellation before progressive video setup
                 try Task.checkCancellation()
                 
-                // For progressive videos, use LocalHTTPServer for IP-independent caching
-                try await ensureLocalHTTPServerReady(reason: "progressive asset", mediaID: mediaID)
-                
-                // Remove query parameters for cleaner URL
-                var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                components?.query = nil
-                let cleanURL = components?.url ?? url
-                
-                // Register with LocalHTTPServer (handles mediaID-based caching and IP changes)
-                let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
-                
-                // Check cancellation before creating asset
-                try Task.checkCancellation()
-                
-                asset = AVURLAsset(url: localURL)
+                // The asset owns its resource loader; no localhost listener is needed.
+                asset = try ProgressiveVideoAsset(remoteURL: url, mediaID: mediaID)
             }
             
             // Check cancellation before caching
@@ -1611,30 +1598,15 @@ class SharedAssetCache: ObservableObject {
 
     /// Create progressive video player (no retry logic, called by retry wrapper)
     private func createProgressivePlayer(for url: URL, mediaID: String) async throws -> AVPlayer {
-        // Remove query parameters
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        components?.query = nil
-        let cleanURL = components?.url ?? url
-        
-        try await ensureLocalHTTPServerReady(reason: "progressive player", mediaID: mediaID)
-        
-        // Register real URL and get localhost proxy URL
-        let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
-        
-        // Create AVPlayer with localhost URL (LocalHTTPServer fixes Content-Type)
-        let asset = AVURLAsset(url: localURL)
+        let asset = try ProgressiveVideoAsset(remoteURL: url, mediaID: mediaID)
 
-        // NOTE: Removed strict isPlayable validation since LocalHTTPServer proxy URLs
-        // may not immediately report as playable, but the video should still work.
-        // Let the player creation proceed and fail naturally if truly unplayable.
-        
         let playerItem = AVPlayerItem(asset: asset)
         applyFeedVideoDecodeLimit(to: playerItem)
         let player = AVPlayer(playerItem: playerItem)
 
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
-        // Let AVPlayer bridge short IPFS/proxy gaps by waiting for more data and
+        // Let AVPlayer bridge short network gaps by waiting for more data and
         // resuming on its own. Disabling this made primary videos pause for a long
         // time after a buffer drain because our manual keepUp callback could miss
         // waitingToPlayAtSpecifiedRate transitions.
@@ -1921,16 +1893,7 @@ class SharedAssetCache: ObservableObject {
             // Check cancellation before progressive video setup
             try Task.checkCancellation()
             
-            // Create fresh progressive video player item using LocalHTTPServer for IP-independent caching
-            try await ensureLocalHTTPServerReady(reason: "progressive player item", mediaID: mediaID)
-            
-            // Register with LocalHTTPServer (handles mediaID-based caching and IP changes)
-            let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: url)
-            
-            // Check cancellation before creating asset
-            try Task.checkCancellation()
-            
-            let asset = AVURLAsset(url: localURL)
+            let asset = try ProgressiveVideoAsset(remoteURL: url, mediaID: mediaID)
             let playerItem = AVPlayerItem(asset: asset)
             applyFeedVideoDecodeLimit(to: playerItem)
             
@@ -2245,13 +2208,9 @@ class SharedAssetCache: ObservableObject {
         guard cachedThumbnail(for: mediaID) == nil else { return }
         guard preloadTasks[cacheKey] == nil else { return }
 
-        // progressiveCacheFileForThumbnailIfAvailable scans up to 4MB of disk looking for
-        // the moov atom (progressiveCacheHasMoovInPrefix). This function runs on every
-        // throttled scroll-visibility tick for the next few videos in the scroll direction;
-        // doing that scan synchronously on the main actor blocked scroll handling, visible
-        // as periodic "stop, move a bit, stop" hitches while non-primary videos scrolled by.
-        // Run it on a dedicated serial queue (reusing preloadTasks to dedup repeat scans of
-        // the same not-yet-cached video) — everything else here stays on this MainActor.
+        // Keep range-index I/O off the main actor during scroll visibility updates.
+        // Only complete caches become file assets; partial caches use the loader
+        // below so thumbnail reads cannot consume holes in a sparse video file.
         let task = Task {
             defer { preloadTasks.removeValue(forKey: cacheKey) }
 
