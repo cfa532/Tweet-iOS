@@ -364,15 +364,13 @@ struct UserListDestinationView: View {
                 return Array(ids[startIndex..<endIndex])
             },
             authoritativeUserFetcher: {
-                let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
                 let targetUser = User.getInstance(mid: destination.userId)
-                let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
-
-                if destination.listType == .FOLLOWER {
-                    targetUser.fansList = ids
-                } else {
-                    targetUser.followingList = ids
+                if destination.listType != .FOLLOWER {
+                    return try await hproseInstance.refreshFollowings(user: targetUser)
                 }
+                let ids = try await hproseInstance.getListByType(user: targetUser, entry: .FOLLOWER)
+                try Task.checkCancellation()
+                targetUser.fansList = ids
                 // Persist the authoritative IDs for cache-first rendering next time.
                 TweetCacheManager.shared.saveUser(targetUser)
                 return ids

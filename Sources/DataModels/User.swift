@@ -170,7 +170,18 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     }
     
     @Published var fansList: [MimeiId]? // List of MimeiId
-    @Published var followingList: [MimeiId]? // List of MimeiId
+    // A list read may finish after a local follow change or a newer refresh.
+    // The revision lets the writer discard that obsolete response before merging it.
+    private(set) var followingListRevision: UInt64 = 0
+    @Published var followingList: [MimeiId]? {
+        didSet {
+            // Even an unchanged refresh supersedes any older in-flight response.
+            followingListRevision &+= 1
+            if followingList != oldValue {
+                schedulePersistIfAppUser()
+            }
+        }
+    }
     @Published var bookmarkedTweets: [MimeiId]? {
         didSet {
             if bookmarkedTweets != oldValue && mid == HproseInstance.shared.appUser.mid {

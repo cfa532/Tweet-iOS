@@ -633,9 +633,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             User.updateUserInstance(with: cachedUser)
             _appUserId = userId
             
-            // Set following list on the singleton instance
-            let appUserInstance = User.getInstance(mid: userId)
-            appUserInstance.followingList = Gadget.getAlphaIds()
+            // Alpha IDs seed guest content; authenticated relationships come from
+            // the cached user and the following-list API.
+            if userId == Constants.GUEST_ID {
+                User.getInstance(mid: userId).followingList = Gadget.getAlphaIds()
+            }
             
             hproseDebug("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
             
@@ -1016,10 +1018,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
                 // Fetch followings and blacklist in background (non-blocking)
                 Task.detached(priority: .background) {
-                    let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                    _ = try? await self.refreshFollowings(user: user)
                     let blackList = (try? await self.getListByType(user: user, entry: .BLACK_LIST)) ?? []
                     await MainActor.run {
-                        user.followingList = followings
                         user.userBlackList = blackList
                         self.printAppUserContent("After background data loaded")
                     }
@@ -1035,11 +1036,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     // Just set entry IP as fallback and mark initialization as complete
                     if appUser.baseUrl == nil {
                         appUser.baseUrl = URL(string: "http://\(finalEntryIP)")
-                    }
-
-                    // Ensure followings list has at least alphaIds
-                    if appUser.followingList?.isEmpty ?? true {
-                        appUser.followingList = Gadget.getAlphaIds()
                     }
 
                     isInitializationComplete = true
@@ -3411,63 +3407,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return (removed, response["reason"] as? String)
     }
     
-    /**
-     * Get a list of users that the given user is following, sorted by timestamp when followed.
-     * For guest users, returns alpha IDs as fallback.
-     */
-    func getFollowings(user: User) async throws -> [MimeiId] {
-        let entry = "get_followings_sorted"
-        // Phase A (demotion prep): snapshot @MainActor User → Sendable UserRecord.
-        let snap = await MainActor.run { UserRecord(user: user) }
-        let attemptedBaseUrl = snap.baseUrl?.absoluteString
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "userid": snap.mid
-        ]
-
-        do {
-            guard let baseUrl = snap.baseUrl else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-            }
-            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
-            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-
-            // Unwrap v2 response
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-
-            // Handle empty array case - server returns empty array when user has no followings
-            let response: [[String: Any]]
-            if let arrayResponse = unwrappedResponse as? [[String: Any]] {
-                response = arrayResponse
-            } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
-                // Server returned empty array - handle gracefully
-                response = []
-                hproseDebug("DEBUG: [HproseInstance] getFollowings - Server returned empty array (no followings)")
-            } else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
-            }
-            
-            let sorted = response.sorted { (lhs, rhs) in
-                let lval = Self.intField(lhs, key: "value") ?? 0
-                let rval = Self.intField(rhs, key: "value") ?? 0
-                return lval > rval
-            }
-            await MainActor.run { NodePool.shared.updateFromUser(user) }
-            return sorted.compactMap { $0["field"] as? String }
-        } catch {
-            hproseError("DEBUG: [HproseInstance] getFollowings error: \(error) (baseUrl: \(attemptedBaseUrl ?? "nil"))")
-            return Gadget.getAlphaIds()
+    /// Fetch and commit one complete list. A response belongs to the revision at
+    /// request start; it must not overwrite follow changes made while awaiting it.
+    @MainActor
+    func refreshFollowings(user: User) async throws -> [MimeiId] {
+        let revision = user.followingListRevision
+        let followings = try await getListByType(user: user, entry: .FOLLOWING)
+        try Task.checkCancellation()
+        guard user.followingListRevision == revision else {
+            throw CancellationError()
         }
+        user.followingList = followings
+        TweetCacheManager.shared.saveUser(user)
+        return followings
     }
-    
-    /**
-     * Check if the app user is in the target user's blacklist
-     * @param targetUserId The user ID to check against
-     * @return true if app user is blacklisted, false otherwise
-     */
-    
+
     /**
      * Populate fans and following lists for a given user
      */
@@ -3476,12 +3430,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let userMid = await MainActor.run { user.mid }
         do {
             // Get followings (users that the user is following)
-            let followings = try await getFollowings(user: user)
-            await MainActor.run {
-                user.followingList = followings
-            }
+            let followings = try await refreshFollowings(user: user)
             hproseDebug("DEBUG: [HproseInstance] Populated followingList for user \(userMid) with \(followings.count) users")
+        } catch is CancellationError {
+            if Task.isCancelled { return }
+        } catch {
+            hproseError("DEBUG: [HproseInstance] Error populating following list for user \(userMid): \(error)")
+        }
 
+        // A failed following read must not prevent the independent fans read.
+        do {
             // Get fans (users who are following the user)
             if let fans = try await getFans(user: user) {
                 await MainActor.run {
@@ -3492,7 +3450,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 hproseDebug("DEBUG: [HproseInstance] No fans found for user \(userMid)")
             }
         } catch {
-            hproseError("DEBUG: [HproseInstance] Error populating fans/following lists for user \(userMid): \(error)")
+            hproseError("DEBUG: [HproseInstance] Error populating fans list for user \(userMid): \(error)")
         }
     }
     
