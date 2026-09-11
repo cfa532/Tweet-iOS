@@ -7198,7 +7198,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
         }
 
-        for dict in response {
+        // The backend returns hash entries without ordering. Sort by the outer
+        // pin timestamp before merging tweets, preserving each tweet's creation time.
+        let orderedPins = try response.map { dict in
+            guard let pinTimestamp = Self.intField(dict, key: "timestamp") else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to get pinned tweets", comment: "Get pinned tweets error")])
+            }
+            return (entry: dict, pinTimestamp: pinTimestamp)
+        }.sorted { $0.pinTimestamp > $1.pinTimestamp }
+
+        for (dict, _) in orderedPins {
             if let tweetDict = dict["tweet"] as? [String: Any] {
                 let tweet = try await mergeTweetFromDict(tweetDict)
                 let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)

@@ -32,7 +32,6 @@
 		4612ED1F2E924A18005D5B8B /* URLResponseExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED1A2E924A18005D5B8B /* URLResponseExtension.swift */; };
 		4612ED202E924A18005D5B8B /* CachingPlayerItemConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED152E924A18005D5B8B /* CachingPlayerItemConfiguration.swift */; };
 		4612ED212E924A18005D5B8B /* ResourceLoaderDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED182E924A18005D5B8B /* ResourceLoaderDelegate.swift */; };
-		C029988A30A1000000000001 /* ProgressiveVideoAsset.swift in Sources */ = {isa = PBXBuildFile; fileRef = C029988A30A1000000000002 /* ProgressiveVideoAsset.swift */; };
 		4612ED222E924A18005D5B8B /* MediaFileHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED162E924A18005D5B8B /* MediaFileHandle.swift */; };
 		4612ED232E924A18005D5B8B /* PendingRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED172E924A18005D5B8B /* PendingRequest.swift */; };
 		4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED242E925803005D5B8B /* LocalHTTPServer.swift */; };
@@ -155,6 +154,7 @@
 		9432536CBF9DB1A3ADCD2067 /* DocumentAttachmentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77454EFF645F6F03E20DC055 /* DocumentAttachmentsView.swift */; };
 		A0F8F09D30F34289B896499E /* UploadProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */; };
 		B3FB362ED05AE5169A33DE6D /* DocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF98BA9542DE4CC62FB1C080 /* DocumentPicker.swift */; };
+		C029988A30A1000000000001 /* ProgressiveVideoAsset.swift in Sources */ = {isa = PBXBuildFile; fileRef = C029988A30A1000000000002 /* ProgressiveVideoAsset.swift */; };
 		C22045EF1B134C4698599733 /* VideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */; };
 		C9B2593C09474D779A5C345A /* TweetHeaderUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A172CBEA1C9C4682B758AE93 /* TweetHeaderUIView.swift */; };
 		CA8FCEEC89259B8FD761147C /* Pods_Tweet.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */; };
@@ -193,7 +193,6 @@
 		4612ED162E924A18005D5B8B /* MediaFileHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaFileHandle.swift; sourceTree = "<group>"; };
 		4612ED172E924A18005D5B8B /* PendingRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingRequest.swift; sourceTree = "<group>"; };
 		4612ED182E924A18005D5B8B /* ResourceLoaderDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceLoaderDelegate.swift; sourceTree = "<group>"; };
-		C029988A30A1000000000002 /* ProgressiveVideoAsset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveVideoAsset.swift; sourceTree = "<group>"; };
 		4612ED192E924A18005D5B8B /* URLExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLExtension.swift; sourceTree = "<group>"; };
 		4612ED1A2E924A18005D5B8B /* URLResponseExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLResponseExtension.swift; sourceTree = "<group>"; };
 		4612ED242E925803005D5B8B /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
@@ -321,6 +320,7 @@
 		A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
 		A65C2418C4764AC0AD757120 /* TweetCellContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetCellContentView.swift; sourceTree = "<group>"; };
 		AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UploadProgressManager.swift; sourceTree = "<group>"; };
+		C029988A30A1000000000002 /* ProgressiveVideoAsset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveVideoAsset.swift; sourceTree = "<group>"; };
 		CF31DB3B18D69C8F667A2422 /* TweetHeightPrewarmer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TweetHeightPrewarmer.swift; sourceTree = "<group>"; };
 		DF98BA9542DE4CC62FB1C080 /* DocumentPicker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DocumentPicker.swift; sourceTree = "<group>"; };
 		E2C260FE784A43EF9772A398 /* TweetTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetTableView.swift; sourceTree = "<group>"; };
@@ -1182,7 +1182,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Tweet/Tweet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 149;
+				CURRENT_PROJECT_VERSION = 150;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1205,7 +1205,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.2.7;
+				MARKETING_VERSION = 2.2.8;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -1241,7 +1241,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Tweet/Tweet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 149;
+				CURRENT_PROJECT_VERSION = 150;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				DEVELOPMENT_TEAM = 96LBXG78A7;
 				ENABLE_PREVIEWS = YES;
@@ -1264,7 +1264,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.2.7;
+				MARKETING_VERSION = 2.2.8;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
