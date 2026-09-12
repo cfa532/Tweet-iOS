@@ -4538,7 +4538,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
             let authorSnap = await MainActor.run { UserRecord(user: author) }
             let writableUrl = try await author.resolveWritableUrl()
-            guard let commentClient = await author.writableClient(timeout: 15) else {
+            // add_comment commits several related objects before returning and must not be
+            // retried after an ambiguous timeout. Give it the same extended response window
+            // as add_tweet so a slow commit can return its authoritative comment id/count.
+            guard let commentClient = await author.writableClient(timeout: 240) else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's writable client not initialized", comment: "Client initialization error")])
             }
 
