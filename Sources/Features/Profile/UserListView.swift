@@ -198,6 +198,11 @@ struct UserListView: View {
                     errorMessage = nil
                 }
             } catch is CancellationError {
+                // An obsolete following-list response is also cancelled. Its task
+                // is still active, so finish loading while retaining the visible rows.
+                if !Task.isCancelled {
+                    await MainActor.run { isLoading = false }
+                }
                 return
             } catch {
                 userListLogger.error("Failed to refresh user list: \(error.localizedDescription, privacy: .public)")

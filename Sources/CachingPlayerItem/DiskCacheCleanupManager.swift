@@ -261,16 +261,18 @@ extension FileManager {
     func sizeOfDirectory(at url: URL) throws -> Int64 {
         let contents = try contentsOfDirectory(
             at: url,
-            includingPropertiesForKeys: [.fileSizeKey],
+            includingPropertiesForKeys: [.totalFileAllocatedSizeKey],
             options: [.skipsHiddenFiles]
         )
         
         var totalSize: Int64 = 0
         
         for fileURL in contents {
-            if let attributes = try? attributesOfItem(atPath: fileURL.path),
-               let fileSize = attributes[.size] as? Int64 {
-                totalSize += fileSize
+            // Sparse progressive caches can have a large logical length after
+            // seeking. Report occupied disk space, including filesystem overhead.
+            let values = try fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
+            if let allocated = values.totalFileAllocatedSize {
+                totalSize += Int64(allocated)
             }
         }
         

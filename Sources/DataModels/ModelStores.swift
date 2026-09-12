@@ -10,6 +10,24 @@ final class UserStore {
         User.getInstance(mid: mid)
     }
 
+    /// Disk records can hydrate followings on cold start, but cannot replace live
+    /// relationships when a cached tweet or search result loads later.
+    @discardableResult
+    func hydrateFromCache(
+        _ record: UserRecord,
+        shouldUpdateBaseUrl: Bool = false
+    ) -> User {
+        let instance = user(mid: record.mid)
+        var cachedRecord = record
+        if instance.followingList != nil {
+            cachedRecord.followingList = nil
+        }
+        if instance.followingCount != nil {
+            cachedRecord.followingCount = nil
+        }
+        return merge(cachedRecord, shouldUpdateBaseUrl: shouldUpdateBaseUrl)
+    }
+
     @discardableResult
     func merge(
         _ decoded: DecodedUserRecord,
@@ -72,7 +90,9 @@ final class UserStore {
         instance.commentsCount = record.commentsCount ?? instance.commentsCount
 
         instance.fansList = record.fansList ?? instance.fansList
-        instance.followingList = record.followingList ?? instance.followingList
+        if let followingList = record.followingList {
+            instance.followingList = followingList
+        }
         instance.bookmarkedTweets = record.bookmarkedTweets ?? instance.bookmarkedTweets
         instance.favoriteTweets = record.favoriteTweets ?? instance.favoriteTweets
         instance.repliedTweets = record.repliedTweets ?? instance.repliedTweets

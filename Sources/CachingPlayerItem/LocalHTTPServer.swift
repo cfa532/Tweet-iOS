@@ -926,6 +926,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// in-flight writes don't fail with "file not found" and stale AVPlayer retries don't
     /// spawn fresh background downloads after cancellation.
     public func cancelDownloads(for mediaID: String) {
+        ProgressiveResourceLoader.cancelRequests(for: mediaID)
         cancelHLSSegmentDownloads(for: mediaID)
 
         // 2. Cancel progressive streaming sessions for this mediaID
@@ -964,68 +965,19 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
 
     public func hasCompleteProgressiveCache(for mediaID: String) -> Bool {
-        let cacheFileURL = progressiveCacheFileURL(for: mediaID)
-        guard FileManager.default.fileExists(atPath: cacheFileURL.path),
-              let totalSize = loadProgressiveTotalSize(mediaID: mediaID),
-              totalSize > 0 else {
-            return false
-        }
-
-        let cachedSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
-        return cachedSize >= totalSize && isValidProgressiveCache(fileURL: cacheFileURL)
+        let cache = ProgressiveRangeCache(mediaID: mediaID)
+        guard FileManager.default.fileExists(atPath: cache.file.path),
+              let state = try? cache.snapshot(), state.isComplete else { return false }
+        return isValidProgressiveCache(fileURL: cache.file)
     }
 
-    public func progressiveCacheFileForThumbnailIfAvailable(for mediaID: String, minimumContiguousBytes: Int64 = 2 * 1024 * 1024) -> URL? {
-        let cacheFileURL = progressiveCacheFileURL(for: mediaID)
-        guard FileManager.default.fileExists(atPath: cacheFileURL.path) else { return nil }
-
-        let cachedSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
-        let requiredSize: Int64
-        if let totalSize = loadProgressiveTotalSize(mediaID: mediaID), totalSize > 0 {
-            if cachedSize >= totalSize {
-                return cacheFileURL
-            }
-            requiredSize = min(totalSize, minimumContiguousBytes)
-        } else {
-            requiredSize = minimumContiguousBytes
-        }
-
-        guard cachedSize >= requiredSize,
-              progressiveCacheHasMoovInPrefix(fileURL: cacheFileURL) else {
-            return nil
-        }
-
-        return cacheFileURL
-    }
-
-    private func progressiveCacheHasMoovInPrefix(fileURL: URL) -> Bool {
-        do {
-            let fileHandle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? fileHandle.close() }
-
-            let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
-            let fileSize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
-            let maxScanBytes = Int(min(max(fileSize, 0), 4 * 1024 * 1024))
-            guard maxScanBytes > 0 else { return false }
-
-            let chunkSize = 128 * 1024
-            var buffer = Data(capacity: maxScanBytes)
-            while buffer.count < maxScanBytes {
-                let remaining = maxScanBytes - buffer.count
-                let toRead = min(chunkSize, remaining)
-                guard let chunk = try fileHandle.read(upToCount: toRead), !chunk.isEmpty else {
-                    break
-                }
-                buffer.append(chunk)
-
-                if buffer.range(of: Data([0x6D, 0x6F, 0x6F, 0x76])) != nil {
-                    return true
-                }
-            }
-            return false
-        } catch {
-            return false
-        }
+    public func progressiveCacheFileForThumbnailIfAvailable(for mediaID: String) -> URL? {
+        // A file asset cannot consult our coverage index. Partial caches (including
+        // legacy prefixes that may acquire distant ranges) need the resource loader.
+        let cache = ProgressiveRangeCache(mediaID: mediaID)
+        guard let state = try? cache.snapshot(), state.isComplete,
+              FileManager.default.fileExists(atPath: cache.file.path) else { return nil }
+        return cache.file
     }
 
     private func trackHLSDataTask(_ task: URLSessionTask, mediaID: String, taskKey: UUID) {
@@ -1286,7 +1238,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         return visibleMediaIDs.contains(mediaID)
     }
 
-    private func downloadPriority(for mediaID: String) -> NodeDownloadPriority {
+    /// Shared scheduling policy for the HTTP HLS path and direct progressive loader.
+    func downloadPriority(for mediaID: String) -> NodeDownloadPriority {
         if isCurrentPrimary(mediaID) {
             return .primary
         }
@@ -2284,6 +2237,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func cachedContiguousSize(for mediaID: String, cacheFileURL: URL) -> Int64 {
+        let cache = ProgressiveRangeCache(mediaID: mediaID)
+        if cache.hasIndex {
+            return (try? cache.snapshot().contiguousBytes) ?? 0
+        }
         let stored = loadProgressiveContiguousSize(mediaID: mediaID).map { min($0, progressiveDiskCacheLimit) }
 
         if let stored, stored > 0 {
@@ -2423,6 +2380,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func loadProgressiveTotalSize(mediaID: String) -> Int64? {
         let metaURL = progressiveMetaFileURL(for: mediaID)
         
+        let cache = ProgressiveRangeCache(mediaID: mediaID)
+        if cache.hasIndex { return try? cache.snapshot().total }
+
         // Only load from meta file - don't guess from video.mp4 size
         // because partial downloads would give wrong total size
         if FileManager.default.fileExists(atPath: metaURL.path),

@@ -581,13 +581,13 @@ extension TweetCacheManager {
 
                 if let originalTweet = payload.originalTweet {
                     let originalAuthor = payload.originalAuthor.map {
-                        UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
+                        UserStore.shared.hydrateFromCache($0, shouldUpdateBaseUrl: true)
                     } ?? UserStore.shared.user(mid: originalTweet.authorId)
                     _ = TweetStore.shared.merge(originalTweet, author: originalAuthor)
                 }
 
                 let author = payload.author.map {
-                    UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
+                    UserStore.shared.hydrateFromCache($0, shouldUpdateBaseUrl: true)
                 } ?? UserStore.shared.user(mid: payload.tweet.authorId)
                 return TweetStore.shared.merge(payload.tweet, author: author)
             }
@@ -634,7 +634,7 @@ extension TweetCacheManager {
 
         guard let cachedPayload, !isBlockedByDeletion(cachedPayload.tweet) else { return nil }
         let author = cachedPayload.author.map {
-            UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
+            UserStore.shared.hydrateFromCache($0, shouldUpdateBaseUrl: true)
         } ?? UserStore.shared.user(mid: cachedPayload.tweet.authorId)
         return TweetStore.shared.merge(cachedPayload.tweet, author: author)
     }
@@ -682,7 +682,7 @@ extension TweetCacheManager {
 
         return await MainActor.run {
             let author = cachedPayload.author.map {
-                UserStore.shared.merge($0, shouldUpdateBaseUrl: true)
+                UserStore.shared.hydrateFromCache($0, shouldUpdateBaseUrl: true)
             } ?? UserStore.shared.user(mid: cachedPayload.tweet.authorId)
             return TweetStore.shared.merge(cachedPayload.tweet, author: author)
         }
@@ -1131,7 +1131,7 @@ extension Tweet {
                 let authorSingleton = User.getInstance(mid: decodedAuthor.mid)
                 
                 // Update singleton with decoded data (preserves existing baseUrl if present)
-                User.updateUserInstance(with: decodedAuthor)
+                UserStore.shared.hydrateFromCache(UserRecord(user: decodedAuthor))
                 
                 // Replace tweet's author with the singleton
                 tweet.author = authorSingleton
@@ -1214,7 +1214,7 @@ extension TweetCacheManager {
         }
 
         return await MainActor.run {
-            UserStore.shared.merge(cachedRecord, shouldUpdateBaseUrl: true)
+            UserStore.shared.hydrateFromCache(cachedRecord, shouldUpdateBaseUrl: true)
         }
     }
     
@@ -1384,7 +1384,7 @@ extension TweetCacheManager {
         }
 
         let coreDataUsers = await MainActor.run {
-            coreDataUserRecords.map { UserStore.shared.merge($0, shouldUpdateBaseUrl: true) }
+            coreDataUserRecords.map { UserStore.shared.hydrateFromCache($0, shouldUpdateBaseUrl: true) }
         }
         for user in coreDataUsers {
             consider(user)
@@ -1529,7 +1529,7 @@ extension TweetCacheManager {
         }
 
         let coreDataUsers = await MainActor.run {
-            coreDataUserRecords.map { UserStore.shared.merge($0, shouldUpdateBaseUrl: true) }
+            coreDataUserRecords.map { UserStore.shared.hydrateFromCache($0, shouldUpdateBaseUrl: true) }
         }
         for user in coreDataUsers {
             consider(user)

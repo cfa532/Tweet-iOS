@@ -651,9 +651,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             User.updateUserInstance(with: cachedUser)
             _appUserId = userId
             
-            // Set following list on the singleton instance
-            let appUserInstance = User.getInstance(mid: userId)
-            appUserInstance.followingList = Gadget.getAlphaIds()
+            // Alpha IDs seed guest content; authenticated relationships come from
+            // the cached user and the following-list API.
+            if userId == Constants.GUEST_ID {
+                User.getInstance(mid: userId).followingList = Gadget.getAlphaIds()
+            }
             
             hproseDebug("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
             
@@ -1034,10 +1036,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
                 // Fetch followings and blacklist in background (non-blocking)
                 Task.detached(priority: .background) {
-                    let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                    _ = try? await self.refreshFollowings(user: user)
                     let blackList = (try? await self.getListByType(user: user, entry: .BLACK_LIST)) ?? []
                     await MainActor.run {
-                        user.followingList = followings
                         user.userBlackList = blackList
                         self.printAppUserContent("After background data loaded")
                     }
@@ -1053,11 +1054,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     // Just set entry IP as fallback and mark initialization as complete
                     if appUser.baseUrl == nil {
                         appUser.baseUrl = URL(string: "http://\(finalEntryIP)")
-                    }
-
-                    // Ensure followings list has at least alphaIds
-                    if appUser.followingList?.isEmpty ?? true {
-                        appUser.followingList = Gadget.getAlphaIds()
                     }
 
                     isInitializationComplete = true
@@ -3433,63 +3429,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return (removed, response["reason"] as? String)
     }
     
-    /**
-     * Get a list of users that the given user is following, sorted by timestamp when followed.
-     * For guest users, returns alpha IDs as fallback.
-     */
-    func getFollowings(user: User) async throws -> [MimeiId] {
-        let entry = "get_followings_sorted"
-        // Phase A (demotion prep): snapshot @MainActor User → Sendable UserRecord.
-        let snap = await MainActor.run { UserRecord(user: user) }
-        let attemptedBaseUrl = snap.baseUrl?.absoluteString
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "userid": snap.mid
-        ]
-
-        do {
-            guard let baseUrl = snap.baseUrl else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-            }
-            let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
-            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-
-            // Unwrap v2 response
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-
-            // Handle empty array case - server returns empty array when user has no followings
-            let response: [[String: Any]]
-            if let arrayResponse = unwrappedResponse as? [[String: Any]] {
-                response = arrayResponse
-            } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
-                // Server returned empty array - handle gracefully
-                response = []
-                hproseDebug("DEBUG: [HproseInstance] getFollowings - Server returned empty array (no followings)")
-            } else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
-            }
-            
-            let sorted = response.sorted { (lhs, rhs) in
-                let lval = Self.intField(lhs, key: "value") ?? 0
-                let rval = Self.intField(rhs, key: "value") ?? 0
-                return lval > rval
-            }
-            await MainActor.run { NodePool.shared.updateFromUser(user) }
-            return sorted.compactMap { $0["field"] as? String }
-        } catch {
-            hproseError("DEBUG: [HproseInstance] getFollowings error: \(error) (baseUrl: \(attemptedBaseUrl ?? "nil"))")
-            return Gadget.getAlphaIds()
+    /// Fetch and commit one complete list. A response belongs to the revision at
+    /// request start; it must not overwrite follow changes made while awaiting it.
+    @MainActor
+    func refreshFollowings(user: User) async throws -> [MimeiId] {
+        let revision = user.followingListRevision
+        let followings = try await getListByType(user: user, entry: .FOLLOWING)
+        try Task.checkCancellation()
+        guard user.followingListRevision == revision else {
+            throw CancellationError()
         }
+        user.followingList = followings
+        TweetCacheManager.shared.saveUser(user)
+        return followings
     }
-    
-    /**
-     * Check if the app user is in the target user's blacklist
-     * @param targetUserId The user ID to check against
-     * @return true if app user is blacklisted, false otherwise
-     */
-    
+
     /**
      * Populate fans and following lists for a given user
      */
@@ -3498,12 +3452,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let userMid = await MainActor.run { user.mid }
         do {
             // Get followings (users that the user is following)
-            let followings = try await getFollowings(user: user)
-            await MainActor.run {
-                user.followingList = followings
-            }
+            let followings = try await refreshFollowings(user: user)
             hproseDebug("DEBUG: [HproseInstance] Populated followingList for user \(userMid) with \(followings.count) users")
+        } catch is CancellationError {
+            if Task.isCancelled { return }
+        } catch {
+            hproseError("DEBUG: [HproseInstance] Error populating following list for user \(userMid): \(error)")
+        }
 
+        // A failed following read must not prevent the independent fans read.
+        do {
             // Get fans (users who are following the user)
             if let fans = try await getFans(user: user) {
                 await MainActor.run {
@@ -3514,7 +3472,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 hproseDebug("DEBUG: [HproseInstance] No fans found for user \(userMid)")
             }
         } catch {
-            hproseError("DEBUG: [HproseInstance] Error populating fans/following lists for user \(userMid): \(error)")
+            hproseError("DEBUG: [HproseInstance] Error populating fans list for user \(userMid): \(error)")
         }
     }
     
@@ -6817,9 +6775,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let hostId = await MainActor.run {
             self.appUser.hostIds?.first
         }
+        // The tweet is created on the author's root node and referenced by their
+        // account, so it goes to the writable route: hostid no longer makes the
+        // backend route the call, and a post arriving anywhere else is refused.
         // Non-idempotent add_tweet can be slow server-side: use a dedicated 240s
         // timeout class instead of mutating the shared 15s client.
-        guard let client = await MainActor.run(body: { self.appUser.baseUrl.map { self.clientPool.getClientByUrl(for: $0.absoluteString, timeout: 240) } }) else {
+        _ = try await self.appUser.resolveWritableUrl()
+        guard let client = await MainActor.run(body: { self.appUser.writableClient(timeout: 240) }) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
         }
             
@@ -7219,7 +7181,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
         }
 
-        for dict in response {
+        // The backend returns hash entries without ordering. Sort by the outer
+        // pin timestamp before merging tweets, preserving each tweet's creation time.
+        let orderedPins = try response.map { dict in
+            guard let pinTimestamp = Self.intField(dict, key: "timestamp") else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to get pinned tweets", comment: "Get pinned tweets error")])
+            }
+            return (entry: dict, pinTimestamp: pinTimestamp)
+        }.sorted { $0.pinTimestamp > $1.pinTimestamp }
+
+        for (dict, _) in orderedPins {
             if let tweetDict = dict["tweet"] as? [String: Any] {
                 let tweet = try await mergeTweetFromDict(tweetDict)
                 let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
@@ -7931,8 +7902,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             hproseDebug("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
 
-            // Test IPs in batches of 4 for faster discovery during high load
-            let batchSize = 4
+            // Test IPs in batches of 2 to limit concurrent network health checks
+            let batchSize = 2
             for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, ipAddresses.count)
                 let batch = Array(ipAddresses[batchStart..<batchEnd])
@@ -8021,8 +7992,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 _ = try await fetchUser(appUserMid, baseUrl: "")
             }
 
-            // Snapshot the (possibly just-refreshed) sender baseUrl for this attempt.
-            let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
+            // The message store is written on the account's root node, so this goes
+            // to the writable route rather than the read route. That route is cached
+            // per user, so a conversation resolves it once: only the first message,
+            // or one sent after a failure, pays for a resolution.
+            let appUserWritableUrl = await MainActor.run { self.appUser.writableUrl }
+            if forceRefresh || appUserWritableUrl == nil {
+                _ = try? await self.appUser.resolveWritableUrl()
+            }
 
             let entry = "message_outgoing"
             let params: [String: Any] = [
@@ -8034,9 +8011,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "msg": message.toJSONString()
             ]
 
-            guard let baseUrl = appUserBaseUrl else {
+            guard let senderClient = await self.appUser.writableClient(timeout: 15) else {
                 let errorMsg = "Failed to create client for sender node"
-                hproseError("[sendMessage] ❌ \(errorMsg) - baseUrl: nil")
+                hproseError("[sendMessage] ❌ \(errorMsg) - writableUrl: nil")
                 if attempt < maxRetries {
                     try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
                     continue
@@ -8056,8 +8033,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     )
                 )
             }
-            
-            let senderClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
             let rawResponse = await invokeRunMApp(using: senderClient, entry: entry, params: params)
             let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
@@ -8172,8 +8147,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 )
             }
             
-            // Snapshot recipient's (freshly-fetched) baseUrl for this attempt.
-            let recipientBaseUrl = await MainActor.run { recipient.baseUrl }
+            // The recipient's copy is written on their root node, so this goes to
+            // their writable route. It is cached per user like the sender's, so a
+            // conversation resolves it once rather than per message.
+            let recipientWritableUrl = await MainActor.run { recipient.writableUrl }
+            if forceRefresh || recipientWritableUrl == nil {
+                _ = try? await recipient.resolveWritableUrl()
+            }
 
             let receiptEntry = "message_incoming"
             let receiptParams: [String: Any] = [
@@ -8185,10 +8165,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "msg": message.toJSONString()
             ]
 
-            // Get fresh client (will be recreated if baseUrl changed)
-            guard let rBaseUrl = recipientBaseUrl else {
+            // Get fresh client (will be recreated if the writable route changed)
+            guard let recipientClient = await recipient.writableClient(timeout: 15) else {
                 let errorMsg = "Failed to create client for recipient node"
-                hproseError("[sendMessage] ❌ \(errorMsg) - baseUrl: nil")
+                hproseError("[sendMessage] ❌ \(errorMsg) - writableUrl: nil")
                 if attempt < maxRetries {
                     // Wait before retry
                     try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
@@ -8210,8 +8190,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 )
             }
             
-            let recipientClient = clientPool.getClientByUrl(for: rBaseUrl.absoluteString, timeout: 15)
-
             let rawReceiptResponse = await invokeRunMApp(using: recipientClient, entry: receiptEntry, params: receiptParams)
             let receiptResponseUnwrapped = try? Self.unwrapV2Response(rawReceiptResponse)
             let receiptResponse = receiptResponseUnwrapped ?? Self.normalizeHproseContainers(rawReceiptResponse)
@@ -8368,11 +8346,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// Fetch recent unread messages from a sender (incoming messages only)
     func fetchMessages(senderId: String) async throws -> [ChatMessage] {
         // Phase A (demotion prep): snapshot @MainActor appUser reads.
-        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
-        guard let baseUrl = appUserBaseUrl else {
+        let (appUserMid, appUserWritableUrl) = await MainActor.run { (self.appUser.mid, self.appUser.writableUrl) }
+        // message_fetch marks the conversation read, so it writes and belongs on the
+        // account's root node. The writable route is cached, so this resolves only
+        // when the app has not written for this user yet.
+        if appUserWritableUrl == nil {
+            _ = try await self.appUser.resolveWritableUrl()
+        }
+        guard let client = await self.appUser.writableClient(timeout: 15) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let entry = "message_fetch"
         let params: [String: Any] = [
@@ -8420,13 +8403,18 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// Check for new incoming messages (only check, do not fetch them)
     func checkNewMessages() async throws -> [ChatMessage] {
         // Phase A (demotion prep): snapshot @MainActor appUser reads.
-        let (appUserMid, appUserBaseUrl, appUserIsGuest) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl, self.appUser.isGuest) }
+        let (appUserMid, appUserWritableUrl, appUserIsGuest) = await MainActor.run { (self.appUser.mid, self.appUser.writableUrl, self.appUser.isGuest) }
         guard !appUserIsGuest else { return [] }
 
-        guard let baseUrl = appUserBaseUrl else {
+        // Reads the store message_fetch writes on the root node. Checking through
+        // the read route would count unread messages on a replica that never
+        // receives them.
+        if appUserWritableUrl == nil {
+            _ = try await self.appUser.resolveWritableUrl()
+        }
+        guard let client = await self.appUser.writableClient(timeout: 15) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
 
         let entry = "message_check"
         let params: [String: Any] = [
