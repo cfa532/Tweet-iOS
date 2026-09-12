@@ -68,6 +68,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private var heavyCallLastAttemptAt: [String: Date] = [:]
     private let heavyCallLock = NSLock()
 
+    private var storageCapabilitiesCache: [String: BackendStorageCapabilities] = [:]
+    private let storageCapabilitiesLock = NSLock()
+
     private static let appManifestRefreshKey = "refresh_app_manifest"
 
     /// True when the node rejected the request because it does not publish the app
@@ -84,6 +87,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
 
     private func invokeRunMApp(
+        using client: HproseClient,
+        entry: String,
+        params: [String: Any],
+        priority: DispatchQoS.QoSClass = .userInitiated,
+        storageOwnerID: String? = nil
+    ) async -> Any? {
+        do {
+            let selected = try await storageCompatibleClient(client, entry: entry, params: params, ownerID: storageOwnerID)
+            return await invokeApplication(using: selected, entry: entry, params: params, priority: priority)
+        } catch {
+            return error as NSError
+        }
+    }
+
+    private func invokeApplication(
         using client: HproseClient,
         entry: String,
         params: [String: Any],
@@ -1141,7 +1159,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         hproseDebug("DEBUG: [fetchComments] Using author's baseUrl (\(authorBaseUrl.absoluteString)) for tweet \(tweetId)")
 
-        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params, storageOwnerID: authorId)
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -1742,7 +1760,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
 
         do {
-            let rawResponse = await invokeRunMApp(using: authorClient, entry: entry, params: params)
+            let rawResponse = await invokeRunMApp(using: authorClient, entry: entry, params: params, storageOwnerID: authorId)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
             if let tweetDict = unwrappedResponse as? [String: Any] {
@@ -2453,8 +2471,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
                 let hproseClient = clientPool.getClientByUrl(for: candidateBaseUrl.absoluteString, timeout: 15)
 
-                // Make server call
-                guard let rawResponse = await invokeRunMApp(using: hproseClient, entry: entry, params: params) else {
+                // Keep the confirmed route paired with the server that answered.
+                // Capability negotiation may select the root for a File account.
+                let compatibleClient = try await storageCompatibleClient(hproseClient, entry: entry, params: params, ownerID: userMid)
+                let confirmedRoute = try Self.storageBaseURL(for: compatibleClient)
+                attemptedBaseUrl = confirmedRoute.absoluteString
+                guard let rawResponse = await invokeApplication(using: compatibleClient, entry: entry, params: params) else {
                     throw HproseError.noResponse(userId: userMid)
                 }
 
@@ -2474,7 +2496,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     user: user,
                     response: response as Any,
                     skipRetryAndBlacklist: skipRetryAndBlacklist,
-                    confirmedBaseUrl: candidateBaseUrl,
+                    confirmedBaseUrl: confirmedRoute,
                     previousAccessNodeMid: previousAccessNodeMid
                 )
                 
@@ -3148,8 +3170,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     func login(_ loginUser: User) async throws -> [String: Any] {
         let entry = "login"
         // Phase A (demotion prep): snapshot @MainActor loginUser credential + route reads.
-        let (loginUsername, loginPassword, loginBaseUrl) = await MainActor.run {
-            (loginUser.username, loginUser.password, loginUser.baseUrl)
+        let (loginUsername, loginPassword, loginBaseUrl, loginMid) = await MainActor.run {
+            (loginUser.username, loginUser.password, loginUser.baseUrl, loginUser.mid)
         }
         let params = [
             "aid": appId,
@@ -3173,7 +3195,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             let newClient = self.clientPool.getClientByUrl(for: loginUrl.absoluteString, timeout: 30)
 
             hproseDebug("DEBUG: [login] Invoking login API...")
-            let rawResponse = await self.invokeRunMApp(using: newClient, entry: entry, params: params)
+            let rawResponse = await self.invokeRunMApp(using: newClient, entry: entry, params: params, storageOwnerID: loginMid)
 
             // Check if the response is nil (network error)
             guard rawResponse != nil else {
@@ -8540,3 +8562,142 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 }
 
 // NOTE: Array.chunked extension is now in TweetUploadManager.swift
+
+// Storage format is a server capability, independent of the v2/v3 response
+// envelope and of the app's Debug/Release configuration.
+private struct BackendStorageCapabilities {
+    let formats: Set<String>
+    let checkedAt: Date
+}
+
+extension HproseInstance {
+    private static func storageBaseURL(for client: HproseClient) throws -> URL {
+        var endpoint = (client.uri ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if endpoint.hasSuffix("/webapi") { endpoint.removeLast("/webapi".count) }
+        guard let url = URL(string: endpoint), url.host != nil else {
+            throw NSError(domain: "BackendStorage", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server address"])
+        }
+        return url
+    }
+
+    private func cachedStorageCapabilities(_ key: String) -> BackendStorageCapabilities? {
+        storageCapabilitiesLock.lock()
+        defer { storageCapabilitiesLock.unlock() }
+        guard let cached = storageCapabilitiesCache[key],
+              Date().timeIntervalSince(cached.checkedAt) < 60 else { return nil }
+        return cached
+    }
+
+    private func cacheStorageCapabilities(_ value: BackendStorageCapabilities, key: String) {
+        storageCapabilitiesLock.lock()
+        defer { storageCapabilitiesLock.unlock() }
+        storageCapabilitiesCache[key] = value
+    }
+
+    private func storageCapabilities(using client: HproseClient, params: [String: Any]) async throws -> BackendStorageCapabilities {
+        let aid = params["aid"] as? String ?? appId
+        let version = params["ver"] as? String ?? "last"
+        let key = "\(client.uri ?? "")|\(aid)|\(version)"
+        if let cached = cachedStorageCapabilities(key) { return cached }
+        let baseURL = try Self.storageBaseURL(for: client)
+        let probeClient = clientPool.getClientByUrl(for: baseURL.absoluteString, timeout: Self.routeProbeTimeout)
+        let raw = await invokeApplication(using: probeClient, entry: "health", params: ["aid": aid, "ver": version])
+        if let error = raw as? Error { throw error }
+        guard let reply = Self.asStringKeyedDictionary(raw), reply["success"] as? Bool == true else {
+            throw NSError(domain: "BackendStorage", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Unable to check this server's storage support. Please try again."
+            ])
+        }
+        let formats: Set<String>
+        if let value = reply["storageFormats"] {
+            guard let advertised = value as? [String] else {
+                throw NSError(domain: "BackendStorage", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server storage capabilities"])
+            }
+            formats = Set(advertised)
+        } else {
+            // Only a successful old health response means legacy. A timeout or
+            // an invalid response is never permission to try an older algorithm.
+            formats = ["database"]
+        }
+        let result = BackendStorageCapabilities(formats: formats, checkedAt: Date())
+        cacheStorageCapabilities(result, key: key)
+        return result
+    }
+
+    private func storageCompatibleClient(
+        _ client: HproseClient, entry: String, params: [String: Any], ownerID: String?
+    ) async throws -> HproseClient {
+        let isRead: Bool
+        switch entry {
+        case "get_user", "get_user_core_data", "get_user_meta", "get_tweet", "get_comments",
+             "get_tweet_feed", "get_tweet_id_list", "get_tweets_by_user", "get_pinned_tweets",
+             "get_followers", "get_followings", "get_followers_sorted", "get_followings_sorted",
+             "get_blocked_users", "message_check", "login":
+            isRead = true
+        case "add_tweet", "update_tweet", "delete_tweet", "add_comment", "delete_comment",
+             "toggle_bookmark", "toggle_favorite", "toggle_bookmark_by_user", "toggle_favorite_by_user",
+             "toggle_following", "toggle_followed", "toggle_follower", "toggle_pinned_tweet",
+             "toggle_tweet_privacy", "retweet_added", "retweet_removed", "block_user",
+             "remove_blacklisted_relationship", "set_author_core_data", "set_user_avatar", "delete_account",
+             "message_outgoing", "message_incoming", "message_fetch", "share_file",
+             "resync_user", "sync_user", "refresh_tweet", "update_following_tweets":
+            // Includes explicit recovery: it must stay on the requested access
+            // node and must not silently turn into an ordinary root read.
+            isRead = false
+        default:
+            return client
+        }
+        // Read model properties once, on main. No observable model crosses into
+        // the asynchronous capability/address lookups below.
+        let tweetID = params["tweetid"] as? String
+        var requestOwnerID = ownerID ?? params["userid"] as? String ?? params["authorid"] as? String ?? params["tweetauthorid"] as? String
+        var submittedFormat: String?
+        for key in ["user", "tweet", "comment"] {
+            if let text = params[key] as? String, let data = text.data(using: .utf8),
+               let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if key == "user" { requestOwnerID = requestOwnerID ?? record["mid"] as? String }
+                if key == "tweet" { requestOwnerID = requestOwnerID ?? record["authorId"] as? String }
+                submittedFormat = submittedFormat ?? record["storageFormat"] as? String
+            }
+        }
+        let requestedOwner = requestOwnerID
+        let requestFormat = submittedFormat
+        let context = await MainActor.run { () -> (root: String?, format: String?) in
+            let tweet = tweetID.flatMap { Tweet.getInstance(for: $0) }
+            var userID = requestedOwner
+            if userID == nil, let tweet {
+                if entry == "get_tweet", let parentID = tweet.parentTweetId,
+                   let parent = Tweet.getInstance(for: parentID) {
+                    userID = parent.authorId
+                } else {
+                    userID = tweet.authorId
+                }
+            }
+            let user = userID.map { User.getInstance(mid: $0) }
+            let format = requestFormat ?? tweet?.storageFormat ?? user?.storageFormat
+            return (user?.hostIds?.first, format)
+        }
+        let capabilities = try await storageCapabilities(using: client, params: params)
+        let requiredFormat = context.format ?? "database"
+        if capabilities.formats.contains("tweet-file-v1") && capabilities.formats.contains(requiredFormat) { return client }
+
+        // A legacy user can own File tweets. Prefer its capable root for mixed
+        // lists even when the user itself still has database storage.
+        if isRead, let root = context.root, !root.isEmpty,
+           let address = await getHostIP(root, usePool: false) {
+            let rootClient = clientPool.getClientByUrl(for: ensureHttpPrefix(address), timeout: client.timeout)
+            if rootClient.uri != client.uri {
+                let rootCapabilities = try await storageCapabilities(using: rootClient, params: params)
+                if rootCapabilities.formats.contains("tweet-file-v1"), rootCapabilities.formats.contains(requiredFormat) {
+                    return rootClient
+                }
+            }
+        }
+        guard capabilities.formats.contains(requiredFormat) else {
+            throw NSError(domain: "BackendStorage", code: -2, userInfo: [
+                NSLocalizedDescriptionKey: "This server needs an update to access this account or tweet."
+            ])
+        }
+        return client
+    }
+}

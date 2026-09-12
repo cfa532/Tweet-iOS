@@ -96,6 +96,7 @@ struct MediaRecord: Codable, Hashable, Sendable {
 
 struct UserRecord: Codable, Sendable {
     var mid: MimeiId
+    var storageFormat: String?
     var baseUrl: URL?
     var writableUrl: URL?
     var name: String?
@@ -133,6 +134,7 @@ struct UserRecord: Codable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case storageFormat
         case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort, domainToShare
         case tweetCount, followingCount, followersCount, bookmarksCount, favoritesCount, commentsCount
         case hostIds, hasAcceptedTerms, publicKey, agentPublicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
@@ -141,6 +143,7 @@ struct UserRecord: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mid = try container.decode(String.self, forKey: .mid)
+        storageFormat = try container.decodeIfPresent(String.self, forKey: .storageFormat)
         baseUrl = try container.decodeIfPresent(URL.self, forKey: .baseUrl)
         _ = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
         writableUrl = nil
@@ -179,6 +182,7 @@ struct UserRecord: Codable, Sendable {
 
     init(
         mid: MimeiId = Constants.GUEST_ID,
+        storageFormat: String? = nil,
         baseUrl: URL? = nil,
         writableUrl: URL? = nil,
         name: String? = nil,
@@ -211,6 +215,7 @@ struct UserRecord: Codable, Sendable {
         userBlackList: [MimeiId]? = nil
     ) {
         self.mid = mid
+        self.storageFormat = storageFormat
         self.baseUrl = baseUrl
         self.writableUrl = writableUrl
         self.name = name
@@ -247,6 +252,7 @@ struct UserRecord: Codable, Sendable {
     init(user: User) {
         self.init(
             mid: user.mid,
+            storageFormat: user.storageFormat,
             // The access route, never the root host a write is currently being read
             // from: that is session state and must not come back on the next launch.
             baseUrl: UserRoutes.shared.accessRoute(for: user.mid),
@@ -343,6 +349,7 @@ extension UserRecord {
 
 struct TweetRecord: Codable, Sendable {
     var mid: MimeiId
+    var storageFormat: String?
     var authorId: MimeiId
     var content: String?
     var timestamp: Date
@@ -361,6 +368,7 @@ struct TweetRecord: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case mid
+        case storageFormat
         case authorId
         case content
         case timestamp
@@ -380,6 +388,7 @@ struct TweetRecord: Codable, Sendable {
 
     init(
         mid: MimeiId,
+        storageFormat: String? = nil,
         authorId: MimeiId,
         content: String? = nil,
         timestamp: Date = Date(),
@@ -397,6 +406,7 @@ struct TweetRecord: Codable, Sendable {
         downloadable: Bool? = nil
     ) {
         self.mid = mid
+        self.storageFormat = storageFormat
         self.authorId = authorId
         self.content = content
         self.timestamp = timestamp
@@ -418,6 +428,7 @@ struct TweetRecord: Codable, Sendable {
     init(tweet: Tweet) {
         self.init(
             mid: tweet.mid,
+            storageFormat: tweet.storageFormat,
             authorId: tweet.authorId,
             content: tweet.content,
             timestamp: tweet.timestamp,
@@ -486,7 +497,8 @@ extension TweetRecord {
             commentCount: commentCount ?? 0,
             attachments: attachments?.map { $0.makeMedia(author: author) },
             isPrivate: isPrivate,
-            downloadable: downloadable
+            downloadable: downloadable,
+            storageFormat: storageFormat
         )
     }
 }

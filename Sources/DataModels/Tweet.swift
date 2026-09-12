@@ -2,6 +2,9 @@ import Foundation
 
 @MainActor
 class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
+    // Format is optional so legacy cache records decode unchanged.
+    var storageFormat: String?
+
     // MARK: - Singleton
     private static var instances: [MimeiId: Tweet] = [:]
     private static let instanceLock = NSLock()
@@ -12,14 +15,14 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
                           originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, parentTweetId: MimeiId? = nil, author: User? = nil,
                           favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
-                          downloadable: Bool? = nil) -> Tweet {
+                          downloadable: Bool? = nil, storageFormat: String? = nil) -> Tweet {
         instanceLock.lock()
         guard let existingInstance = instances[mid] else {
             let newInstance = Tweet(mid: mid, authorId: authorId, content: content, timestamp: timestamp, title: title,
                                   originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, parentTweetId: parentTweetId, author: author,
                                   favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
                                   retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
-                                  isPrivate: isPrivate, downloadable: downloadable)
+                                  isPrivate: isPrivate, downloadable: downloadable, storageFormat: storageFormat)
             instances[mid] = newInstance
             instanceLock.unlock()
             return newInstance
@@ -33,6 +36,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         // applyRenderAffectingUpdate so a changed body drops the typeset text and the
         // measured heights — feed cells that were not bound at this moment would
         // otherwise keep rendering the old string at the old height.
+        existingInstance.storageFormat = storageFormat ?? existingInstance.storageFormat
         existingInstance.applyRenderAffectingUpdate {
             if let content = content { existingInstance.content = content }
             if let title = title { existingInstance.title = title }
@@ -293,6 +297,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     
     enum CodingKeys: String, CodingKey {
         case mid
+        case storageFormat
         case authorId
         case content
         case timestamp
@@ -314,6 +319,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mid = try container.decode(String.self, forKey: .mid)
+        storageFormat = try container.decodeIfPresent(String.self, forKey: .storageFormat)
         authorId = try container.decode(String.self, forKey: .authorId)
         content = try container.decodeIfPresent(String.self, forKey: .content)
         timestamp = try container.decode(Date.self, forKey: .timestamp)
@@ -337,8 +343,9 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
          originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, parentTweetId: MimeiId? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
-         downloadable: Bool? = nil) {
+         downloadable: Bool? = nil, storageFormat: String? = nil) {
         self.mid = mid
+        self.storageFormat = storageFormat
         self.authorId = authorId
         self.content = content
         self.timestamp = timestamp
@@ -365,6 +372,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(mid, forKey: .mid)
+        try container.encodeIfPresent(storageFormat, forKey: .storageFormat)
         try container.encode(authorId, forKey: .authorId)
         try container.encodeIfPresent(content, forKey: .content)
         try container.encode(timestamp, forKey: .timestamp)
@@ -396,6 +404,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     /// is most of them. Unguarded, one merge woke every bound cell (body, action bar,
     /// header) for a row whose content was byte-identical, mid-scroll.
     func update(from other: Tweet) throws {
+        storageFormat = other.storageFormat ?? storageFormat
         applyRenderAffectingUpdate {
             // Update all properties except author
             if let content = other.content, content != self.content { self.content = content }
@@ -675,7 +684,8 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             commentCount: commentCount ?? self.commentCount ?? 0,
             attachments: attachments ?? self.attachments,
             isPrivate: isPrivate ?? self.isPrivate,
-            downloadable: downloadable ?? self.downloadable
+            downloadable: downloadable ?? self.downloadable,
+            storageFormat: self.storageFormat
         )
     }
     

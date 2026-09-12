@@ -111,6 +111,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         }
     }
     
+    // Absent in legacy responses/caches; used only for compatible server routing.
+    var storageFormat: String?
     @Published var hostIds: [MimeiId]? // hostIds[0]=writable host, hostIds[1]=best access node
     /// For read RPCs, hostIds[1] is the access node. Single-host users store the
     /// same node in hostIds[0] and hostIds[1].
@@ -415,6 +417,7 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         instance.cloudDrivePort = user.cloudDrivePort
         instance.domainToShare = user.domainToShare ?? instance.domainToShare
         instance.hostIds = user.hostIds ?? instance.hostIds
+        instance.storageFormat = user.storageFormat ?? instance.storageFormat
         instance.publicKey = user.publicKey ?? instance.publicKey
         instance.agentPublicKey = user.agentPublicKey ?? instance.agentPublicKey
 
@@ -473,6 +476,7 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     
     // CodingKeys to handle @Published properties
     enum CodingKeys: String, CodingKey {
+        case storageFormat
         case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort, domainToShare
         case tweetCount, followingCount, followersCount, bookmarksCount, favoritesCount, commentsCount
         case hostIds, publicKey, agentPublicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
@@ -483,6 +487,7 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
         mid = try container.decode(String.self, forKey: .mid)
+        storageFormat = try container.decodeIfPresent(String.self, forKey: .storageFormat)
         // Routes are not decoded from a user payload. The backend sends a baseUrl of its
         // own and the app has always ignored it; where a cached route should be restored
         // it comes through UserRecord, which records it explicitly.
@@ -526,6 +531,7 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         var container = encoder.container(keyedBy: CodingKeys.self)
         
         try container.encode(mid, forKey: .mid)
+        try container.encodeIfPresent(storageFormat, forKey: .storageFormat)
         // NOW caching baseUrl for faster app restarts
         // Safe because retry mechanism automatically re-resolves if IP changed
         // The access route: reading from a root host is session state (see UserRoutes).

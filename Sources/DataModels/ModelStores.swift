@@ -54,6 +54,7 @@ final class UserStore {
         instance.cloudDrivePort = record.cloudDrivePort
         instance.domainToShare = record.domainToShare ?? instance.domainToShare
         instance.hostIds = record.hostIds ?? instance.hostIds
+        instance.storageFormat = record.storageFormat ?? instance.storageFormat
         instance.hasAcceptedTerms = record.hasAcceptedTerms
         instance.publicKey = record.publicKey ?? instance.publicKey
         instance.agentPublicKey = record.agentPublicKey ?? instance.agentPublicKey
@@ -144,7 +145,8 @@ final class TweetStore {
             commentCount: record.commentCount ?? 0,
             attachments: attachments,
             isPrivate: record.isPrivate,
-            downloadable: record.downloadable
+            downloadable: record.downloadable,
+            storageFormat: record.storageFormat
         )
         if prewarmHeight {
             TweetHeightPrewarmer.shared.prewarm(instance)
@@ -154,6 +156,7 @@ final class TweetStore {
 
     @discardableResult
     func update(_ tweet: Tweet, with record: TweetRecord) -> Tweet {
+        tweet.storageFormat = record.storageFormat ?? tweet.storageFormat
         tweet.applyRenderAffectingUpdate {
             if let content = record.content { tweet.content = content }
             if let title = record.title { tweet.title = title }
