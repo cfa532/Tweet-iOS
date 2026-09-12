@@ -55,6 +55,7 @@ struct RegistrationView: View {
                             TextField(LocalizedStringKey("Username"), text: $username)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .autocapitalization(.none)
+                                .autocorrectionDisabled()
                                 .disabled(!hproseInstance.appUser.isGuest) // Username cannot be changed
                                 .focused($focusedField, equals: .username)
                                 .contentShape(Rectangle())
@@ -233,7 +234,19 @@ struct RegistrationView: View {
     private func handleSubmit() {
         // Prevent repeated submission
         guard !isSubmitting else { return }
-        
+
+        // Resigning the active field commits any pending keyboard/autofill edit to
+        // its SwiftUI binding. Read the form on the next main-queue turn so the
+        // value visible in the field is the value submitted to the backend.
+        focusedField = nil
+        DispatchQueue.main.async {
+            submitCurrentValues()
+        }
+    }
+
+    private func submitCurrentValues() {
+        guard !isSubmitting else { return }
+
         // Every unmet precondition has to reach the user. These used to assign to an
         // `errorMessage` that nothing rendered except an inline "accept the Terms" caption,
         // so a password mismatch or a missing username made the button do nothing at all.
@@ -246,16 +259,22 @@ struct RegistrationView: View {
         // Set loading state
         isSubmitting = true
         onSubmissionStateChange?(true) // Notify parent about submission start
-        
+
+        let submittedUsername = username
+        let submittedPassword = password
+        let submittedAlias = alias
+        let submittedProfile = profile
+        let submittedHostId = hostId
+
         // Call the submit function asynchronously
         Task {
             do {
                 try await onSubmit(
-                    username,
-                    password.isEmpty ? nil : password,
-                    alias.isEmpty ? nil : alias,
-                    profile.isEmpty ? nil : profile,
-                    hostId
+                    submittedUsername,
+                    submittedPassword.isEmpty ? nil : submittedPassword,
+                    submittedAlias.isEmpty ? nil : submittedAlias,
+                    submittedProfile.isEmpty ? nil : submittedProfile,
+                    submittedHostId
                 )
                 
                 // Show success message and dismiss after a delay
