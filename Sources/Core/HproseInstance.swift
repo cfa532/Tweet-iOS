@@ -7232,6 +7232,69 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         return result
     }
+
+    /// Follows the configured default users as a newly registered account.
+    ///
+    /// The registration response is the authoritative source for the new user's
+    /// root host. Looking the user up again here races MiMei publication: the
+    /// account can be committed successfully before provider discovery can find it.
+    private func autoFollowDefaultUsersAfterRegistration(
+        registeredUserId: MimeiId,
+        registeredUserHostId: String,
+        alphaIds: [MimeiId]
+    ) async {
+        guard let writableIP = await getHostIP(
+            registeredUserHostId,
+            v4Only: false,
+            usePool: false
+        ), let writableURL = URL(string: "http://\(writableIP)") else {
+            hproseError("DEBUG: [registerUser:background] Could not resolve registered user's root host: \(registeredUserHostId)")
+            return
+        }
+
+        let client = clientPool.getClientByUrl(for: writableURL.absoluteString, timeout: 60)
+
+        for alphaId in alphaIds {
+            do {
+                hproseDebug("DEBUG: [registerUser:background] Checking if alphaId user exists: \(alphaId)")
+                guard let targetUser = try await fetchUser(alphaId, forceRefresh: false) else {
+                    hproseWarning("DEBUG: [registerUser:background] AlphaId user \(alphaId) not found, skipping auto-follow")
+                    continue
+                }
+                guard let targetHostId = await MainActor.run(body: { targetUser.hostIds?.first }),
+                      !targetHostId.isEmpty else {
+                    hproseWarning("DEBUG: [registerUser:background] AlphaId user \(alphaId) has no root host, skipping auto-follow")
+                    continue
+                }
+
+                let params: [String: Any] = [
+                    "aid": appId,
+                    "ver": "last",
+                    "version": "v2",
+                    "followingid": alphaId,
+                    "followingid_hostid": targetHostId,
+                    "userid": registeredUserId,
+                    "userid_hostid": registeredUserHostId,
+                ]
+                let rawResponse = await invokeRunMApp(
+                    using: client,
+                    entry: "toggle_following",
+                    params: params
+                )
+                let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+                let isFollowing = Self.asStringKeyedDictionary(unwrappedResponse)?["isFollowing"] as? Bool
+                    ?? unwrappedResponse as? Bool
+                guard isFollowing == true else {
+                    hproseWarning("DEBUG: [registerUser:background] Unexpected auto-follow result for \(alphaId): \(String(describing: unwrappedResponse))")
+                    continue
+                }
+                hproseDebug("DEBUG: [registerUser:background] Followed alphaId user: \(alphaId)")
+            } catch {
+                let nsError = error as NSError
+                hproseError("DEBUG: [registerUser:background] Failed to follow alphaId \(alphaId): domain: \(nsError.domain), code: \(nsError.code), description: \(error.localizedDescription)")
+            }
+        }
+    }
     
     func registerUser(
         username: String,
@@ -7315,39 +7378,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         
         hproseDebug("DEBUG: [registerUser] Registration success status: \(success)")
         if success {
-            // Extract the newly created user's ID from the response
             guard let userDict = response["user"] as? [String: Any],
-                  let registeredUserId = userDict["mid"] as? String else {
-                // If user object is missing, still return success but log warning
-                hproseWarning("DEBUG: [registerUser] Warning: User object not found in registration response")
+                  let registeredUserId = userDict["mid"] as? String,
+                  let registeredUserHostId = (userDict["hostIds"] as? [String])?.first,
+                  !registeredUserHostId.isEmpty else {
+                hproseWarning("DEBUG: [registerUser] Registration response is missing user.mid or user.hostIds[0]; skipping default follow")
                 return true
             }
             
-            // Make the newly registered user follow each user in getAlphaIds()
-            // Run this in a detached task so we can return success immediately
             let alphaIds = Gadget.getAlphaIds()
-            
             Task.detached { [weak self] in
-                guard let self = self else { return }
-                
-                for alphaId in alphaIds {
-                    do {
-                        // First verify the alphaId user exists before attempting to follow
-                        hproseDebug("DEBUG: [registerUser:background] Checking if alphaId user exists: \(alphaId)")
-                        guard let _ = try await self.fetchUser(alphaId, forceRefresh: false) else {
-                            hproseWarning("DEBUG: [registerUser:background] AlphaId user \(alphaId) not found, skipping auto-follow")
-                            continue
-                        }
-                        
-                        hproseDebug("DEBUG: [registerUser:background] AlphaId user exists, attempting to follow: \(alphaId)")
-                        _ = try await self.toggleFollowing(followingId: alphaId, userId: registeredUserId)
-                    } catch {
-                        let nsError = error as NSError
-                        hproseError("DEBUG: [registerUser:background] Failed to follow alphaId \(alphaId): domain: \(nsError.domain), code: \(nsError.code), description: \(error.localizedDescription)")
-                        // Continue with other users even if one fails
-                    }
-                }
-                
+                await self?.autoFollowDefaultUsersAfterRegistration(
+                    registeredUserId: registeredUserId,
+                    registeredUserHostId: registeredUserHostId,
+                    alphaIds: alphaIds
+                )
             }
             
             // Return success immediately without waiting for auto-follow to complete
