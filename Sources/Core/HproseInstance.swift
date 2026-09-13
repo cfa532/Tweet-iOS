@@ -1079,9 +1079,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         pageNumber: UInt = 0,
         pageSize: UInt = 20
     ) async throws -> [Tweet?] {
+        guard let readNodeURL = parentTweet.readNodeURL else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Read the parent tweet before loading its comments"])
+        }
         let result = try await fetchComments(
             forTweetId: parentTweet.mid,
-            authorId: parentTweet.authorId,
+            readNodeURL: readNodeURL,
             pageNumber: pageNumber,
             pageSize: pageSize
         )
@@ -1094,9 +1097,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return result
     }
 
-    func fetchComments(
+    private func fetchComments(
         forTweetId tweetId: MimeiId,
-        authorId: MimeiId,
+        readNodeURL: URL,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
     ) async throws -> [Tweet?] {
@@ -1113,29 +1116,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "ps": pageSize,
         ] as [String : Any]
 
-        // CRITICAL: Use the parent tweet's author's baseUrl to fetch comments
-        // Comments are stored on the tweet author's node, not the appUser's node
-        // Fetch author if not already loaded
-        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: authorId)
-        // Phase A (demotion prep): snapshot @MainActor User reads together.
-        let cachedAuthorValid = await MainActor.run { cachedAuthor.username != nil && cachedAuthor.baseUrl != nil }
-        let author: User
-        if cachedAuthorValid {
-            author = cachedAuthor
-        } else if let fetchedAuthor = try? await fetchUser(authorId) {
-            author = fetchedAuthor
-        } else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch author for comments", comment: "Author fetch error")])
-        }
+        // Read the parent's children on the same node that supplied the parent.
+        // An author's user record may have been read from a different node.
+        let client = clientPool.getClientByUrl(for: readNodeURL.absoluteString, timeout: 15)
 
-        // Use author's client - comments are on author's node
-        let authorSnap = await MainActor.run { UserRecord(user: author) }
-        guard let authorBaseUrl = authorSnap.baseUrl else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: nil", comment: "Client initialization error")])
-        }
-        let client = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
-
-        hproseDebug("DEBUG: [fetchComments] Using author's baseUrl (\(authorBaseUrl.absoluteString)) for tweet \(tweetId)")
+        hproseDebug("DEBUG: [fetchComments] Using parent's read node (\(readNodeURL.absoluteString)) for tweet \(tweetId)")
 
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         
@@ -1164,7 +1149,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         for item in response {
             if let dict = item {
                 do {
-                    let comment = try await mergeTweetFromDict(dict)
+                    let comment = try await mergeTweetFromDict(dict, from: client)
 
                     // Check if there's cached author data (expired or not)
                     let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
@@ -1329,7 +1314,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         for originalTweetDict in originalTweetsData {
             if let dict = originalTweetDict {
                 do {
-                    let originalTweet = try await mergeTweetFromDict(dict, attachAuthor: true)
+                    let originalTweet = try await mergeTweetFromDict(dict, attachAuthor: true, from: client)
                     
                     // Fetch author in background - will update singleton when complete
                     scheduleBackgroundAuthorFetch(authorId: originalTweet.authorId, context: "original author")
@@ -1351,7 +1336,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         for item in tweetsData {
             if let tweetDict = item {
                 do {
-                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthor: true)
+                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthor: true, from: client)
                     
                     // Fetch author in background - will update singleton when complete
                     scheduleBackgroundAuthorFetch(authorId: tweet.authorId, context: "author")
@@ -1562,7 +1547,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         for originalTweetDict in originalTweetsData {
             if let dict = originalTweetDict {
                 do {
-                    let originalTweet = try await mergeTweetFromDict(dict)
+                    let originalTweet = try await mergeTweetFromDict(dict, from: client)
                     let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: originalTweet.authorId)
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
@@ -1579,7 +1564,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         for item in tweetsData {
             if let tweetDict = item {
                 do {
-                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: snap.mid)
+                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: snap.mid, from: client)
 
                     // Only show private tweets if the current user is the author.
                     // Cache tweet under its authorId. Both the @MainActor Tweet read and the
@@ -1653,12 +1638,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // Originals are filed under their own author, as fetchTweetFeed files them, so a
         // retweet read from cache can find the tweet it embeds.
         for dict in originalTweetsData.compactMap({ $0 }) {
-            guard let record = try? TweetRecord.fromDictionary(dict) else { continue }
+            guard let record = try? TweetRecord.fromDictionary(dict, readNodeURL: baseUrl) else { continue }
             cache.saveTweetRecord(record, userId: record.authorId)
         }
 
         for dict in tweetsData.compactMap({ $0 }) {
-            guard let record = try? TweetRecord.fromDictionary(dict) else { continue }
+            guard let record = try? TweetRecord.fromDictionary(dict, readNodeURL: baseUrl) else { continue }
             // fetchTweetFeed's rule: the feed never carries private tweets.
             if record.isPrivate == true { continue }
             cache.saveTweetRecord(record, userId: feedKey)
@@ -1679,7 +1664,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// - Parameters:
     ///   - tweetId: The ID of the tweet to retrieve
     ///   - authorId: The ID of the tweet's author
-    ///   - nodeUrl: Optional node URL (unused)
+    ///   - nodeUrl: Explicit read node; otherwise reuse the node that last served this tweet.
     ///   - fromDetailView: When true, tells the server this is a detail-view read so it can
     ///     sync/provide the tweet on its end if this node isn't already a DHT provider for it.
     ///     Also passes along the author's write hostId (if known) so the server doesn't have
@@ -1702,7 +1687,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         // Check cache first using TweetCacheManager
         let author = try await fetchUser(authorId)
-        if !bypassCache, let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
+        let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId)
+        if !bypassCache, let cachedTweet {
             // Set author if not already set (check + assign on the main actor in one hop)
             await MainActor.run {
                 if cachedTweet.author == nil {
@@ -1714,13 +1700,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         // Fetch from server using get_tweet API (like Android's fetchTweet)
         // Phase A (demotion prep): snapshot @MainActor author + appUser reads in one hop.
-        let (authorBaseUrl, authorHostId, appUserMid) = await MainActor.run {
-            (author?.baseUrl, author?.hostIds?.first, self.appUser.mid)
+        let (readNodeURL, authorHostId, appUserMid) = await MainActor.run {
+            (nodeUrl.flatMap(URL.init(string:)) ?? cachedTweet?.readNodeURL ?? author?.baseUrl,
+             author?.hostIds?.first, self.appUser.mid)
         }
-        guard let authorBaseUrl else {
+        guard let readNodeURL else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author client not initialized", comment: "Author client initialization error")])
         }
-        let authorClient = clientPool.getClientByUrl(for: authorBaseUrl.absoluteString, timeout: 15)
+        let client = clientPool.getClientByUrl(for: readNodeURL.absoluteString, timeout: 15)
 
         let entry = "get_tweet"
         var params: [String: Any] = [
@@ -1738,7 +1725,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
 
         do {
-            let rawResponse = await invokeRunMApp(using: authorClient, entry: entry, params: params)
+            let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
             if let tweetDict = unwrappedResponse as? [String: Any] {
@@ -1747,7 +1734,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 // Record successful access
                 blackList.recordSuccess(tweetId)
                 
-                let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: authorId)
+                let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: authorId, from: client)
 
                 // Cache tweet by authorId, not appUser.mid
                 await MainActor.run { TweetCacheManager.shared.saveTweet(tweet, userId: authorId) }
@@ -1788,10 +1775,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard !TweetDeletionRegistry.shared.isDeleted(tweetId) else { return nil }
 
         let author = try await fetchUser(authorId)
-        // Refresh is tied to the tweet author. Never substitute an unrelated
-        // app-user/provider node when the author's route is unavailable.
+        let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId)
+        // Synchronize the same access-node copy used by detail and comment reads.
+        // The author's root host remains the source of the explicit synchronization.
         let (authorBaseUrl, authorHostId, appUserMid) = await MainActor.run {
-            (author?.baseUrl, author?.hostIds?.first, self.appUser.mid)
+            (cachedTweet?.readNodeURL ?? author?.baseUrl, author?.hostIds?.first, self.appUser.mid)
         }
         guard let baseUrl = authorBaseUrl else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author client not initialized", comment: "Client initialization error")])
@@ -1816,7 +1804,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         if let tweetDict = unwrappedResponse as? [String: Any] {
             do {
                 guard !TweetDeletionRegistry.shared.isDeleted(tweetId) else { return nil }
-                let tweet = try await mergeTweetFromDict(tweetDict)
+                let tweet = try await mergeTweetFromDict(tweetDict, from: client)
                 if let author = try? await fetchUser(authorId) {
                     await MainActor.run {
                         tweet.author = author  // Set on main thread since author is @Published
@@ -2961,14 +2949,22 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private func mergeTweetFromDict(
         _ dict: [String: Any],
         attachAuthor: Bool = false,
-        attachAuthorMid: MimeiId? = nil
+        attachAuthorMid: MimeiId? = nil,
+        from client: HproseClient
     ) async throws -> Tweet {
-        let record = try TweetRecord.fromDictionary(dict)
+        let record = try TweetRecord.fromDictionary(dict, readNodeURL: Self.tweetReadNodeURL(client))
         return await MainActor.run {
             let authorMid = attachAuthor ? record.authorId : attachAuthorMid
             let author = authorMid.map { UserStore.shared.user(mid: $0) }
             return TweetStore.shared.merge(record, author: author)
         }
+    }
+
+    /// Clients point at /webapi/; retain the serving node as local tweet metadata.
+    private static func tweetReadNodeURL(_ client: HproseClient) -> URL? {
+        var components = URLComponents(string: client.uri)
+        components?.path = ""
+        return components?.url
     }
 
     private func mergeUserFromDict(
@@ -3106,7 +3102,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             do {
                 let tweet = try await mergeTweetFromDict(
                     tweetData,
-                    attachAuthorMid: tweetData["authorId"] as? String == syncedMid ? syncedMid : nil
+                    attachAuthorMid: tweetData["authorId"] as? String == syncedMid ? syncedMid : nil,
+                    from: client
                 )
                 await MainActor.run {
                     if tweet.author == nil {
@@ -3601,7 +3598,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         for (index, dict) in response.enumerated() {
             if let item = dict {
                 do {
-                    let tweet = try await mergeTweetFromDict(item)
+                    let tweet = try await mergeTweetFromDict(item, from: client)
                     let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
                     await MainActor.run {
                         tweet.author = cachedAuthor
@@ -3636,7 +3633,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
                             if let parentPayload = try? Self.unwrapV2Response(parentRawResponse),
                                let parentDict = Self.asStringKeyedDictionary(parentPayload),
-                               let parentTweet = try? await mergeTweetFromDict(parentDict) {
+                               let parentTweet = try? await mergeTweetFromDict(parentDict, from: client) {
                                 let parentAuthor = await TweetCacheManager.shared.fetchUser(mid: parentTweet.authorId)
                                 await MainActor.run {
                                     parentTweet.author = parentAuthor
@@ -3915,7 +3912,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 updatedUser = try await mergeUserFromDict(userDict)
             }
             if let tweetDict = response["tweet"] as? [String: Any] {
-                updatedTweet = try await mergeTweetFromDict(tweetDict)
+                updatedTweet = try await mergeTweetFromDict(tweetDict, from: client)
             }
 
             if !isFavorite {
@@ -3985,7 +3982,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 updatedUser = try await mergeUserFromDict(userDict)
             }
             if let tweetDict = response["tweet"] as? [String: Any] {
-                updatedTweet = try await mergeTweetFromDict(tweetDict)
+                updatedTweet = try await mergeTweetFromDict(tweetDict, from: client)
             }
 
             if !isBookmarked {
@@ -4450,7 +4447,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // add_comment is non-idempotent: a retry after a lost/late response can create
         // a second comment even though the first request already succeeded on the node.
         // Surface ambiguous failures to the caller instead of automatically resubmitting.
-            // Comments are stored on the tweet author's node (same as get_comments / fetchComments).
+            // Writes belong to the parent author's root, independently of the read node.
             let existingAuthor = await MainActor.run { tweet.author }
             let author: User
             if let existingAuthor {
@@ -4520,9 +4517,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             
             await adoptWriteRouteForReads(author, reason: entry)
+            let commentReadNodeURL = Self.tweetReadNodeURL(commentClient)
             await MainActor.run {
                 comment.mid = commentId
                 comment.author = appUser
+                comment.readNodeURL = commentReadNodeURL
                 tweet.commentCount = count
             }
             // Cache the updated tweet under its authorId, not appUser.mid
@@ -7167,7 +7166,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         for (dict, _) in orderedPins {
             if let tweetDict = dict["tweet"] as? [String: Any] {
-                let tweet = try await mergeTweetFromDict(tweetDict)
+                let tweet = try await mergeTweetFromDict(tweetDict, from: client)
                 let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
                 await MainActor.run {
                     tweet.author = cachedAuthor

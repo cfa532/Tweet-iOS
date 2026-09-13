@@ -2168,7 +2168,7 @@ struct TweetDetailView: View {
         await refreshComments()
     }
 
-    // READ: get_tweet on hostIds[1] (author's read node), bypasses cache.
+    // READ: get_tweet on the node that served the displayed tweet, bypassing cache.
     // fromDetailView (server-side DHT provider sync) only needs to fire once per
     // detail-view open (isInitialLoad), not on every pull-to-refresh — except for
     // the embedded/quoted original tweet, which always gets it since it isn't
@@ -2216,7 +2216,7 @@ struct TweetDetailView: View {
         hasLoadedOriginalTweet = true
     }
 
-    // SYNC: refresh_tweet on hostIds[1], which pulls from hostIds[0] if they differ
+    // SYNC: refresh the displayed copy from the author's root node.
     private func doResyncTweet() async {
         if let originalTweetId = tweet.originalTweetId,
            let originalAuthorId = tweet.originalAuthorId {
@@ -2260,7 +2260,7 @@ struct TweetDetailView: View {
         await refreshComments()
     }
 
-    // READ comments page-by-page on hostIds[1] until overlap or end.
+    // READ comments page-by-page on the parent's serving node until overlap or end.
     private func refreshComments() async {
         do {
             var allNewComments: [Tweet] = []

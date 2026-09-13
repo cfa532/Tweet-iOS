@@ -350,6 +350,7 @@ struct TweetRecord: Codable, Sendable {
     var originalTweetId: MimeiId?
     var originalAuthorId: MimeiId?
     var parentTweetId: MimeiId?
+    var readNodeURL: URL?
     var favorites: [Bool]?
     var favoriteCount: Int?
     var bookmarkCount: Int?
@@ -368,6 +369,7 @@ struct TweetRecord: Codable, Sendable {
         case originalTweetId
         case originalAuthorId
         case parentTweetId
+        case readNodeURL
         case favorites
         case favoriteCount
         case bookmarkCount
@@ -434,6 +436,7 @@ struct TweetRecord: Codable, Sendable {
             isPrivate: tweet.isPrivate,
             downloadable: tweet.downloadable
         )
+        readNodeURL = tweet.readNodeURL
     }
 }
 
@@ -444,14 +447,18 @@ extension TweetRecord {
         return try decoder.decode(TweetRecord.self, from: data)
     }
 
-    static func fromDictionary(_ dict: [String: Any]) throws -> TweetRecord {
+    static func fromDictionary(_ dict: [String: Any], readNodeURL: URL? = nil) throws -> TweetRecord {
         var validatedDict = dict
+        // Routing comes from the client that received the response, never its payload.
+        validatedDict.removeValue(forKey: "readNodeURL")
         validatedDict["timestamp"] = normalizedTimestampMilliseconds(from: dict["timestamp"])
 
         let jsonData = try JSONSerialization.data(withJSONObject: validatedDict, options: [])
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
-        return try decoder.decode(TweetRecord.self, from: jsonData)
+        var record = try decoder.decode(TweetRecord.self, from: jsonData)
+        record.readNodeURL = readNodeURL
+        return record
     }
 
     private static func normalizedTimestampMilliseconds(from value: Any?) -> Double {
@@ -469,7 +476,7 @@ extension TweetRecord {
 
     @MainActor
     func makeTweet(author: User? = nil) -> Tweet {
-        Tweet(
+        let tweet = Tweet(
             mid: mid,
             authorId: authorId,
             content: content,
@@ -488,5 +495,7 @@ extension TweetRecord {
             isPrivate: isPrivate,
             downloadable: downloadable
         )
+        tweet.readNodeURL = readNodeURL
+        return tweet
     }
 }
