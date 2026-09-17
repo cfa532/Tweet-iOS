@@ -8718,13 +8718,12 @@ extension HproseInstance {
         let context = await MainActor.run { () -> (root: String?, format: String?) in
             let tweet = tweetID.flatMap { Tweet.getInstance(for: $0) }
             var userID = requestedOwner
-            if userID == nil, let tweet {
-                if entry == "get_tweet", let parentID = tweet.parentTweetId,
-                   let parent = Tweet.getInstance(for: parentID) {
-                    userID = parent.authorId
-                } else {
-                    userID = tweet.authorId
-                }
+            if entry == "get_tweet", let parentID = tweet?.parentTweetId {
+                // getTweet's authorId identifies the writer. A comment's storage
+                // root belongs to its parent's author, even when a writer is supplied.
+                userID = Tweet.getInstance(for: parentID)?.authorId
+            } else if userID == nil {
+                userID = tweet?.authorId
             }
             let user = userID.map { User.getInstance(mid: $0) }
             let format = requestFormat ?? tweet?.storageFormat ?? user?.storageFormat
