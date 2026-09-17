@@ -180,7 +180,7 @@ struct HomeView: View {
                 await MainActor.run {
                     print("DEBUG: Cache persists across logout - cleared periodically or manually by user")
                 }
-                try await HproseInstance.shared.initialize()
+                await HproseInstance.shared.initialize()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NavigateToCommentDetail"))) { notification in

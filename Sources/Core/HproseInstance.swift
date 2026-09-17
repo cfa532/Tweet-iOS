@@ -589,7 +589,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ///
     /// - Note: This method is called during app startup by TweetApp.AppState.initialize()
     /// - Note: Errors during initAppEntry are caught and logged, allowing the app to continue with defaults
-    @MainActor func initialize() async throws {
+    @MainActor func initialize() async {
         
         // Step 1: Initialize preference helper first
         self.preferenceHelper = PreferenceHelper()

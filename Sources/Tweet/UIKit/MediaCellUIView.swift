@@ -2589,7 +2589,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     /// Defer video output attachment to next run-loop cycle.
     private func deferVideoOutputAttachment(_ newPlayer: AVPlayer) {
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.async { [weak self, newPlayer] in
             guard let self, self.player === newPlayer else { return }
             self.ensureVideoOutputAttached(for: newPlayer)
             if self.captureMissingVideoCoverIfPossible(for: newPlayer, reason: "videoOutputAttached") {

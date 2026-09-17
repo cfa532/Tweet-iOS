@@ -552,7 +552,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             DetailVideoManager.shared.pausePlayer()
         }
 
-        Task {
+        Task { [self] in
             print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
 
             // Load attachment preview if available
@@ -572,7 +572,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             // Create share items with preview
             let shareItems = await buildShareItems(for: tweet, hproseInstance: hprose)
 
-            await MainActor.run {
+            await MainActor.run { [self] in
                 self.isPreparingShare = false
                 self.shareSpinner.stopAnimating()
                 self.shareButton.alpha = 1.0

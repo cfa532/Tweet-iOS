@@ -2811,7 +2811,11 @@ class SharedAssetCache: ObservableObject {
             Task {
                 // Preload immediately if delay is 0, otherwise use async timing
                 if delay > 0 {
-                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    do {
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    } catch {
+                        return
+                    }
                 }
                 
                 guard !Task.isCancelled else { return }
