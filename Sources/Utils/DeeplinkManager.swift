@@ -250,21 +250,6 @@ class DeeplinkManager: ObservableObject {
     
     /// Handle deeplink navigation
     func handleDeeplink(_ deeplink: DeeplinkType, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
-        // Wait for app initialization if needed
-        if !hproseInstance.isAppInitialized {
-            print("[DeeplinkManager] App not initialized, waiting...")
-            // Wait up to 10 seconds for initialization
-            var waitCount = 0
-            while !hproseInstance.isAppInitialized && waitCount < 100 {
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                waitCount += 1
-            }
-            
-            if !hproseInstance.isAppInitialized {
-                print("[DeeplinkManager] App initialization timeout, proceeding anyway")
-            }
-        }
-        
         switch deeplink {
         case .tweet(let tweetId, let authorId):
             return await navigateToTweet(tweetId: tweetId, authorId: authorId, navigationPath: navigationPath, hproseInstance: hproseInstance)
@@ -386,6 +371,15 @@ class DeeplinkManager: ObservableObject {
     private func navigateToUser(userId: String, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
         print("[DeeplinkManager] Navigating to user: \(userId)")
 
+        guard !userId.isEmpty, userId != Constants.GUEST_ID else { return false }
+
+        // ProfileView validates the route and refreshes data after appearing. Cached
+        // content needs neither that network round trip nor app network initialization.
+        let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+        if cachedUser.username != nil {
+            return await replaceNavigationPath(with: cachedUser, navigationPath: navigationPath)
+        }
+
         guard let user = await resolveWithRouteRepair(
             routeOwnerId: userId,
             hproseInstance: hproseInstance,
@@ -441,6 +435,10 @@ class DeeplinkManager: ObservableObject {
     ) async -> T? {
         guard !routeOwnerId.isEmpty, routeOwnerId != Constants.GUEST_ID else { return nil }
 
+        // ContentView is mounted after local preferences and app-user identity are
+        // loaded. Route discovery resolves its own entry connection, so the target
+        // read can run alongside initAppEntry instead of waiting for the app user's
+        // network refresh (which may be on a different node).
         for (attemptIndex, delay) in Self.retryDelays.enumerated() {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)

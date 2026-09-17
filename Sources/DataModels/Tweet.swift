@@ -116,6 +116,9 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     var originalTweetId: MimeiId? // retweet id of the original tweet
     var originalAuthorId: MimeiId? // authorId of the forwarded tweet
     var parentTweetId: MimeiId? // immediate parent for comments and replies
+    // The node that served this object, independent of its author's current route.
+    // Persisted by TweetRecord in the local cache, not sent in tweet write payloads.
+    var readNodeURL: URL?
         
     // Media attachments
     var attachments: [MimeiFileType]? {
@@ -405,6 +408,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     /// header) for a row whose content was byte-identical, mid-scroll.
     func update(from other: Tweet) throws {
         storageFormat = other.storageFormat ?? storageFormat
+        if let readNodeURL = other.readNodeURL { self.readNodeURL = readNodeURL }
         applyRenderAffectingUpdate {
             // Update all properties except author
             if let content = other.content, content != self.content { self.content = content }

@@ -69,7 +69,12 @@ struct CommentDetailViewWithParent: View {
             isLoading = false
             return
         }
-        
+
+        // A cached parent is enough to present the destination. Keep the detail
+        // read below for fresh data and provider registration without delaying it.
+        parentTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
+        isLoading = parentTweet == nil
+
         do {
             // Any read that opens a detail view carries fromDetailView, so the node
             // syncs and provides the tweet if it isn't a provider yet.

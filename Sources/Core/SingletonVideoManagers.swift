@@ -1940,7 +1940,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
                     return
                 }
 
-                Task { @MainActor in
+                Task { @MainActor [self, player] in
                     // Bail if fullscreen was dismissed while seek was in flight.
                     guard self.isActive else { return }
 
@@ -3971,8 +3971,8 @@ final class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycle
         }
         videoCompletionObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
+        ) { [weak self, playerItem] _ in
+            Task { @MainActor [playerItem] in
                 guard let self,
                       let player = self.currentPlayer,
                       player.currentItem === playerItem else { return }

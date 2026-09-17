@@ -168,6 +168,7 @@ final class TweetStore {
             downloadable: record.downloadable,
             storageFormat: record.storageFormat
         )
+        if let readNodeURL = record.readNodeURL { instance.readNodeURL = readNodeURL }
         if prewarmHeight {
             TweetHeightPrewarmer.shared.prewarm(instance)
         }
@@ -177,6 +178,7 @@ final class TweetStore {
     @discardableResult
     func update(_ tweet: Tweet, with record: TweetRecord) -> Tweet {
         tweet.storageFormat = record.storageFormat ?? tweet.storageFormat
+        if let readNodeURL = record.readNodeURL { tweet.readNodeURL = readNodeURL }
         tweet.applyRenderAffectingUpdate {
             if let content = record.content { tweet.content = content }
             if let title = record.title { tweet.title = title }
