@@ -30,6 +30,10 @@ post_install do |installer|
       # Disable bitcode (can cause dSYM issues)
       config.build_settings['ENABLE_BITCODE'] = 'NO'
       config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+
+      # The legacy pod headers use quoted framework imports, which Xcode's
+      # module verifier rejects. Preserve this setting when regenerating Pods.
+      config.build_settings['ENABLE_MODULE_VERIFIER'] = 'NO'
       
       # Ensure proper architecture settings - support both arm64 and x86_64 for simulator
       config.build_settings['ARCHS'] = '$(ARCHS_STANDARD)'
