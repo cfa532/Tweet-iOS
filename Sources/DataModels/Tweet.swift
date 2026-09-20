@@ -119,6 +119,12 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     // The node that served this object, independent of its author's current route.
     // Persisted by TweetRecord in the local cache, not sent in tweet write payloads.
     var readNodeURL: URL?
+
+    /// Attachments use the same serving node as this tweet. Until a read node is
+    /// recorded, use the author's route, matching getTweet's initial node selection.
+    var mediaBaseURL: URL? {
+        readNodeURL ?? author?.baseUrl
+    }
         
     // Media attachments
     var attachments: [MimeiFileType]? {

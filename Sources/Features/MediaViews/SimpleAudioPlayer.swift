@@ -442,7 +442,7 @@ struct CompactAudioPlaylistPlayer: View {
     @State private var startupTimeoutTask: Task<Void, Never>?
 
     private var baseUrl: URL {
-        parentTweet.author?.baseUrl
+        parentTweet.mediaBaseURL
             ?? HproseInstance.shared.appUser.baseUrl
             ?? HproseInstance.baseUrl
     }

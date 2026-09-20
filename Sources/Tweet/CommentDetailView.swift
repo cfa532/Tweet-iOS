@@ -292,7 +292,7 @@ struct CommentDetailView: View {
     private var selectedCommentVideo: (url: URL, mid: String, mediaType: MediaType)? {
         guard let attachments = comment.attachments,
               attachments.indices.contains(selectedMediaIndex),
-              let baseUrl = comment.author?.baseUrl else {
+              let baseUrl = comment.mediaBaseURL else {
             return nil
         }
 
@@ -305,11 +305,11 @@ struct CommentDetailView: View {
     }
 
     /// What the video wiring below is derived from: the comment, the page in view, and the
-    /// author route its URL is built from. The route can still be arriving when this view
+    /// serving route its URL is built from. The route can still be arriving when this view
     /// opens, and the media section only renders a player once it exists, so the wiring
     /// has to follow the key rather than snapshot it on appear.
     private var commentVideoWiringKey: String {
-        let route = comment.author?.baseUrl?.absoluteString ?? ""
+        let route = comment.mediaBaseURL?.absoluteString ?? ""
         return "\(comment.mid)|\(route)|\(selectedMediaIndex)|\(commentVideoMids.joined(separator: ","))"
     }
 
@@ -320,7 +320,7 @@ struct CommentDetailView: View {
     private func registerCommentVideoAttachments() {
         DetailVideoManager.shared.setMainTweetAttachments(
             comment.attachments ?? [],
-            baseUrl: comment.author?.baseUrl
+            baseUrl: comment.mediaBaseURL
         )
     }
 
@@ -353,7 +353,7 @@ struct CommentDetailView: View {
                 let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
                 let _ = print("DEBUG: [CommentDetailView] Showing \(attachments.count) attachments from comment \(comment.mid)")
                 let _ = print("DEBUG: [CommentDetailView]   comment.author = \(comment.author?.username ?? "nil")")
-                let _ = print("DEBUG: [CommentDetailView]   comment.author.baseUrl = \(comment.author?.baseUrl?.absoluteString ?? "nil")")
+                let _ = print("DEBUG: [CommentDetailView]   comment.mediaBaseURL = \(comment.mediaBaseURL?.absoluteString ?? "nil")")
                 let _ = attachments.enumerated().forEach { index, att in
                     print("DEBUG: [CommentDetailView]   [\(index)] type=\(att.type), mid=\(att.mid)")
                 }

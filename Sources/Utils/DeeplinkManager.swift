@@ -301,19 +301,9 @@ class DeeplinkManager: ObservableObject {
         }
     }
 
-    /// Gives a cached deeplink target the two things the server-read branch guarantees and
-    /// the cache does not: an attached author, and a route that has just been probed.
-    ///
-    /// Reading the tweet from disk is the point of that branch, but everything the detail
-    /// view does next — build its media URLs, read its comments, refresh the tweet — goes
-    /// through the author's route, and a link is routinely opened long after the route
-    /// cached with it stopped serving. Every other deeplink resolution repairs that route
-    /// through `resolveWithRouteRepair`; this branch skipped it and displayed a tweet
-    /// against an address nothing had checked.
-    ///
-    /// Deliberately not awaited: the cached tweet is already on screen, and both the
-    /// detail view's video wiring and its image loads follow the route as it moves, so
-    /// the link still opens at cache speed.
+    /// Attach the cached author and check its profile route after navigation.
+    /// Attachment URLs use the tweet's serving node when one has been recorded,
+    /// independently of this author's profile route.
     private func prepareAuthorRouteForCachedTweet(
         _ tweet: Tweet,
         authorId: String,

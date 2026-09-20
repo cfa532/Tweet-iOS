@@ -72,9 +72,9 @@ struct MediaBrowserView: View {
     }
 
     private var baseUrl: URL {
-        // Use author's baseUrl if available, otherwise use appUser's baseUrl
-        // If both are nil, use real IP from HproseInstance (resolved at app start)
-        return currentTweet.author?.baseUrl 
+        // Match inline detail media to the node that supplied the tweet.
+        // Keep the existing app route for locally constructed media without a route.
+        return currentTweet.mediaBaseURL
             ?? HproseInstance.shared.appUser.baseUrl 
             ?? HproseInstance.baseUrl
     }
@@ -221,7 +221,7 @@ struct MediaBrowserView: View {
                     return
                 }
                 let attachment = allNextAttachments[videoIndex]
-                let nextBaseUrl = nextTweet.author?.baseUrl
+                let nextBaseUrl = nextTweet.mediaBaseURL
                     ?? HproseInstance.shared.appUser.baseUrl
                     ?? HproseInstance.baseUrl
                 var nextBrowserIndex = 0

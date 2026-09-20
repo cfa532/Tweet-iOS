@@ -484,7 +484,7 @@ struct DetailMediaCell: View {
     }
     
     private var baseUrl: URL? {
-        return parentTweet.author?.baseUrl
+        return parentTweet.mediaBaseURL
     }
 
     static func imageLoadId(for attachment: MimeiFileType) -> String {
@@ -1411,7 +1411,7 @@ struct TweetDetailView: View {
     }
 
     private var firstMainTweetVideoToAutoplay: (url: URL, mid: String, mediaType: MediaType)? {
-        guard let baseUrl = displayTweet.author?.baseUrl,
+        guard let baseUrl = displayTweet.mediaBaseURL,
               let attachment = displayTweet.attachments?.first(where: { $0.type == .video || $0.type == .hls_video }),
               let url = attachment.getUrl(baseUrl) else {
             return nil
@@ -1425,20 +1425,10 @@ struct TweetDetailView: View {
             .map { $0.mid }
     }
 
-    /// Everything the main tweet's video wiring is built from: which tweet is on screen,
-    /// which videos it carries, and the author route their URLs are resolved against.
-    ///
-    /// Registering that wiring once, on appear, assumes all three are already settled.
-    /// They are when the view is pushed from a feed cell that just rendered the tweet,
-    /// but not when a deeplink opens it. A deeplink whose tweet is already cached
-    /// navigates on the cached copy alone — no author fetch, no route repair — so the
-    /// author can still be arriving, and with it the only base URL an attachment URL can
-    /// be built from. The media section renders the player the moment that route exists,
-    /// so a snapshot taken before it leaves the player spinning on a video nobody ever
-    /// asked the manager to load; the visibility coordinator cannot rescue it either,
-    /// because it resolves playback through the same snapshot.
+    /// Keep video registration aligned with the tweet, its attachments and the
+    /// serving node used by the media views, including data arriving after navigation.
     private var mainTweetVideoWiringKey: String {
-        let route = displayTweet.author?.baseUrl?.absoluteString ?? ""
+        let route = displayTweet.mediaBaseURL?.absoluteString ?? ""
         return "\(displayTweet.mid)|\(route)|\(mainTweetVideoMids.joined(separator: ","))"
     }
 
@@ -1448,7 +1438,7 @@ struct TweetDetailView: View {
         guard let attachments = displayTweet.attachments else { return }
         DetailVideoManager.shared.setMainTweetAttachments(
             attachments,
-            baseUrl: displayTweet.author?.baseUrl
+            baseUrl: displayTweet.mediaBaseURL
         )
     }
 
@@ -1773,7 +1763,7 @@ struct TweetDetailView: View {
             cachedDisplayTweet = nil
         }
         .onChange(of: mainTweetVideoWiringKey) { _, _ in
-            // The tweet, its videos or the author's route settled after onAppear. This
+            // The tweet, its videos or its serving route settled after onAppear. This
             // runs in the same body evaluation that decides whether the player view can
             // be rendered at all, so the manager is always wired for the URL on screen.
             print("DEBUG: [TweetDetailView] Main tweet video wiring changed - re-registering")
@@ -1885,7 +1875,7 @@ struct TweetDetailView: View {
 
                                     Group {
                                         if attachment.type == .video || attachment.type == .hls_video {
-                                            if let baseUrl = displayTweet.author?.baseUrl,
+                                            if let baseUrl = displayTweet.mediaBaseURL,
                                                let url = attachment.getUrl(baseUrl) {
                                                 DetailSingletonVideoPlayerView(
                                                     url: url,
