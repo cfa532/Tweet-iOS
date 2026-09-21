@@ -1118,6 +1118,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         let result = try await fetchComments(
             forTweetId: parentTweet.mid,
+            parentAuthorId: parentTweet.authorId,
             readNodeURL: readNodeURL,
             pageNumber: pageNumber,
             pageSize: pageSize
@@ -1133,6 +1134,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
     private func fetchComments(
         forTweetId tweetId: MimeiId,
+        parentAuthorId: MimeiId,
         readNodeURL: URL,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
@@ -1150,15 +1152,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "ps": pageSize,
         ] as [String : Any]
 
-        // Read the parent's children on the same node that supplied the parent.
-        // An author's user record may have been read from a different node.
+        // Start with the node that supplied the parent, rather than the author's
+        // independently selected user route.
         let client = clientPool.getClientByUrl(for: readNodeURL.absoluteString, timeout: 15)
 
         hproseDebug("DEBUG: [fetchComments] Using parent's read node (\(readNodeURL.absoluteString)) for tweet \(tweetId)")
 
-        // The parent has already been read from this server. Do not negotiate a
-        // different route for its children using the author's independent route.
-        let rawResponse = await invokeApplication(using: client, entry: entry, params: params)
+        // A Database parent can have File comments. Like TweetWeb, negotiate
+        // support for the child graph and retain the node that actually serves it.
+        let (rawResponse, responseClient) = await invokeRunMAppWithSource(
+            using: client, entry: entry, params: params, storageOwnerID: parentAuthorId
+        )
         
         // Unwrap v2 response
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -1185,32 +1189,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         for item in response {
             if let dict = item {
                 do {
-                    let comment = try await mergeTweetFromDict(dict, from: client)
-
-                    // Check if there's cached author data (expired or not)
-                    let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
-
-                    // If we have cached data with username and baseUrl, use it regardless of expiration
-                    let commentCachedAuthorValid = await MainActor.run { cachedAuthor.username != nil && cachedAuthor.baseUrl != nil }
-                    if commentCachedAuthorValid {
-                        await MainActor.run {
-                            comment.author = cachedAuthor
-                        }
-                        hproseWarning("DEBUG: [fetchComments] Using cached author for \(comment.authorId), skipping network fetch")
-                    } else {
-                        // Only fetch from network if there's no cached data
-                        if let author = try? await fetchUser(comment.authorId) {
-                            await MainActor.run {
-                                comment.author = author
-                            }
-                        } else {
-                            // Server fetch failed - use skeleton to indicate error
-                            await MainActor.run {
-                                comment.author = User.getInstance(mid: comment.authorId)
-                                hproseWarning("⚠️ [fetchComments] Server fetch failed, using skeleton for \(comment.authorId) to indicate error")
-                            }
-                        }
-                    }
+                    let comment = try await mergeTweetFromDict(dict, attachAuthor: true, from: responseClient)
                     commentsWithAuthors.append(comment)
                 } catch {
                     hproseError("Error processing comment: \(error)")
@@ -1220,7 +1199,24 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 commentsWithAuthors.append(nil)
             }
         }
-        return commentsWithAuthors
+
+        // Return the comment bodies without waiting for their authors' nodes.
+        // The attached User singletons update the rows when these lookups finish.
+        // Snapshot IDs once so background tasks never read observable models.
+        let loadedComments = commentsWithAuthors
+        let authorIds = await MainActor.run {
+            Set(loadedComments.compactMap { $0?.authorId })
+        }
+        for authorId in authorIds {
+            Task(priority: .utility) {
+                do {
+                    _ = try await self.fetchUser(authorId)
+                } catch {
+                    hproseWarning("DEBUG: [fetchComments] Background author fetch failed for \(authorId): \(error)")
+                }
+            }
+        }
+        return loadedComments
     }
 
     // MARK: - Tweet Operations
@@ -1549,10 +1545,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         pageSize: UInt,
         entry: String
     ) async throws -> [Tweet?] {
-        // Phase A (demotion prep): snapshot @MainActor User + appUser.mid.
-        let snap = await MainActor.run { UserRecord(user: user) }
-        let appUserMid = await MainActor.run { self.appUser.mid }
-        guard let baseUrl = snap.baseUrl else {
+        // UserRecord stores the access route for persistence. Network reads must
+        // use the live route, including the root adopted after a successful write,
+        // so profile resync and the following list read target the same copy.
+        let (userMid, readNodeURL, appUserMid) = await MainActor.run {
+            (user.mid, user.baseUrl, self.appUser.mid)
+        }
+        guard let baseUrl = readNodeURL else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
@@ -1560,7 +1559,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": snap.mid,
+            "userid": userMid,
             "pn": pageNumber,
             "ps": pageSize,
             "appuserid": appUserMid,
@@ -1600,7 +1599,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         for item in tweetsData {
             if let tweetDict = item {
                 do {
-                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: snap.mid, from: responseClient)
+                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: userMid, from: responseClient)
 
                     // Only show private tweets if the current user is the author.
                     // Cache tweet under its authorId. Both the @MainActor Tweet read and the
@@ -7151,18 +7150,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
      */
     func getPinnedTweets(user: User) async throws -> [Tweet] {
         let entry = "get_pinned_tweets"
-        // Phase A (demotion prep): snapshot @MainActor User + appUser.mid.
-        let snap = await MainActor.run { UserRecord(user: user) }
-        let appUserMid = await MainActor.run { self.appUser.mid }
+        // Pinned rows use the same live read route as the profile's regular rows.
+        let (userMid, readNodeURL, appUserMid) = await MainActor.run {
+            (user.mid, user.baseUrl, self.appUser.mid)
+        }
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": snap.mid,
+            "userid": userMid,
             "appuserid": appUserMid
         ]
 
-        guard let baseUrl = snap.baseUrl else {
+        guard let baseUrl = readNodeURL else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
