@@ -345,6 +345,7 @@ struct MediaBrowserView: View {
         let cleanupNonVisibleImagesClosure: (Int) -> Void
         let cleanupImageStatesClosure: () -> Void
         @State private var isCompletingDismiss = false
+        @State private var isVideoPinching = false
 
         /// Find the next video attachment index after the current index (skips images/audio).
         /// Returns nil if there is no next video in this tweet.
@@ -528,7 +529,7 @@ struct MediaBrowserView: View {
                 .onChanged { value in
                     guard !isSystemEdgeSwipe(value) else { return }
                     guard allowImageAttachments || !currentAttachmentIsImage else { return }
-                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else { return }
+                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed, !isVideoPinching else { return }
 
                     let vertical = abs(value.translation.height)
                     let horizontal = abs(value.translation.width)
@@ -546,7 +547,7 @@ struct MediaBrowserView: View {
                         return
                     }
                     guard allowImageAttachments || !currentAttachmentIsImage else { return }
-                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed else {
+                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed, !isVideoPinching else {
                         resetDragOffset(animated: true)
                         return
                     }
@@ -715,6 +716,10 @@ struct MediaBrowserView: View {
                 mediaType: attachment.type,
                 aspectRatio: attachment.aspectRatio,
                 shouldAutoPlay: shouldAutoPlay,
+                onPinchStateChange: { pinching in
+                    isVideoPinching = pinching
+                    if pinching { resetDragOffset(animated: false) }
+                },
                 onUserInteraction: {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showControls = true
@@ -1081,6 +1086,7 @@ struct SingletonVideoPlayerView: View {
     let mediaType: MediaType
     let aspectRatio: Float?
     let shouldAutoPlay: Bool
+    let onPinchStateChange: (Bool) -> Void
     let onUserInteraction: () -> Void
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
@@ -1124,6 +1130,7 @@ struct SingletonVideoPlayerView: View {
                             SimplerAVPlayerViewController(
                                 player: player,
                                 mid: mid,
+                                onPinchStateChange: onPinchStateChange,
                                 onUserInteraction: onUserInteraction
                             )
                         }
@@ -1388,18 +1395,23 @@ private struct BrowserLayerVideoPlayerView: View {
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     let player: AVPlayer
     let mid: String
+    let onPinchStateChange: (Bool) -> Void
     let onUserInteraction: () -> Void
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(onUserInteraction: onUserInteraction)
+        Coordinator(onPinchStateChange: onPinchStateChange, onUserInteraction: onUserInteraction)
     }
     
+    @MainActor
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var statusObserver: NSKeyValueObservation?
         var currentItemObserver: NSKeyValueObservation?
+        weak var playerViewController: AVPlayerViewController?
+        var onPinchStateChange: (Bool) -> Void
         var onUserInteraction: () -> Void
 
-        init(onUserInteraction: @escaping () -> Void) {
+        init(onPinchStateChange: @escaping (Bool) -> Void, onUserInteraction: @escaping () -> Void) {
+            self.onPinchStateChange = onPinchStateChange
             self.onUserInteraction = onUserInteraction
         }
         
@@ -1413,9 +1425,52 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             onUserInteraction()
         }
 
+        @objc func handleVideoPinch(_ recognizer: UIPinchGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                onPinchStateChange(true)
+                onUserInteraction()
+            case .changed:
+                // Change only the picture's fit/fill mode. Scaling the controller's
+                // view would also enlarge and crop its playback controls.
+                if recognizer.scale > 1.05 {
+                    playerViewController?.videoGravity = .resizeAspectFill
+                } else if recognizer.scale < 0.95 {
+                    playerViewController?.videoGravity = .resizeAspect
+                }
+            case .ended, .cancelled, .failed:
+                finishPinching()
+            default:
+                break
+            }
+        }
+
+        func finishPinching() {
+            // Keep navigation suppressed until drag recognizers have also received
+            // the end of these touches; a pinch must not become a swipe-to-dismiss.
+            DispatchQueue.main.async { [self] in onPinchStateChange(false) }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard gestureRecognizer is UIPinchGestureRecognizer else { return true }
+            var target = touch.view
+            while let view = target, view !== gestureRecognizer.view {
+                if view is UIControl { return false }
+                target = view.superview
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            // Own pinch sizing here instead of letting AVKit use the same pinch
+            // to enter a separate system fullscreen presentation.
+            gestureRecognizer is UIPinchGestureRecognizer && otherGestureRecognizer is UIPinchGestureRecognizer
+        }
+
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            true
+            !(gestureRecognizer is UIPinchGestureRecognizer || otherGestureRecognizer is UIPinchGestureRecognizer)
         }
     }
 
@@ -1450,6 +1505,7 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         // Let AVPlayerViewController keep its native tap handling while the app
         // overlay is also revealed for fullscreen actions such as bookmarking.
         let coordinator = context.coordinator
+        coordinator.playerViewController = controller
         let tapRecognizer = UITapGestureRecognizer(
             target: coordinator,
             action: #selector(Coordinator.handlePlayerTap(_:))
@@ -1459,6 +1515,13 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         tapRecognizer.delaysTouchesEnded = false
         tapRecognizer.delegate = coordinator
         controller.view.addGestureRecognizer(tapRecognizer)
+
+        let pinchRecognizer = UIPinchGestureRecognizer(
+            target: coordinator,
+            action: #selector(Coordinator.handleVideoPinch(_:))
+        )
+        pinchRecognizer.delegate = coordinator
+        controller.view.addGestureRecognizer(pinchRecognizer)
         
         // Setup observer to auto-play when ready
         setupPlayerItemObserver(player: player, coordinator: coordinator)
@@ -1499,6 +1562,7 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        context.coordinator.onPinchStateChange = onPinchStateChange
         context.coordinator.onUserInteraction = onUserInteraction
 
         if let controller = uiViewController as? SurfaceAwarePlayerViewController {
@@ -1514,6 +1578,7 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
 
         if uiViewController.player !== player {
             uiViewController.player = player
+            uiViewController.videoGravity = .resizeAspect
             
             // Setup observer for new player - don't auto-play, let FullScreenVideoManager handle it
             let coordinator = context.coordinator
@@ -1535,6 +1600,10 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
                 }
             }
         }
+    }
+
+    static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
+        coordinator.finishPinching()
     }
 }
 
