@@ -35,8 +35,8 @@ private struct ProfileNewTweetsBanner: View {
                         .font(.system(size: 15, weight: .regular))
                 }
                 .foregroundColor(.white)
-                .padding(.leading, 12)
-                .padding(.trailing, 14)
+                .padding(.leading, 20)
+                .padding(.trailing, 22)
                 .frame(height: 44)
                 .background(Capsule().fill(Color.accentColor))
                 .clipShape(Capsule())
@@ -62,7 +62,7 @@ private struct ProfileNewTweetsBanner: View {
     }
 
     private var avatarCluster: some View {
-        HStack(spacing: -9) {
+        HStack(spacing: -5) {
             ForEach(Array(distinctAuthors.prefix(3).enumerated()), id: \.element.mid) { index, user in
                 Avatar(user: user, size: 26)
                     .frame(width: 26, height: 26)

@@ -1021,8 +1021,8 @@ private struct NewTweetsBannerOverlay: View {
                         }
                     }
                     .foregroundColor(.white)
-                    .padding(.leading, 12)
-                    .padding(.trailing, 14)
+                    .padding(.leading, 20)
+                    .padding(.trailing, 22)
                     .frame(height: 44)
                     .background(
                         Capsule()
@@ -1085,7 +1085,7 @@ private struct NewTweetsBannerOverlay: View {
         let items = avatarClusterItems(from: distinctAuthors)
         let avatarCount = max(1, items.count)
         let avatarSize: CGFloat = 32
-        let trailingReveal: CGFloat = 7
+        let trailingReveal: CGFloat = 20
         let width = avatarSize + CGFloat(avatarCount - 1) * trailingReveal
 
         return ZStack(alignment: .leading) {
