@@ -17,6 +17,7 @@ struct MediaBrowserView: View {
     let cellTweetId: String? // The visible cell's tweet ID (could be retweet or quoting tweet)
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
+    @StateObject private var videoSession = BrowserVideoSession()
     @State private var currentTweet: Tweet // Allow changing tweet for auto-advance
     @State private var currentCellTweetId: String // Track position in visible feed
     @State private var showVideoPlayer = false
@@ -102,6 +103,7 @@ struct MediaBrowserView: View {
     var body: some View {
         MediaBrowserContentView(
                 attachments: attachments,
+                videoSession: videoSession,
                 currentIndex: $currentIndex,
                 previousIndex: $previousIndex,
                 showControls: $showControls,
@@ -158,6 +160,7 @@ struct MediaBrowserView: View {
             }
             .onDisappear {
                 OrientationManager.shared.lockToPortrait()
+                videoSession.close()
 
                 let shouldTransferVideoPlayback = attachments.indices.contains(currentIndex)
                     && (attachments[currentIndex].type == .video || attachments[currentIndex].type == .hls_video)
@@ -322,6 +325,7 @@ struct MediaBrowserView: View {
     // MARK: - MediaBrowserContentView
     private struct MediaBrowserContentView: View {
         let attachments: [MimeiFileType]
+        let videoSession: BrowserVideoSession
         @Binding var currentIndex: Int
         @Binding var previousIndex: Int
         @Binding var showControls: Bool
@@ -345,7 +349,7 @@ struct MediaBrowserView: View {
         let cleanupNonVisibleImagesClosure: (Int) -> Void
         let cleanupImageStatesClosure: () -> Void
         @State private var isCompletingDismiss = false
-        @State private var isVideoPinching = false
+        @State private var isVideoZoomed = false
 
         /// Find the next video attachment index after the current index (skips images/audio).
         /// Returns nil if there is no next video in this tweet.
@@ -419,6 +423,7 @@ struct MediaBrowserView: View {
                     count: attachments.count,
                     index: $currentIndex,
                     animateSelection: !suppressPagingAnimation,
+                    isVideoZoomed: isVideoZoomed,
                     isVideo: { isVideoAttachment(attachments[$0]) }
                 ) { index in
                     let attachment = attachments[index]
@@ -443,10 +448,12 @@ struct MediaBrowserView: View {
                 .background(Color.clear)
                 .simultaneousGesture(verticalNavigationGesture(allowImageAttachments: false))
                 .onChange(of: currentIndex) { _, newIndex in
+                    isVideoZoomed = false
                     previousIndex = newIndex
                     cleanupNonVisibleImagesClosure(newIndex)
                     loadSelectedVideoIfNeeded(reason: "indexChanged")
                 }
+                .onChange(of: currentTweet.mid) { _, _ in isVideoZoomed = false }
                 .onChange(of: currentAttachmentIsImage) { _, isImage in
                     if !isImage { isImageZoomed = false }
                 }
@@ -507,7 +514,7 @@ struct MediaBrowserView: View {
                         .tint(.white)
                     }
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 60)
+                    .padding(.bottom, currentAttachmentIsImage ? 60 : 145)
                 }
             }
         }
@@ -517,19 +524,19 @@ struct MediaBrowserView: View {
             return isImageAttachment(attachments[currentIndex])
         }
 
-        /// Swipes that start in the home-indicator zone are the system home/app-switcher
-        /// gesture, not video navigation. Advancing on them loads the next video while
-        /// the app is backgrounding.
-        private func isSystemEdgeSwipe(_ value: DragGesture.Value) -> Bool {
-            value.startLocation.y > UIScreen.main.bounds.height - 44
+        /// Reserve the home gesture and video controls, including a seek that
+        /// outlasts the overlay timer, so those drags cannot advance or dismiss.
+        private func isReservedSwipeStart(_ value: DragGesture.Value) -> Bool {
+            let bottomExclusion: CGFloat = currentAttachmentIsImage ? 44 : 200
+            return value.startLocation.y > UIScreen.main.bounds.height - bottomExclusion
         }
 
         private func verticalNavigationGesture(allowImageAttachments: Bool) -> some Gesture {
             DragGesture(minimumDistance: 25, coordinateSpace: .global)
                 .onChanged { value in
-                    guard !isSystemEdgeSwipe(value) else { return }
+                    guard !isReservedSwipeStart(value) else { return }
                     guard allowImageAttachments || !currentAttachmentIsImage else { return }
-                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed, !isVideoPinching else { return }
+                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed, !isVideoZoomed else { return }
 
                     let vertical = abs(value.translation.height)
                     let horizontal = abs(value.translation.width)
@@ -542,12 +549,12 @@ struct MediaBrowserView: View {
                 .onEnded { value in
                     // If the app is resigning/backgrounding (home swipe took over),
                     // never treat the gesture end as navigation.
-                    guard UIApplication.shared.applicationState == .active, !isSystemEdgeSwipe(value) else {
+                    guard UIApplication.shared.applicationState == .active, !isReservedSwipeStart(value) else {
                         resetDragOffset(animated: false)
                         return
                     }
                     guard allowImageAttachments || !currentAttachmentIsImage else { return }
-                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed, !isVideoPinching else {
+                    guard !isTransitioning, !isCompletingVerticalAdvance, !isCompletingDismiss, !isImageZoomed, !isVideoZoomed else {
                         resetDragOffset(animated: true)
                         return
                     }
@@ -716,9 +723,11 @@ struct MediaBrowserView: View {
                 mediaType: attachment.type,
                 aspectRatio: attachment.aspectRatio,
                 shouldAutoPlay: shouldAutoPlay,
-                onPinchStateChange: { pinching in
-                    isVideoPinching = pinching
-                    if pinching { resetDragOffset(animated: false) }
+                videoSession: videoSession,
+                showControls: showControls,
+                onNavigationLockChange: { zoomed in
+                    isVideoZoomed = zoomed
+                    if zoomed { resetDragOffset(animated: false) }
                 },
                 onUserInteraction: {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -1086,24 +1095,17 @@ struct SingletonVideoPlayerView: View {
     let mediaType: MediaType
     let aspectRatio: Float?
     let shouldAutoPlay: Bool
-    let onPinchStateChange: (Bool) -> Void
+    @ObservedObject var videoSession: BrowserVideoSession
+    let showControls: Bool
+    let onNavigationLockChange: (Bool) -> Void
     let onUserInteraction: () -> Void
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
     @State private var handoffThumbnail: UIImage?
     @State private var handoffThumbnailMid: String?
-    @State private var readyForDisplayMid: String?
 
     private var didThisVideoFailToLoad: Bool {
         manager.loadFailedVideoMid == mid
-    }
-
-    private var requiresLayerBackedPlaybackSurface: Bool {
-#if targetEnvironment(macCatalyst)
-        true
-#else
-        ProcessInfo.processInfo.isiOSAppOnMac
-#endif
     }
 
     var body: some View {
@@ -1111,38 +1113,24 @@ struct SingletonVideoPlayerView: View {
             ZStack {
                 // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
                 if let player = manager.singletonPlayer, manager.currentVideoMid == mid, let currentItem = player.currentItem {
-                    let layerReadyForCurrentVideo = readyForDisplayMid == mid
+                    let layerReadyForCurrentVideo = videoSession.isReady(for: player, mid: mid)
                     let visualState = manager.visualState(
                         for: mid,
                         hasPoster: currentPosterImage != nil,
                         layerReadyForDisplay: layerReadyForCurrentVideo,
                         player: player
                     )
-                    Group {
-                        if requiresLayerBackedPlaybackSurface {
-                            BrowserLayerVideoPlayerView(
-                                player: player,
-                                mid: mid,
-                                onUserInteraction: onUserInteraction
-                            )
-                        } else {
-                            // Keep native playback controls on iPhone and iPad.
-                            SimplerAVPlayerViewController(
-                                player: player,
-                                mid: mid,
-                                onPinchStateChange: onPinchStateChange,
-                                onUserInteraction: onUserInteraction
-                            )
-                        }
-                    }
+                    BrowserVideoPlayer(
+                        player: player,
+                        mid: mid,
+                        session: videoSession,
+                        showControls: showControls,
+                        onNavigationLockChange: onNavigationLockChange,
+                        onUserInteraction: onUserInteraction
+                    )
                     .id(fullscreenSurfaceID(mid: mid, item: currentItem))
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
-                    .onAppear {
-                        DispatchQueue.main.async {
-                            readyForDisplayMid = mid
-                        }
-                    }
 
                     if visualState.showsPoster {
                         posterImage
@@ -1177,7 +1165,6 @@ struct SingletonVideoPlayerView: View {
                 refreshHandoffThumbnail(for: mid)
             }
             .onChange(of: mid) { _, newMid in
-                readyForDisplayMid = nil
                 refreshHandoffThumbnail(for: newMid)
             }
             .onReceive(NotificationCenter.default.publisher(for: .videoThumbnailCached)) { notification in
@@ -1186,15 +1173,12 @@ struct SingletonVideoPlayerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .videoPlayerItemReplaced)) { notification in
                 guard notification.userInfo?["mediaID"] as? String == mid else { return }
-                readyForDisplayMid = nil
                 refreshHandoffThumbnail(for: mid)
             }
             .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in
-                readyForDisplayMid = nil
                 refreshHandoffThumbnail(for: mid)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                readyForDisplayMid = nil
                 refreshHandoffThumbnail(for: mid)
             }
         }
@@ -1269,341 +1253,6 @@ struct SingletonVideoPlayerView: View {
         return thumbnailForCurrentMid
             ?? SharedAssetCache.shared.cachedThumbnail(for: mid)
             ?? manager.transitionPoster(for: mid)
-    }
-}
-
-// MARK: - Layer-backed browser player for iPad apps running on Mac
-
-/// AVPlayerViewController may promote its transition surface to the Mac display's
-/// dimensions even though SwiftUI presented MediaBrowserView inside an app window.
-/// AVPlayerLayer stays bound to the measured browser frame and preserves aspect fit.
-@MainActor
-private struct BrowserLayerVideoPlayerView: View {
-    let player: AVPlayer
-    let mid: String
-    let onUserInteraction: () -> Void
-
-    @ObservedObject private var manager = FullScreenVideoManager.shared
-    @State private var currentTime: Double = 0
-    @State private var duration: Double = 1
-    @State private var isSeeking = false
-    @State private var shouldResumeAfterSeek = false
-
-    private let playbackClock = Timer.publish(
-        every: 0.25,
-        on: .main,
-        in: .common
-    ).autoconnect()
-
-    var body: some View {
-        ZStack {
-            LightweightVideoPlayer(player: player)
-                .contentShape(Rectangle())
-                .onTapGesture(perform: onUserInteraction)
-
-            VStack {
-                Spacer()
-                HStack(spacing: 10) {
-                    Button {
-                        if manager.isPlaying {
-                            manager.pause()
-                        } else {
-                            manager.play()
-                        }
-                        onUserInteraction()
-                    } label: {
-                        Image(systemName: manager.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.white)
-                    .accessibilityLabel(manager.isPlaying ? "Pause video" : "Play video")
-
-                    Slider(
-                        value: Binding(
-                            get: { currentTime },
-                            set: { currentTime = $0 }
-                        ),
-                        in: 0...max(duration, 1),
-                        onEditingChanged: handleSeeking
-                    )
-                    .tint(.white)
-
-                    Text("\(formattedTime(currentTime)) / \(formattedTime(duration))")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white)
-                        .frame(width: 92, alignment: .trailing)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(Color.black.opacity(0.65))
-            }
-        }
-        .onAppear {
-            refreshPlaybackTime()
-            manager.markPlaybackSurfaceReady(player: player, mid: mid)
-        }
-        .onReceive(playbackClock) { _ in
-            refreshPlaybackTime()
-        }
-    }
-
-    private func refreshPlaybackTime() {
-        guard !isSeeking else { return }
-
-        let playerTime = player.currentTime().seconds
-        if playerTime.isFinite {
-            currentTime = max(0, playerTime)
-        }
-
-        if let itemDuration = player.currentItem?.duration.seconds,
-           itemDuration.isFinite,
-           itemDuration > 0 {
-            duration = itemDuration
-        }
-    }
-
-    private func handleSeeking(_ editing: Bool) {
-        if editing {
-            isSeeking = true
-            shouldResumeAfterSeek = manager.isPlaying
-            manager.pause()
-            onUserInteraction()
-            return
-        }
-
-        let target = CMTime(seconds: currentTime, preferredTimescale: 600)
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-        isSeeking = false
-
-        if shouldResumeAfterSeek {
-            manager.play()
-        }
-        shouldResumeAfterSeek = false
-        onUserInteraction()
-    }
-
-    private func formattedTime(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let totalSeconds = Int(seconds)
-        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
-    }
-}
-
-// MARK: - Simple AVPlayerViewController Wrapper
-private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
-    let player: AVPlayer
-    let mid: String
-    let onPinchStateChange: (Bool) -> Void
-    let onUserInteraction: () -> Void
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPinchStateChange: onPinchStateChange, onUserInteraction: onUserInteraction)
-    }
-    
-    @MainActor
-    class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var statusObserver: NSKeyValueObservation?
-        var currentItemObserver: NSKeyValueObservation?
-        weak var playerViewController: AVPlayerViewController?
-        var onPinchStateChange: (Bool) -> Void
-        var onUserInteraction: () -> Void
-
-        init(onPinchStateChange: @escaping (Bool) -> Void, onUserInteraction: @escaping () -> Void) {
-            self.onPinchStateChange = onPinchStateChange
-            self.onUserInteraction = onUserInteraction
-        }
-        
-        deinit {
-            statusObserver?.invalidate()
-            currentItemObserver?.invalidate()
-        }
-
-        @objc func handlePlayerTap(_ recognizer: UITapGestureRecognizer) {
-            guard recognizer.state == .ended else { return }
-            onUserInteraction()
-        }
-
-        @objc func handleVideoPinch(_ recognizer: UIPinchGestureRecognizer) {
-            switch recognizer.state {
-            case .began:
-                onPinchStateChange(true)
-                onUserInteraction()
-            case .changed:
-                // Change only the picture's fit/fill mode. Scaling the controller's
-                // view would also enlarge and crop its playback controls.
-                if recognizer.scale > 1.05 {
-                    playerViewController?.videoGravity = .resizeAspectFill
-                } else if recognizer.scale < 0.95 {
-                    playerViewController?.videoGravity = .resizeAspect
-                }
-            case .ended, .cancelled, .failed:
-                finishPinching()
-            default:
-                break
-            }
-        }
-
-        func finishPinching() {
-            // Keep navigation suppressed until drag recognizers have also received
-            // the end of these touches; a pinch must not become a swipe-to-dismiss.
-            DispatchQueue.main.async { [self] in onPinchStateChange(false) }
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard gestureRecognizer is UIPinchGestureRecognizer else { return true }
-            var target = touch.view
-            while let view = target, view !== gestureRecognizer.view {
-                if view is UIControl { return false }
-                target = view.superview
-            }
-            return true
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            // Own pinch sizing here instead of letting AVKit use the same pinch
-            // to enter a separate system fullscreen presentation.
-            gestureRecognizer is UIPinchGestureRecognizer && otherGestureRecognizer is UIPinchGestureRecognizer
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            !(gestureRecognizer is UIPinchGestureRecognizer || otherGestureRecognizer is UIPinchGestureRecognizer)
-        }
-    }
-
-    private final class SurfaceAwarePlayerViewController: AVPlayerViewController {
-        var onSurfaceReady: (() -> Void)?
-
-        override func viewDidAppear(_ animated: Bool) {
-            super.viewDidAppear(animated)
-            onSurfaceReady?()
-        }
-
-        override func viewDidLayoutSubviews() {
-            super.viewDidLayoutSubviews()
-            if view.window != nil {
-                onSurfaceReady?()
-            }
-        }
-    }
-    
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = SurfaceAwarePlayerViewController()
-        controller.player = player
-        controller.showsPlaybackControls = true
-        controller.videoGravity = .resizeAspect
-        controller.view.backgroundColor = .black
-        controller.onSurfaceReady = {
-            Task { @MainActor in
-                FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
-            }
-        }
-
-        // Let AVPlayerViewController keep its native tap handling while the app
-        // overlay is also revealed for fullscreen actions such as bookmarking.
-        let coordinator = context.coordinator
-        coordinator.playerViewController = controller
-        let tapRecognizer = UITapGestureRecognizer(
-            target: coordinator,
-            action: #selector(Coordinator.handlePlayerTap(_:))
-        )
-        tapRecognizer.cancelsTouchesInView = false
-        tapRecognizer.delaysTouchesBegan = false
-        tapRecognizer.delaysTouchesEnded = false
-        tapRecognizer.delegate = coordinator
-        controller.view.addGestureRecognizer(tapRecognizer)
-
-        let pinchRecognizer = UIPinchGestureRecognizer(
-            target: coordinator,
-            action: #selector(Coordinator.handleVideoPinch(_:))
-        )
-        pinchRecognizer.delegate = coordinator
-        controller.view.addGestureRecognizer(pinchRecognizer)
-        
-        // Setup observer to auto-play when ready
-        setupPlayerItemObserver(player: player, coordinator: coordinator)
-        
-        // Observe currentItem changes to set up observer for new items
-        coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
-            Task { @MainActor in
-                setupPlayerItemObserver(player: player, coordinator: coordinator)
-            }
-        }
-        
-        return controller
-    }
-    
-    private func setupPlayerItemObserver(player: AVPlayer, coordinator: Coordinator) {
-        coordinator.statusObserver?.invalidate()
-        
-        // Don't auto-play here - let FullScreenVideoManager handle playback after restoring position
-        // FullScreenVideoManager will check for saved state and seek/play accordingly
-        if let playerItem = player.currentItem {
-            if playerItem.status == .readyToPlay {
-                // FullScreenVideoManager will handle playback after checking for saved state
-            } else {
-                coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { [weak coordinator] item, _ in
-                    let status = item.status
-                    Task { @MainActor in
-                        if status == .readyToPlay {
-                            // FullScreenVideoManager will handle playback after checking for saved state
-                            coordinator?.statusObserver?.invalidate()
-                            coordinator?.statusObserver = nil
-                        } else if status == .failed {
-                            print("ERROR: [SingletonVideoPlayer] Player item failed")
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        context.coordinator.onPinchStateChange = onPinchStateChange
-        context.coordinator.onUserInteraction = onUserInteraction
-
-        if let controller = uiViewController as? SurfaceAwarePlayerViewController {
-            controller.onSurfaceReady = {
-                Task { @MainActor in
-                    FullScreenVideoManager.shared.markPlaybackSurfaceReady(player: player, mid: mid)
-                }
-            }
-            if controller.view.window != nil {
-                controller.onSurfaceReady?()
-            }
-        }
-
-        if uiViewController.player !== player {
-            uiViewController.player = player
-            uiViewController.videoGravity = .resizeAspect
-            
-            // Setup observer for new player - don't auto-play, let FullScreenVideoManager handle it
-            let coordinator = context.coordinator
-            coordinator.statusObserver?.invalidate()
-            if let playerItem = player.currentItem {
-                if playerItem.status == .readyToPlay {
-                    // FullScreenVideoManager will handle playback after checking for saved state
-                } else {
-                    coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { [weak coordinator] item, _ in
-                        let status = item.status
-                        Task { @MainActor in
-                            if status == .readyToPlay {
-                                // FullScreenVideoManager will handle playback after checking for saved state
-                                coordinator?.statusObserver?.invalidate()
-                                coordinator?.statusObserver = nil
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
-        coordinator.finishPinching()
     }
 }
 

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C8500E57AC4A4947AE640101 /* BrowserVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8500E57AC4A4947AE640102 /* BrowserVideoPlayer.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A25 /* HomeViewModel.swift */; };
@@ -165,6 +166,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		C8500E57AC4A4947AE640102 /* BrowserVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserVideoPlayer.swift; sourceTree = "<group>"; };
 		12D26DB960D62FB2EB1C7843 /* PDFPreviewView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PDFPreviewView.swift; sourceTree = "<group>"; };
 		16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1A1A1A1A1A1A1A1A1A1A01 /* Tweet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tweet.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -617,6 +619,7 @@
 				F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */,
 				468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */,
 				BC97283C3AE44BB19E48AF02 /* NativeMediaPager.swift */,
+				C8500E57AC4A4947AE640102 /* BrowserVideoPlayer.swift */,
 				46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */,
 				46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */,
 				46E5B36C2DE3617400AEF31F /* AvatarFullScreenView.swift */,
@@ -885,6 +888,7 @@
 				4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */,
 				468384A12DFE9EAB0079ECC5 /* MediaBrowserView.swift in Sources */,
 				BC97283C3AE44BB19E48AF01 /* NativeMediaPager.swift in Sources */,
+				C8500E57AC4A4947AE640101 /* BrowserVideoPlayer.swift in Sources */,
 				46B03D8B2E48D760000E08DF /* MediaPicker.swift in Sources */,
 				469A99562DEC744200954049 /* ProfileHeaderSection.swift in Sources */,
 				46E5B3492DDC0F6900AEF31F /* MediaGridView.swift in Sources */,

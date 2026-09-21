@@ -8,6 +8,7 @@ struct NativeMediaPager<Page: View>: UIViewControllerRepresentable {
     let count: Int
     @Binding var index: Int
     let animateSelection: Bool
+    let isVideoZoomed: Bool
     let isVideo: (Int) -> Bool
     @ViewBuilder let content: (Int) -> Page
 
@@ -18,6 +19,7 @@ struct NativeMediaPager<Page: View>: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: NativeMediaPagingController<Page>, context: Context) {
         controller.selected = { index = $0 }
         controller.isVideo = isVideo
+        controller.isVideoZoomed = isVideoZoomed
         controller.content = content
         withTransaction(context.transaction) {
             controller.show(index, animated: animateSelection && !UIAccessibility.isReduceMotionEnabled)
@@ -39,6 +41,7 @@ final class NativeMediaPagingController<Page: View>: UIViewController, UIScrollV
     var content: (Int) -> Page
     var selected: (Int) -> Void = { _ in }
     var isVideo: (Int) -> Bool = { _ in false }
+    var isVideoZoomed = false
 
     init(count: Int, index: Int, content: @escaping (Int) -> Page) {
         self.count = count
@@ -61,7 +64,7 @@ final class NativeMediaPagingController<Page: View>: UIViewController, UIScrollV
         paging.contentInsetAdjustmentBehavior = .never
         paging.panGestureRecognizer.maximumNumberOfTouches = 1
         paging.canBeginPaging = { [weak self] point in
-            guard let self, self.count > 1 else { return false }
+            guard let self, self.count > 1, !self.isVideoZoomed else { return false }
             if self.isVideo(self.current) {
                 return point.y > self.view.safeAreaInsets.top + 64
                     && point.y < self.paging.bounds.height - self.view.safeAreaInsets.bottom - 100
@@ -187,6 +190,7 @@ private final class BrowserPagingScrollView: UIScrollView {
         var target = hitTest(point, with: nil)
         while let current = target, current !== self {
             if current is UIControl { return false }
+            if let video = current as? BrowserVideoScrollView, video.locksNavigation { return false }
             if let image = current as? BrowserZoomingImageView, image.zoomScale > image.minimumZoomScale + 0.001 { return false }
             target = current.superview
         }

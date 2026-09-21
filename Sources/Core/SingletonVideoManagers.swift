@@ -223,6 +223,8 @@ extension VideoPlayerLifecycleManager {
     }
     
     func handleAppWillResignActive() {
+        // PiP/AirPlay is still visible playback, not a suspended inline player.
+        if let fullscreen = self as? FullScreenVideoManager, fullscreen.keepsPlayingOutsideApp { return }
         guard let player = getPlayer() else { return }
         
         let managerName = String(describing: type(of: self))
@@ -271,6 +273,8 @@ extension VideoPlayerLifecycleManager {
     }
     
     func handleAppDidEnterBackground() {
+        // PiP/AirPlay is still visible playback, not a suspended inline player.
+        if let fullscreen = self as? FullScreenVideoManager, fullscreen.keepsPlayingOutsideApp { return }
         guard let player = getPlayer() else { return }
         
         let managerName = String(describing: type(of: self))
@@ -298,11 +302,15 @@ extension VideoPlayerLifecycleManager {
     }
     
     func handleAppWillEnterForeground() {
+        // PiP/AirPlay is still visible playback, not a suspended inline player.
+        if let fullscreen = self as? FullScreenVideoManager, fullscreen.keepsPlayingOutsideApp { return }
         print("DEBUG: [\(String(describing: type(of: self)))] App entering foreground, recovering from background")
         recoverFromBackground()
     }
     
     func handleAppDidBecomeActive() {
+        // PiP/AirPlay is still visible playback, not a suspended inline player.
+        if let fullscreen = self as? FullScreenVideoManager, fullscreen.keepsPlayingOutsideApp { return }
         let managerName = String(describing: type(of: self))
         print("DEBUG: [\(managerName)] App became active")
         // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
@@ -361,7 +369,6 @@ private final class PlayerVolumeRamp {
         task = nil
 
         if let restoringVolume, let currentPlayer {
-            currentPlayer.isMuted = false
             currentPlayer.volume = restoringVolume
         }
         currentPlayer = nil
@@ -376,7 +383,7 @@ private final class PlayerVolumeRamp {
     ) {
         cancel()
         currentPlayer = player
-        player.isMuted = false
+        // A volume transition must preserve the user's separate mute setting.
 
         if let startVolume {
             player.volume = startVolume
@@ -431,6 +438,22 @@ private final class PlayerVolumeRamp {
 @MainActor
 final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     static let shared = FullScreenVideoManager()
+
+    @Published var isUserMuted = false {
+        didSet { singletonPlayer?.isMuted = isUserMuted }
+    }
+    var isPictureInPictureActive = false
+    var keepsPlayingOutsideApp: Bool {
+        isPictureInPictureActive || singletonPlayer?.isExternalPlaybackActive == true
+    }
+
+    func externalPlaybackDidEnd() {
+        guard !keepsPlayingOutsideApp, UIApplication.shared.applicationState == .background else { return }
+        handleAppWillResignActive()
+        handleAppDidEnterBackground()
+        NotificationCenter.default.post(name: .fullscreenExternalPlaybackDidEnd, object: nil)
+    }
+
     private init() {
         // Pre-create player so it's ready when fullscreen opens (no creation delay)
         singletonPlayer = AVPlayer()
@@ -451,6 +474,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     
     /// Activate manager when fullscreen view appears
     func activateForFullscreen() {
+        isUserMuted = false
         if pendingDeactivationCompletion != nil {
             audioVolumeRamp.cancel(restoringVolume: 1)
             finishFullscreenDeactivation()
@@ -586,7 +610,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
             )
         }
 
-        singletonPlayer?.isMuted = false
+        singletonPlayer?.isMuted = isUserMuted
         singletonPlayer?.volume = 1
         singletonPlayer?.pause()
 
@@ -751,7 +775,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     private func ensurePlayerInitialized() {
         guard singletonPlayer == nil else { return }
         singletonPlayer = AVPlayer()
-        singletonPlayer?.isMuted = false
+        singletonPlayer?.isMuted = isUserMuted
     }
 
     func pausePlayer() {
@@ -1226,7 +1250,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         }
         
         singletonPlayer = AVPlayer()
-        singletonPlayer?.isMuted = false
+        singletonPlayer?.isMuted = isUserMuted
         
     }
 
@@ -2329,7 +2353,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
 
         let startupFadeDuration = pendingStartupAudioFadeDuration
         pendingStartupAudioFadeDuration = nil
-        player.isMuted = false
+        player.isMuted = isUserMuted
         if startupFadeDuration != nil {
             player.volume = 0
         }
@@ -2662,7 +2686,7 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
         // when the player has enough buffer. Seeking here causes duplicate seeks and stuck loading state.
         
         // Ensure mute state is correct
-        player.isMuted = false
+        player.isMuted = isUserMuted
         
         // Check if we have saved state to restore
         let shouldRestore = currentVideoMid.map { videoMid in

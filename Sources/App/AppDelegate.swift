@@ -562,6 +562,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func setupAppLifecycleNotifications() {
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(handleAppDidEnterBackground),
+            name: .fullscreenExternalPlaybackDidEnd,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(handleAppWillResignActive),
             name: UIApplication.willResignActiveNotification,
             object: nil
@@ -690,6 +696,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         guard UIApplication.shared.applicationState == .background else {
             print("⚡ [AppDelegate] Background memory release skipped; app returned before cleanup")
+            endBackgroundCleanupTask()
+            return
+        }
+
+        // Active PiP/AirPlay still needs its player and local streaming proxy.
+        // The external-playback-ended notification schedules cleanup again.
+        if FullScreenVideoManager.shared.keepsPlayingOutsideApp {
             endBackgroundCleanupTask()
             return
         }
@@ -875,6 +888,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func scheduleVideoInfrastructureRecovery(reason: String) {
+        guard !FullScreenVideoManager.shared.keepsPlayingOutsideApp else { return }
         guard !isRecoveringVideoInfrastructure else {
             print("[AppDelegate] Video infrastructure recovery already in progress; skipping \(reason)")
             return
