@@ -67,12 +67,11 @@ struct CommentListUIKitView: View {
         .task(id: parentTweet.mid) {
             guard loadedParentTweetId != parentTweet.mid else { return }
             loadedParentTweetId = parentTweet.mid
-            // TweetDetailView owns the ordered page-zero server refresh. This view
+            // TweetDetailView owns the independent server comments read. This view
             // only reflects the bound cache/server results and handles pagination.
             initialLoadComplete = true
             if !comments.isEmpty {
                 currentPage = UInt((comments.count - 1) / Int(pageSize))
-                hasMoreComments = comments.count >= pageSize
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notif in
@@ -95,41 +94,6 @@ struct CommentListUIKitView: View {
             if scrolled && !hasMoreComments && !comments.isEmpty {
                 hasMoreComments = true
             }
-        }
-    }
-
-    private func performInitialLoad() async {
-        await MainActor.run {
-            isLoading = true
-            initialLoadComplete = false
-            currentPage = 0
-        }
-
-        do {
-            let newComments = try await commentFetcher(0, pageSize)
-            let validComments = newComments.compactMap { $0 }
-
-            await MainActor.run {
-                if comments.isEmpty {
-                    comments = validComments
-                }
-                hasMoreComments = newComments.count >= pageSize
-                initialLoadComplete = true
-            }
-        } catch {
-            await MainActor.run {
-                initialLoadComplete = true
-            }
-        }
-    }
-
-    private func refreshComments() async {
-        guard !isLoading else { return }
-        // Capped: the fetch keeps running past the cap and fills the list when it
-        // lands, but the spinner does not follow it.
-        await runWithSpinnerCap { await performInitialLoad() }
-        await MainActor.run {
-            isLoading = false
         }
     }
 
@@ -188,11 +152,8 @@ struct CommentListUIKitView: View {
                 }
 
                 await MainActor.run {
-                    hasMoreComments = false
+                    // A failed request leaves this page available to retry.
                     isLoadingMore = false
-                    if !comments.isEmpty {
-                        showNoMoreMessage()
-                    }
                 }
             }
         }

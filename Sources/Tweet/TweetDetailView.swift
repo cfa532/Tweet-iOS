@@ -1384,7 +1384,6 @@ struct TweetDetailView: View {
     @State private var pendingMenuDeleteAction: (() -> Void)?
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
-    @State private var hasServedCachedCommentsForCurrentParentTweet = false
     @State private var currentCommentsParentTweetId = ""
     @State private var initialLoadParentTweetId = ""
     @State private var selectedEmbeddedTweetForNavigation: Tweet?
@@ -1543,9 +1542,6 @@ struct TweetDetailView: View {
                             commentsListView
                                 .padding(.leading, -4)
                         }
-                        .task {
-                            setupInitialData()
-                        }
                     }
                     .coordinateSpace(name: "commentsScroll")
                     .refreshable {
@@ -1696,10 +1692,24 @@ struct TweetDetailView: View {
                 commentsVideoCoordinator.refreshVisiblePlaybackAfterForeground(reason: "didBecomeActive")
             }
         }
+        .task(id: displayTweet.mid) {
+            configureCommentCacheContextIfNeeded()
+            let parentId = displayTweet.mid
+            let cached = await TweetDetailCommentsCache.shared.persistedComments(for: parentId)
+            guard !Task.isCancelled, displayTweet.mid == parentId else { return }
+            let existingIds = Set(comments.map { $0.mid })
+            comments.append(contentsOf: cached.filter { !existingIds.contains($0.mid) })
+            comments.sort { $0.timestamp > $1.timestamp }
+            // Comments read independently of the parent tweet's network read.
+            await refreshComments()
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            await refreshComments()
+        }
         // AVPlayerViewController creates its complete controls/KVO/PiP hierarchy synchronously.
         // Keep that work out of the navigation transaction while player borrowing and loading
         // continue immediately behind the cached handoff thumbnail.
         .task(id: tweet.mid) {
+            setupInitialData()
             shouldMountNativePlaybackSurface = false
             nativePlaybackMountDelayElapsed = false
             try? await Task.sleep(for: .milliseconds(380))
@@ -2063,35 +2073,8 @@ struct TweetDetailView: View {
             comments: $comments,
             parentTweet: displayTweet,
             commentFetcher: { page, size in
-                let parentTweet = await MainActor.run { displayTweet }
-
-                if page == 0 {
-                    let parentMid = await MainActor.run { parentTweet.mid }
-                    let alreadyServed = await MainActor.run { hasServedCachedCommentsForCurrentParentTweet }
-                    if !alreadyServed {
-                        let cached = await TweetDetailCommentsCache.shared.persistedComments(for: parentMid)
-                        if !cached.isEmpty {
-                            await MainActor.run {
-                                hasServedCachedCommentsForCurrentParentTweet = true
-                                comments = cached
-                            }
-                            return cached.map { Optional($0) }
-                        }
-                    }
-                }
-
-                let fetched = try await hproseInstance.fetchComments(
-                    parentTweet,
-                    pageNumber: page,
-                    pageSize: size
-                )
-                if page == 0 {
-                    await MainActor.run {
-                        hasServedCachedCommentsForCurrentParentTweet = true
-                        TweetDetailCommentsCache.shared.setComments(fetched.compactMap { $0 }, for: parentTweet.mid)
-                    }
-                }
-                return fetched
+                let parent = await MainActor.run { displayTweet }
+                return try await hproseInstance.fetchComments(parent, pageNumber: page, pageSize: size)
             },
             notifications: [
                 CommentListNotification(
@@ -2136,12 +2119,10 @@ struct TweetDetailView: View {
     private func setupInitialData() {
         configureCommentCacheContextIfNeeded()
 
-        // The server syncs the tweet and its comments when this detail-view read
-        // completes. Keep one owner for the ordered read so comments are fetched
-        // exactly once, after that sync opportunity.
-        if initialLoadParentTweetId != displayTweet.mid {
-            initialLoadParentTweetId = displayTweet.mid
-            Task { await loadInitialServerData() }
+        // The comments task runs independently; a slow parent read must not hold it up.
+        if initialLoadParentTweetId != tweet.mid {
+            initialLoadParentTweetId = tweet.mid
+            Task { await doReadTweet(isInitialLoad: true) }
         }
 
         // Periodically reload the current provider without triggering a cross-node sync.
@@ -2150,12 +2131,6 @@ struct TweetDetailView: View {
                 await doReadTweet(isInitialLoad: false)
             }
         }
-    }
-
-    private func loadInitialServerData() async {
-        await doReadTweet(isInitialLoad: true)
-        // A failed tweet read must not prevent a best-effort comments refresh.
-        await refreshComments()
     }
 
     // READ: get_tweet on the node that served the displayed tweet, bypassing cache.
@@ -2232,7 +2207,7 @@ struct TweetDetailView: View {
         }
     }
 
-    /// `refreshComments` walks comment pages until it overlaps what we already have and
+    /// `refreshComments` walks comment pages until the server returns a short page and
     /// every RPC on the way has a 15s client timeout, so the control is capped rather
     /// than left to follow the fetch. `isPullRefreshing` clears when the fetch actually
     /// finishes, keeping the list from paginating underneath it past the cap.
@@ -2250,35 +2225,29 @@ struct TweetDetailView: View {
         await refreshComments()
     }
 
-    // READ comments page-by-page on the parent's serving node until overlap or end.
+    // Only a short server page marks the end; unresolved and duplicate rows still count.
     private func refreshComments() async {
+        let parent = displayTweet
         do {
-            var allNewComments: [Tweet] = []
             var currentPage: UInt = 0
             let pageSize: UInt = 20
-            var hasOverlap = false
 
-            while !hasOverlap {
+            while !Task.isCancelled {
                 let freshComments = try await hproseInstance.fetchComments(
-                    displayTweet, pageNumber: currentPage, pageSize: pageSize
+                    parent, pageNumber: currentPage, pageSize: pageSize
                 )
+                guard !Task.isCancelled, displayTweet.mid == parent.mid else { return }
 
                 let validComments = freshComments.compactMap { $0 }
-                if validComments.isEmpty { break }
-
                 let existingIds = Set(comments.map { $0.mid })
                 let newOnThisPage = validComments.filter { !existingIds.contains($0.mid) }
-                if newOnThisPage.count < validComments.count { hasOverlap = true }
-                allNewComments.append(contentsOf: newOnThisPage)
+                if !newOnThisPage.isEmpty {
+                    comments.append(contentsOf: newOnThisPage)
+                    comments.sort { $0.timestamp > $1.timestamp }
+                    TweetDetailCommentsCache.shared.setComments(comments, for: parent.mid)
+                }
                 if freshComments.count < pageSize { break }
                 currentPage += 1
-            }
-
-            await MainActor.run {
-                if !allNewComments.isEmpty {
-                    comments.insert(contentsOf: allNewComments, at: 0)
-                    TweetDetailCommentsCache.shared.setComments(comments, for: displayTweet.mid)
-                }
             }
         } catch {}
     }
@@ -2290,11 +2259,8 @@ struct TweetDetailView: View {
         }
 
         currentCommentsParentTweetId = parentTweetId
-        hasServedCachedCommentsForCurrentParentTweet = false
-        initialLoadParentTweetId = ""
         if let cachedComments = TweetDetailCommentsCache.shared.comments(for: parentTweetId) {
             comments = cachedComments
-            hasServedCachedCommentsForCurrentParentTweet = true
         } else {
             comments = []
         }

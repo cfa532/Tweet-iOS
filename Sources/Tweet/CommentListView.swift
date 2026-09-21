@@ -39,7 +39,7 @@ struct CommentListView<RowView: View>: View {
 
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var comments: [Tweet]
-    @State private var isLoading: Bool = false
+    let isLoading: Bool
     @State private var isLoadingMore: Bool = false
     @State private var hasMoreComments: Bool = true
     @State private var currentPage: UInt = 0
@@ -50,7 +50,6 @@ struct CommentListView<RowView: View>: View {
     @State private var initialLoadComplete = false
     @State private var loadingStartTime: Date? = nil
     @State private var showNoMoreComments = false
-    @State private var hasTriggeredInitialTaskLoad = false
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -60,6 +59,7 @@ struct CommentListView<RowView: View>: View {
         comments: Binding<[Tweet]>,
         commentFetcher: @escaping @Sendable (UInt, UInt) async throws -> [Tweet?],
         commentCount: Int,
+        isLoading: Bool = false,
         notifications: [CommentListNotification]? = nil,
         externalRefreshToken: Int = 0,
         hasUserScrolled: Binding<Bool> = .constant(true),
@@ -69,6 +69,7 @@ struct CommentListView<RowView: View>: View {
         self._comments = comments
         self.commentFetcher = commentFetcher
         self.commentCount = commentCount
+        self.isLoading = isLoading
         self.notifications = notifications ?? []
         self.externalRefreshToken = externalRefreshToken
         self.hasUserScrolled = hasUserScrolled
@@ -103,13 +104,13 @@ struct CommentListView<RowView: View>: View {
                 }
             }
             .task {
-                guard !hasTriggeredInitialTaskLoad else { return }
-                hasTriggeredInitialTaskLoad = true
-                await refreshComments()
+                // CommentDetailView owns the independent initial server read.
+                initialLoadComplete = true
             }
             .onChange(of: externalRefreshToken) { _, _ in
                 currentPage = 0
-                hasMoreComments = comments.count >= Int(pageSize)
+                // A visible/cache count cannot establish server exhaustion.
+                hasMoreComments = true
                 initialLoadComplete = true
             }
             // Listen to all notifications
@@ -140,41 +141,6 @@ struct CommentListView<RowView: View>: View {
     }
 
     // MARK: - Methods
-    func performInitialLoad() async {
-        isLoading = true
-        initialLoadComplete = false
-        currentPage = 0
-        
-        do {
-            let newComments = try await commentFetcher(0, pageSize)
-            let validComments = newComments.compactMap { $0 }
-            
-            await MainActor.run {
-                comments = validComments
-                hasMoreComments = newComments.count >= pageSize
-                initialLoadComplete = true
-            }
-        } catch {
-            errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
-            await MainActor.run {
-                initialLoadComplete = true
-            }
-        }
-    }
-
-    func refreshComments() async {
-        guard !isLoading else { return }
-
-        // Capped: the fetch keeps running past the cap and fills the list when it
-        // lands, but the spinner does not follow it.
-        await runWithSpinnerCap { await performInitialLoad() }
-
-        // Set loading to false after refresh completes
-        await MainActor.run {
-            isLoading = false
-        }
-    }
-
     func loadMoreComments(page: UInt? = nil) {
         guard hasMoreComments, !isLoadingMore, initialLoadComplete else { 
             return 
@@ -247,12 +213,9 @@ struct CommentListView<RowView: View>: View {
                 }
                 
                 await MainActor.run {
-                    hasMoreComments = false
+                    // A failed request leaves this page available to retry.
                     isLoadingMore = false
                     loadingStartTime = nil
-                    if comments.count > 0 {
-                        showNoMoreMessage()
-                    }
                 }
             }
         }
