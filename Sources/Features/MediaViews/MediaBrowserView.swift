@@ -34,7 +34,7 @@ struct MediaBrowserView: View {
     @State private var isCompletingVerticalAdvance = false // Track outgoing swipe-up animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
-    @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
+    @State private var suppressPagingAnimation: Bool = false // Suppress horizontal paging during vertical next-video transitions
     @State private var originalImageTasks: [Int: Task<Void, Never>] = [:]
     @State private var focusedImageMid: String?
     private var attachments: [MimeiFileType] {
@@ -114,7 +114,7 @@ struct MediaBrowserView: View {
                 isTransitioning: $isTransitioning,
                 isCompletingVerticalAdvance: $isCompletingVerticalAdvance,
                 transitionOffset: $transitionOffset,
-                suppressTabPagingAnimation: $suppressTabPagingAnimation,
+                suppressPagingAnimation: $suppressPagingAnimation,
                 currentTweet: currentTweet,
                 currentCellTweetId: currentCellTweetId,
                 dismiss: dismissFullScreen,
@@ -212,7 +212,7 @@ struct MediaBrowserView: View {
                 if isTransitioning || isCompletingVerticalAdvance {
                     isTransitioning = false
                     isCompletingVerticalAdvance = false
-                    suppressTabPagingAnimation = false
+                    suppressPagingAnimation = false
                     dragOffset = .zero
                     transitionOffset = 0
                 }
@@ -231,9 +231,9 @@ struct MediaBrowserView: View {
                     mid: attachment.mid
                 )
 
-                // Prevent TabView from doing a horizontal paging animation when we change currentIndex programmatically.
+                // Prevent the pager from doing a horizontal paging animation when we change currentIndex programmatically.
                 // The vertical push should be the only visible transition.
-                suppressTabPagingAnimation = true
+                suppressPagingAnimation = true
                 isCompletingVerticalAdvance = true
                 showControls = false
                 let slideDistance = UIScreen.main.bounds.height
@@ -274,7 +274,7 @@ struct MediaBrowserView: View {
                 try? await Task.sleep(nanoseconds: 220_000_000)
                 isTransitioning = false
                 isCompletingVerticalAdvance = false
-                suppressTabPagingAnimation = false
+                suppressPagingAnimation = false
             }
         }
         
@@ -334,7 +334,7 @@ struct MediaBrowserView: View {
         @Binding var isTransitioning: Bool
         @Binding var isCompletingVerticalAdvance: Bool
         @Binding var transitionOffset: CGFloat
-        @Binding var suppressTabPagingAnimation: Bool
+        @Binding var suppressPagingAnimation: Bool
         let currentTweet: Tweet
         let currentCellTweetId: String
         let dismiss: () -> Void
@@ -377,16 +377,6 @@ struct MediaBrowserView: View {
                 .frame(width: geometry.size.width, height: geometry.size.height)
             }
             .statusBar(hidden: true)
-            .onTapGesture {
-                // Video pages own tap-to-reveal through their native or layer-backed
-                // playback surface. This screen-covering gesture must not also fire
-                // there because it can swallow taps meant for playback controls.
-                guard currentIndex < attachments.count, !isVideoAttachment(attachments[currentIndex]) else { return }
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showControls = true
-                }
-                resetControlsTimer()
-            }
             .onAppear {
                 isVisible = true
                 UIApplication.shared.isIdleTimerDisabled = true
@@ -424,39 +414,40 @@ struct MediaBrowserView: View {
 
         private var currentContentLayer: some View {
             ZStack {
-                TabView(selection: $currentIndex) {
-                    ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
-                        Group {
-                            if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                videoView(for: attachment, url: url, index: index)
-                            } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                audioView(for: attachment, url: url, index: index)
-                            } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                imageView(for: attachment, url: url, index: index)
-                            } else if isPDFAttachment(attachment) {
-                                pdfView(for: attachment, index: index)
-                            }
+                NativeMediaPager(
+                    count: attachments.count,
+                    index: $currentIndex,
+                    animateSelection: !suppressPagingAnimation,
+                    isVideo: { isVideoAttachment(attachments[$0]) }
+                ) { index in
+                    let attachment = attachments[index]
+                    Group {
+                        if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                            videoView(for: attachment, url: url, index: index)
+                        } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                            audioView(for: attachment, url: url, index: index)
+                        } else if isImageAttachment(attachment), attachment.getUrl(baseUrl) != nil {
+                            imageView(for: attachment, index: index)
+                        } else if isPDFAttachment(attachment) {
+                            pdfView(for: attachment, index: index)
                         }
-                        .background(Color.clear)
-                        .offset(y: verticalOffset(for: index))
-                        .scaleEffect(contentScale(for: index))
-                        .animation(nil, value: dragOffset)
-                        .tag(index)
                     }
+                    .background(Color.clear)
+                    .offset(y: verticalOffset(for: index))
+                    .scaleEffect(contentScale(for: index))
+                    .animation(nil, value: dragOffset)
                 }
+                // A new tweet or attachment list owns a new set of hosted pages.
+                .id([currentTweet.mid] + attachments.map(\.mid))
                 .background(Color.clear)
-                .tabViewStyle(.page)
-                .indexViewStyle(.page(backgroundDisplayMode: .always))
-                .transaction { txn in
-                    if suppressTabPagingAnimation {
-                        txn.animation = nil
-                    }
-                }
                 .simultaneousGesture(verticalNavigationGesture(allowImageAttachments: false))
                 .onChange(of: currentIndex) { _, newIndex in
                     previousIndex = newIndex
                     cleanupNonVisibleImagesClosure(newIndex)
                     loadSelectedVideoIfNeeded(reason: "indexChanged")
+                }
+                .onChange(of: currentAttachmentIsImage) { _, isImage in
+                    if !isImage { isImageZoomed = false }
                 }
 
                 if showControls {
@@ -614,7 +605,7 @@ struct MediaBrowserView: View {
             guard attachments.indices.contains(nextVideoIndex) else { return }
 
             Task { @MainActor in
-                suppressTabPagingAnimation = true
+                suppressPagingAnimation = true
                 isCompletingVerticalAdvance = true
                 showControls = false
                 let slideDistance = UIScreen.main.bounds.height
@@ -642,7 +633,7 @@ struct MediaBrowserView: View {
                 try? await Task.sleep(nanoseconds: 220_000_000)
                 isTransitioning = false
                 isCompletingVerticalAdvance = false
-                suppressTabPagingAnimation = false
+                suppressPagingAnimation = false
             }
         }
         
@@ -682,10 +673,8 @@ struct MediaBrowserView: View {
                 return
             }
 
-            // TabView page lifecycle is not deterministic: the selected page's onAppear
-            // can be skipped or delayed when fullscreen is presented over an active feed
-            // player. The container owns the current selection, so it makes the selected
-            // video load explicit; duplicate calls are ignored by FullScreenVideoManager.
+            // Neighbouring pages are mounted before selection. The container owns
+            // playback so preloading a page cannot start its video early.
             FullScreenVideoManager.shared.loadVideo(
                 url: url,
                 mid: attachment.mid,
@@ -696,14 +685,15 @@ struct MediaBrowserView: View {
             )
         }
         
-        private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+        private func imageView(for attachment: MimeiFileType, index: Int) -> some View {
             ImageViewWithPlaceholder(
-                attachment: attachment,
-                baseUrl: baseUrl,
-                url: url,
                 imageState: imageStates[index] ?? .loading,
                 isImageZoomed: $isImageZoomed,
-                isCurrentIndex: index == currentIndex
+                isCurrentIndex: index == currentIndex,
+                onTap: {
+                    withAnimation(.easeInOut(duration: 0.2)) { showControls = true }
+                    resetControlsTimer()
+                }
             )
             .contentShape(Rectangle())
             .simultaneousGesture(verticalNavigationGesture(allowImageAttachments: true))
@@ -954,56 +944,22 @@ enum ImageState {
 
 // MARK: - Image View With Placeholder
 struct ImageViewWithPlaceholder: View {
-    let attachment: MimeiFileType
-    let baseUrl: URL
-    let url: URL
     let imageState: ImageState
     @Binding var isImageZoomed: Bool
     let isCurrentIndex: Bool
-    
-    @State private var scale: CGFloat = 1.0
-    @State private var lastScale: CGFloat = 1.0
-    @State private var offset: CGSize = .zero
-    @State private var lastOffset: CGSize = .zero
+    let onTap: () -> Void
+
+    @State private var zoomed = false
     @State private var showDownloadToast = false
     @State private var downloadToastMessage = ""
-    
-    // Calculate zoom parameters based on actual image dimensions and screen dimensions
-    private func getActualAspectRatio() -> CGFloat {
+
+    private var image: UIImage? {
         switch imageState {
-        case .loaded(let image):
-            return image.size.width / image.size.height
-        case .placeholder(let image):
-            return image.size.width / image.size.height
-        default:
-            return CGFloat(attachment.aspectRatio ?? 1.0)
+        case .placeholder(let image), .loaded(let image): return image
+        default: return nil
         }
     }
-    
-    private func calculateDoubleTapScale(for geometry: GeometryProxy) -> CGFloat {
-        let screenWidth = geometry.size.width
-        let screenHeight = geometry.size.height
-        let actualAspectRatio = getActualAspectRatio()
-        
-        // For images with AR < 0.6: calculate scale to cover full width
-        // For other images: use 2.0 as double-tap zoom scale
-        if actualAspectRatio < 0.6 {
-            // Image is tall, so it's fitted to screen height
-            // Current width = screenHeight * actualAspectRatio
-            // We want width = screenWidth
-            // So scale = screenWidth / (screenHeight * actualAspectRatio)
-            return screenWidth / (screenHeight * actualAspectRatio)
-        } else {
-            // Image is wide or normal, use 2.0 zoom
-            return 2.0
-        }
-    }
-    
-    private func calculateMaxScale(for geometry: GeometryProxy) -> CGFloat {
-        // Allow up to 2x the double-tap scale for pinch zoom
-        return calculateDoubleTapScale(for: geometry) * 2.0
-    }
-    
+
     private func downloadImage() {
         // Get the image to download
         let imageToDownload: UIImage?
@@ -1052,158 +1008,65 @@ struct ImageViewWithPlaceholder: View {
     }
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                Color.clear
-                
-                Group {
-                    switch imageState {
-                    case .loading:
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.5)
-                        
-                    case .placeholder(let placeholderImage):
-                        Image(uiImage: placeholderImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                        
-                    case .loaded(let image):
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                        
-                    case .error:
-                        VStack {
-                            Image(systemName: "photo")
-                                .font(.system(size: 50))
-                                .foregroundColor(.gray)
-                            Text(LocalizedStringKey("Failed to load image"))
-                                .foregroundColor(.gray)
-                                .font(.caption)
-                        }
-                    }
+        ZStack {
+            // Keep one native image view alive as the thumbnail is replaced by
+            // the original, preserving zoom and pan when its aspect ratio matches.
+            BrowserZoomableImage(
+                image: image,
+                onZoomChange: { zoomed = $0 },
+                onTap: onTap,
+                onLongPress: downloadImage
+            )
+
+            switch imageState {
+            case .loading:
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
+                    .allowsHitTesting(false)
+            case .error:
+                VStack {
+                    Image(systemName: "photo")
+                        .font(.system(size: 50))
+                        .foregroundColor(.gray)
+                    Text(LocalizedStringKey("Failed to load image"))
+                        .foregroundColor(.gray)
+                        .font(.caption)
                 }
-                .scaleEffect(scale)
-                .offset(offset)
-                .simultaneousGesture(
-                    MagnificationGesture()
-                        .onChanged { value in
-                            let delta = value / lastScale
-                            lastScale = value
-                            let maxScale = calculateMaxScale(for: geometry)
-                            scale = min(max(scale * delta, 1.0), maxScale)
-                        }
-                        .onEnded { _ in
-                            lastScale = 1.0
-                            // Snap back to bounds if needed
-                            if scale < 1.0 {
-                                withAnimation(.easeOut(duration: 0.3)) {
-                                    scale = 1.0
-                                    offset = .zero
-                                }
-                            }
-                        }
-                )
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 15)
-                        .onChanged { value in
-                            guard scale > 1.0 else {
-                                lastOffset = .zero
-                                return
-                            }
+                .allowsHitTesting(false)
+            case .placeholder, .loaded:
+                EmptyView()
+            }
 
-                            let delta = CGSize(
-                                width: value.translation.width - lastOffset.width,
-                                height: value.translation.height - lastOffset.height
-                            )
-                            lastOffset = value.translation
-
-                            let actualAspectRatio = getActualAspectRatio()
-                            let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
-                            let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
-
-                            // For tall images (AR < 0.6), align to top and only allow upward scrolling
-                            if actualAspectRatio < 0.6 {
-                                // Align to top: offset.y should be positive (image top aligned to screen top)
-                                let topAlignedOffsetY = maxOffsetY
-
-                                offset = CGSize(
-                                    width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
-                                    height: max(0, min(topAlignedOffsetY, offset.height + delta.height))
-                                )
-                            } else {
-                                // Normal behavior for wide/normal images
-                                offset = CGSize(
-                                    width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
-                                    height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
-                                )
-                            }
-                        }
-                        .onEnded { _ in
-                            lastOffset = .zero
-                        },
-                    including: scale > 1.0 ? .gesture : .none
-                )
-                .onTapGesture(count: 2) {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        if scale > 1.0 {
-                            scale = 1.0
-                            offset = .zero
-                        } else {
-                            scale = calculateDoubleTapScale(for: geometry)
-                            
-                            // For tall images (AR < 0.6), align to top when zooming in
-                            let actualAspectRatio = getActualAspectRatio()
-                            if actualAspectRatio < 0.6 {
-                                let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
-                                offset = CGSize(width: 0, height: maxOffsetY)
-                            } else {
-                                offset = .zero
-                            }
-                        }
-                    }
-                }
-                .onLongPressGesture {
-                    // Download image on long press
-                    downloadImage()
-                }
-                
-                // Download toast overlay
-                if showDownloadToast {
-                    VStack {
+            if showDownloadToast {
+                VStack {
+                    Spacer()
+                    HStack {
                         Spacer()
-                        HStack {
-                            Spacer()
-                            Text(downloadToastMessage)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(Color.black.opacity(0.7))
-                                .cornerRadius(8)
-                            Spacer()
-                        }
-                        .padding(.bottom, 100)
+                        Text(downloadToastMessage)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.black.opacity(0.7))
+                            .cornerRadius(8)
+                        Spacer()
                     }
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.3), value: showDownloadToast)
+                    .padding(.bottom, 100)
                 }
+                .allowsHitTesting(false)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.3), value: showDownloadToast)
             }
         }
         .clipped()
-        .onChange(of: scale) { _, newScale in
-            // Update the zoom state for the current image
-            if isCurrentIndex {
-                isImageZoomed = newScale > 1.0
-            }
+        .onAppear {
+            if isCurrentIndex { isImageZoomed = zoomed }
         }
-        .onChange(of: isCurrentIndex) { _, newIsCurrent in
-            // Reset zoom state when switching to a different image
-            if newIsCurrent {
-                isImageZoomed = scale > 1.0
-            } else {
-                isImageZoomed = false
-            }
+        .onChange(of: zoomed) { _, newValue in
+            if isCurrentIndex { isImageZoomed = newValue }
+        }
+        .onChange(of: isCurrentIndex) { _, isCurrent in
+            if isCurrent { isImageZoomed = zoomed }
         }
     }
 }

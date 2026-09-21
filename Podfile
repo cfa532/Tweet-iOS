@@ -3,7 +3,6 @@ platform :ios, '15.0'
 target 'Tweet' do
   use_frameworks!  # Use dynamic frameworks
   pod 'hprose', '2.0.3'
-  pod 'SDWebImageSwiftUI', '~> 3.1.3'
   pod 'ffmpeg-kit-ios', :path => 'Vendor/ffmpeg-kit-ios-min'
   
   # CachingPlayerItem is now integrated directly into the app
@@ -39,13 +38,6 @@ post_install do |installer|
       config.build_settings['ARCHS'] = '$(ARCHS_STANDARD)'
       config.build_settings['VALID_ARCHS'] = 'arm64 x86_64'
       config.build_settings['ONLY_ACTIVE_ARCH'] = 'NO'
-      
-      # Suppress deprecation warnings in SDWebImage (third-party code using old UTType APIs)
-      if target.name == 'SDWebImage'
-        config.build_settings['GCC_WARN_DEPRECATED_FUNCTIONS'] = 'NO'
-        config.build_settings['CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS'] = 'NO'
-        config.build_settings['GCC_WARN_ABOUT_DEPRECATED_FUNCTIONS'] = 'NO'
-      end
       
       # Suppress deprecation warnings in hprose (third-party code using old SSL APIs)
       if target.name == 'hprose'

@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import os.log
-import SDWebImage
 
 /// Manages memory usage with a 2GB cap to prevent OS termination
 final class MemoryCapManager: @unchecked Sendable {
@@ -297,7 +296,6 @@ final class MemoryCapManager: @unchecked Sendable {
         SharedAssetCache.shared.releaseForBackground()
         LocalHTTPServer.shared.stopImmediatelyForBackground()
         ImageCacheManager.shared.clearMemoryCache()
-        SDImageCache.shared.clearMemory()
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
         // Close pooled hprose URLSessions (keep-alive connections + buffers).
