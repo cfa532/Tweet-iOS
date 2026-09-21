@@ -20,9 +20,14 @@ struct ComposeTweetView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
     
-    // Check if there's content or attachments that would be lost
-    private var hasContentOrAttachments: Bool {
-        !viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.selectedItems.isEmpty || !viewModel.selectedImages.isEmpty || !viewModel.selectedVideos.isEmpty || !viewModel.selectedDocuments.isEmpty
+    // Compare against the new editor's empty, public draft, including unpublished text.
+    private var hasUnsavedChanges: Bool {
+        !viewModel.tweetContent.isEmpty
+            || !viewModel.selectedItems.isEmpty
+            || !viewModel.selectedImages.isEmpty
+            || !viewModel.selectedVideos.isEmpty
+            || !viewModel.selectedDocuments.isEmpty
+            || viewModel.isPrivate
     }
 
     init() {
@@ -47,7 +52,7 @@ struct ComposeTweetView: View {
                 }
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(NSLocalizedString("Cancel", comment: "Cancel button")) {
-                        if hasContentOrAttachments {
+                        if hasUnsavedChanges {
                             showCancelConfirmation = true
                         } else {
                             viewModel.clearForm()
@@ -125,7 +130,7 @@ struct ComposeTweetView: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .interactiveDismissDisabled(viewModel.tweetContent.count > 0)
+        .interactiveDismissDisabled(hasUnsavedChanges)
         .alert(NSLocalizedString("Discard Tweet?", comment: "Cancel confirmation title"), isPresented: $showCancelConfirmation) {
             Button(NSLocalizedString("Discard", comment: "Discard button"), role: .destructive) {
                 viewModel.clearForm()

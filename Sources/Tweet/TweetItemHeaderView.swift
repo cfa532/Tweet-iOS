@@ -6,13 +6,20 @@ struct AdminTweetContentEditSheet: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     @State private var text: String
+    @State private var originalText: String
     @State private var saving = false
+    @State private var showCancelConfirmation = false
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
 
     init(tweet: Tweet) {
         self.tweet = tweet
         _text = State(initialValue: tweet.content ?? "")
+        _originalText = State(initialValue: tweet.content ?? "")
+    }
+
+    private var hasUnsavedChanges: Bool {
+        text != originalText
     }
 
     var body: some View {
@@ -23,7 +30,19 @@ struct AdminTweetContentEditSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button("Cancel") {
+                            if hasUnsavedChanges {
+                                showCancelConfirmation = true
+                            } else {
+                                dismiss()
+                            }
+                        }
+                        .alert("Unsaved Changes", isPresented: $showCancelConfirmation) {
+                            Button("Discard Changes", role: .destructive) { dismiss() }
+                            Button("Keep Editing", role: .cancel) { }
+                        } message: {
+                            Text("You have unsaved changes. Are you sure you want to exit without saving?")
+                        }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
@@ -64,6 +83,7 @@ struct AdminTweetContentEditSheet: View {
                     }
                 }
         }
+        .interactiveDismissDisabled(hasUnsavedChanges)
         .overlay {
             if saving {
                 ZStack {
