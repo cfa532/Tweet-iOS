@@ -4478,7 +4478,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
 
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-        _ = try Self.unwrapV2Response(rawResponse)
+        // A missing response is not an acknowledgment. Require the updated tweet's
+        // ID before the editor can update its local cache and dismiss as saved.
+        guard let response = try Self.unwrapV2Response(rawResponse) as? [String: Any],
+              let updatedTweetId = response["mid"] as? String,
+              updatedTweetId == tweetId else {
+            throw NSError(domain: "HproseClient", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+        }
         await adoptWriteRouteForReads(requestUser, reason: entry)
     }
     
