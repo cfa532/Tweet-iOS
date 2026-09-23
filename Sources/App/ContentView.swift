@@ -1023,13 +1023,15 @@ private struct NewTweetsBannerOverlay: View {
                     .foregroundColor(.white)
                     .padding(.leading, 20)
                     .padding(.trailing, 22)
-                    .frame(height: 44)
                     .background(
                         Capsule()
                             .fill(bannerBackgroundColor)
                     )
                     .clipShape(Capsule())
                     .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 3)
+                    // Keep the tap target comfortable while the capsule hugs the avatars.
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .transition(.move(edge: .top).combined(with: .opacity))
@@ -1095,7 +1097,8 @@ private struct NewTweetsBannerOverlay: View {
                     .zIndex(Double(avatarCount - index))
             }
         }
-        .frame(width: width, height: avatarSize)
+        // Offsets do not expand the stack's layout bounds; anchor it before spreading avatars.
+        .frame(width: width, height: avatarSize, alignment: .leading)
     }
 
     private func avatarClusterItems(from authors: [User]) -> [AvatarClusterItem] {
