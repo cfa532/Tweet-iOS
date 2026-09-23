@@ -27,7 +27,8 @@ struct SearchScreen: View {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(XTheme.secondaryTextColor)
                         
-                        TextField(LocalizedStringKey("Search by @username or tweet content..."), text: $searchViewModel.searchText)
+                        TextField("", text: $searchViewModel.searchText)
+                            .accessibilityLabel(Text(LocalizedStringKey("Search")))
                             .textFieldStyle(PlainTextFieldStyle())
                             .focused($isSearchFieldFocused)
                             .onSubmit {
