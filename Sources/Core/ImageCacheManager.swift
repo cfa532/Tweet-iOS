@@ -51,6 +51,14 @@ private final class DecodedImageBox: @unchecked Sendable {
 
 class ImageCacheManager: @unchecked Sendable {
     static let shared = ImageCacheManager()
+    private let imageSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = Constants.IMAGE_LOAD_TIMEOUT
+        // The request timeout resets as data arrives. Bound the whole download
+        // too, so a trickling response cannot keep a visible image loading.
+        configuration.timeoutIntervalForResource = Constants.IMAGE_LOAD_TIMEOUT
+        return URLSession(configuration: configuration)
+    }()
     private let cache = NSCache<NSString, UIImage>()
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
@@ -778,7 +786,7 @@ class ImageCacheManager: @unchecked Sendable {
                 request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
-                let downloadResult = try await URLSession.shared.download(for: request)
+                let downloadResult = try await self.imageSession.download(for: request)
                 tempURL = downloadResult.0  // Store for cleanup in defer
                 
                 guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
@@ -865,7 +873,7 @@ class ImageCacheManager: @unchecked Sendable {
                 request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
-                let downloadResult = try await URLSession.shared.download(for: request)
+                let downloadResult = try await self.imageSession.download(for: request)
                 tempURL = downloadResult.0  // Store for cleanup in defer
                 
                 guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
@@ -1034,7 +1042,7 @@ class ImageCacheManager: @unchecked Sendable {
                 request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
-                let downloadResult = try await URLSession.shared.download(for: request)
+                let downloadResult = try await self.imageSession.download(for: request)
                 tempURL = downloadResult.0  // Store for cleanup in defer
                 
                 guard let httpResponse = downloadResult.1 as? HTTPURLResponse,

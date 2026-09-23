@@ -448,12 +448,6 @@ struct SelectableTextView: UIViewRepresentable {
 
 // Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
 @available(iOS 16.0, *)
-@MainActor
-private enum DetailImageLoadRegistry {
-    static var activeCompressedLoads: Set<String> = []
-}
-
-@available(iOS 16.0, *)
 struct DetailMediaCell: View {
     @ObservedObject var parentTweet: Tweet
     let attachmentIndex: Int
@@ -616,10 +610,6 @@ struct DetailMediaCell: View {
                 NotificationCenter.default.removeObserver(observer)
                 imageCacheObserver = nil
             }
-            if attachment.type == .image {
-                DetailImageLoadRegistry.activeCompressedLoads.remove(Self.imageLoadId(for: attachment))
-            }
-
             originalImageTask?.cancel()
             originalImageTask = nil
         }
@@ -704,18 +694,13 @@ struct DetailMediaCell: View {
             return
         }
 
-        if DetailImageLoadRegistry.activeCompressedLoads.contains(loadId) {
-            print("♻️ [TweetDetailView] Waiting for shared detail image load \(loadId)")
-            loading = true
-            return
-        }
-        
         // If no cached image, start loading with global manager
         print("DEBUG: [TweetDetailView] Starting network load for \(loadId)")
         loading = true
-        DetailImageLoadRegistry.activeCompressedLoads.insert(loadId)
         
         // Detail-visible images should outrank preload/background image work.
+        // Let the manager coalesce requests so every cell receives failures as well
+        // as successes; waiting only for imageCached leaves failed loads spinning.
         GlobalImageLoadManager.shared.loadImageCriticalPriority(
             id: loadId,
             url: url,
@@ -723,7 +708,6 @@ struct DetailMediaCell: View {
             baseUrl: baseUrl
         ) { loadedImage in
             print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
-            DetailImageLoadRegistry.activeCompressedLoads.remove(loadId)
             // Completion is already @MainActor, update state immediately without additional Task wrapper
             // The extra Task wrapper was causing a delay in UI updates, making spinners stick
             self.image = loadedImage

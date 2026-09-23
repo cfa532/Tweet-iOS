@@ -242,6 +242,29 @@ final class GlobalImageLoadManager: ObservableObject {
             return
         }
         
+        // Keep every queued caller's callbacks on the queued request itself, so
+        // priority changes and cleanup that retains the request retain its callers.
+        if let index = pendingRequests.firstIndex(where: { $0.id == request.id }) {
+            let existing = pendingRequests[index]
+            pendingRequests[index] = ImageLoadRequest(
+                id: existing.id,
+                url: existing.url,
+                attachment: existing.attachment,
+                baseUrl: existing.baseUrl,
+                priority: existing.priority,
+                completion: { image in
+                    existing.completion(image)
+                    request.completion(image)
+                },
+                onProgress: { progress in
+                    existing.onProgress(progress)
+                    request.onProgress(progress)
+                }
+            )
+            boostPriority(id: request.id, to: request.priority)
+            return
+        }
+
         // If image reappears and we haven't completed it successfully, reset retry count
         // This allows images to be retried when they come back into view.
         //
@@ -780,12 +803,6 @@ final class GlobalImageLoadManager: ObservableObject {
     }
     
     private func addToPendingQueue(_ request: ImageLoadRequest) {
-        if let existingIndex = pendingRequests.firstIndex(where: { $0.id == request.id }) {
-            let existing = pendingRequests[existingIndex]
-            guard request.priority.rawValue > existing.priority.rawValue else { return }
-            pendingRequests.remove(at: existingIndex)
-        }
-
         // Insert request in priority order (highest priority first)
         let insertIndex = pendingRequests.firstIndex { $0.priority.rawValue < request.priority.rawValue } ?? pendingRequests.count
         pendingRequests.insert(request, at: insertIndex)
