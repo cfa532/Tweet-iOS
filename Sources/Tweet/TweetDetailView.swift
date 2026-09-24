@@ -361,34 +361,7 @@ struct SelectableTextView: UIViewRepresentable {
             .foregroundColor: XTheme.text,
             .paragraphStyle: ps,
         ])
-        applyDetectedLinks(to: attributedString)
         return attributedString
-    }
-
-    private func applyDetectedLinks(to attributedString: NSMutableAttributedString) {
-        guard attributedString.length > 0,
-              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
-            return
-        }
-
-        let fullString = attributedString.string as NSString
-        let fullRange = NSRange(location: 0, length: attributedString.length)
-        detector.enumerateMatches(in: attributedString.string, options: [], range: fullRange) { match, _, _ in
-            guard let match,
-                  let url = match.url,
-                  NSMaxRange(match.range) <= attributedString.length else { return }
-
-            let matchedText = fullString.substring(with: match.range)
-            let trimmedLength = matchedText.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;:)］】》」'\"")).utf16.count
-            let linkRange = NSRange(location: match.range.location, length: trimmedLength)
-            guard linkRange.length > 0 else { return }
-
-            attributedString.addAttributes([
-                .link: url,
-                .foregroundColor: XTheme.accent,
-                .underlineStyle: NSUnderlineStyle.single.rawValue,
-            ], range: linkRange)
-        }
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -413,6 +386,7 @@ struct SelectableTextView: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.attributedText = makeAttributedString(text)
+        context.coordinator.detectLinks(in: textView, text: text)
         return textView
     }
 
@@ -420,7 +394,12 @@ struct SelectableTextView: UIViewRepresentable {
         uiView.delegate = context.coordinator
         if uiView.text != text {
             uiView.attributedText = makeAttributedString(text)
+            context.coordinator.detectLinks(in: uiView, text: text)
         }
+    }
+
+    static func dismantleUIView(_ uiView: UITextView, coordinator: Coordinator) {
+        coordinator.linkDetectionTask?.cancel()
     }
     
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -434,7 +413,58 @@ struct SelectableTextView: UIViewRepresentable {
         Coordinator()
     }
 
+    @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
+        var linkDetectionTask: Task<Void, Never>?
+
+        private struct DetectedLink: Sendable {
+            let range: NSRange
+            let url: URL
+        }
+
+        private nonisolated static let linkDetector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        )
+
+        private nonisolated static func detectedLinks(in text: String) -> [DetectedLink] {
+            guard !text.isEmpty, let detector = linkDetector else { return [] }
+
+            let fullString = text as NSString
+            var links: [DetectedLink] = []
+            detector.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: fullString.length)) { match, _, _ in
+                guard let match, let url = match.url else { return }
+
+                let matchedText = fullString.substring(with: match.range)
+                let trimmedLength = matchedText.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;:)］】》」'\"")).utf16.count
+                guard trimmedLength > 0 else { return }
+                links.append(DetectedLink(range: NSRange(location: match.range.location, length: trimmedLength), url: url))
+            }
+            return links
+        }
+
+        func detectLinks(in textView: UITextView, text: String) {
+            linkDetectionTask?.cancel()
+            // Detector initialization and scanning can block for hundreds of milliseconds.
+            // Render selectable text first; only pass text and link ranges off the main actor.
+            linkDetectionTask = Task { [weak textView] in
+                let links = await Task.detached(priority: .userInitiated) {
+                    Self.detectedLinks(in: text)
+                }.value
+                // A text change or dismantle cancels the old scan's UI update.
+                guard !Task.isCancelled, let textView, !links.isEmpty else { return }
+
+                textView.textStorage.beginEditing()
+                for link in links {
+                    textView.textStorage.addAttributes([
+                        .link: link.url,
+                        .foregroundColor: XTheme.accent,
+                        .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    ], range: link.range)
+                }
+                textView.textStorage.endEditing()
+            }
+        }
+
         func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
             guard case .link(let url) = textItem.content else {
                 return defaultAction
