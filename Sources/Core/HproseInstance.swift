@@ -4247,13 +4247,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
      * Delete a tweet.
      * Sends the current app user as the requester and the tweet author as owner metadata.
      * The backend decides whether to permanently delete the tweet or only remove it
-     * from the requester's personal lists.
+     * from the requester's personal lists. Admin deletion deletes on the author's
+     * root first, then removes the admin's feed entry in a separate task.
      */
     func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String {
         let entry = "delete_tweet"
-        // Phase A (demotion prep): snapshot @MainActor appUser.mid + admin check.
-        let (appUserMid, isAdminDeletingAnotherUsersTweet) = await MainActor.run {
-            (self.appUser.mid, tweetAuthorId != self.appUser.mid && Gadget.isResearchAdminUser(self.appUser))
+        let (appUserInstance, appUserMid, isAdminDeletingAnotherUsersTweet) = await MainActor.run {
+            (self.appUser, self.appUser.mid, tweetAuthorId != self.appUser.mid && Gadget.isResearchAdminUser(self.appUser))
         }
         // Snapshot the retweet link BEFORE deleting: removeDeletedTweetLocally() clears the
         // singleton and the cache row, so afterwards there is no way to find the original.
@@ -4285,7 +4285,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             requestUser = author
         } else {
-            requestUser = await MainActor.run { self.appUser }
+            requestUser = appUserInstance
         }
 
         // Delete is a mutation, so it must run directly against the current
@@ -4305,6 +4305,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         } catch {
             if Self.isTweetNotFoundDeleteFailure(error, response: rawResponse) {
                 hproseDebug("DEBUG: [deleteTweet] Tweet \(tweetId) is already missing on server; clearing local cache")
+                if isAdminDeletingAnotherUsersTweet {
+                    removeDeletedTweetFromAdminFeed(tweetId, authorId: tweetAuthorId, adminId: appUserMid)
+                }
                 await removeDeletedTweetLocally(tweetId)
                 // retweet_removed is an idempotent Hdel, so it is safe to send even when
                 // another client already unlinked this retweet.
@@ -4336,6 +4339,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                           userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid delete response from server", comment: "Server response error")])
         }
 
+        if isAdminDeletingAnotherUsersTweet {
+            removeDeletedTweetFromAdminFeed(deletedTweetId, authorId: tweetAuthorId, adminId: appUserMid)
+        }
         await adoptWriteRouteForReads(requestUser, reason: entry)
 
         await removeDeletedTweetLocally(deletedTweetId)
@@ -4350,8 +4356,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             )
         }
 
-        // Only decrement tweetCount if appUser is the author
-        // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
+        // Only the author's tweetCount changes; admin deletion also removes the
+        // admin's feed entry without changing how many tweets the admin authored.
         if tweetAuthorId == appUserMid {
             await MainActor.run {
                 let currentCount = self.appUser.tweetCount ?? 0
@@ -4366,6 +4372,51 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         try? await self.refreshAppUserFromServer()
 
         return deletedTweetId
+    }
+
+    /// Start only after author deletion succeeds (or the tweet is already gone).
+    /// A separate task keeps admin feed failures from undoing the successful local
+    /// deletion. Only IDs cross into it; user access stays on the main actor.
+    private func removeDeletedTweetFromAdminFeed(_ tweetId: String, authorId: String, adminId: String) {
+        Task {
+            do {
+                let adminUser = await MainActor.run { User.getInstance(mid: adminId) }
+                _ = try await adminUser.resolveWritableUrl()
+                guard let client = await adminUser.writableClient(timeout: 30) else {
+                    throw NSError(domain: "HproseClient", code: -1,
+                                  userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
+                }
+                // Distinct requester/author IDs remove only the admin's lists.
+                // The backend selects the Database or File adapter per object.
+                let params = [
+                    "aid": appId,
+                    "ver": "last",
+                    "version": "v3",
+                    "userid": adminId,
+                    "appuserid": adminId,
+                    "authorid": authorId,
+                    "tweetid": tweetId
+                ]
+                let rawResponse = await invokeRunMApp(using: client, entry: "delete_tweet", params: params)
+                let result = try Self.unwrapV2Response(rawResponse)
+                guard let response = result as? [String: Any],
+                      Self.stringField(response, keys: ["tweetid"]) == tweetId else {
+                    throw NSError(domain: "HproseClient", code: -1,
+                                  userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid delete response from server", comment: "Server response error")])
+                }
+                await adoptWriteRouteForReads(adminUser, reason: "delete_tweet")
+            } catch {
+                hproseWarning("[deleteTweet] Tweet \(tweetId) deleted, but admin feed removal failed: \(error)")
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: .errorOccurred,
+                        object: NSError(domain: "TweetDeletion", code: -1, userInfo: [
+                            NSLocalizedDescriptionKey: NSLocalizedString("Tweet deleted, but failed to remove it from your feed", comment: "Admin feed removal error") + ": " + ErrorMessageHelper.userFriendlyMessage(from: error)
+                        ])
+                    )
+                }
+            }
+        }
     }
 
     /// Unlink a deleted retweet from its original tweet and bring the original's
