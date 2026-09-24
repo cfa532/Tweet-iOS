@@ -1023,6 +1023,7 @@ private struct NewTweetsBannerOverlay: View {
                     .foregroundColor(.white)
                     .padding(.leading, 20)
                     .padding(.trailing, 22)
+                    .padding(.vertical, 2)
                     .background(
                         Capsule()
                             .fill(bannerBackgroundColor)

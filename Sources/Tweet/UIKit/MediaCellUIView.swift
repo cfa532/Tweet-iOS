@@ -4960,6 +4960,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     // MARK: - Tap Handling
 
     @objc private func retryTapped() {
+        // The author's route may have been repaired since this cell was configured.
+        // Both image and video retries must rebuild their URL from the current route.
+        updateEffectiveBaseUrl()
         if isVideoAttachment {
             retryVideoLoad()
         } else {
@@ -5058,8 +5061,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     @objc private func retryImageLoad() {
-        guard let attachment, attachment.type == .image,
-              let url = attachment.getUrl(effectiveBaseUrl) else { return }
+        guard let attachment, attachment.type == .image else { return }
+
+        // Detail builds its URL at load time; do the same for a manual feed retry
+        // instead of reusing the failed route captured during configure.
+        guard let url = attachment.getUrl(effectiveBaseUrl) else { return }
+
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
         retryButton.isHidden = true
         // Clear permanently-failed status so GlobalImageLoadManager will retry
         GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
@@ -5067,6 +5076,15 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         // load manager's state leaves the tap silently refused for the rest of the
         // 30s session block.
         BlackList.shared.clearForManualRetry(MimeiId(attachment.mid))
+
+        // setVisible(false) cancels image work but intentionally leaves the last
+        // failure UI in place. If its button is still tappable during a visibility
+        // update, loadImage's visibility guard would otherwise discard this retry.
+        // A direct tap proves the cell is on screen; restore its loading state now.
+        if !isVisible {
+            setVisible(true)
+            return
+        }
         loadImage(attachment: attachment, url: url)
     }
 
