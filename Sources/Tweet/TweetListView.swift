@@ -47,10 +47,11 @@ struct NewTweetsBanner: View {
                                 .font(.system(size: 15, weight: .regular))
                         }
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundColor(.white)
                     .padding(.leading, 20)
                     .padding(.trailing, 22)
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 4)
                     .background(
                         Capsule()
                             .fill(bannerBackgroundColor)
@@ -67,7 +68,7 @@ struct NewTweetsBanner: View {
 
             Spacer()
         }
-        .padding(.top, 12)
+        .padding(.top, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(isPresented && !tweets.isEmpty)
         .animation(.easeOut(duration: 0.22), value: isPresented)
