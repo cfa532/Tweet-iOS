@@ -68,7 +68,7 @@ struct NewTweetsBanner: View {
 
             Spacer()
         }
-        .padding(.top, 16)
+        .padding(.top, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(isPresented && !tweets.isEmpty)
         .animation(.easeOut(duration: 0.22), value: isPresented)
