@@ -606,7 +606,9 @@ final class GlobalImageLoadManager: ObservableObject {
         return candidates.first { $0.id.hasPrefix("browser_") } ?? candidates.first
     }
     
-    private func handleLoadFailure(_ request: ImageLoadRequest) {
+    /// Returns true when the request remains in progress via a scheduled retry.
+    @discardableResult
+    private func handleLoadFailure(_ request: ImageLoadRequest) -> Bool {
         let currentRetryCount = retryCounts[request.id] ?? 0
         let newRetryCount = currentRetryCount + 1
         retryCounts[request.id] = newRetryCount
@@ -646,6 +648,17 @@ final class GlobalImageLoadManager: ObservableObject {
                     self.completedRequests.remove(focusedRetryRequest.id)
                     self.permanentlyFailedRequests.remove(focusedRetryRequest.id)
                     self.retryCounts[focusedRetryRequest.id] = newRetryCount
+
+                    // The focused browser request becomes the owner of the retry. Move
+                    // the original request and its other joined callers with it so a
+                    // later success or terminal failure still completes every surface.
+                    if focusedRetryRequest.id != requestId {
+                        let joinedRequests = self.activeLoadWaiters.removeValue(forKey: requestId) ?? []
+                        let remainingRequests = joinedRequests.filter { $0.id != focusedRetryRequest.id }
+                        self.activeLoadWaiters[focusedRetryRequest.id, default: []]
+                            .append(contentsOf: [request] + remainingRequests)
+                    }
+
                     print("🔄 [GlobalImageLoadManager] Retrying focused fullscreen image: \(focusedRetryRequest.id)")
                     self.loadImage(request: focusedRetryRequest, isRetry: true)
                     return
@@ -656,6 +669,7 @@ final class GlobalImageLoadManager: ObservableObject {
                     print("DEBUG: [GlobalImageLoadManager] Skipping retry due to memory pressure: \(requestId)")
                     self.permanentlyFailedRequests.insert(requestId)
                     self.retryCounts.removeValue(forKey: requestId)
+                    self.completeRequest(request, with: nil)
                     return
                 }
 
@@ -680,11 +694,13 @@ final class GlobalImageLoadManager: ObservableObject {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             print("DEBUG: [GlobalImageLoadManager] Scheduled retry #\(newRetryCount) in \(delay)s for: \(request.id)")
+            return true
         } else {
             // After retries, mark as permanently failed to prevent further attempts
             permanentlyFailedRequests.insert(request.id)
             retryCounts.removeValue(forKey: request.id)
             print("❌ [IMAGE LOAD] Permanently failed after \(maxRetries) retries: \(request.id)")
+            return false
         }
     }
     
@@ -740,11 +756,11 @@ final class GlobalImageLoadManager: ObservableObject {
                         BlackList.shared.recordFailure(mediaID)
 
                         // Only retry for real failures, not cancellations
-                        self.handleLoadFailure(request)
+                        let willRetry = self.handleLoadFailure(request)
+                        if !willRetry {
+                            self.completeRequest(request, with: nil)
+                        }
                     }
-
-                    // Always call completion on real failures so UI can update isLoading state.
-                    self.completeRequest(request, with: nil)
                 }
                 self.clearActiveLoadState(for: request.id)
                 self.updateStatistics()
