@@ -575,7 +575,16 @@ extension TweetCacheManager {
             }
         }
 
-        return await MainActor.run {
+        let cachedAuthorIds = Set(cachedSlots.flatMap { payload -> [String] in
+            guard let payload else { return [] }
+            var authorIds = [payload.tweet.authorId]
+            if let originalTweet = payload.originalTweet {
+                authorIds.append(originalTweet.authorId)
+            }
+            return authorIds
+        })
+
+        let tweets: [Tweet?] = await MainActor.run {
             cachedSlots.map { payload in
                 guard let payload else { return nil }
 
@@ -592,6 +601,15 @@ extension TweetCacheManager {
                 return TweetStore.shared.merge(payload.tweet, author: author)
             }
         }
+
+        // Keep the cache-first path fast, but do not let its cached User objects become
+        // the final routing authority. Their read-node address may have changed since
+        // the tweets were saved, so refresh those authors without delaying rendering.
+        HproseInstance.shared.refreshTweetAuthorsInBackground(
+            cachedAuthorIds,
+            reason: "cached tweet page"
+        )
+        return tweets
     }
 
     /// Fetch a tweet by its mid (tweet ID) from cache
@@ -649,6 +667,11 @@ extension TweetCacheManager {
             }
             return tweet
         }) {
+            let authorId = await MainActor.run { tweetInstance.authorId }
+            HproseInstance.shared.refreshTweetAuthorsInBackground(
+                Set([authorId]),
+                reason: "cached tweet detail"
+            )
             return tweetInstance
         }
 
@@ -680,12 +703,17 @@ extension TweetCacheManager {
 
         guard let cachedPayload, !isBlockedByDeletion(cachedPayload.tweet) else { return nil }
 
-        return await MainActor.run {
+        let tweet = await MainActor.run {
             let author = cachedPayload.author.map {
                 UserStore.shared.hydrateFromCache($0, shouldUpdateBaseUrl: true)
             } ?? UserStore.shared.user(mid: cachedPayload.tweet.authorId)
             return TweetStore.shared.merge(cachedPayload.tweet, author: author)
         }
+        HproseInstance.shared.refreshTweetAuthorsInBackground(
+            Set([cachedPayload.tweet.authorId]),
+            reason: "cached tweet detail"
+        )
+        return tweet
     }
 
     /// Save a tweet to the cache. If tweet is nil, do nothing. To remove a tweet, use deleteTweet.

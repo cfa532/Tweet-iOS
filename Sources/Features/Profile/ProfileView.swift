@@ -967,6 +967,27 @@ struct ProfileView: View {
             return
         }
 
+        // A healthy cached address can still be stale: liveness does not prove that it
+        // is the access node's currently advertised address. Refresh the ordinary
+        // get_user route first, then run the explicit resync on that confirmed route.
+        do {
+            _ = try await Task.detached(priority: .utility) {
+                try await hproseInstance.fetchUser(
+                    profileUserId,
+                    baseUrl: "",
+                    forceRefresh: true,
+                    refreshExpiredCacheInBackground: false
+                )
+            }.value
+        } catch is CancellationError {
+            print("DEBUG: [ProfileView] Profile route refresh cancelled for \(profileUserId)")
+            return
+        } catch {
+            print("DEBUG: [ProfileView] Could not refresh route before resync for \(profileUserId): \(error)")
+        }
+
+        guard !Task.isCancelled else { return }
+
         do {
             let resyncResult = try await Task.detached(priority: .utility) {
                 try await hproseInstance.resyncUser(userId: profileUserId)

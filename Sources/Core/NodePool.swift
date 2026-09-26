@@ -28,11 +28,16 @@ import Foundation
 ///   drops it, which puts the user back on the access route.
 final class UserRoutes: @unchecked Sendable {
     static let shared = UserRoutes()
+    /// Routine tweet-author hydration reuses a route for this long after a real
+    /// request or explicit fresh health check confirms it.
+    static let confirmationLifetime: TimeInterval = 60
 
     private struct Routes {
         var access: URL?
         var writable: URL?
         var readsFromWriteHost = false
+        var confirmedReadRoute: URL?
+        var lastRouteConfirmedAt: Date?
     }
 
     private var routes: [MimeiId: Routes] = [:]
@@ -49,14 +54,29 @@ final class UserRoutes: @unchecked Sendable {
         return result
     }
 
+    private static func effectiveReadRoute(_ routes: Routes) -> URL? {
+        if routes.readsFromWriteHost, let writable = routes.writable {
+            return writable
+        }
+        return routes.access
+    }
+
+    private static func invalidateConfirmationIfRouteChanged(
+        _ routes: inout Routes,
+        previousReadRoute: URL?
+    ) {
+        guard previousReadRoute != effectiveReadRoute(routes) else { return }
+        routes.confirmedReadRoute = nil
+        routes.lastRouteConfirmedAt = nil
+    }
+
     /// The route reads should use: the root host while a write is being waited out,
     /// otherwise the access node.
     func readRoute(for mid: MimeiId) -> URL? {
         lock.lock()
         defer { lock.unlock() }
         guard let entry = routes[mid] else { return nil }
-        if entry.readsFromWriteHost, let writable = entry.writable { return writable }
-        return entry.access
+        return Self.effectiveReadRoute(entry)
     }
 
     /// The access node route alone. This is what gets written to the cache and recorded
@@ -79,10 +99,10 @@ final class UserRoutes: @unchecked Sendable {
     func setAccessRoute(_ url: URL?, for mid: MimeiId) -> Bool {
         withRoutes(mid) { entry in
             guard entry.access != url else { return false }
-            let before = entry.readsFromWriteHost ? (entry.writable ?? entry.access) : entry.access
+            let before = Self.effectiveReadRoute(entry)
             entry.access = url
-            let after = entry.readsFromWriteHost ? (entry.writable ?? entry.access) : entry.access
-            return before != after
+            Self.invalidateConfirmationIfRouteChanged(&entry, previousReadRoute: before)
+            return before != Self.effectiveReadRoute(entry)
         }
     }
 
@@ -90,10 +110,11 @@ final class UserRoutes: @unchecked Sendable {
     func setWritableRoute(_ url: URL?, for mid: MimeiId) -> Bool {
         withRoutes(mid) { entry in
             guard entry.writable != url else { return false }
-            let wasReading = entry.readsFromWriteHost
+            let before = Self.effectiveReadRoute(entry)
             entry.writable = url
             if url == nil { entry.readsFromWriteHost = false }
-            return wasReading
+            Self.invalidateConfirmationIfRouteChanged(&entry, previousReadRoute: before)
+            return before != Self.effectiveReadRoute(entry)
         }
     }
 
@@ -102,7 +123,9 @@ final class UserRoutes: @unchecked Sendable {
     func readFromWriteHost(for mid: MimeiId) -> Bool {
         withRoutes(mid) { entry in
             guard entry.writable != nil, !entry.readsFromWriteHost else { return false }
+            let before = Self.effectiveReadRoute(entry)
             entry.readsFromWriteHost = true
+            Self.invalidateConfirmationIfRouteChanged(&entry, previousReadRoute: before)
             return true
         }
     }
@@ -112,9 +135,39 @@ final class UserRoutes: @unchecked Sendable {
     func stopReadingFromWriteHost(for mid: MimeiId) -> Bool {
         withRoutes(mid) { entry in
             guard entry.readsFromWriteHost else { return false }
+            let before = Self.effectiveReadRoute(entry)
             entry.readsFromWriteHost = false
+            Self.invalidateConfirmationIfRouteChanged(&entry, previousReadRoute: before)
             return true
         }
+    }
+
+    /// Records confirmation only when `url` is still the effective read route. This
+    /// prevents a late response from blessing an address that has already been replaced.
+    @discardableResult
+    func confirmReadRoute(_ url: URL, for mid: MimeiId, at date: Date = Date()) -> Bool {
+        withRoutes(mid) { entry in
+            guard Self.effectiveReadRoute(entry) == url else { return false }
+            entry.confirmedReadRoute = url
+            entry.lastRouteConfirmedAt = date
+            return true
+        }
+    }
+
+    func lastRouteConfirmedAt(for mid: MimeiId) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = routes[mid],
+              entry.confirmedReadRoute == Self.effectiveReadRoute(entry) else {
+            return nil
+        }
+        return entry.lastRouteConfirmedAt
+    }
+
+    func hasRecentRouteConfirmation(for mid: MimeiId, now: Date = Date()) -> Bool {
+        guard let confirmedAt = lastRouteConfirmedAt(for: mid) else { return false }
+        let age = now.timeIntervalSince(confirmedAt)
+        return age >= 0 && age < Self.confirmationLifetime
     }
 }
 

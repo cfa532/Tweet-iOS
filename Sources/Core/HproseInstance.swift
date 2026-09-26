@@ -315,15 +315,24 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         throw lastError ?? NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("All retry attempts failed", comment: "Network retry error")])
     }
     
-    private func applyBaseUrlIfNeeded(_ user: User, url: URL, reason: String) async {
+    private func applyBaseUrlIfNeeded(
+        _ user: User,
+        url: URL,
+        reason: String,
+        confirmed: Bool = false
+    ) async {
         await MainActor.run {
             let current = user.baseUrl?.absoluteString
             let newValue = url.absoluteString
-            guard current != newValue else { return }
-            user.baseUrl = url
-            user.resetClients()
-            hproseDebug("DEBUG: [updateUserFromServer] Updated baseUrl (\(reason)) to \(newValue) for userId: \(user.mid)")
-            NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": user.mid])
+            if current != newValue {
+                user.baseUrl = url
+                user.resetClients()
+                hproseDebug("DEBUG: [updateUserFromServer] Updated baseUrl (\(reason)) to \(newValue) for userId: \(user.mid)")
+                NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": user.mid])
+            }
+            if confirmed {
+                UserRoutes.shared.confirmReadRoute(url, for: user.mid)
+            }
         }
     }
 
@@ -357,6 +366,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let userMid = await MainActor.run { user.mid }
         let previousRoute = await MainActor.run { user.baseUrl?.absoluteString ?? "nil" }
         let changed = await MainActor.run { UserRoutes.shared.readFromWriteHost(for: userMid) }
+        UserRoutes.shared.confirmReadRoute(writableUrl, for: userMid)
         guard changed else { return }
 
         // Printed, not logged at debug level: every other route change is invisible in a
@@ -1331,15 +1341,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         var scheduledBackgroundAuthorFetches = Set<String>()
         func scheduleBackgroundAuthorFetch(authorId: String, context: String) {
             guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
-
-            Task.detached(priority: .userInitiated) {
-                do {
-                    _ = try await self.fetchUser(authorId)
-                    // Author singleton is already set, it will update automatically.
-                } catch {
-                    hproseWarning("⚠️ [fetchTweetFeed] Background fetch failed for \(context) \(authorId): \(error)")
-                }
-            }
+            refreshTweetAuthorsInBackground(
+                Set([authorId]),
+                reason: "feed \(context)"
+            )
         }
         
         // Cache original tweets first - cache under their authorId, not appUser.mid
@@ -1903,10 +1908,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
     }
     
-    /// If @baseUrl is an empty string, cached user data is bypassed, but NodePool
-    /// still wins route selection when it has an entry for the user's access node.
-    /// If NodePool has no entry, the user's cached baseUrl or provider lookup is used.
-    /// Otherwise, the supplied baseUrl is used as the fallback route after NodePool.
+    /// If `baseUrl` is an empty string, cached user data and NodePool are bypassed so
+    /// current node/provider discovery runs. A non-empty route is an explicit fallback;
+    /// nil uses the normal cached-user and NodePool path.
     ///
     /// - Parameters:
     ///   - userId: The user ID to fetch
@@ -1914,8 +1918,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// - Parameters:
     ///   - userId: The user ID to fetch
     ///   - baseUrl: Explicit fallback route for this user. Pass nil to use this
-    ///     user's cached route/NodePool/provider lookup, or "" to bypass the
-    ///     cached user return while still letting NodePool win route selection.
+    ///     user's cached route/NodePool/provider lookup, or "" to bypass both the
+    ///     cached user return and pooled route selection so discovery runs again.
     ///   - maxRetries: Maximum number of retry attempts (default: 2)
     ///   - forceRefresh: If true, bypasses cache and fetches fresh data
     ///   - skipRetryAndBlacklist: If true, skips retry logic and blacklist management (for internal use)
@@ -1941,7 +1945,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         // Check if this user has been blacklisted due to repeated failures
         // Skip this check if we're in internal retry logic to prevent double-checking
-        if !skipRetryAndBlacklist && blackList.isBlacklisted(userId) {
+        if !skipRetryAndBlacklist && !forceRefresh && blackList.isBlacklisted(userId) {
             let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
             let cachedHasUsername = await MainActor.run { cachedUser.username != nil }
             if cachedHasUsername {
@@ -1976,8 +1980,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     }
                     // User data has expired.
                     // If baseUrl is empty, don't return stale data; route selection
-                    // below still checks NodePool before falling back to cached baseUrl
-                    // or provider discovery.
+                    // below bypasses NodePool and runs current node/provider discovery.
                     if forceFreshIPResolution {
                         hproseDebug("DEBUG: [fetchUser] Cache expired and baseUrl empty (forcing IP resolution), fetching fresh data")
                         forceFreshIPResolution = true
@@ -2105,6 +2108,31 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private var ongoingUserUpdates: Set<String> = []
     private var userUpdateErrors: [String: NSError] = [:]
     private let userUpdateQueue = DispatchQueue(label: "user.update.queue")
+    /// Tweet rows render immediately with their cached authors, then use an ordinary
+    /// `get_user` read to refresh author data and routes in the background. This is
+    /// deliberately not a `resync_user`: routine rendering must not force synchronization.
+    func refreshTweetAuthorsInBackground(_ userIds: Set<String>, reason: String) {
+        let idsToRefresh = userIds.filter { userId in
+            userId != Constants.GUEST_ID
+                && !UserRoutes.shared.hasRecentRouteConfirmation(for: userId)
+        }
+
+        for userId in idsToRefresh {
+            Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                do {
+                    _ = try await self.fetchUser(
+                        userId,
+                        baseUrl: "",
+                        forceRefresh: true,
+                        refreshExpiredCacheInBackground: false
+                    )
+                } catch {
+                    hproseWarning("DEBUG: [tweet author refresh] Failed for \(userId) (\(reason)): \(error)")
+                }
+            }
+        }
+    }
     
     // MARK: - Helper Methods
     
@@ -2243,6 +2271,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseDebug("DEBUG: [ProfileRoute] Fresh health check for user \(userMid) at \(currentHostPort)")
             let routeIsHealthy = await isRouteAlive(currentHostPort, forceFresh: true)
             if routeIsHealthy {
+                if let confirmedURL = URL(string: currentBaseUrl) {
+                    UserRoutes.shared.confirmReadRoute(confirmedURL, for: userMid)
+                }
                 hproseDebug("DEBUG: [ProfileRoute] Current route is healthy for user \(userMid); refreshing profile data")
                 return true
             }
@@ -2285,7 +2316,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return false
         }
 
-        await applyBaseUrlIfNeeded(user, url: replacementURL, reason: "profile health repair")
+        await applyBaseUrlIfNeeded(
+            user,
+            url: replacementURL,
+            reason: "profile health repair",
+            confirmed: true
+        )
         if let accessNodeMid {
             NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: normalizeHostPort(replacementIP))
         }
@@ -2330,7 +2366,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return false
         }
 
-        await applyBaseUrlIfNeeded(user, url: alternateURL, reason: "\(logPrefix) alternate route")
+        await applyBaseUrlIfNeeded(
+            user,
+            url: alternateURL,
+            reason: "\(logPrefix) alternate route",
+            confirmed: true
+        )
         NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: alternateHostPort)
         await MainActor.run { TweetCacheManager.shared.saveUser(user) }
         hproseWarning("DEBUG: [\(logPrefix)] Switched route for user \(userMid): \(attemptedHostPort) -> \(alternateHostPort)")
@@ -2409,7 +2450,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return nil
         }
 
-        await applyBaseUrlIfNeeded(user, url: url, reason: reason)
+        await applyBaseUrlIfNeeded(user, url: url, reason: reason, confirmed: true)
         return url
     }
     
@@ -2606,7 +2647,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 // IPv6 routes are fine for RPC; only share URLs need a v4 literal.
                 if let accessIP = await getHostIP(currentAccessNodeMid, v4Only: false),
                    let accessUrl = URL(string: ensureHttpPrefix(accessIP)) {
-                    await applyBaseUrlIfNeeded(fetchedUser, url: accessUrl, reason: "access node changed")
+                    await applyBaseUrlIfNeeded(
+                        fetchedUser,
+                        url: accessUrl,
+                        reason: "access node changed",
+                        confirmed: true
+                    )
                     await MainActor.run { NodePool.shared.updateNodeIP(nodeMid: currentAccessNodeMid, newIP: accessUrl.absoluteString) }
                 } else {
                     hproseDebug("DEBUG: [processUserDataResponse] Could not resolve changed access node \(currentAccessNodeMid); leaving NodePool unchanged")
@@ -2651,8 +2697,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ) async throws -> URL {
         // Phase A (demotion prep): snapshot @MainActor user reads (mid for logs, hostIds for read-node fallback).
         let (userMid, userHostIds) = await MainActor.run { (user.mid, user.hostIds) }
-        // Forced resolution must validate a pooled route through getHostIP below.
-        // That health check removes an unreachable IP before discovering a replacement.
+        // A normal resolution may reuse NodePool. A forced refresh deliberately skips
+        // it: reachability only proves the old address still answers, not that it is
+        // still the node's currently advertised address.
         if !forceFreshIP,
            let url = await applyNodePoolBaseUrlIfAvailable(for: user, reason: "NodePool route") {
             hproseDebug("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using NodePool IP: \(url.absoluteString) for userId: \(userMid)")
@@ -2687,7 +2734,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             if let accessIP = await getHostIP(
                 accessNodeMid,
                 v4Only: v4Only,
-                forceHealthCheck: forceFreshIP
+                forceHealthCheck: forceFreshIP,
+                forceDiscovery: forceFreshIP
             ),
                let url = URL(string: ensureHttpPrefix(accessIP)) {
                 return url
@@ -2698,7 +2746,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         hproseDebug("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(userMid), reason: \(reason)")
 
         do {
-            guard let providerIP = try await getProviderIP(userMid, v4Only: v4Only) else {
+            guard let providerIP = try await getProviderIP(
+                userMid,
+                v4Only: v4Only,
+                forceFresh: forceFreshIP
+            ) else {
                 // getProviderIP returned nil (not exception) - user not found or no IPs available
                 hproseWarning("WARNING: [resolveAndUpdateBaseUrl] getProviderIP returned nil for userId: \(userMid) - user not found or no IPs available")
                 throw HproseError.userNotFound(userId: userMid, reason: "No healthy provider IP found")
@@ -3040,6 +3092,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // validated. Failed/null refreshes leave the cached object alone.
             let updatedUser = UserStore.shared.merge(decodedUserForMerge, shouldUpdateBaseUrl: confirmedBaseUrl != nil)
             updatedUser.cacheStatus = .fresh
+            if let confirmedBaseUrl {
+                UserRoutes.shared.confirmReadRoute(confirmedBaseUrl, for: updatedUser.mid)
+            }
 
             hproseDebug("DEBUG: [updateUserFromDict] Updated user: \(updatedUser.username ?? "nil") (\(updatedUser.mid))")
 
@@ -3622,15 +3677,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         var scheduledBackgroundAuthorFetches = Set<String>()
         func scheduleBackgroundAuthorFetch(authorId: String) {
             guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
-
-            Task(priority: .utility) { [weak self] in
-                await Task.yield()
-                do {
-                    _ = try await self?.fetchUser(authorId)
-                } catch {
-                    hproseError("DEBUG: [HproseInstance] getUserTweetsByType - Background author fetch failed for \(authorId): \(error)")
-                }
-            }
+            refreshTweetAuthorsInBackground(
+                Set([authorId]),
+                reason: "typed tweet list"
+            )
         }
         
         var tweetsWithAuthors: [Tweet?] = []
@@ -7246,14 +7296,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         var scheduledBackgroundAuthorFetches = Set<String>()
         func scheduleBackgroundAuthorFetch(authorId: String) {
             guard scheduledBackgroundAuthorFetches.insert(authorId).inserted else { return }
-
-            Task(priority: .utility) { [weak self] in
-                do {
-                    _ = try await self?.fetchUser(authorId)
-                } catch {
-                    hproseError("DEBUG: [getPinnedTweets] Background author fetch failed for \(authorId): \(error)")
-                }
-            }
+            refreshTweetAuthorsInBackground(
+                Set([authorId]),
+                reason: "pinned tweet list"
+            )
         }
 
         // The backend returns hash entries without ordering. Sort by the outer
@@ -7735,6 +7781,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ///   - nodeId: The node ID to resolve IPs for
     ///   - v4Only: Whether to request IPv4 addresses only
     ///   - forceHealthCheck: Whether to bypass a cached health result for a pooled IP
+    ///   - forceDiscovery: Whether to bypass NodePool and consult current node discovery.
+    ///     A forced user refresh uses this because a reachable old address is not proof
+    ///     that it is still the node's currently advertised address.
     ///   - excludedIP: An address to leave out of this lookup. A successful health probe
     ///     does not prove that every RPC is usable on that address, so a caller whose RPC
     ///     just failed passes the attempted address here to get the *next* advertised
@@ -7749,6 +7798,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         _ nodeId: String,
         v4Only: Bool = false,
         forceHealthCheck: Bool = false,
+        forceDiscovery: Bool = false,
         excludedIP: String? = nil,
         usePool: Bool = true
     ) async -> String? {
@@ -7756,7 +7806,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let excludedKey = excludedIP.map { normalizeHostPort($0) }
 
         // Step 0: Check NodePool first for cached IP
-        if usePool, let pooledIP = NodePool.shared.getIPForNode(nodeMid: nodeId) {
+        if usePool, !forceDiscovery,
+           let pooledIP = NodePool.shared.getIPForNode(nodeMid: nodeId) {
             if let excludedKey, normalizeHostPort(pooledIP) == excludedKey {
                 hproseDebug("DEBUG: [getHostIP] Skipping pooled IP \(pooledIP) for node \(nodeId) during alternate-route lookup")
             } else {
@@ -7827,7 +7878,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // Refresh appUser's IP via entry
             if let newAppUserIP = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: entryClient, forceFresh: forceHealthCheck),
                let newAppUserURL = URL(string: ensureHttpPrefix(newAppUserIP)) {
-                await applyBaseUrlIfNeeded(appUser, url: newAppUserURL, reason: "getHostIP appUser refresh")
+                await applyBaseUrlIfNeeded(
+                    appUser,
+                    url: newAppUserURL,
+                    reason: "getHostIP appUser refresh",
+                    confirmed: true
+                )
 
                 // Retry with refreshed appUser
                 hproseWarning("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")

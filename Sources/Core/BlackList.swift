@@ -79,6 +79,16 @@ final class BlackList: @unchecked Sendable {
     /// The resource gets a clean slate and one honest attempt. If it is genuinely dead
     /// the counters simply rebuild from the next failure.
     func clearForManualRetry(_ mimeiId: MimeiId) {
+        clearFailureHistory(mimeiId, reason: "manual retry")
+    }
+
+    /// A media URL changed because its author's read route moved. Failures recorded for
+    /// the old address must not prevent the first request to the newly discovered route.
+    func clearAfterRouteChange(_ mimeiId: MimeiId) {
+        clearFailureHistory(mimeiId, reason: "author route change")
+    }
+
+    private func clearFailureHistory(_ mimeiId: MimeiId, reason: String) {
         queue.sync(flags: .barrier) {
             sessionBlockedResources.removeValue(forKey: mimeiId)
             sessionFailureCounts.removeValue(forKey: mimeiId)
@@ -86,7 +96,7 @@ final class BlackList: @unchecked Sendable {
             candidates.removeValue(forKey: mimeiId)
             let wasPermanent = blacklist.remove(mimeiId) != nil
             permanentFailureStarts.removeValue(forKey: mimeiId)
-            print("[BlackList] Cleared \(mimeiId) for manual retry\(wasPermanent ? " (was permanently blacklisted)" : "")")
+            print("[BlackList] Cleared \(mimeiId) for \(reason)\(wasPermanent ? " (was permanently blacklisted)" : "")")
             saveToStorageLocked()
         }
     }

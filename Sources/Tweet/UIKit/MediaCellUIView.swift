@@ -582,6 +582,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     private var imageLoadTask: Task<Void, Never>?
     private var foregroundObserver: NSObjectProtocol?
     private var imageCacheObserver: NSObjectProtocol?
+    private var userUpdateObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
     private var timerHideTask: DispatchWorkItem?
 
@@ -669,6 +670,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         isUserInteractionEnabled = true
         addGestureRecognizer(mediaTapGesture)
+        setupUserUpdateObserver()
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
@@ -5763,6 +5765,21 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         }
     }
 
+    private func setupUserUpdateObserver() {
+        guard userUpdateObserver == nil else { return }
+        userUpdateObserver = NotificationCenter.default.addObserver(
+            forName: .userDidUpdate,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let userId = notification.userInfo?["userId"] as? String
+            MainActor.assumeIsolated {
+                guard let self, let userId else { return }
+                self.userDidUpdate(userId: userId)
+            }
+        }
+    }
+
     private func setupForegroundObserver() {
         guard foregroundObserver == nil else { return }
         foregroundObserver = NotificationCenter.default.addObserver(
@@ -6085,8 +6102,35 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
     }
 
     func userDidUpdate(userId: String) {
-        if userId == parentTweet?.authorId {
-            updateEffectiveBaseUrl()
+        guard userId == parentTweet?.authorId else { return }
+
+        let previousBaseUrl = effectiveBaseUrl
+        updateEffectiveBaseUrl()
+        guard effectiveBaseUrl != previousBaseUrl,
+              isVisible,
+              let attachment else { return }
+
+        print("\(logPrefix) 🔀 Author route changed: \(previousBaseUrl.absoluteString) -> \(effectiveBaseUrl.absoluteString)")
+        BlackList.shared.clearAfterRouteChange(MimeiId(attachment.mid))
+
+        if attachment.type == .image {
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
+            GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
+            retryButton.isHidden = true
+            if let url = attachment.getUrl(effectiveBaseUrl) {
+                loadImage(attachment: attachment, url: url)
+            }
+        } else if isVideoAttachment {
+            automaticTransientRetryTask?.cancel()
+            automaticTransientRetryTask = nil
+            automaticTransientRetryCount = 0
+            resetFeedPlayerRebuildBudget(clearingHistoryFor: attachment.mid)
+            retryVideoLoad(isAutomatic: true)
+        } else if attachment.type == .audio,
+                  let url = attachment.getUrl(effectiveBaseUrl) {
+            setupAudioCell(url: url)
         }
     }
 
@@ -6411,6 +6455,10 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if let o = imageCacheObserver {
             NotificationCenter.default.removeObserver(o)
             imageCacheObserver = nil
+        }
+        if let observer = userUpdateObserver {
+            NotificationCenter.default.removeObserver(observer)
+            userUpdateObserver = nil
         }
     }
 }
