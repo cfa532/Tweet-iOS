@@ -662,6 +662,7 @@ extension TweetCacheManager {
 
         if let tweetInstance = await MainActor.run(body: { () -> Tweet? in
             guard let tweet = TweetStore.shared.tweet(mid: mid),
+                  tweet.hasDisplayPayload,
                   !self.isBlockedByDeletion(tweet) else {
                 return nil
             }

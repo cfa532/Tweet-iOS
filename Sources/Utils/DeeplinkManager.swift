@@ -252,7 +252,7 @@ class DeeplinkManager: ObservableObject {
     func handleDeeplink(_ deeplink: DeeplinkType, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
         switch deeplink {
         case .tweet(let tweetId, let authorId):
-            return await navigateToTweet(tweetId: tweetId, authorId: authorId, navigationPath: navigationPath, hproseInstance: hproseInstance)
+            return await navigateToTweet(tweetId: tweetId, authorId: authorId, navigationPath: navigationPath)
             
         case .user(let userId):
             return await navigateToUser(userId: userId, navigationPath: navigationPath, hproseInstance: hproseInstance)
@@ -264,97 +264,18 @@ class DeeplinkManager: ObservableObject {
     }
     
     /// Navigate to a tweet
-    private func navigateToTweet(tweetId: String, authorId: String, navigationPath: Binding<NavigationPath>, hproseInstance: HproseInstance) async -> Bool {
+    private func navigateToTweet(tweetId: String, authorId: String, navigationPath: Binding<NavigationPath>) async -> Bool {
         print("[DeeplinkManager] Navigating to tweet: \(tweetId), author: \(authorId)")
-        
-        // First try to fetch from cache
-        if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
-            print("[DeeplinkManager] ✅ Found tweet in cache")
-            let didNavigate = await replaceNavigationPath(with: cachedTweet, navigationPath: navigationPath)
-            if didNavigate {
-                prepareAuthorRouteForCachedTweet(cachedTweet, authorId: authorId, hproseInstance: hproseInstance)
-            }
-            return didNavigate
-        }
-        
-        // If not in cache and we have authorId, fetch from server
-        if !authorId.isEmpty {
-            // A tweet is read from its author's node, so that is the route to keep
-            // honest between attempts.
-            guard let tweet = await resolveWithRouteRepair(
-                routeOwnerId: authorId,
-                hproseInstance: hproseInstance,
-                label: "tweet \(tweetId)",
-                fetch: {
-                    await self.fetchDeeplinkTweet(tweetId: tweetId, authorId: authorId, hproseInstance: hproseInstance)
-                }
-            ) else {
-                print("[DeeplinkManager] ⚠️ Tweet not found on server after deeplink retries")
-                return false
-            }
-
-            print("[DeeplinkManager] ✅ Successfully fetched tweet for deeplink")
-            return await replaceNavigationPath(with: tweet, navigationPath: navigationPath)
-        } else {
+        guard !tweetId.isEmpty, !authorId.isEmpty else {
             print("[DeeplinkManager] ⚠️ Cannot fetch tweet: missing authorId")
             return false
         }
-    }
 
-    /// Attach the cached author and check its profile route after navigation.
-    /// Attachment URLs use the tweet's serving node when one has been recorded,
-    /// independently of this author's profile route.
-    private func prepareAuthorRouteForCachedTweet(
-        _ tweet: Tweet,
-        authorId: String,
-        hproseInstance: HproseInstance
-    ) {
-        guard !authorId.isEmpty, authorId != Constants.GUEST_ID else { return }
-
-        Task { @MainActor in
-            let author = await TweetCacheManager.shared.fetchUser(mid: authorId)
-
-            // The same assignment getTweet makes on a cache hit. A cached tweet can name
-            // an author the store had never loaded, and until it is set the attachments
-            // have no base URL to resolve a media URL against.
-            if tweet.author == nil, author.username != nil {
-                tweet.author = author
-            }
-
-            // Only a route that exists can be stale. When the author has none, the detail
-            // view's own read resolves one; starting a second discovery here would race it
-            // for the same user and lose to fetchUser's concurrent-refresh gate.
-            guard author.baseUrl != nil else { return }
-
-            if await hproseInstance.validateAndRepairProfileRoute(for: author) {
-                print("[DeeplinkManager] Author route verified for cached tweet \(tweet.mid)")
-            } else {
-                print("[DeeplinkManager] ⚠️ No healthy author route for cached tweet \(tweet.mid)")
-            }
-        }
-    }
-
-    /// Fetch tweet data for deeplink navigation using normal read first, then explicit recovery.
-    private func fetchDeeplinkTweet(tweetId: String, authorId: String, hproseInstance: HproseInstance) async -> Tweet? {
-        // Try getTweet first (faster, uses current provider). It throws when the
-        // author's node can't be resolved — don't let that skip the refreshTweet
-        // fallback, which can still sync via the app user's own node.
-        do {
-            if let tweet = try await hproseInstance.getTweet(tweetId: tweetId, authorId: authorId) {
-                return tweet
-            }
-        } catch {
-            print("[DeeplinkManager] ⚠️ getTweet failed (\(error)), trying refreshTweet...")
-        }
-
-        do {
-            // refreshTweet syncs from the author's host and falls back to the
-            // app user's node when the author's baseUrl is unknown.
-            return try await hproseInstance.refreshTweet(tweetId: tweetId, authorId: authorId)
-        } catch {
-            print("[DeeplinkManager] ❌ refreshTweet failed: \(error)")
-            return nil
-        }
+        // Match Android: present the detail view immediately with an ID-only object.
+        // The detail view hydrates cache/author/tweet independently and owns recovery.
+        let destination = Tweet.getInstance(for: tweetId)
+            ?? Tweet.getInstance(mid: tweetId, authorId: authorId)
+        return await replaceNavigationPath(with: destination, navigationPath: navigationPath)
     }
     
     /// Navigate to a user profile
@@ -403,10 +324,8 @@ class DeeplinkManager: ObservableObject {
     /// Runs `fetch` against the node cached for `routeOwnerId`, repairing that route
     /// between attempts the way the rest of the app does.
     ///
-    /// Both deeplink destinations are read from one user's node — a profile from the
-    /// user's own route, a tweet from its author's `baseUrl` — and a link can be opened
-    /// long after that cached route stopped serving. Two different failures need two
-    /// different repairs, so both run:
+    /// A profile link can be opened long after its cached route stopped serving. Two
+    /// different failures need two different repairs, so both run:
     ///
     /// - `validateAndRepairProfileRoute` before each attempt, the same check `ProfileView`
     ///   runs on open: probe the current route and, when it is dead, move to the access

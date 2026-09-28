@@ -2028,6 +2028,13 @@ struct TweetDetailView: View {
     
     private var tweetContent: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if !displayTweet.hasDisplayPayload {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(XTheme.accentColor)
+                    .frame(maxWidth: .infinity, minHeight: 128)
+            }
+
             // Show text content if available
             if let content = displayTweet.content, !content.isEmpty {
                 SelectableTextView(text: content)
@@ -2153,21 +2160,38 @@ struct TweetDetailView: View {
     // the embedded/quoted original tweet, which always gets it since it isn't
     // covered by any other "opened from feed" sync.
     private func doReadTweet(isInitialLoad: Bool) async {
+        if isInitialLoad && !tweet.hasDisplayPayload {
+            // An immediate deeplink arrives as an ID-only singleton. Let disk cache and
+            // its cached author paint independently before waiting on the network read.
+            _ = await TweetCacheManager.shared.fetchTweet(mid: tweet.mid)
+            if tweet.author == nil {
+                let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
+                if cachedAuthor.username != nil {
+                    tweet.author = cachedAuthor
+                }
+            }
+        }
+
+        var attemptedOriginalRead = false
         if let originalTweetId = tweet.originalTweetId,
            let originalAuthorId = tweet.originalAuthorId {
             let isPureRetweet = (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)
             if isPureRetweet {
                 // The original tweet is the only thing displayed (as the embedded card).
+                attemptedOriginalRead = true
                 if let refreshed = try? await hproseInstance.getTweet(
                     tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true
                 ) {
                     await MainActor.run { adoptRefreshedOriginal(refreshed) }
                 }
+                hasLoadedOriginalTweet = true
             } else {
+                attemptedOriginalRead = true
                 async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad)
                 async let originalResult = hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true)
                 if let refreshed = try? await tweetResult { await MainActor.run { try? tweet.update(from: refreshed) } }
                 if let refreshedOriginal = try? await originalResult { await MainActor.run { adoptRefreshedOriginal(refreshedOriginal) } }
+                hasLoadedOriginalTweet = true
             }
         } else {
             if let refreshed = try? await hproseInstance.getTweet(
@@ -2175,6 +2199,34 @@ struct TweetDetailView: View {
             ) {
                 await MainActor.run { try? tweet.update(from: refreshed) }
             }
+        }
+
+        // Preserve the previous deeplink recovery, but run it after navigation so it
+        // cannot hold the whole app behind the full-screen opening-link placeholder.
+        if isInitialLoad && !tweet.hasDisplayPayload,
+           let recovered = try? await hproseInstance.refreshTweet(
+               tweetId: tweet.mid,
+               authorId: tweet.authorId
+           ) {
+            try? tweet.update(from: recovered)
+        }
+
+        // A deeplink stub does not reveal that it is a quote/retweet until the wrapper
+        // read completes, so resolve the newly discovered original in the same pass.
+        if isInitialLoad,
+           !attemptedOriginalRead,
+           originalTweet == nil,
+           let originalTweetId = tweet.originalTweetId,
+           let originalAuthorId = tweet.originalAuthorId {
+            if let refreshedOriginal = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId,
+                bypassCache: true,
+                fromDetailView: true
+            ) {
+                adoptRefreshedOriginal(refreshedOriginal)
+            }
+            hasLoadedOriginalTweet = true
         }
     }
 

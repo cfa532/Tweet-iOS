@@ -40,6 +40,8 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         existingInstance.applyRenderAffectingUpdate {
             if let content = content { existingInstance.content = content }
             if let title = title { existingInstance.title = title }
+            if let originalTweetId = originalTweetId { existingInstance.originalTweetId = originalTweetId }
+            if let originalAuthorId = originalAuthorId { existingInstance.originalAuthorId = originalAuthorId }
             if let parentTweetId = parentTweetId { existingInstance.parentTweetId = parentTweetId }
             if let author = author { existingInstance.author = author }
             if let favorites = favorites { existingInstance.favorites = favorites }
@@ -116,6 +118,14 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     var originalTweetId: MimeiId? // retweet id of the original tweet
     var originalAuthorId: MimeiId? // authorId of the forwarded tweet
     var parentTweetId: MimeiId? // immediate parent for comments and replies
+
+    /// True once an ID-only navigation placeholder has enough data to render its body.
+    var hasDisplayPayload: Bool {
+        !(content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(attachments?.isEmpty ?? true)
+            || originalTweetId != nil
+    }
     // The node that served this object, independent of its author's current route.
     // Persisted by TweetRecord in the local cache, not sent in tweet write payloads.
     var readNodeURL: URL?
@@ -196,12 +206,16 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
 
         let content: String?
         let title: String?
+        let originalTweetId: String?
+        let originalAuthorId: String?
         let attachments: [Attachment]?
 
         @MainActor
         init(_ tweet: Tweet) {
             content = tweet.content
             title = tweet.title
+            originalTweetId = tweet.originalTweetId
+            originalAuthorId = tweet.originalAuthorId
             attachments = tweet.attachments?.map(Attachment.init)
         }
     }
@@ -419,6 +433,12 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             // Update all properties except author
             if let content = other.content, content != self.content { self.content = content }
             if let title = other.title, title != self.title { self.title = title }
+            if let originalTweetId = other.originalTweetId, originalTweetId != self.originalTweetId {
+                self.originalTweetId = originalTweetId
+            }
+            if let originalAuthorId = other.originalAuthorId, originalAuthorId != self.originalAuthorId {
+                self.originalAuthorId = originalAuthorId
+            }
             if let parentTweetId = other.parentTweetId, parentTweetId != self.parentTweetId {
                 self.parentTweetId = parentTweetId
             }
@@ -513,6 +533,12 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             applyRenderAffectingUpdate {
                 if let content = tempTweet.content { self.content = content }
                 if let title = tempTweet.title { self.title = title }
+                if let originalTweetId = tempTweet.originalTweetId {
+                    self.originalTweetId = originalTweetId
+                }
+                if let originalAuthorId = tempTweet.originalAuthorId {
+                    self.originalAuthorId = originalAuthorId
+                }
                 if let parentTweetId = tempTweet.parentTweetId { self.parentTweetId = parentTweetId }
                 if let author = tempTweet.author { self.author = author }
                 if let favorites = tempTweet.favorites { self.favorites = favorites }
