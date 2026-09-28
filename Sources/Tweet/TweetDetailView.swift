@@ -1400,6 +1400,7 @@ struct TweetDetailView: View {
     @State private var hasLoadedOriginalTweet = false
     @State private var currentCommentsParentTweetId = ""
     @State private var initialLoadParentTweetId = ""
+    @State private var hasFinishedInitialTweetLoad = false
     @State private var selectedEmbeddedTweetForNavigation: Tweet?
     @State private var selectedCommentUserForNavigation: User?
     @State private var commentProfileNavigationPath = NavigationPath()
@@ -2029,10 +2030,22 @@ struct TweetDetailView: View {
     private var tweetContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !displayTweet.hasDisplayPayload {
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(XTheme.accentColor)
+                if hasFinishedInitialTweetLoad {
+                    VStack(spacing: 12) {
+                        Text(NSLocalizedString("Failed to load tweet.", comment: "Tweet detail load failure"))
+                            .foregroundColor(XTheme.secondaryTextColor)
+                        Button(NSLocalizedString("Retry", comment: "Retry button")) {
+                            Task { await doReadTweet(isInitialLoad: true) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                     .frame(maxWidth: .infinity, minHeight: 128)
+                } else {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(XTheme.accentColor)
+                        .frame(maxWidth: .infinity, minHeight: 128)
+                }
             }
 
             // Show text content if available
@@ -2154,12 +2167,21 @@ struct TweetDetailView: View {
         }
     }
 
-    // READ: get_tweet on the node that served the displayed tweet, bypassing cache.
-    // fromDetailView (server-side DHT provider sync) only needs to fire once per
-    // detail-view open (isInitialLoad), not on every pull-to-refresh — except for
-    // the embedded/quoted original tweet, which always gets it since it isn't
-    // covered by any other "opened from feed" sync.
+    // READ: the initial detail load resolves the author and reads get_tweet from
+    // that same baseUrl, bypassing cache. Later periodic reads may reuse the node
+    // that served the displayed tweet. fromDetailView (server-side DHT provider
+    // sync) only needs to fire once per detail-view open (isInitialLoad), except
+    // for an embedded/quoted original that has no other "opened from feed" sync.
     private func doReadTweet(isInitialLoad: Bool) async {
+        if isInitialLoad {
+            hasFinishedInitialTweetLoad = false
+        }
+        defer {
+            if isInitialLoad {
+                hasFinishedInitialTweetLoad = true
+            }
+        }
+
         if isInitialLoad && !tweet.hasDisplayPayload {
             // An immediate deeplink arrives as an ID-only singleton. Let disk cache and
             // its cached author paint independently before waiting on the network read.

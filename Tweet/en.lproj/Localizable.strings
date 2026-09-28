@@ -218,6 +218,7 @@
 
 // MARK: - Buttons
 "Retry" = "Retry";
+"Failed to load tweet." = "Failed to load tweet.";
 "OK" = "OK";
 "Add Option" = "Add Option";
 "Cancel" = "Cancel";

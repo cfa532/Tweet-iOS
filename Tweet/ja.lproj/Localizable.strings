@@ -183,6 +183,7 @@
 
 // MARK: - Buttons
 "Retry" = "再試行";
+"Failed to load tweet." = "ツイートを読み込めませんでした。";
 "OK" = "OK";
 "Add Option" = "オプションを追加";
 "Cancel" = "キャンセル";

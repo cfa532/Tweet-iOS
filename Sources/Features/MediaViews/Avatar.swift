@@ -22,6 +22,12 @@ struct Avatar: View {
     }
 
     private var routedAvatarUrl: String? {
+        // Once the owner has a resolved route, keep the avatar on that exact
+        // user.baseUrl. Pre-resolution fallbacks remain for other app surfaces
+        // whose cached User has not acquired a route yet.
+        if user.baseUrl != nil {
+            return user.avatarUrl
+        }
         guard let avatar = user.avatar else { return nil }
         if let baseUrl = nodePoolBaseUrl {
             return avatarUrl(for: avatar, baseUrl: baseUrl)

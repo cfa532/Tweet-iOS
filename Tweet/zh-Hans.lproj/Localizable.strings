@@ -186,6 +186,7 @@
 
 // MARK: - Buttons
 "Retry" = "重试";
+"Failed to load tweet." = "推文加载失败。";
 "OK" = "确定";
 "Add Option" = "添加选项";
 "Cancel" = "取消";
