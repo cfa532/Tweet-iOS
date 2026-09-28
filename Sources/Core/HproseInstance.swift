@@ -49,6 +49,11 @@ private struct UserRouteRaceResult: @unchecked Sendable {
     let baseURL: URL
 }
 
+private struct TweetRouteRaceResult: @unchecked Sendable {
+    let tweetData: [String: Any]
+    let client: HproseClient
+}
+
 // MARK: - HproseInstance
 // Phase B: the class is nonisolated so RPC methods run off the main actor. Members that
 // touch @Published/appUser/UI state are individually marked @MainActor; the remaining
@@ -1698,11 +1703,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
 
     
-    /// Get tweet from the current provider of the tweet.
-    /// 
-    /// This function retrieves tweet data from the current provider node, which may not be the most
-    /// up-to-date version. It does NOT sync data from the author's host node. Use this for fetching
-    /// original tweets in retweets/quoted tweets where you just need the tweet data quickly.
+    /// Get a tweet from the resolved author node, then from the tweet's own providers on a detail miss.
+    ///
+    /// Author discovery stays first because a user normally has more providers and resolves faster.
+    /// A new tweet may not have propagated to the selected user node yet, so a detail read gets one
+    /// bounded fallback through provider discovery for the tweet ID itself.
     /// 
     /// For the latest data, use `refreshTweet` instead, which syncs from the author's host before retrieving.
     ///
@@ -1786,69 +1791,53 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
         }
 
-        // The author route above was proven by get_user, not a HEAD probe. If it
-        // still cannot serve this tweet, resolve the author again while excluding
-        // that address; the alternate must also win a real get_user race before the
-        // tweet retry uses it. Updating the shared User keeps avatar and tweet aligned.
-        var currentReadNodeURL = readNodeURL
-        let canSwitchDetailRoute = fromDetailView && nodeUrl == nil && author != nil
-        let readAttemptCount = canSwitchDetailRoute ? 2 : 1
-
-        for attemptIndex in 0..<readAttemptCount {
-            let client = clientPool.getClientByUrl(for: currentReadNodeURL.absoluteString, timeout: 15)
-
-            do {
-                let (rawResponse, responseClient) = await invokeRunMAppWithSource(
-                    using: client,
-                    entry: entry,
-                    params: params,
-                    storageOwnerID: authorId
-                )
-                let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-
-                if let tweetDict = unwrappedResponse as? [String: Any] {
-                    guard !TweetDeletionRegistry.shared.isDeleted(tweetId) else { return nil }
-
-                    blackList.recordSuccess(tweetId)
-
-                    let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: authorId, from: responseClient)
-                    await MainActor.run { TweetCacheManager.shared.saveTweet(tweet, userId: authorId) }
-                    return tweet
-                }
-
-                if attemptIndex + 1 < readAttemptCount,
-                   let alternateAuthor = try? await fetchUserForDetail(
-                       authorId,
-                       excluding: [normalizeHostPort(currentReadNodeURL.absoluteString)],
-                       recordFailure: false
-                   ),
-                   let alternateURL = await MainActor.run(body: { alternateAuthor.baseUrl }) {
-                    currentReadNodeURL = alternateURL
-                    continue
-                }
-
-                hproseError("DEBUG: [getTweet] Tweet not found for tweetId: \(tweetId), recording failure")
-                blackList.recordFailure(tweetId)
-                return nil
-            } catch {
-                if attemptIndex + 1 < readAttemptCount,
-                   let alternateAuthor = try? await fetchUserForDetail(
-                       authorId,
-                       excluding: [normalizeHostPort(currentReadNodeURL.absoluteString)],
-                       recordFailure: false
-                   ),
-                   let alternateURL = await MainActor.run(body: { alternateAuthor.baseUrl }) {
-                    currentReadNodeURL = alternateURL
-                    continue
-                }
-
-                blackList.recordFailure(tweetId)
-                hproseError("DEBUG: [getTweet] Error fetching tweet: \(tweetId), author: \(authorId), route: \(currentReadNodeURL.absoluteString)")
-                hproseDebug("DEBUG: [getTweet] Exception: \(error)")
-                throw error
+        // The user provider set is the fast discovery path, so try the author route
+        // first. A newly-published tweet may not have propagated there yet; in that
+        // case discover the smaller provider set for the tweet itself and try it once.
+        let client = clientPool.getClientByUrl(for: readNodeURL.absoluteString, timeout: 15)
+        var initialError: Error?
+        do {
+            let (rawResponse, responseClient) = await invokeRunMAppWithSource(
+                using: client,
+                entry: entry,
+                params: params,
+                storageOwnerID: authorId
+            )
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            if let tweetDict = unwrappedResponse as? [String: Any] {
+                guard !TweetDeletionRegistry.shared.isDeleted(tweetId) else { return nil }
+                blackList.recordSuccess(tweetId)
+                let tweet = try await mergeTweetFromDict(tweetDict, attachAuthorMid: authorId, from: responseClient)
+                await MainActor.run { TweetCacheManager.shared.saveTweet(tweet, userId: authorId) }
+                return tweet
             }
+        } catch {
+            initialError = error
+            hproseDebug("DEBUG: [getTweet] Author route failed for \(tweetId): \(error)")
         }
 
+        if fromDetailView, nodeUrl == nil, author != nil,
+           let fallback = await fetchTweetFromProviders(
+               tweetId: tweetId,
+               authorId: authorId,
+               appUserID: appUserMid,
+               authorHostID: authorHostId,
+               excluding: [normalizeHostPort(readNodeURL.absoluteString)]
+           ) {
+            guard !TweetDeletionRegistry.shared.isDeleted(tweetId) else { return nil }
+            blackList.recordSuccess(tweetId)
+            let tweet = try await mergeTweetFromDict(
+                fallback.tweetData,
+                attachAuthorMid: authorId,
+                from: fallback.client
+            )
+            await MainActor.run { TweetCacheManager.shared.saveTweet(tweet, userId: authorId) }
+            return tweet
+        }
+
+        blackList.recordFailure(tweetId)
+        hproseError("DEBUG: [getTweet] Author route and tweet providers failed for tweetId: \(tweetId)")
+        if let initialError { throw initialError }
         return nil
     }
     
@@ -1968,15 +1957,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// Resolve a detail-page author by racing real get_user reads in bounded batches.
     /// Cached user data is rendered by the view before this starts; it is never used
     /// as proof that an old route still serves the author.
-    func fetchUserForDetail(
-        _ userId: String,
-        excluding excludedRoutes: Set<String> = [],
-        recordFailure: Bool = true
-    ) async throws -> User? {
+    func fetchUserForDetail(_ userId: String) async throws -> User? {
         guard userId != Constants.GUEST_ID else { return nil }
 
-        let candidates = try await getProviderCandidates(userId, v4Only: false, forceFresh: true)
-            .filter { !excludedRoutes.contains(normalizeHostPort($0)) }
+        let candidates = try await getProviderCandidates(userId)
         guard !candidates.isEmpty else {
             throw HproseError.userNotFound(userId: userId, reason: "No provider addresses returned")
         }
@@ -2072,8 +2056,90 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return updatedUser
         }
 
-        if recordFailure { blackList.recordFailure(userId) }
+        blackList.recordFailure(userId)
         throw HproseError.userNotFound(userId: userId, reason: "No provider returned valid author data")
+    }
+
+    /// A detail read starts with user-provider discovery because users usually have
+    /// more providers and are found faster. Only after that proven route misses the
+    /// tweet do we discover the tweet's own, typically smaller provider set.
+    private func fetchTweetFromProviders(
+        tweetId: String,
+        authorId: String,
+        appUserID: String,
+        authorHostID: String?,
+        excluding excludedRoutes: Set<String>
+    ) async -> TweetRouteRaceResult? {
+        let candidates: [String]
+        do {
+            candidates = try await getProviderCandidates(tweetId)
+                .filter { !excludedRoutes.contains(normalizeHostPort($0)) }
+        } catch {
+            hproseDebug("DEBUG: [fetchTweetFromProviders] Discovery failed for \(tweetId): \(error)")
+            return nil
+        }
+
+        let batchSize = 3
+        for batchStart in stride(from: 0, to: candidates.count, by: batchSize) {
+            let batchEnd = min(batchStart + batchSize, candidates.count)
+            let batch = Array(candidates[batchStart..<batchEnd])
+            hproseDebug("DEBUG: [fetchTweetFromProviders] Racing get_tweet batch \(batchStart / batchSize + 1) with \(batch.count) route(s) for \(tweetId)")
+
+            let winner = await withTaskGroup(
+                of: TweetRouteRaceResult?.self,
+                returning: TweetRouteRaceResult?.self
+            ) { group in
+                for address in batch {
+                    group.addTask {
+                        guard !Task.isCancelled,
+                              let candidateURL = URL(string: self.ensureHttpPrefix(address)) else {
+                            return nil
+                        }
+                        do {
+                            var requestParams: [String: Any] = [
+                                "aid": self.appId,
+                                "ver": "last",
+                                "version": "v2",
+                                "tweetid": tweetId,
+                                "appuserid": appUserID,
+                                "fromdetailview": Self.rpcBool(true)
+                            ]
+                            if let authorHostID {
+                                requestParams["authorhostid"] = authorHostID
+                            }
+                            let client = self.clientPool.getClientByUrl(for: candidateURL.absoluteString, timeout: 15)
+                            let (rawResponse, responseClient) = await self.invokeRunMAppWithSource(
+                                using: client,
+                                entry: "get_tweet",
+                                params: requestParams,
+                                storageOwnerID: authorId
+                            )
+                            let response = try Self.unwrapV2Response(rawResponse)
+                            guard let tweetData = response as? [String: Any],
+                                  tweetData["mid"] as? String == tweetId,
+                                  tweetData["authorId"] as? String == authorId else {
+                                return nil
+                            }
+                            return TweetRouteRaceResult(tweetData: tweetData, client: responseClient)
+                        } catch {
+                            hproseDebug("DEBUG: [fetchTweetFromProviders] get_tweet failed via \(address): \(error)")
+                            return nil
+                        }
+                    }
+                }
+
+                for await result in group {
+                    if let result {
+                        group.cancelAll()
+                        return result
+                    }
+                }
+                return nil
+            }
+
+            if let winner { return winner }
+        }
+        return nil
     }
 
     /// If `baseUrl` is an empty string, cached user data and NodePool are bypassed so
@@ -2968,26 +3034,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return providerIP
     }
 
-    /// Return every advertised public provider route without electing one through
-    /// a HEAD probe. Detail-page author resolution validates these routes with the
-    /// actual get_user request in three-wide batches.
-    private func getProviderCandidates(
-        _ mid: String,
-        v4Only: Bool,
-        forceFresh: Bool
-    ) async throws -> [String] {
+    /// Return fresh advertised public provider routes without a HEAD election.
+    /// Detail loading validates them with get_user or get_tweet in three-wide batches.
+    private func getProviderCandidates(_ mid: String) async throws -> [String] {
         guard let entryIP = try await findEntryIP() else {
             throw HproseError.userNotFound(userId: mid, reason: "App entry unavailable")
         }
         let client = clientPool.getClientByIP(for: entryIP)
-        var params: [String: Any] = [
+        let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "mid": mid,
-            "v4only": v4Only ? "true" : "false"
+            "v4only": "false",
+            "refresh": "true"
         ]
-        if forceFresh { params["refresh"] = "true" }
 
         let rawResponse = await invokeRunMApp(
             using: client,
@@ -3007,11 +3068,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         var seen = Set<String>()
         return routes.compactMap { route in
             let trimmed = route.trimmingCharacters(in: .whitespacesAndNewlines)
-            let colonCount = trimmed.reduce(into: 0) { count, character in
-                if character == ":" { count += 1 }
-            }
             guard !trimmed.isEmpty,
-                  (!v4Only || colonCount <= 1),
                   Gadget.isValidPublicIpAddress(trimmed),
                   seen.insert(normalizeHostPort(trimmed)).inserted else {
                 return nil
