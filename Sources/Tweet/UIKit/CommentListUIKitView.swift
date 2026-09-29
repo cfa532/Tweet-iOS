@@ -21,13 +21,16 @@ struct CommentListUIKitView: View {
     /// `onReachBottom`; without this gate that starts a load-more against a page
     /// cursor the refresh has already invalidated.
     var isRefreshing: Binding<Bool> = .constant(false)
+    /// True while the parent's first server read of its comments is still pending, so an
+    /// empty list is worth waiting for. Owned by the parent, which runs that read; when it
+    /// finishes (with comments, none, or a failure) the loading row goes away.
+    var isLoading: Bool = false
     let commentsVideoCoordinator: CommentsVideoPlaybackCoordinator
     let onAvatarTap: (User) -> Void
     let onShowLogin: () -> Void
     let onShowToast: (String, Bool) -> Void
 
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @State private var isLoading = false
     @State private var isLoadingMore = false
     @State private var hasMoreComments = true
     @State private var currentPage: UInt = 0

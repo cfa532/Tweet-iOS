@@ -1384,6 +1384,8 @@ struct TweetDetailView: View {
     // BottomBarScrollTracker observing the parent UIScrollView. Used by
     // CommentListView to suppress the open-time auto-probe's flash.
     @State private var hasUserScrolledComments = false
+    /// The first comments read (after the tweet read) is pending; drives the loading row.
+    @State private var isLoadingComments = false
     /// True while a pull-to-refresh fetch is in flight. Stays true until the fetch
     /// actually finishes — not until the refresh control comes down — because its
     /// job is to keep the comment list from paginating against a page cursor the
@@ -2136,6 +2138,7 @@ struct TweetDetailView: View {
             ],
             hasUserScrolled: $hasUserScrolledComments,
             isRefreshing: $isPullRefreshing,
+            isLoading: isLoadingComments,
             commentsVideoCoordinator: commentsVideoCoordinator,
             onAvatarTap: { user in
                 selectedCommentUserForNavigation = user
@@ -2163,8 +2166,14 @@ struct TweetDetailView: View {
         if initialLoadParentTweetId != tweet.mid {
             initialLoadParentTweetId = tweet.mid
             Task {
-                await doReadTweet(isInitialLoad: true)
-                await refreshComments()
+                // Capped like the pull-to-refresh spinner: past the cap the read keeps
+                // going and fills the list when it lands, but the spinner does not wait.
+                isLoadingComments = true
+                await runWithSpinnerCap {
+                    await doReadTweet(isInitialLoad: true)
+                    await refreshComments()
+                }
+                isLoadingComments = false
             }
         }
 
