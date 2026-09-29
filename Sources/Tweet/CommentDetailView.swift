@@ -247,9 +247,8 @@ struct CommentDetailView: View {
             let existingIds = Set(replies.map { $0.mid })
             replies.append(contentsOf: cached.filter { !existingIds.contains($0.mid) })
             replies.sort { $0.timestamp > $1.timestamp }
-            // Replies do not wait for the parent comment's network read.
-            await refreshReplies()
-            isLoadingReplies = false
+            // The first server read is chained after the parent read in setupInitialData;
+            // this task only paints the cache and schedules the one follow-up refresh.
             do { try await Task.sleep(for: .seconds(15)) } catch { return }
             await refreshReplies()
         }
@@ -259,10 +258,16 @@ struct CommentDetailView: View {
     private func setupInitialData() {
         configureRepliesCacheContextIfNeeded()
 
-        // The replies task runs independently of this parent read.
+        // Same ordering as TweetDetailView: the initial parent read makes the serving node
+        // sync this comment's replies and records the readNodeURL get_comments requires,
+        // so replies are fetched only after it returns.
         if initialLoadCommentId != comment.mid {
             initialLoadCommentId = comment.mid
-            Task { await syncComment(isInitialLoad: true) }
+            Task {
+                await syncComment(isInitialLoad: true)
+                await refreshReplies()
+                isLoadingReplies = false
+            }
         }
 
         // Periodically reload the current provider without triggering a cross-node sync.

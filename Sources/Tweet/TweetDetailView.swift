@@ -1715,8 +1715,9 @@ struct TweetDetailView: View {
             let existingIds = Set(comments.map { $0.mid })
             comments.append(contentsOf: cached.filter { !existingIds.contains($0.mid) })
             comments.sort { $0.timestamp > $1.timestamp }
-            // Comments read independently of the parent tweet's network read.
-            await refreshComments()
+            // The first server read is chained after the detail tweet read in
+            // setupInitialData; this task only paints the cache and schedules the
+            // one follow-up refresh.
             do { try await Task.sleep(for: .seconds(15)) } catch { return }
             await refreshComments()
         }
@@ -2153,10 +2154,18 @@ struct TweetDetailView: View {
     private func setupInitialData() {
         configureCommentCacheContextIfNeeded()
 
-        // The comments task runs independently; a slow parent read must not hold it up.
+        // The fromDetailView read is what makes the serving node sync this tweet and its
+        // comments, and it records the tweet's readNodeURL that get_comments requires.
+        // Comments are therefore fetched only after it returns (as TweetWeb does); racing
+        // it hit an unsynced node and returned an empty first page. A failed read still
+        // falls through to the comments refresh. The cached list is painted separately
+        // by the comments task, so a slow read does not leave the screen empty.
         if initialLoadParentTweetId != tweet.mid {
             initialLoadParentTweetId = tweet.mid
-            Task { await doReadTweet(isInitialLoad: true) }
+            Task {
+                await doReadTweet(isInitialLoad: true)
+                await refreshComments()
+            }
         }
 
         // Periodically reload the current provider without triggering a cross-node sync.
