@@ -2865,8 +2865,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false, confirmedBaseUrl: confirmedBaseUrl)
 
             // NodePool is authoritative for the access node. After a confirmed
-            // fetch, replace the pool entry only when the user's route differs
-            // from what the pool already knows.
+            // fetch, record the user's route only if the pool knows nothing yet.
             let fetchedUser = await MainActor.run { User.getInstance(mid: userMid) }
             let (currentAccessNodeMid, fetchedBaseUrlString, fetchedHostIds) = await MainActor.run {
                 (fetchedUser.hostIds.flatMap { $0.count > 1 ? $0[1] : nil },
@@ -2894,12 +2893,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 return true
             }
 
-            let ipValid = await MainActor.run { NodePool.shared.isUserIPValid(for: fetchedUser) }
+            // Seed the pool only when it has no address for this access node. A user's
+            // saved route is per user and may be the other IP family of the same node;
+            // letting each successful fetch overwrite the pool made users sharing a node
+            // trade v4/v6 back and forth, and every trade moved others onto the new
+            // address (route change -> video reload). Replacing a pooled address is left
+            // to the discovery and repair paths, which have proven the new one.
             if let baseUrlString = fetchedBaseUrlString,
                let hostIds = fetchedHostIds, hostIds.count > 1,
-               !ipValid {
-                let accessNodeMid = hostIds[1]
-                await MainActor.run { NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString) }
+               NodePool.shared.getIPForNode(nodeMid: hostIds[1]) == nil {
+                NodePool.shared.updateNodeIP(nodeMid: hostIds[1], newIP: baseUrlString)
             }
             return true
         }

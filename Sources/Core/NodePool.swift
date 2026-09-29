@@ -215,35 +215,6 @@ final class NodePool: @unchecked Sendable {
     
     // MARK: - Public Methods
     
-    /// Check if user's current IP is valid in the pool
-    /// Only checks access node (hostIds[1]) - the node we read data from
-    @MainActor
-    func isUserIPValid(for user: User) -> Bool {
-        guard let baseUrlString = user.baseUrl?.absoluteString,
-              let hostIds = user.hostIds,
-              hostIds.count > 1 else {
-            return false
-        }
-        
-        return queue.sync {
-            let normalizedUserIP = NodeInfo.normalizeIP(baseUrlString)
-            let accessNodeMid = hostIds[1]
-            
-            if let node = nodes[accessNodeMid] {
-                if node.hasIP(normalizedUserIP) {
-                    print("DEBUG: [NodePool] ✅ User IP \(normalizedUserIP) found in access node \(accessNodeMid)")
-                    return true
-                } else {
-                    print("DEBUG: [NodePool] ⚠️ User IP \(normalizedUserIP) not in access node \(accessNodeMid)'s IP list (has \(node.ips.count) IPs)")
-                }
-            } else {
-                print("DEBUG: [NodePool] Access node \(accessNodeMid) not in pool yet")
-            }
-            
-            return false
-        }
-    }
-    
     /// Get a valid IP from the user's access node in the pool
     /// Only uses access node (hostIds[1]) - the node we read data from
     @MainActor
