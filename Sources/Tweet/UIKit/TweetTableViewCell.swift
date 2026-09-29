@@ -8,23 +8,6 @@
 import UIKit
 import Darwin
 
-// TEMPORARY (Jul 2026 fling-scroll stall investigation) — logs when a call on this
-// instrumented path takes long enough to plausibly cause a dropped-frame/catch-up-jump
-// scroll stall. Remove once the stall is root-caused.
-enum StallLog {
-    static let thresholdMs: Double = 4
-    @inline(__always)
-    static func measure<T>(_ label: String, _ extra: @autoclosure () -> String = "", _ block: () -> T) -> T {
-        let start = CACurrentMediaTime()
-        let result = block()
-        let elapsedMs = (CACurrentMediaTime() - start) * 1000
-        if elapsedMs >= thresholdMs {
-            print("⏱️ [STALL] \(label) took \(String(format: "%.1f", elapsedMs))ms \(extra())")
-        }
-        return result
-    }
-}
-
 class TweetTableViewCell: UITableViewCell {
     static let reuseIdentifier = "TweetTableViewCell"
     static let pinnedTweetsDividerHeight: CGFloat = 25
@@ -144,18 +127,16 @@ class TweetTableViewCell: UITableViewCell {
             self.onContentDidChangeHeightAsync?()
         }
 
-        StallLog.measure("TweetTableViewCell.configure", "tweetId=\(tweet.mid)") {
-            tweetContentView.configure(
-                tweet: tweet,
-                hproseInstance: hproseInstance,
-                isPinned: isPinned,
-                isLastItem: isLastItem,
-                parentViewController: parentViewController,
-                allowDeleteAll: allowDeleteAll,
-                commentParentTweet: commentParentTweet,
-                savedParentTweetId: savedParentTweetId
-            )
-        }
+        tweetContentView.configure(
+            tweet: tweet,
+            hproseInstance: hproseInstance,
+            isPinned: isPinned,
+            isLastItem: isLastItem,
+            parentViewController: parentViewController,
+            allowDeleteAll: allowDeleteAll,
+            commentParentTweet: commentParentTweet,
+            savedParentTweetId: savedParentTweetId
+        )
     }
 
     override func prepareForReuse() {

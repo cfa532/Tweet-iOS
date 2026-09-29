@@ -443,16 +443,14 @@ class TweetBodyUIView: UIView {
 
             // Configure pure UIKit media grid
             mediaGridView.videoCoordinator = videoCoordinator
-            StallLog.measure("mediaGridView.configure", "tweetId=\(tweet.mid) count=\(mediaAttachments.count)") {
-                mediaGridView.configure(
-                    tweet: tweet,
-                    attachments: mediaAttachments,
-                    isEmbedded: isEmbedded,
-                    cellTweetId: cellTweetId,
-                    shouldLoadVideo: true,
-                    parentViewController: parentViewController
-                )
-            }
+            mediaGridView.configure(
+                tweet: tweet,
+                attachments: mediaAttachments,
+                isEmbedded: isEmbedded,
+                cellTweetId: cellTweetId,
+                shouldLoadVideo: true,
+                parentViewController: parentViewController
+            )
 
             // Put back the visibility the rebuild cleared, and start the image loads the
             // next scroll pass would have started. Videos are left to the coordinator,

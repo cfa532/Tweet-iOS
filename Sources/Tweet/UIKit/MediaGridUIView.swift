@@ -152,18 +152,16 @@ class MediaGridUIView: UIView {
             cellView.frame = .zero
 
             // Aspect ratio will be updated in layoutSubviews with correct dimensions
-            StallLog.measure("MediaCellUIView.configure(new grid)", "tweetId=\(tweet.mid) idx=\(i)") {
-                cellView.configure(
-                    parentTweet: tweet,
-                    attachmentIndex: originalAttachmentIndex(i),
-                    aspectRatio: 1.0,  // Placeholder, will be updated in layoutSubviews
-                    shouldAcquirePlayer: shouldLoadVideo,
-                    isEmbedded: isEmbedded,
-                    cellTweetId: cellTweetId,
-                    isSingleMedia: attachments.count == 1,
-                    parentViewController: parentViewController
-                )
-            }
+            cellView.configure(
+                parentTweet: tweet,
+                attachmentIndex: originalAttachmentIndex(i),
+                aspectRatio: 1.0,  // Placeholder, will be updated in layoutSubviews
+                shouldAcquirePlayer: shouldLoadVideo,
+                isEmbedded: isEmbedded,
+                cellTweetId: cellTweetId,
+                isSingleMedia: attachments.count == 1,
+                parentViewController: parentViewController
+            )
 
         }
 

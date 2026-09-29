@@ -2573,13 +2573,6 @@ class TweetTableViewController: UITableViewController {
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let __stallStart = CACurrentMediaTime()
-        defer {
-            let elapsedMs = (CACurrentMediaTime() - __stallStart) * 1000
-            if elapsedMs >= StallLog.thresholdMs {
-                print("⏱️ [STALL] cellForRowAt row=\(indexPath.row) took \(String(format: "%.1f", elapsedMs))ms scrolling=\(isUserDragging || isDecelerating)")
-            }
-        }
         guard let cell = tableView.dequeueReusableCell(
             withIdentifier: TweetTableViewCell.reuseIdentifier,
             for: indexPath
