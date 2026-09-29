@@ -195,13 +195,15 @@ final class NodePool: @unchecked Sendable {
             return ips.contains(where: { Self.normalizeIP($0) == normalized })
         }
         
-        /// Get the preferred IP (prefer IPv4 over IPv6)
+        /// The route to use: the first address in the list. `updateNodeIP` stores the
+        /// address discovery just proved as the only entry, and `addIPToNode` appends
+        /// fallbacks after it, so the first entry is the one confirmed most recently.
+        /// Preferring IPv4 here instead made every user on the node switch to IPv4 as
+        /// soon as any user's saved IPv4 route was appended, and back again on the next
+        /// `updateNodeIP` -- even where IPv4 is the family that times out. The remaining
+        /// entries stay as fallbacks when `removeIPFromNode` evicts the first.
         func getPreferredIP() -> String? {
-            // Prefer IPv4 over IPv6 for better compatibility
-            return ips.first { ip in
-                let normalized = Self.normalizeIP(ip)
-                return !normalized.hasPrefix("[") && normalized.filter { $0 == ":" }.count <= 1
-            } ?? ips.first
+            ips.first
         }
         
         /// Normalize IP by removing http:// prefix and trailing slashes.
