@@ -20,24 +20,28 @@ class EmbeddedTweetUIView: UIView {
     private let headerView = TweetHeaderUIView()
     private let bodyView = TweetBodyUIView()
 
-    // Placeholder shown while loading — matches the "Loading quoted tweet..." text used in TweetDetailView.
-    private let placeholderView: UIView = {
-        let v = UIView()
-        v.isHidden = true
-
+    // Placeholder shown while loading, then reworded once the original is known to be
+    // unavailable. Same 36pt single line in both states, so no row relayout on the swap.
+    private let placeholderLabel: UILabel = {
         let label = UILabel()
         label.text = NSLocalizedString("Loading quoted tweet...", comment: "")
         label.textColor = XTheme.secondaryText
         label.font = .preferredFont(forTextStyle: .subheadline)
         label.numberOfLines = 1
         label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
 
-        v.addSubview(label)
+    private lazy var placeholderView: UIView = {
+        let v = UIView()
+        v.isHidden = true
+
+        v.addSubview(placeholderLabel)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -8),
-            label.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
-            label.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -8),
+            placeholderLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
+            placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -8),
+            placeholderLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
+            placeholderLabel.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -8),
         ])
 
         return v
@@ -243,6 +247,7 @@ class EmbeddedTweetUIView: UIView {
 
     /// Show loading placeholder while embedded tweet is being fetched
     func showPlaceholder() {
+        placeholderLabel.text = NSLocalizedString("Loading quoted tweet...", comment: "")
         contentStack.isHidden = true
         placeholderView.isHidden = false
         contentStackBottomConstraint.isActive = false
@@ -294,8 +299,11 @@ class EmbeddedTweetUIView: UIView {
                     self?.onAsyncConfigured?()
                 }
             }
-            // Original tweet fetch failed (deleted/404/network error) — leave the
-            // "Loading quoted tweet..." placeholder showing rather than an empty/hidden card.
+            // Original tweet fetch failed (deleted/404/network error) — keep the placeholder
+            // (not an empty/hidden card), reworded so it no longer claims to be loading.
+            // It stays non-tappable: handleTap has no loadedTweet to open.
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.placeholderLabel.text = NSLocalizedString("Original tweet not found", comment: "") }
         }
     }
 
@@ -376,6 +384,7 @@ class EmbeddedTweetUIView: UIView {
         headerView.prepareForReuse()
         bodyView.prepareForReuse()
         // Reset to placeholder state — swap constraint groups
+        placeholderLabel.text = NSLocalizedString("Loading quoted tweet...", comment: "")
         contentStack.isHidden = true
         placeholderView.isHidden = false
         contentStackBottomConstraint.constant = -Self.contentBottomPadding  // Reset to default

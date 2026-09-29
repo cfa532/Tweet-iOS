@@ -204,6 +204,7 @@
 // MARK: - Loading States
 "Loading tweets..." = "Loading tweets...";
 "Loading quoted tweet..." = "Loading quoted tweet...";
+"Original tweet not found" = "Original tweet not found";
 "No tweet yet" = "No tweet yet";
 "Timeline" = "Home";
 

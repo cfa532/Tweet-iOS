@@ -1527,85 +1527,70 @@ struct TweetDetailView: View {
     
     var body: some View {
         Group {
-            // Hide retweets/quoted tweets if their original tweets failed to load
-            if isRetweetOrQuotedTweet && originalTweet == nil && hasLoadedOriginalTweet {
-                // This is a retweet/quoted tweet but original tweet failed to load - show error message
-                VStack {
-                    Spacer()
-                    Text("Original tweet not found")
-                        .font(.headline)
-                        .foregroundColor(XTheme.secondaryTextColor)
-                    Text("The original tweet may have been deleted or is no longer accessible.")
-                        .font(.caption)
-                        .foregroundColor(XTheme.secondaryTextColor)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Spacer()
+            // A missing original is shown as a placeholder inside the tweet (see tweetContent);
+            // replacing the whole screen with an error left the reader with no way back.
+            VStack(spacing: 0) {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        VStack(spacing: 0) {
+                            mediaSection
+                            tweetHeader
+                            documentsSection
+                            tweetContent
+                            actionButtons
+                        }
+                        .padding(.bottom, 8)
+                        .background(XTheme.backgroundColor)
+
+                        commentsListView
+                            .padding(.leading, -4)
+                    }
                 }
-            } else {
-                VStack(spacing: 0) {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            VStack(spacing: 0) {
-                                mediaSection
-                                tweetHeader
-                                documentsSection
-                                tweetContent
-                                actionButtons
+                .coordinateSpace(name: "commentsScroll")
+                .refreshable {
+                    await runCappedPullRefresh()
+                }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    // Floating navigation bar — pure UIKit, driven directly by KVO.
+                    // Using safeAreaInset (instead of a ZStack overlay) so the
+                    // ScrollView's pull-to-refresh spinner appears below the nav bar
+                    // rather than being hidden behind it.
+                    NavBarOverlay(onBack: { dismiss() })
+                        .frame(height: 44)
+                }
+                .overlay(alignment: .top) {
+                    // Bottom bar scroll tracker — placed outside ScrollView to properly find it
+                    BottomBarScrollTracker { offset, delta, isAtBottom, isInteracting in
+                        if isDetailScrollInteractionActive != isInteracting {
+                            isDetailScrollInteractionActive = isInteracting
+                            if !isInteracting {
+                                mountNativePlaybackSurfaceIfReady()
                             }
-                            .padding(.bottom, 8)
-                            .background(XTheme.backgroundColor)
-
-                            commentsListView
-                                .padding(.leading, -4)
                         }
+                        handleScrollOffsetChange(offset, delta: delta, isAtBottom: isAtBottom)
                     }
-                    .coordinateSpace(name: "commentsScroll")
-                    .refreshable {
-                        await runCappedPullRefresh()
-                    }
-                    .safeAreaInset(edge: .top, spacing: 0) {
-                        // Floating navigation bar — pure UIKit, driven directly by KVO.
-                        // Using safeAreaInset (instead of a ZStack overlay) so the
-                        // ScrollView's pull-to-refresh spinner appears below the nav bar
-                        // rather than being hidden behind it.
-                        NavBarOverlay(onBack: { dismiss() })
-                            .frame(height: 44)
-                    }
-                    .overlay(alignment: .top) {
-                        // Bottom bar scroll tracker — placed outside ScrollView to properly find it
-                        BottomBarScrollTracker { offset, delta, isAtBottom, isInteracting in
-                            if isDetailScrollInteractionActive != isInteracting {
-                                isDetailScrollInteractionActive = isInteracting
-                                if !isInteracting {
-                                    mountNativePlaybackSurfaceIfReady()
-                                }
-                            }
-                            handleScrollOffsetChange(offset, delta: delta, isAtBottom: isAtBottom)
-                        }
-                        .frame(width: 0, height: 0)
-                    }
+                    .frame(width: 0, height: 0)
+                }
 
-            // ReplyEditor as a component at the bottom
-            if showReplyEditor {
-                ReplyEditorView(
-                    parentTweet: displayTweet,
-                    isQuoting: false,
-                    onClose: {
-                        showReplyEditor = false
-                    },
-                    onExpandedClose: {
-                        shouldShowExpandedReply = false
-                    },
-                    initialExpanded: shouldShowExpandedReply
-                )
-                // Reserve a constant footprint so showing/hiding the bottom bar cannot resize
-                // the ScrollView during an active gesture. Offset preserves the previous visual
-                // position without changing layout or the visible tweet's content offset.
-                .padding(.bottom, 48)
-                .offset(y: isNavigationBarVisible ? 0 : 40)
-                .animation(.easeInOut(duration: 0.25), value: isNavigationBarVisible)
-            }
+                // ReplyEditor as a component at the bottom
+                if showReplyEditor {
+                    ReplyEditorView(
+                        parentTweet: displayTweet,
+                        isQuoting: false,
+                        onClose: {
+                            showReplyEditor = false
+                        },
+                        onExpandedClose: {
+                            shouldShowExpandedReply = false
+                        },
+                        initialExpanded: shouldShowExpandedReply
+                    )
+                    // Reserve a constant footprint so showing/hiding the bottom bar cannot resize
+                    // the ScrollView during an active gesture. Offset preserves the previous visual
+                    // position without changing layout or the visible tweet's content offset.
+                    .padding(.bottom, 48)
+                    .offset(y: isNavigationBarVisible ? 0 : 40)
+                    .animation(.easeInOut(duration: 0.25), value: isNavigationBarVisible)
                 }
             }
         }
@@ -2076,7 +2061,11 @@ struct TweetDetailView: View {
                     .padding(.horizontal)
                     .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
                 } else {
-                    Text(NSLocalizedString("Loading quoted tweet...", comment: ""))
+                    // Plain Text on purpose: with no original there is nothing to open, so the
+                    // placeholder carries no tap handler (unlike EmbeddedTweetView above).
+                    Text(hasLoadedOriginalTweet
+                         ? NSLocalizedString("Original tweet not found", comment: "")
+                         : NSLocalizedString("Loading quoted tweet...", comment: ""))
                         .foregroundColor(XTheme.secondaryTextColor)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 8)
