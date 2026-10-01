@@ -24,12 +24,6 @@ struct NewTweetsBanner: View {
     let isPresented: Bool
     let onTap: () -> Void
 
-    private struct AvatarClusterItem: Identifiable {
-        let id: String
-        let user: User?
-        let opacity: Double
-    }
-
     var body: some View {
         VStack {
             if isPresented && !tweets.isEmpty {
@@ -83,7 +77,7 @@ struct NewTweetsBanner: View {
     }
 
     private var shouldShowTitle: Bool {
-        avatarClusterItems(from: distinctAuthors).count <= 3
+        distinctAuthors.count <= 3
     }
 
     private var bannerBackgroundColor: Color {
@@ -113,63 +107,22 @@ struct NewTweetsBanner: View {
     }
 
     private var avatarCluster: some View {
-        let items = avatarClusterItems(from: distinctAuthors)
-        let avatarCount = max(1, items.count)
+        let authors = Array(distinctAuthors.prefix(5))
+        let avatarCount = authors.count
         let avatarSize: CGFloat = 32
         let trailingReveal: CGFloat = 20
         let width = avatarSize + CGFloat(avatarCount - 1) * trailingReveal
 
         return ZStack(alignment: .leading) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                avatarView(for: item, size: avatarSize)
+            ForEach(Array(authors.enumerated()), id: \.element.mid) { index, author in
+                Avatar(user: author, size: avatarSize)
+                    .frame(width: avatarSize, height: avatarSize)
                     .offset(x: CGFloat(index) * trailingReveal)
                     .zIndex(Double(avatarCount - index))
             }
         }
         // Offsets do not expand the stack's layout bounds; anchor it before spreading avatars.
         .frame(width: width, height: avatarSize, alignment: .leading)
-    }
-
-    private func avatarClusterItems(from authors: [User]) -> [AvatarClusterItem] {
-        if authors.isEmpty {
-            return [AvatarClusterItem(id: "default-0", user: nil, opacity: 1.0)]
-        }
-
-        if authors.count <= 5 {
-            return authors.map { author in
-                AvatarClusterItem(id: author.mid, user: author, opacity: 1.0)
-            }
-        }
-
-        let firstAuthors = authors.prefix(2).map { author in
-            AvatarClusterItem(id: author.mid, user: author, opacity: 1.0)
-        }
-        let placeholders = [
-            AvatarClusterItem(id: "default-more-0", user: nil, opacity: 0.42),
-            AvatarClusterItem(id: "default-more-1", user: nil, opacity: 0.42)
-        ]
-        let lastAuthor = authors[authors.count - 1]
-        return firstAuthors + placeholders + [
-            AvatarClusterItem(id: lastAuthor.mid, user: lastAuthor, opacity: 1.0)
-        ]
-    }
-
-    @ViewBuilder
-    private func avatarView(for item: AvatarClusterItem, size: CGFloat) -> some View {
-        if let user = item.user {
-            Avatar(user: user, size: size)
-                .frame(width: size, height: size)
-        } else {
-            Circle()
-                .fill(XTheme.secondaryBackgroundColor)
-                .overlay(
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(XTheme.secondaryTextColor)
-                )
-                .frame(width: size, height: size)
-                .opacity(item.opacity)
-        }
     }
 
 }
