@@ -45,7 +45,7 @@ struct NewTweetsBanner: View {
                     .foregroundColor(.white)
                     .padding(.leading, 20)
                     .padding(.trailing, 22)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 6)
                     .background(
                         Capsule()
                             .fill(bannerBackgroundColor)
