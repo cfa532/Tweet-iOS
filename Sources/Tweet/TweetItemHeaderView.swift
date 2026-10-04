@@ -102,40 +102,58 @@ struct AdminTweetContentEditSheet: View {
     }
 }
 
+// Shared with TweetWeb and Android: floor elapsed seconds, then use completed
+// minutes/hours/days/weeks, 30-day months, and 365-day years.
+enum TweetRelativeTime {
+    static func text(from timestamp: Date, at now: Date = Date()) -> String {
+        let seconds = Int(floor(now.timeIntervalSince(timestamp)))
+        let minutes = seconds / 60
+        let hours = minutes / 60
+        let days = hours / 24
+        let weeks = days / 7
+        let months = days / 30
+        let years = days / 365
+
+        if seconds < 60 { return "%@s".localizedFormat(String(seconds)) }
+        if minutes < 60 { return "%@m".localizedFormat(String(minutes)) }
+        if hours < 24 { return "%@h".localizedFormat(String(hours)) }
+        if days < 7 { return "%@d".localizedFormat(String(days)) }
+        if months < 1 { return "%@w".localizedFormat(String(weeks)) }
+        if years < 1 { return "%@mo".localizedFormat(String(months)) }
+        return "%@y".localizedFormat(String(years))
+    }
+
+    static func refreshInterval(from timestamp: Date, at now: Date = Date()) -> TimeInterval {
+        now.timeIntervalSince(timestamp) < 60 ? 1 : 60
+    }
+}
+
 struct TweetItemHeaderView: View {
     @ObservedObject var tweet: Tweet
-    
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var now = Date()
+
     var body: some View {
-        AuthorNameView(author: tweet.author, timeDifference: timeDifference)
+        AuthorNameView(author: tweet.author, timeDifference: TweetRelativeTime.text(from: tweet.timestamp, at: now))
             .lineLimit(2)
             .truncationMode(.tail)
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
-    }
-    
-    private var timeDifference: String {
-        let now = Date()
-        let timeInterval = now.timeIntervalSince(tweet.timestamp)
-        
-        if timeInterval < 60 {
-            return "now"
-        } else if timeInterval < 3600 {
-            let minutes = Int(timeInterval / 60)
-            return "\(minutes)m"
-        } else if timeInterval < 86400 {
-            let hours = Int(timeInterval / 3600)
-            return "\(hours)h"
-        } else if timeInterval < 2592000 {
-            let days = Int(timeInterval / 86400)
-            return "\(days)d"
-        } else if timeInterval < 31536000 {
-            let months = Int(timeInterval / 2592000)
-            return "\(months)mo"
-        } else {
-            let years = Int(timeInterval / 31536000)
-            return "\(years)y"
-        }
+            // SwiftUI cancels the clock when this header disappears or the scene
+            // becomes inactive, and refreshes immediately on return.
+            .task(id: scenePhase == .active ? tweet.timestamp : nil) {
+                guard scenePhase == .active else { return }
+                while !Task.isCancelled {
+                    now = Date()
+                    let interval = TweetRelativeTime.refreshInterval(from: tweet.timestamp, at: now)
+                    do {
+                        try await Task.sleep(for: .seconds(interval))
+                    } catch {
+                        return
+                    }
+                }
+            }
     }
 }
 

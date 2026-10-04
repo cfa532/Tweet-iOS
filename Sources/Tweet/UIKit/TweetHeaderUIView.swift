@@ -154,6 +154,8 @@ class TweetHeaderUIView: UIView {
     private var currentTweetId: String?
     private var currentAuthorId: String?
     private var currentTimestampText = ""
+    private var timestampUpdates: AnyCancellable?
+    private var timestampTick: AnyCancellable?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -196,11 +198,57 @@ class TweetHeaderUIView: UIView {
 
     private weak var currentTweet: Tweet?
 
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        timestampUpdates = nil
+        timestampTick = nil
+        guard window != nil else { return }
+
+        // Restart on foreground entry; stop while inactive or detached.
+        timestampUpdates = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .merge(with: NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification))
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                if notification.name == UIApplication.didBecomeActiveNotification {
+                    self?.updateTimestampClock()
+                } else {
+                    self?.timestampTick = nil
+                }
+            }
+        updateTimestampClock()
+    }
+
+    private func updateTimestampClock() {
+        timestampTick = nil
+        guard window != nil, UIApplication.shared.applicationState == .active,
+              let tweet = currentTweet else { return }
+        refreshTimestamp()
+        // Schedule one tick so new posts switch from seconds to minutes at age 60s.
+        timestampTick = Just(())
+            .delay(for: .seconds(TweetRelativeTime.refreshInterval(from: tweet.timestamp)), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateTimestampClock()
+            }
+    }
+
+    private func refreshTimestamp() {
+        guard let tweet = currentTweet else { return }
+        let text = Self.timeDifference(from: tweet.timestamp)
+        guard text != currentTimestampText else { return }
+        currentTimestampText = text
+        // A different age label can change the embedded header's line wrapping.
+        tweet.cachedHeaderHeight = -1
+        tweet.cachedHeaderWidth = 0
+        setHeaderText(name: tweet.author?.name, username: tweet.author?.username)
+    }
+
     func configure(tweet: Tweet) {
         currentTweet = tweet
 
-        // Skip full reconfigure if same tweet
+        // Refresh the age even when the rest of the header can be reused.
         if currentTweetId == tweet.mid {
+            refreshTimestamp()
+            updateTimestampClock()
             return
         }
         currentTweetId = tweet.mid
@@ -208,11 +256,12 @@ class TweetHeaderUIView: UIView {
         userCancellables.removeAll()
         currentAuthorId = nil
 
-        // Set timestamp (static - doesn't change)
+        // Set the initial age; the window-bound clock keeps it current.
         currentTimestampText = Self.timeDifference(from: tweet.timestamp)
 
         // Set author info
         updateAuthorLabels(user: tweet.author)
+        updateTimestampClock()
 
         // Track author attachment/replacement without duplicating per-user subscriptions.
         tweet.$author
@@ -333,6 +382,7 @@ class TweetHeaderUIView: UIView {
     }
 
     func prepareForReuse() {
+        timestampTick = nil
         tweetCancellables.removeAll()
         userCancellables.removeAll()
         currentTweetId = nil
@@ -343,23 +393,9 @@ class TweetHeaderUIView: UIView {
         menuButton.menuActions = []
     }
 
-    // MARK: - Time Difference (ported from TweetItemHeaderView)
+    // MARK: - Shared relative-time formatting
 
     static func timeDifference(from timestamp: Date) -> String {
-        let timeInterval = Date().timeIntervalSince(timestamp)
-
-        if timeInterval < 60 {
-            return "now"
-        } else if timeInterval < 3600 {
-            return "\(Int(timeInterval / 60))m"
-        } else if timeInterval < 86400 {
-            return "\(Int(timeInterval / 3600))h"
-        } else if timeInterval < 2592000 {
-            return "\(Int(timeInterval / 86400))d"
-        } else if timeInterval < 31536000 {
-            return "\(Int(timeInterval / 2592000))mo"
-        } else {
-            return "\(Int(timeInterval / 31536000))y"
-        }
+        TweetRelativeTime.text(from: timestamp)
     }
 }
