@@ -140,6 +140,16 @@ final class HproseClientPool: @unchecked Sendable {
         let client = HproseHttpClient()
         client.timeout = timeout
         client.uri = urlString
+        // Do not pool idle sockets. hprose defaults to `Connection: keep-alive` with a
+        // 300s hint, so this one shared NSURLSession kept connections for minutes. After
+        // the app idled (Wi-Fi power save, a router dropping its state) a burst of calls
+        // reused those stale sockets and every one hung to its timeout, while a call on a
+        // live socket to the same address answered in 0.3s (diagnostics.log, Oct 2026);
+        // relaunching, which gave fresh sockets, cleared it. Before this pool existed every
+        // RPC opened a new connection, so reuse is what changed. `Connection: close`
+        // costs one TCP handshake per call and removes the stale-socket case outright.
+        // Set once at creation, like timeout/uri: never mutate a pooled client afterwards.
+        client.keepAlive = false
         sharedClients[key] = client
         return client
     }

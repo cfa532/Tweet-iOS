@@ -1,7 +1,8 @@
 import Foundation
 
 /// Small append-only failure log in Documents, visible on the phone under
-/// Files > On My iPhone > Tweet > diagnostics.log (Info.plist has UIFileSharingEnabled).
+/// Files > On My iPhone > Tweetd > diagnostics.log (the app's display name is "Tweetd";
+/// Info.plist has UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace).
 ///
 /// Why this exists: some failures (a feed page or an edit that silently times out) are
 /// rare and happen away from Xcode. `print` is discarded in a Release build with no
@@ -15,6 +16,9 @@ enum DiagnosticLog {
     /// Bounded so an error storm cannot grow the file without limit. When the cap is
     /// reached the file restarts empty; the newest failures are what matter.
     private static let maxBytes = 256 * 1024
+    /// The file is also restarted once it is this old, so it always holds roughly the
+    /// last three days (the same 72h window the console mirror used).
+    private static let maxAge: TimeInterval = 72 * 60 * 60
     private static let queue = DispatchQueue(label: "app.diagnostic.log", qos: .utility)
     // Only ever touched from `queue` (serial), which is what makes nonisolated(unsafe) sound.
     nonisolated(unsafe) private static let formatter: ISO8601DateFormatter = {
@@ -32,8 +36,10 @@ enum DiagnosticLog {
             let url = docs.appendingPathComponent(fileName)
             let fm = FileManager.default
 
-            let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-            if size >= maxBytes {
+            let attributes = try? fm.attributesOfItem(atPath: url.path)
+            let size = (attributes?[.size] as? Int) ?? 0
+            let createdAt = (attributes?[.creationDate] as? Date) ?? now
+            if size >= maxBytes || now.timeIntervalSince(createdAt) >= maxAge {
                 try? fm.removeItem(at: url)
             }
             if !fm.fileExists(atPath: url.path) {
