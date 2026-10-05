@@ -287,6 +287,10 @@ struct CommentListContentView<RowView: View>: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
+            } else if comments.isEmpty && commentCount > 0 {
+                // The parent reports comments but none are in hand (loading row capped
+                // or the read failed). "No comment yet" would contradict the count.
+                EmptyView()
             } else if comments.isEmpty {
                 // Nothing to show and nothing worth waiting for
                 VStack(spacing: 16) {

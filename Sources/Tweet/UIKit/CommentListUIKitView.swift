@@ -424,10 +424,14 @@ private final class CommentListTableViewController: UIViewController, UITableVie
     /// empty list is worth waiting for. That counter is a convenience value and can
     /// disagree with reality, so it only governs whether to *wait* — the page-0 fetch
     /// runs regardless and fills the list if the count was wrong.
+    ///
+    /// A parent that reports comments but has none in hand (the loading row is capped at
+    /// a few seconds while the read can run longer, or the read failed) must not claim
+    /// "No comment yet" — that contradicts the count, so the row is simply absent.
     private var rows: [Row] {
         if comments.isEmpty {
-            if isLoading && commentCount > 0 {
-                return [.status(.loading)]
+            if commentCount > 0 {
+                return isLoading ? [.status(.loading)] : []
             }
             return [.status(.empty)]
         }
