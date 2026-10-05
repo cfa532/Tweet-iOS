@@ -458,6 +458,7 @@
 "No more comments" = "これ以上コメントはありません";
 "No more messages" = "これ以上メッセージはありません";
 "No more tweets" = "これ以上のツイートはありません";
+"Couldn't load tweets. Please try again." = "ツイートを読み込めませんでした。もう一度お試しください。";
 
 // MARK: - Video Player
 "Failed to load video" = "動画の読み込みに失敗しました";

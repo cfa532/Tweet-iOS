@@ -532,6 +532,7 @@
 "No more comments" = "No more comments";
 "No more messages" = "No more messages";
 "No more tweets" = "No more tweets";
+"Couldn't load tweets. Please try again." = "Couldn't load tweets. Please try again.";
 
 // MARK: - Video Player
 "Failed to load video" = "Failed to load video";

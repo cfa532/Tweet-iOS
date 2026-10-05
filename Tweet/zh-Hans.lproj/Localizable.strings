@@ -505,6 +505,7 @@
 "No more comments" = "没有更多评论了";
 "No more messages" = "没有更多消息了";
 "No more tweets" = "没有更多推文了";
+"Couldn't load tweets. Please try again." = "无法加载推文，请重试。";
 
 // MARK: - Video Player
 "Failed to load video" = "视频加载失败";

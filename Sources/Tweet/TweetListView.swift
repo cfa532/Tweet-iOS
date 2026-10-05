@@ -1288,6 +1288,18 @@ struct TweetListView: View {
         await loadFromServer(page: 0, pageSize: pageSize, role: .pagination) { _ in }
     }
 
+    /// Shows the shared "couldn't load" message on this list's toast overlay.
+    @MainActor
+    private func reportFetchFailure() {
+        toastMessage = NSLocalizedString("Couldn't load tweets. Please try again.", comment: "Shown when a page of tweets fails to load")
+        toastType = .error
+        withAnimation { showToast = true }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            withAnimation { showToast = false }
+        }
+    }
+
     func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
         // maxTweetsInMemory just triggers a viewport-aware trim (see scheduleMemoryMaintenance /
         // trimRequestToken) — it keeps the array bounded without blocking pagination, so users
@@ -1423,6 +1435,12 @@ struct TweetListView: View {
                 // Also written to diagnostics.log (Files app): print is lost in a Release build
                 // that is not attached to Xcode.
                 DiagnosticLog.error("feed", "Server load failed, feed=\(feedIdentifier) page=\(pageToLoad) role=\(role): \(error)")
+                // Tell the user, the same way Android does. Pagination state is left as it was
+                // (a failed page is not "no more tweets"), so the next scroll or pull retries.
+                // A cancelled load (scrolled away, view gone) is not a failure.
+                if !Task.isCancelled, !(error is CancellationError), (error as NSError).code != NSURLErrorCancelled {
+                    await MainActor.run { reportFetchFailure() }
+                }
                 await MainActor.run {
                     // Mark initial load as complete even on error for page 0
                     if page == 0 {
