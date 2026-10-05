@@ -1418,6 +1418,11 @@ struct TweetListView: View {
                 pageToLoad += 1
                 print("📊 [PAGINATION] Auto-loading next page \(pageToLoad) after full empty page")
             } catch {
+                // A failed page is otherwise invisible: the spinner stops, no rows arrive and
+                // pagination state is left untouched (correctly — an error is not "no more").
+                // Also written to diagnostics.log (Files app): print is lost in a Release build
+                // that is not attached to Xcode.
+                DiagnosticLog.error("feed", "Server load failed, feed=\(feedIdentifier) page=\(pageToLoad) role=\(role): \(error)")
                 await MainActor.run {
                     // Mark initial load as complete even on error for page 0
                     if page == 0 {

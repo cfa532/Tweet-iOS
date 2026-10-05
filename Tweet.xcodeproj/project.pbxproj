@@ -44,6 +44,7 @@
 		4614381D2E3F69AD002D1B22 /* CoreDataManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */; };
 		461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438222E403E98002D1B22 /* ChatMessageView.swift */; };
 		462826222EAD92A9000E891A /* CircularImageCropper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 462826212EAD92A9000E891A /* CircularImageCropper.swift */; };
+		4629FB2B2DFFEA3100588A02 /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB2A2DFFEA3100588A01 /* DiagnosticLog.swift */; };
 		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
@@ -207,6 +208,7 @@
 		4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataManager.swift; sourceTree = "<group>"; };
 		461438222E403E98002D1B22 /* ChatMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessageView.swift; sourceTree = "<group>"; };
 		462826212EAD92A9000E891A /* CircularImageCropper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularImageCropper.swift; sourceTree = "<group>"; };
+		4629FB2A2DFFEA3100588A01 /* DiagnosticLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLog.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
@@ -573,6 +575,7 @@
 				4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */,
 				46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */,
 				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
+				4629FB2A2DFFEA3100588A01 /* DiagnosticLog.swift */,
 				4629FB182DFFEA3100588941 /* MetricKitManager.swift */,
 				DF98BA9542DE4CC62FB1C080 /* DocumentPicker.swift */,
 			);
@@ -926,6 +929,7 @@
 				461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */,
 				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
 				468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */,
+				4629FB2B2DFFEA3100588A02 /* DiagnosticLog.swift in Sources */,
 				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
 				465209862EEC5FEB00FA6DBA /* HproseClientPool.swift in Sources */,
 				4614381D2E3F69AD002D1B22 /* CoreDataManager.swift in Sources */,

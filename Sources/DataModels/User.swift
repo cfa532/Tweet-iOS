@@ -670,6 +670,7 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         }
 
         print("ERROR: [resolveWritableUrl] getHostIP returned nil for hostId: \(hostId)")
+        DiagnosticLog.error("write", "resolveWritableUrl: getHostIP returned nil for hostId \(hostId)")
         throw NSError(domain: "HproseService", code: -1, userInfo: [
             NSLocalizedDescriptionKey: NSLocalizedString("Upload server not responding. Please try again later.", comment: "Upload error"),
             NSLocalizedFailureReasonErrorKey: "Writable host \(hostId) failed health check"

@@ -133,12 +133,24 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         params: [String: Any],
         priority: DispatchQoS.QoSClass = .userInitiated
     ) async -> Any? {
+        let startedAt = Date()
         let response = await HproseTransport.invokeRunMApp(
             using: client,
             entry: entry,
             params: params,
             priority: priority
         )
+        // Single choke point for every RPC, so one record here covers feed reads and
+        // writes alike. Elapsed time separates the causes: ~0 means the pooled-client
+        // gate refused the call (nil without touching the network), roughly the client
+        // timeout means the node accepted the connection and never answered.
+        if response == nil || response is NSError {
+            let hostClient = client as? HproseHttpClient
+            DiagnosticLog.error(
+                "rpc",
+                "\(entry) failed after \(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s via \(hostClient?.uri ?? "?") timeout=\(hostClient?.timeout ?? 0)s: \(response.map { String(describing: $0) } ?? "nil response")"
+            )
+        }
 
         // Every runMApp carries `aid`, the app's manifest id, so a stale one fails all of
         // them — feed, node/provider discovery, user refresh, writes — with the same
@@ -1499,6 +1511,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             )
         } catch {
             guard !Task.isCancelled else { throw error }
+            // A profile read goes to the live read route, which is the ROOT host (hostIds[0])
+            // after any successful write, while the main feed always uses the access node.
+            // Record which one failed so a device log can tell a flaky root host apart from
+            // a flaky access node.
+            let (accessRoute, writeRoute) = await MainActor.run {
+                (UserRoutes.shared.accessRoute(for: user.mid)?.absoluteString, UserRoutes.shared.writableRoute(for: user.mid)?.absoluteString)
+            }
+            DiagnosticLog.error(
+                "profile",
+                "\(entry) pn=\(pageNumber) user=\(userMid) failed via \(userBaseUrlStr ?? "nil") access=\(accessRoute ?? "nil") root=\(writeRoute ?? "nil"): \(error)"
+            )
             if hasTimeoutCause(error) {
                 hproseWarning("DEBUG: [fetchUserTweets] Timeout via \(userBaseUrlStr ?? "nil"); retrying same route once for \(userMid): \(error)")
                 do {
@@ -1515,11 +1538,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     // Move to the next advertised address of the same access node
                     // rather than hammering the one that just timed out twice.
                     hproseWarning("DEBUG: [fetchUserTweets] Timeout again via \(userBaseUrlStr ?? "nil"); looking for an alternate address of the same access node")
-                    guard await switchToAlternateRoute(
+                    let switched = await switchToAlternateRoute(
                         for: user,
                         attemptedBaseUrl: userBaseUrlStr,
                         logPrefix: "fetchUserTweets"
-                    ) else {
+                    )
+                    DiagnosticLog.error("profile", "user=\(userMid) timed out twice via \(userBaseUrlStr ?? "nil"); switched to alternate route: \(switched)")
+                    guard switched else {
                         hproseWarning("DEBUG: [fetchUserTweets] No alternate address for \(userMid); not retrying the same address")
                         throw error
                     }
