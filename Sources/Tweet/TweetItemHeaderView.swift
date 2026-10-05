@@ -123,9 +123,11 @@ enum TweetRelativeTime {
         return "%@y".localizedFormat(String(years))
     }
 
-    static func refreshInterval(from timestamp: Date, at now: Date = Date()) -> TimeInterval {
-        now.timeIntervalSince(timestamp) < 60 ? 1 : 60
-    }
+    // One tick per minute for every post. Posts under a minute old used to tick every
+    // second so the seconds label counted up, which woke each visible header (and, in the
+    // UIKit cells, re-ran the header layout check) every second for little value. A new
+    // post's "Ns" label may now lag up to a minute before it becomes "1m".
+    static let refreshInterval: TimeInterval = 60
 }
 
 struct TweetItemHeaderView: View {
@@ -146,9 +148,8 @@ struct TweetItemHeaderView: View {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     now = Date()
-                    let interval = TweetRelativeTime.refreshInterval(from: tweet.timestamp, at: now)
                     do {
-                        try await Task.sleep(for: .seconds(interval))
+                        try await Task.sleep(for: .seconds(TweetRelativeTime.refreshInterval))
                     } catch {
                         return
                     }

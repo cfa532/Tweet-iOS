@@ -221,11 +221,10 @@ class TweetHeaderUIView: UIView {
     private func updateTimestampClock() {
         timestampTick = nil
         guard window != nil, UIApplication.shared.applicationState == .active,
-              let tweet = currentTweet else { return }
+              currentTweet != nil else { return }
         refreshTimestamp()
-        // Schedule one tick so new posts switch from seconds to minutes at age 60s.
         timestampTick = Just(())
-            .delay(for: .seconds(TweetRelativeTime.refreshInterval(from: tweet.timestamp)), scheduler: DispatchQueue.main)
+            .delay(for: .seconds(TweetRelativeTime.refreshInterval), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateTimestampClock()
             }

@@ -25,8 +25,8 @@ These are elapsed durations, not calendar-month differences. For example, 28 day
 is 4 weeks, 30 days is 1 month, 360 days is 12 months, and 365 days is 1 year.
 No unit adds 1 to the completed count.
 
-Refresh on display and foreground return. While active, refresh every second for
-posts less than a minute old, then every minute. Stop scheduled updates when the
+Refresh on display and foreground return. While active, refresh every minute
+(iOS no longer ticks every second for posts under a minute old). Stop scheduled updates when the
 header is disposed or the app/page is inactive. Labels can lag by one refresh
 interval; device clock differences can also affect comparisons across clients.
 
