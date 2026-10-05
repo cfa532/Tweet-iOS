@@ -24,7 +24,7 @@ extension String {
 // MARK: - Comment spinner cap
 
 /// Hard cap on how long a comment spinner may block a detail screen.
-let maxCommentSpinnerSeconds: TimeInterval = 6
+let maxCommentSpinnerSeconds: TimeInterval = 15
 
 /// Runs `work` but stops *waiting* on it after `seconds`, returning either way.
 ///

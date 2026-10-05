@@ -235,7 +235,7 @@ struct CommentDetailView: View {
             setupInitialData()
         }
         .task(id: comment.mid) {
-            do { try await Task.sleep(for: .seconds(6)) } catch { return }
+            do { try await Task.sleep(for: .seconds(maxCommentSpinnerSeconds)) } catch { return }
             isLoadingReplies = false
         }
         .task(id: comment.mid) {
