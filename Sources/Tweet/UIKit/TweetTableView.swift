@@ -35,6 +35,9 @@ struct TweetTableView: UIViewControllerRepresentable {
     /// viewport-aware trim. The controller decides whether/how to trim and reports
     /// the result back via onTweetsTrimmed.
     let trimRequestToken: Int
+    /// Incremented by TweetListView when loading the next page fails; the controller
+    /// shows the failure in its footer.
+    let loadMoreFailureToken: Int
     let trimMaxCount: Int
     let trimTargetCount: Int
     let onTweetsTrimmed: (([Tweet]) -> Void)?
@@ -63,6 +66,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         var lastHeaderWasPresent: Bool?
         var lastHeaderRefreshToken: Int?
         var lastTrimRequestToken: Int?
+        var lastLoadMoreFailureToken: Int?
         var lastAppliedInterfaceIsDark: Bool?
         var lastAppliedColorScheme: ColorScheme?
         weak var controller: TweetTableViewController?
@@ -108,6 +112,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         context.coordinator.lastHeaderWasPresent = header != nil
         context.coordinator.lastHeaderRefreshToken = headerRefreshToken
         context.coordinator.lastTrimRequestToken = trimRequestToken
+        context.coordinator.lastLoadMoreFailureToken = loadMoreFailureToken
 
         return controller
     }
@@ -191,6 +196,11 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.onRetweetUnavailable = onRetweetUnavailable
         uiViewController.allowDeleteAll = allowDeleteAll
         uiViewController.onTweetsTrimmed = onTweetsTrimmed
+
+        if coordinator.lastLoadMoreFailureToken != loadMoreFailureToken {
+            coordinator.lastLoadMoreFailureToken = loadMoreFailureToken
+            uiViewController.showLoadMoreFailureMessage()
+        }
 
         if coordinator.lastTrimRequestToken != trimRequestToken {
             coordinator.lastTrimRequestToken = trimRequestToken

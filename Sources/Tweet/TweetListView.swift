@@ -204,9 +204,6 @@ struct TweetListView: View {
     @State private var paginationState: TweetPaginationState = .canLoadMore
     @State private var currentPage: UInt = 0
     @State private var initialCacheLoadComplete = false
-    @State private var showToast = false
-    @State private var toastMessage = ""
-    @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
@@ -239,6 +236,9 @@ struct TweetListView: View {
     // tweetsToKeepOnTrim, this should rarely if ever be hit during normal pagination.
     private let hardPaginationStopCount: Int = 1500
     @State private var trimRequestToken: Int = 0
+    /// Incremented when loading the NEXT page (bottom pagination) fails; the table shows
+    /// the failure in its footer, in the same place as the "No more tweets" label.
+    @State private var loadMoreFailureToken: Int = 0
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -702,6 +702,7 @@ struct TweetListView: View {
                 }
             },
             trimRequestToken: trimRequestToken,
+            loadMoreFailureToken: loadMoreFailureToken,
             trimMaxCount: maxTweetsInMemory,
             trimTargetCount: tweetsToKeepOnTrim,
             onTweetsTrimmed: { trimmedTweets in
@@ -756,17 +757,6 @@ struct TweetListView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
-            }
-
-            if showToast {
-                VStack {
-                    Spacer()
-                    ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 40)
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .animation(.easeInOut(duration: 0.3), value: showToast)
                 .allowsHitTesting(false)
             }
 
@@ -1288,18 +1278,6 @@ struct TweetListView: View {
         await loadFromServer(page: 0, pageSize: pageSize, role: .pagination) { _ in }
     }
 
-    /// Shows the shared "couldn't load" message on this list's toast overlay.
-    @MainActor
-    private func reportFetchFailure() {
-        toastMessage = NSLocalizedString("Couldn't load tweets. Please try again.", comment: "Shown when a page of tweets fails to load")
-        toastType = .error
-        withAnimation { showToast = true }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            withAnimation { showToast = false }
-        }
-    }
-
     func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
         // maxTweetsInMemory just triggers a viewport-aware trim (see scheduleMemoryMaintenance /
         // trimRequestToken) — it keeps the array bounded without blocking pagination, so users
@@ -1435,11 +1413,15 @@ struct TweetListView: View {
                 // Also written to diagnostics.log (Files app): print is lost in a Release build
                 // that is not attached to Xcode.
                 DiagnosticLog.error("feed", "Server load failed, feed=\(feedIdentifier) page=\(pageToLoad) role=\(role): \(error)")
-                // Tell the user, the same way Android does. Pagination state is left as it was
-                // (a failed page is not "no more tweets"), so the next scroll or pull retries.
-                // A cancelled load (scrolled away, view gone) is not a failure.
-                if !Task.isCancelled, !(error is CancellationError), (error as NSError).code != NSURLErrorCancelled {
-                    await MainActor.run { reportFetchFailure() }
+                // Tell the user only when the NEXT page failed (they are at the bottom, waiting
+                // on it); the table shows it in its footer where "No more tweets" appears.
+                // Page-0 refreshes are a background freshness path with their own cached rows
+                // on screen, so a failure there is not worth interrupting for. Pagination state
+                // is left as it was (a failed page is not "no more tweets"), so the next scroll
+                // retries. A cancelled load (scrolled away, view gone) is not a failure.
+                if role == .pagination, page > 0,
+                   !Task.isCancelled, !(error is CancellationError), (error as NSError).code != NSURLErrorCancelled {
+                    await MainActor.run { loadMoreFailureToken += 1 }
                 }
                 await MainActor.run {
                     // Mark initial load as complete even on error for page 0

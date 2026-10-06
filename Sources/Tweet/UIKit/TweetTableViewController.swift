@@ -4553,6 +4553,19 @@ class TweetTableViewController: UITableViewController {
     
     private func showNoMoreTweetsMessage() {
         guard canShowNoMoreTweetsMessage, tweets.count > 0 else { return }
+        showFooterMessage(NSLocalizedString("No more tweets", comment: "Message shown when there are no more tweets to load"))
+    }
+
+    /// Shown when loading the next page failed. It replaces the spinner footer, and the
+    /// spinner's later hide is a no-op while a footer message is up.
+    func showLoadMoreFailureMessage() {
+        guard tweets.count > 0 else { return }
+        showFooterMessage(NSLocalizedString("Couldn't load tweets. Please try again.", comment: "Shown when a page of tweets fails to load"))
+    }
+
+    /// Transient bottom-of-list label shared by "No more tweets" and the load failure
+    /// (same slot, same fade in/out, auto-hides after 2s).
+    private func showFooterMessage(_ text: String) {
         guard !isShowingNoMoreTweetsMessage else { return }
         guard tableView.window != nil else {
             needsFooterUpdate = true
@@ -4568,7 +4581,7 @@ class TweetTableViewController: UITableViewController {
         footerView.isUserInteractionEnabled = false
 
         let messageLabel = UILabel()
-        messageLabel.text = NSLocalizedString("No more tweets", comment: "Message shown when there are no more tweets to load")
+        messageLabel.text = text
         messageLabel.textAlignment = .center
         messageLabel.font = .systemFont(ofSize: 15, weight: .medium)
         messageLabel.textColor = XTheme.secondaryText
