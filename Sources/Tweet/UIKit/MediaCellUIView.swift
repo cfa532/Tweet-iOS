@@ -45,6 +45,12 @@ private final class RotatingLoadingSpinnerView: UIView {
     private let spokeCount = 9
     private let animationDuration: CFTimeInterval = 1.0
 
+    /// Diagnostic only: fires once if one continuous spinning run lasts `stallThreshold`.
+    /// Used to catch a video cell stuck on its spinner (see MediaCellUIView.logStuckSpinner).
+    var onStalled: (() -> Void)?
+    private let stallThreshold: TimeInterval = 8
+    private var stallTimer: Timer?
+
     override init(frame: CGRect) {
         super.init(frame: frame.isEmpty ? CGRect(origin: .zero, size: CGSize(width: 44, height: 44)) : frame)
         isHidden = true
@@ -86,6 +92,12 @@ private final class RotatingLoadingSpinnerView: UIView {
     }
 
     func startAnimating() {
+        if !isAnimating {
+            stallTimer?.invalidate()
+            stallTimer = Timer.scheduledTimer(withTimeInterval: stallThreshold, repeats: false) { [weak self] _ in
+                self?.onStalled?()
+            }
+        }
         isAnimating = true
         isHidden = false
         updateSpokeColor()
@@ -93,6 +105,8 @@ private final class RotatingLoadingSpinnerView: UIView {
     }
 
     func stopAnimating() {
+        stallTimer?.invalidate()
+        stallTimer = nil
         isAnimating = false
         spokeLayer.removeAnimation(forKey: fadeAnimationKey)
         if hidesWhenStopped {
@@ -663,6 +677,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         addSubview(videoPlayerView)
         addSubview(imageView)
         addSubview(loadingSpinner)
+        loadingSpinner.onStalled = { [weak self] in self?.logStuckSpinner() }
         addSubview(retryButton)
         addSubview(replayButton)
         addSubview(muteButton)
@@ -1677,6 +1692,32 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             self.handleCoordinatorPlayCommand()
         }
         return true
+    }
+
+    /// Diagnostic for the "second video stuck on a spinner" report. Runs once per spinner
+    /// run that lasts 8s on a visible video cell, and records everything that decides
+    /// whether the cell can still make progress.
+    private func logStuckSpinner() {
+        guard isVisible, isVideoAttachment, let attachment else { return }
+        let coordinator = videoCoordinator ?? .shared
+        let isPrimary = videoIdentifier.map { coordinator.primaryVideoId == $0 } ?? false
+        var line = "mid=\(attachment.mid.prefix(8)) type=\(attachment.type) idx=\(attachmentIndex) tweet=\((cellTweetId ?? "").prefix(8))"
+        line += " state=\(videoCellState) primary=\(isPrimary) wantsPlay=\(coordinatorWantsToPlay) acquire=\(shouldAcquirePlayer)"
+        line += " player=\(player != nil) setupTask=\(setupPlayerTask != nil) debounce=\(playerAcquireDebounceTask != nil) primaryRetry=\(primaryAcquireRetryTask != nil)"
+        line += " cover=\(imageView.image != nil) rendered=\(hasRenderedFrameForCurrentPlayer) layerReady=\(videoPlayerView.isLayerReadyForDisplay)"
+        line += " scrollIdle=\(coordinator.isFeedScrollIdle) tooFast=\(coordinator.isFeedScrollTooFastForPlayerWork) infra=\(AppDelegate.isVideoInfrastructureReady)"
+        if let player {
+            line += " item=\(player.currentItem?.status.rawValue ?? -1) tc=\(player.timeControlStatus.rawValue) rate=\(player.rate) buffered=\(String(format: "%.1f", bufferedTimeAhead(for: player)))s"
+            if let error = player.currentItem?.error { line += " itemError=\(error)" }
+        }
+        let host = attachment.getUrl(effectiveBaseUrl).map { NodePoolRegistry.nodeHost(from: $0) }
+        let priority = LocalHTTPServer.shared.downloadPriority(for: attachment.mid)
+        line += " node=\(host ?? "?") prio=\(priority)"
+        Task {
+            var slots = ""
+            if let host { slots = await NodePoolRegistry.shared.pool(for: host).diagnosticSummary() }
+            DiagnosticLog.error("video-spinner", "stuck 8s: \(line) pool[\(slots)]")
+        }
     }
 
     private func schedulePlayerAcquireIfNeeded() {
@@ -3993,6 +4034,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 videoPlayerView.layer.render(in: ctx.cgContext)
             }
             if !isInvalidVideoCover(snapshot) {
+                // Diagnostic: CALayer.render(in:) does not draw AVPlayerLayer video, so this
+                // snapshot is suspected to be the flat systemGray5 backdrop (the grey tile).
+                DiagnosticLog.error("video-cover", "layer-snapshot cover saved mid=\(mid.prefix(8)) async=\(async) visible=\(isVisible) state=\(videoCellState) hasOutput=\(videoOutput != nil) rendered=\(hasRenderedFrameForCurrentPlayer)")
                 imageView.image = snapshot
                 SharedAssetCache.shared.updateCachedThumbnail(snapshot, for: mid)
                 return true

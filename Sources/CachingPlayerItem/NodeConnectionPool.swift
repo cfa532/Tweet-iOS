@@ -111,6 +111,11 @@ actor NodeConnectionPool {
         preloadsAllowed = true
     }
 
+    /// Diagnostic only: lane occupancy, for the stuck-spinner log.
+    func diagnosticSummary() -> String {
+        "primary=\(primarySlots.map { "\($0.key.prefix(8)):\($0.value)" }) visible=\(visibleActive)/\(maxVisibleSlots) \(visibleSlots.map { "\($0.key.prefix(8)):\($0.value)" }) preload=\(preloadActive)/\(maxPreloadSlots) preloadsAllowed=\(preloadsAllowed)"
+    }
+
     /// Whether this node has bandwidth to spare for work nobody is waiting on.
     /// LocalHTTPServer.recomputePreloadPermission clears it while a primary or visible
     /// video is still filling its buffer.
