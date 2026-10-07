@@ -59,7 +59,7 @@ struct CommentMenu: View {
                         try await deleteComment(comment)
                     } catch {
                         await MainActor.run {
-                            alertMessage = "Failed to delete comment. \(error)"
+                            alertMessage = String(format: NSLocalizedString("Failed to delete comment. %@", comment: ""), error.localizedDescription)
                             showAlert = true
                         }
                     }
@@ -106,7 +106,7 @@ struct CommentMenu: View {
                 object: nil,
                 userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
             )
-            throw NSError(domain: "CommentService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete comment"])
+            throw NSError(domain: "CommentService", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to delete comment", comment: "")])
         }
     }
 }

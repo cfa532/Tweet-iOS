@@ -15,7 +15,7 @@ struct TermsOfServiceView: View {
                             .font(.largeTitle)
                             .fontWeight(.bold)
                         
-                        Text("Last updated: \(Date().formatted(date: .abbreviated, time: .omitted))")
+                        Text(String(format: NSLocalizedString("Last updated: %@", comment: ""), Date().formatted(date: .abbreviated, time: .omitted)))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

@@ -303,12 +303,12 @@ struct BrowserVideoPlayer: View {
                                 if manager.isPlaying { manager.pause() } else { manager.play() }
                                 onUserInteraction()
                             } label: { Image(systemName: manager.isPlaying ? "pause.fill" : "play.fill").frame(width: 44, height: 44) }
-                                .accessibilityLabel(manager.isPlaying ? "Pause video" : "Play video")
+                                .accessibilityLabel(manager.isPlaying ? NSLocalizedString("Pause video", comment: "") : NSLocalizedString("Play video", comment: ""))
                             Button {
                                 manager.isUserMuted.toggle()
                                 onUserInteraction()
                             } label: { Image(systemName: manager.isUserMuted ? "speaker.slash.fill" : "speaker.wave.2.fill").frame(width: 44, height: 44) }
-                                .accessibilityLabel(manager.isUserMuted ? "Unmute video" : "Mute video")
+                                .accessibilityLabel(manager.isUserMuted ? NSLocalizedString("Unmute video", comment: "") : NSLocalizedString("Mute video", comment: ""))
                             Spacer()
                             BrowserAirPlayButton().frame(width: 44, height: 44)
                                 .accessibilityLabel("AirPlay")

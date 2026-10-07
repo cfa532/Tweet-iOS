@@ -241,7 +241,7 @@ struct AttachmentView: View {
                         .foregroundColor(.blue)
                     
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(attachment.fileName ?? "Attachment")
+                        Text(attachment.fileName ?? NSLocalizedString("Attachment", comment: ""))
                             .font(.caption)
                             .foregroundColor(.primary)
                         

@@ -642,9 +642,9 @@ struct ContentView: View {
                     let memoryGB = String(format: "%.1f", Double(memoryMB) / 1024.0)
                     
                     if severity == "critical" {
-                        self.toastMessage = NSLocalizedString("Memory critically low (\(memoryGB)GB). Please restart the app to free resources.", comment: "Critical memory warning")
+                        self.toastMessage = String(format: NSLocalizedString("Memory critically low (%@GB). Please restart the app to free resources.", comment: ""), memoryGB)
                     } else {
-                        self.toastMessage = NSLocalizedString("Memory is running low (\(memoryGB)GB). Consider restarting the app if issues persist.", comment: "High memory warning")
+                        self.toastMessage = String(format: NSLocalizedString("Memory is running low (%@GB). Consider restarting the app if issues persist.", comment: ""), memoryGB)
                     }
                     
                     self.toastType = .error

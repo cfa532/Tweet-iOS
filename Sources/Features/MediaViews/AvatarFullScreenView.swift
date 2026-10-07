@@ -43,20 +43,20 @@ struct AvatarFullScreenView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(user.mid)
                         .onLongPressGesture {
-                            copyToClipboard(user.mid, label: "User ID")
+                            copyToClipboard(user.mid, label: NSLocalizedString("User ID", comment: ""))
                         }
                     
                     if let baseUrl = user.baseUrl {
                         Text(baseUrl.absoluteString)
                             .onLongPressGesture {
-                                copyToClipboard(baseUrl.absoluteString, label: "Base URL")
+                                copyToClipboard(baseUrl.absoluteString, label: NSLocalizedString("Base URL", comment: ""))
                             }
                     }
                     
                     if let hostId = user.hostIds?.first {
                         Text(hostId)
                             .onLongPressGesture {
-                                copyToClipboard(hostId, label: "Host ID")
+                                copyToClipboard(hostId, label: NSLocalizedString("Host ID", comment: ""))
                             }
                     }
                 }
@@ -99,7 +99,7 @@ struct AvatarFullScreenView: View {
     
     private func copyToClipboard(_ text: String, label: String) {
         UIPasteboard.general.string = text
-        copyToastMessage = "\(label) copied to clipboard"
+        copyToastMessage = String(format: NSLocalizedString("%@ copied to clipboard", comment: ""), label)
         showCopyToast = true
         
         // Hide toast after 2 seconds

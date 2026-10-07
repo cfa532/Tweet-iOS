@@ -1030,7 +1030,7 @@ private struct DetailLayerVideoPlayerView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.white)
-                    .accessibilityLabel(manager.isPlaying ? "Pause video" : "Play video")
+                    .accessibilityLabel(manager.isPlaying ? NSLocalizedString("Pause video", comment: "") : NSLocalizedString("Play video", comment: ""))
 
                     Slider(
                         value: Binding(

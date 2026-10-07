@@ -368,7 +368,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         btn.layer.borderWidth = 1
         btn.layer.borderColor = UIColor.separator.cgColor
         btn.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
-        btn.accessibilityLabel = "Retry media"
+        btn.accessibilityLabel = NSLocalizedString("Retry media", comment: "")
         btn.isHidden = true
         return btn
     }()
@@ -383,7 +383,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         btn.layer.borderWidth = 1
         btn.layer.borderColor = UIColor.white.withAlphaComponent(0.45).cgColor
         btn.addTarget(self, action: #selector(replayTapped), for: .touchUpInside)
-        btn.accessibilityLabel = "Replay video"
+        btn.accessibilityLabel = NSLocalizedString("Replay video", comment: "")
         btn.isHidden = true
         return btn
     }()

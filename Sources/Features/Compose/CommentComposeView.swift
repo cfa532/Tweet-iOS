@@ -148,7 +148,7 @@ struct CommentComposeView: View {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 8) {
                         Avatar(user: hproseInstance.appUser, size: 32)
-                        Text(isQuoting ? "Quote Tweet" : "Reply")
+                        Text(isQuoting ? NSLocalizedString("Quote Tweet", comment: "") : NSLocalizedString("Reply", comment: ""))
                             .font(.headline)
                     }
                 }

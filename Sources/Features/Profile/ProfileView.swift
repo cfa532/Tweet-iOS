@@ -393,7 +393,7 @@ struct ProfileView: View {
                                 .scaleEffect(1.5)
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             
-                            Text(isUploadingAvatar ? "Updating avatar..." : "Updating profile...")
+                            Text(isUploadingAvatar ? NSLocalizedString("Updating avatar...", comment: "") : NSLocalizedString("Updating profile...", comment: ""))
                                 .foregroundColor(.white)
                                 .font(.headline)
                                 .fontWeight(.medium)

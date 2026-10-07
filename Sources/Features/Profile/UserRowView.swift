@@ -117,8 +117,8 @@ struct UserRowView: View {
     
     private func formatRegistrationDate(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return "Since \(formatter.string(from: date))"
+        formatter.setLocalizedDateFormatFromTemplate("yMMMM")
+        return String(format: NSLocalizedString("Since %@", comment: ""), formatter.string(from: date))
     }
 
     private var hasRenderableUser: Bool {

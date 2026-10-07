@@ -431,7 +431,7 @@ struct ProfileEditView: View {
             do {
                 // Convert UIImage to JPEG data
                 guard let data = image.jpegData(compressionQuality: 0.9) else {
-                    throw NSError(domain: "ProfileEditView", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert image to data"])
+                    throw NSError(domain: "ProfileEditView", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to convert image to data", comment: "")])
                 }
                 
                 let typeIdentifier = "public.jpeg"

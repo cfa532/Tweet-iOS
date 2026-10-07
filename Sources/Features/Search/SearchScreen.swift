@@ -80,7 +80,7 @@ struct SearchScreen: View {
                     VStack(spacing: 12) {
                         ProgressView()
                             .scaleEffect(2.0)
-                        Text("\(searchViewModel.countdownSeconds)s")
+                        Text(String(format: NSLocalizedString("%ds", comment: "Search countdown in seconds"), searchViewModel.countdownSeconds))
                             .font(.subheadline)
                             .foregroundColor(XTheme.secondaryTextColor)
                             .monospacedDigit()

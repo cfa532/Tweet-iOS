@@ -76,7 +76,7 @@ struct SettingsView: View {
                     HStack {
                         Text(LocalizedStringKey("Version"))
                         Spacer()
-                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? NSLocalizedString("Unknown", comment: ""))
                             .foregroundColor(.gray)
                     }
 
@@ -179,7 +179,7 @@ struct SettingsView: View {
                     dismiss()
                 }
             } else {
-                let message = result["message"] as? String ?? "Unknown error occurred"
+                let message = result["message"] as? String ?? NSLocalizedString("Unknown error occurred", comment: "")
                 await MainActor.run {
                     deleteAccountError = message
                     showDeleteAccountError = true

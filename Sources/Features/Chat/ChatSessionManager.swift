@@ -419,7 +419,7 @@ class ChatSessionManager: ObservableObject {
         // Create notification content
         let content = UNMutableNotificationContent()
         content.title = senderName
-        content.body = message.content ?? "New message"
+        content.body = message.content ?? NSLocalizedString("New message", comment: "")
         content.sound = .default
         content.badge = NSNumber(value: newBadge)
 

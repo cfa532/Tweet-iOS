@@ -386,7 +386,7 @@ struct TweetMenu: View {
                                 await MainActor.run {
                                     NotificationCenter.default.post(
                                         name: .errorOccurred,
-                                        object: NSError(domain: "PinToggle", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to update pin status: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                                        object: NSError(domain: "PinToggle", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Failed to update pin status: %@", comment: ""), ErrorMessageHelper.userFriendlyMessage(from: error))])
                                     )
                                 }
                             }
@@ -573,7 +573,7 @@ struct TweetMenu: View {
                 // Send notification for global error toast
                 NotificationCenter.default.post(
                     name: .errorOccurred,
-                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Failed to delete tweet: %@", comment: ""), ErrorMessageHelper.userFriendlyMessage(from: error))])
                 )
             }
         }
@@ -630,7 +630,7 @@ private struct ObservedAuthorNameView: View {
     let timeDifference: String
     
     var body: some View {
-        Text(user.name ?? "No one")
+        Text(user.name ?? NSLocalizedString("No one", comment: ""))
             .font(.headline)
             .foregroundColor(.themeText)
         + Text(" @\(user.username ?? NSLocalizedString("username", comment: "Default username")) • \(timeDifference)")

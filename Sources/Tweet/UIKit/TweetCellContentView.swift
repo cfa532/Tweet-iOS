@@ -1155,7 +1155,7 @@ class TweetCellContentView: UIView {
                             )
                             NotificationCenter.default.post(
                                 name: .errorOccurred,
-                                object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                                object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Failed to delete tweet: %@", comment: ""), ErrorMessageHelper.userFriendlyMessage(from: error))])
                             )
                         }
                     }

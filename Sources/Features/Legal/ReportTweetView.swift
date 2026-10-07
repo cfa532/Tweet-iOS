@@ -93,10 +93,10 @@ struct ReportTweetView: View {
                         
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Text(tweet.author?.name ?? "Unknown User")
+                                Text(tweet.author?.name ?? NSLocalizedString("Unknown User", comment: ""))
                                     .font(.headline)
                                 Spacer()
-                                Text("@\(tweet.author?.username ?? "unknown")")
+                                Text("@\(tweet.author?.username ?? NSLocalizedString("username", comment: ""))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }

@@ -168,7 +168,7 @@ struct TweetActionButtonsView: View {
                         try? tweet.update(from: refreshedTweet)
                     }
                 }
-                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload retweet"])
+                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload retweet", comment: "")])
             }
             
             print("✅ [Retweet] Retweet created with ID: \(retweet.mid) for original tweet: \(tweet.mid)")
@@ -183,7 +183,7 @@ struct TweetActionButtonsView: View {
                         try? tweet.update(from: refreshedTweet)
                     }
                 }
-                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid retweet ID from server"])
+                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid retweet ID from server", comment: "")])
             }
             
             // Refresh original tweet from server to ensure all views get the updated count

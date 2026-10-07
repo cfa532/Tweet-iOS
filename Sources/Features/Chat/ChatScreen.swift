@@ -320,7 +320,7 @@ struct ChatScreen: View {
                     HStack {
                         Image(systemName: getAttachmentIcon(for: attachment.type))
                             .foregroundColor(.blue)
-                        Text(attachment.fileName ?? "Attachment")
+                        Text(attachment.fileName ?? NSLocalizedString("Attachment", comment: ""))
                             .font(.caption)
                             .foregroundColor(.primary)
                             .lineLimit(1)
@@ -952,22 +952,22 @@ struct ChatScreen: View {
             typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
             typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
             typeIdentifier.contains("webm") {
-            return "Video"
+            return NSLocalizedString("Video", comment: "")
         } else if typeIdentifier.contains("image") || typeIdentifier.contains("jpeg") || 
                     typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
                     typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-            return "Image"
+            return NSLocalizedString("Image", comment: "")
         } else if typeIdentifier.contains("audio") || typeIdentifier.contains("mp3") || 
                     typeIdentifier.contains("wav") || typeIdentifier.contains("m4a") {
-            return "Audio"
+            return NSLocalizedString("Audio", comment: "")
         } else if typeIdentifier.contains("pdf") {
             return "PDF"
         } else if typeIdentifier.contains("zip") {
             return "ZIP"
         } else if typeIdentifier.contains("doc") || typeIdentifier.contains("word") {
-            return "Document"
+            return NSLocalizedString("Document", comment: "")
         } else {
-            return "File"
+            return NSLocalizedString("File", comment: "")
         }
     }
     

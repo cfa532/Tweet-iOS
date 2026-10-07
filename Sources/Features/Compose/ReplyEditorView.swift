@@ -249,7 +249,7 @@ struct ReplyEditorView: View {
                         .foregroundColor(.secondary)
                     
                     // Reply context
-                    Text("Reply to @\(parentTweet.author?.username ?? "")")
+                    Text(String(format: NSLocalizedString("Reply to @%@", comment: ""), parentTweet.author?.username ?? ""))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

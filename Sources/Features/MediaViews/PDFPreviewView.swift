@@ -74,7 +74,7 @@ struct PDFPreviewView: View {
     
     private func downloadAndShowPDF() {
         guard let url = attachment.getUrl(baseUrl) else {
-            downloadError = "Invalid URL"
+            downloadError = NSLocalizedString("Invalid URL", comment: "")
             return
         }
         
@@ -94,7 +94,7 @@ struct PDFPreviewView: View {
                 }
                 
                 guard let localURL = localURL else {
-                    downloadError = "Download failed"
+                    downloadError = NSLocalizedString("Download failed", comment: "")
                     return
                 }
                 
@@ -127,7 +127,7 @@ struct PDFPreviewView: View {
                     
                     print("DEBUG: [PDFPreviewView] Successfully downloaded PDF to: \(destinationURL)")
                 } catch {
-                    downloadError = "Failed to save PDF"
+                    downloadError = NSLocalizedString("Failed to save PDF", comment: "")
                     print("ERROR: [PDFPreviewView] Failed to move PDF: \(error)")
                 }
             }
@@ -260,7 +260,7 @@ struct PDFPreviewViewFullScreen: View {
     
     private func downloadAndShowPDF() {
         guard let url = attachment.getUrl(baseUrl) else {
-            downloadError = "Invalid URL"
+            downloadError = NSLocalizedString("Invalid URL", comment: "")
             return
         }
         
@@ -280,7 +280,7 @@ struct PDFPreviewViewFullScreen: View {
                 }
                 
                 guard let localURL = localURL else {
-                    downloadError = "Download failed"
+                    downloadError = NSLocalizedString("Download failed", comment: "")
                     return
                 }
                 
@@ -313,7 +313,7 @@ struct PDFPreviewViewFullScreen: View {
                     
                     print("DEBUG: [PDFPreviewView] Successfully downloaded PDF to: \(destinationURL)")
                 } catch {
-                    downloadError = "Failed to save PDF"
+                    downloadError = NSLocalizedString("Failed to save PDF", comment: "")
                     print("ERROR: [PDFPreviewView] Failed to move PDF: \(error)")
                 }
             }

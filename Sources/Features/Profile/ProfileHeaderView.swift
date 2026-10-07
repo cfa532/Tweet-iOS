@@ -14,8 +14,8 @@ struct ProfileHeaderView: View {
     let onAvatarTap: () -> Void
     private func formatRegistrationDate(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return "Since \(formatter.string(from: date))"
+        formatter.setLocalizedDateFormatFromTemplate("yMMMM")
+        return String(format: NSLocalizedString("Since %@", comment: ""), formatter.string(from: date))
     }
     
     var body: some View {
@@ -31,7 +31,7 @@ struct ProfileHeaderView: View {
                 .padding(.trailing, 4)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(user.name ?? "User Name")
+                    Text(user.name ?? NSLocalizedString("User Name", comment: ""))
                         .font(.title2)
                         .bold()
                         .foregroundColor(.themeText)

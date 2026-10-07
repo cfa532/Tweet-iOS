@@ -87,7 +87,7 @@ struct DocumentAttachmentsView: View {
                 HStack(spacing: 4) {
                     Text("···")
                         .font(.system(size: 20, weight: .bold))
-                    Text("+\(documents.count - displayedDocuments.count) more")
+                    Text(String(format: NSLocalizedString("+%d more", comment: ""), documents.count - displayedDocuments.count))
                         .font(.system(size: 13))
                 }
                 .padding(.leading, 12)
@@ -434,7 +434,7 @@ struct DocumentRowView: View {
     }
     
     private var displayFileName: String {
-        truncateFileName(document.fileName ?? "Document")
+        truncateFileName(document.fileName ?? NSLocalizedString("Document", comment: ""))
     }
     
     var body: some View {
