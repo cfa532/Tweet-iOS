@@ -1,4 +1,5 @@
 import SwiftUI
+import LinkPresentation
 
 struct ProfileView: View {
     let user: User
@@ -488,7 +489,9 @@ struct ProfileView: View {
 
                 Menu {
                     Button {
-                        profileShareData = ShareSheetData(items: [profileShareText])
+                        Task {
+                            await shareProfile()
+                        }
                     } label: {
                         Label(NSLocalizedString("Share Profile", comment: "Share profile menu item"), systemImage: "square.and.arrow.up")
                     }
@@ -532,12 +535,13 @@ struct ProfileView: View {
         }
     }
 
-    /// Display name + the profile's fragment-form share URL:
+    /// Display name and bio + the profile's fragment-form share URL:
     /// `http://dtweet.com/#author/{userId}`. Same domain and hash-route shape as
     /// the tweet share link (`#tweet/{mid}/{authorId}`), so iOS Universal Links
     /// open the app when installed and `DeeplinkManager` routes the `#author/`
     /// fragment to this profile; browsers get the web app via the Worker.
-    private var profileShareText: String {
+    @MainActor
+    private func shareProfile() async {
         let displayName = user.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let handle = user.username?.trimmingCharacters(in: .whitespacesAndNewlines)
         var text = ""
@@ -546,10 +550,45 @@ struct ProfileView: View {
         } else if let handle, !handle.isEmpty {
             text = "@\(handle)"
         }
-        if !text.isEmpty {
-            text += "\n\n"
+        if let profile = user.profile?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !profile.isEmpty {
+            text += text.isEmpty ? profile : "\n\(profile)"
         }
-        return text + "\(AppConfig.shareDomain)/#author/\(user.mid)"
+        let urlText = "\(AppConfig.shareDomain)/#author/\(user.mid)"
+        let shareText = text.isEmpty ? urlText : "\(text)\n\n\(urlText)"
+        let avatarId = user.avatar
+        let avatarURL = user.avatarUrl.flatMap { URL(string: $0) }
+
+        // Snapshot profile values before loading; disk reads and image decoding
+        // stay off the main actor, and no live User crosses that boundary.
+        let previewImage = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let avatarId else { return nil }
+            if let cached = ImageCacheManager.shared.getCachedCompressedImage(forMid: "avatar_\(avatarId)") {
+                return cached
+            }
+            guard let avatarURL else { return nil }
+            var request = URLRequest(url: avatarURL)
+            request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
+            request.cachePolicy = .returnCacheDataElseLoad
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let response = response as? HTTPURLResponse,
+                  (200...299).contains(response.statusCode),
+                  let image = UIImage(data: data) else { return nil }
+            return image.preparingForDisplay()
+        }.value
+
+        var items: [Any] = [ProfileShareItem(
+            shareText: shareText,
+            title: text,
+            url: URL(string: urlText),
+            previewImage: previewImage
+        )]
+        // WeChat needs a separate image item for its preview. Use UIImage
+        // directly: multiple custom item sources have caused WeChat crashes.
+        if let previewImage {
+            items.append(previewImage)
+        }
+        profileShareData = ShareSheetData(items: items)
     }
     
     private var profileEditSheet: some View {
@@ -1151,6 +1190,47 @@ struct ProfileView: View {
     }
     
 
+}
+
+/// Supplies profile metadata directly because the bio and avatar are not part of
+/// the fragment URL available to a link-preview fetcher.
+private final class ProfileShareItem: NSObject, UIActivityItemSource {
+    let shareText: String
+    let title: String
+    let url: URL?
+    let previewImage: UIImage?
+
+    init(shareText: String, title: String, url: URL?, previewImage: UIImage?) {
+        self.shareText = shareText
+        self.title = title
+        self.url = url
+        self.previewImage = previewImage
+        super.init()
+    }
+
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        shareText
+    }
+
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        shareText
+    }
+
+    func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+        title
+    }
+
+    func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
+        let metadata = LPLinkMetadata()
+        metadata.url = url
+        metadata.originalURL = url
+        metadata.title = title
+        if let previewImage {
+            metadata.iconProvider = NSItemProvider(object: previewImage)
+            metadata.imageProvider = NSItemProvider(object: previewImage)
+        }
+        return metadata
+    }
 }
 
 enum UserListType {
