@@ -400,6 +400,15 @@ class FollowingsTweetViewModel: ObservableObject {
         print("DEBUG: [FollowingsTweetViewModel] Cleared pending new tweets banner: \(reason)")
     }
 
+    func syncAppUserForUserPull() async {
+        guard await waitForAppInitializationIfNeeded(reason: "main feed pull-to-refresh") else { return }
+        do {
+            try await hproseInstance.syncAppUserForFeedRefresh()
+        } catch {
+            print("ERROR: [FollowingsTweetViewModel] Main feed appUser sync failed: \(error)")
+        }
+    }
+
     private func fetchFollowingTweetsForBanner(pageSize: UInt) async throws -> [Tweet] {
         guard !hproseInstance.appUser.isGuest else { return [] }
 

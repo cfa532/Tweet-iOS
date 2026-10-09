@@ -80,6 +80,9 @@ struct FollowingsTweetView: View {
             topContentInset: topContentInset,
             allowDeleteAll: true,
             preservesScrollPositionOnPrepend: true,
+            onRefreshExtra: {
+                await viewModel.syncAppUserForUserPull()
+            },
             onAvatarTap: { user in onAvatarTap(user) },
             onTweetTap: { tweet in onTweetTap(tweet) },
             onShowLogin: onShowLogin,

@@ -1429,6 +1429,43 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return tweets
     }
 
+    /// Pull only appUser's existing root state before an explicit feed reload.
+    func syncAppUserForFeedRefresh() async throws {
+        let appSnap = await MainActor.run { UserRecord(user: self.appUser) }
+        guard appSnap.mid != Constants.GUEST_ID else { return }
+        guard let hostIds = appSnap.hostIds,
+              let rootHostId = hostIds.first else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Route unavailable for main feed synchronization"
+            ])
+        }
+        let accessHostId = hostIds.count > 1 ? hostIds[1] : rootHostId
+        guard accessHostId != rootHostId else { return }
+        guard let accessUrl = appSnap.baseUrl else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Access route unavailable for main feed synchronization"
+            ])
+        }
+
+        // Use the same access route as get_tweet_feed. No following-user scan
+        // or new-tweet count is needed to pull appUser's already assembled feed.
+        let client = clientPool.getClientByUrl(for: accessUrl.absoluteString, timeout: 300)
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "mid": appSnap.mid,
+            "appuserid": appSnap.mid
+        ]
+        let response = await invokeRunMApp(using: client, entry: "sync_user", params: params)
+        guard let result = try Self.unwrapV2Response(response) as? [String: Any],
+              result["success"] as? Bool == true else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid response from main feed synchronization"
+            ])
+        }
+    }
+
     private func followingTweetsHomeClient() async throws -> HproseClient {
         // appUser is a @MainActor class instance (implicitly Sendable); resolve its
         // writable client on the main actor.

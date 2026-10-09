@@ -173,6 +173,40 @@ The feed moved from SwiftUI-heavy cell composition toward UIKit-first rendering 
 - Shared media/cache managers are central infrastructure.
 - Scroll/media lifecycle handling is tied to visibility and navigation context.
 
+## 6) Feed Synchronization Relies on Leither (2026-10-09)
+
+An appUser may follow hundreds of users. Checking every followed root or forcing
+each followed User to sync during feed opening or pull-to-refresh creates too much
+network work. Leither's provider replication owns keeping those Users and their
+directly referenced Tweets current; client refreshes must not replace that mechanism.
+
+The backend's `update_following_tweets` still walks the following list locally on
+appUser's root to assemble the feed. For each followed User it checks the local
+`MiMeiIsProvider` table and calls `MiMeiProvide` only when needed, without first
+calling `MiMeiSync`. This removes forced network synchronization per following;
+it does not remove the local tweet-list scan.
+
+On iOS, main-feed pull-to-refresh calls `sync_user` for **appUser alone** on its
+separate access node, waits for the request, then runs the existing cache reload
+and `get_tweet_feed`. If access and root are the same node, no pull is needed.
+This explicit sync is not conditional on discovering new tweets. A failed sync
+is logged, and the existing reload proceeds. Do not restore the reverted
+`forcesync` branch that synchronized every following during a main-feed pull.
+
+Automatic feed opening retains its separate root-side collection. Only when that
+returns new tweets does iOS request appUser synchronization to a separate access
+node. The root response supplies the new-tweet banner; later ordinary feed reads
+use the access node. Profile opening remains an ordinary read. Profile
+pull-to-refresh still synchronizes the selected User and now reads its 40 most
+recent tweet IDs afterward.
+
+The tradeoff is eventual freshness: a main-feed pull retrieves the feed already
+assembled on appUser's root, rather than scanning followed roots for new posts.
+Synchronizing appUser's feed list also does not itself guarantee that every
+followed author's tweet body is immediately available on the access node.
+Validate propagation through Leither instead of adding per-following forced
+syncs to hide replication delays.
+
 ## Source of Truth
 
 For current behavior, rely on:
