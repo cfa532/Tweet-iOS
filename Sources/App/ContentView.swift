@@ -284,10 +284,6 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
         .overlay(
-            // Upload progress overlay
-            UploadProgressOverlay(progressManager: uploadProgressManager)
-        )
-        .overlay(
             // Pending upload dialog
             Group {
                 if showPendingUploadDialog, let upload = pendingUpload {
@@ -307,6 +303,10 @@ struct ContentView: View {
                             onCancel: {
                                 showPendingUploadDialog = false
                                 cancelPendingUpload()
+                            },
+                            onLater: {
+                                showPendingUploadDialog = false
+                                pendingUpload = nil
                             }
                         )
                     }
@@ -769,95 +769,41 @@ struct ContentView: View {
     // MARK: - Pending Upload Handling
     
     private func checkForPendingUpload() {
-        // Don't recover while the foreground upload queue is still handling work.
-        guard !showPendingUploadDialog && !uploadProgressManager.hasActiveOrQueuedUploads else {
-            return
-        }
-        
-        Task {
-            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-            
-            guard FileManager.default.fileExists(atPath: fileURL.path) else {
-                return
-            }
-            
+        guard !showPendingUploadDialog && !uploadProgressManager.hasActiveOrQueuedUploads else { return }
+        Task { @MainActor in
             do {
-                let data = try Data(contentsOf: fileURL)
-                let upload = try JSONDecoder().decode(TweetUploadManager.PendingTweetUpload.self, from: data)
-                
-                // Check if the pending upload is not too old (e.g., within 24 hours)
-                let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
-                guard Date().timeIntervalSince(upload.timestamp) < maxAge else {
-                    // Too old, remove it
-                    try? FileManager.default.removeItem(at: fileURL)
-                    return
-                }
-                
-                // Auto-resume if there are still retries left (maxRetries = 2)
-                let maxRetries = 2
-                if upload.retryCount < maxRetries {
-                    print("DEBUG: [Auto-resume] Pending upload found with retryCount=\(upload.retryCount), auto-resuming without user confirmation")
-                    // Automatically retry without showing dialog
-                    retryPendingUpload(upload)
-                } else {
-                    // Max retries reached, show dialog for user to decide
-                    print("DEBUG: [Auto-resume] Pending upload found with retryCount=\(upload.retryCount) (max reached), showing dialog")
-                    await MainActor.run {
-                        self.pendingUpload = upload
-                        self.showPendingUploadDialog = true
-                    }
-                }
+                let uploads = try await hproseInstance.uploadManager.pendingUploads()
+                guard !showPendingUploadDialog, !uploadProgressManager.hasActiveOrQueuedUploads,
+                      let upload = uploads.first(where: { $0.record.authorId == hproseInstance.appUser.mid }) else { return }
+                pendingUpload = upload
+                showPendingUploadDialog = true
             } catch {
-                print("DEBUG: Failed to load pending upload: \(error)")
+                print("[Upload] Could not read pending uploads: \(error)")
             }
         }
     }
-    
+
     private func retryPendingUpload(_ upload: TweetUploadManager.PendingTweetUpload) {
-        Task {
-            // Determine upload type and check for videos
-            let uploadType = upload.tweet.originalTweetId != nil ? "comment" : "tweet"
-            let hasVideos = upload.itemData.contains { item in
-                item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
-            }
-            
-            // Use upload queue for retry (prevents conflicts with other uploads)
-            await MainActor.run {
-                UploadProgressManager.shared.enqueueUpload(type: uploadType, hasVideos: hasVideos) {
-                    // Retry the upload using the upload manager
-                    // If there's an existing video job ID, it will check status and poll
-                    // If not, it will re-upload attachments in foreground (with dialog visible)
-                    await self.hproseInstance.uploadManager.uploadTweetWithPersistenceAndRetry(
-                        tweet: upload.tweet,
-                        itemData: upload.itemData,
-                        retryCount: upload.retryCount,
-                        videoJobId: upload.videoJobId
-                    )
-                }
-            }
-        }
+        pendingUpload = nil
+        // A background grant must follow a user action. Never automatically
+        // retry an upload whose publication may already have reached the node.
+        hproseInstance.uploadManager.enqueue(upload)
     }
-    
+
     private func cancelPendingUpload() {
-        Task {
-            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-            try? FileManager.default.removeItem(at: fileURL)
-            
-            await MainActor.run {
-                self.pendingUpload = nil
-                self.showPendingUploadDialog = false
-                
-                self.toastMessage = NSLocalizedString("Upload discarded", comment: "Upload cancelled message")
-                self.toastType = .error
-                self.showToast = true
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    withAnimation { self.showToast = false }
-                }
+        guard let upload = pendingUpload else { return }
+        Task { @MainActor in
+            do {
+                try await hproseInstance.uploadManager.removePendingUpload(upload)
+                pendingUpload = nil
+                showPendingUploadDialog = false
+                checkForPendingUpload()
+            } catch {
+                print("[Upload] Could not discard pending upload: \(error)")
             }
         }
     }
-    
+
     // MARK: - Deeplink Handling
 
     private func handlePendingDeeplinks() {

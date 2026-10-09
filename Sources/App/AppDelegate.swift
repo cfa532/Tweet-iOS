@@ -35,7 +35,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
     private enum BackgroundMainFeedCheck {
         static let identifier = "com.example.ZZ.mainFeedCheck"
-        static let interval: TimeInterval = 5 * 60
+        // Earliest next opportunity; iOS decides when background refresh runs.
+        static let interval: TimeInterval = 15 * 60
     }
 
     private static let logFileName = "app.log"
@@ -445,23 +446,31 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func handleMainFeedCheckBackgroundTask(task: BGAppRefreshTask) {
         print("[AppDelegate] 🔄 Background main feed check task STARTED")
 
-        Task { @MainActor in
-            self.noteBackgroundLaunchIfNeeded()
-            self.scheduleNextMainFeedCheck()
+        noteBackgroundLaunchIfNeeded()
+        scheduleNextMainFeedCheck()
+
+        // Expiration and the worker can finish in either order. Serialize both
+        // on the main actor so the scheduler receives exactly one completion.
+        var didComplete = false
+        let finish: @MainActor (Bool) -> Void = { success in
+            guard !didComplete else { return }
+            didComplete = true
+            task.expirationHandler = nil
+            task.setTaskCompleted(success: success)
+            print("[AppDelegate] Background main feed check finished (success: \(success))")
         }
 
-        let checkTask = Task {
-            if #available(iOS 16.0, *) {
-                await FollowingsTweetViewModel.shared.performBackgroundFeedCheck()
-            }
-            task.setTaskCompleted(success: true)
-            print("[AppDelegate] ✅ Background main feed check completed")
+        let checkTask = Task { @MainActor in
+            let success = await FollowingsTweetViewModel.shared.performBackgroundFeedCheck()
+            finish(success && !Task.isCancelled)
         }
 
         task.expirationHandler = {
-            print("[AppDelegate] ⏰ Background main feed check task EXPIRED")
-            checkTask.cancel()
-            task.setTaskCompleted(success: false)
+            Task { @MainActor in
+                print("[AppDelegate] ⏰ Background main feed check task EXPIRED")
+                checkTask.cancel()
+                finish(false)
+            }
         }
     }
 

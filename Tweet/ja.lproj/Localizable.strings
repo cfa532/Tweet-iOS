@@ -817,3 +817,18 @@
 "%ds" = "%d秒";
 "Unknown User" = "不明なユーザー";
 "New message" = "新しいメッセージ";
+
+/* Continued uploads */
+"Preparing upload..." = "アップロードを準備中…";
+"Uploading attachments..." = "添付ファイルをアップロード中…";
+"Publishing..." = "投稿中…";
+"Normalizing video..." = "動画を処理中…";
+"Keep the app open while uploading." = "アップロード中はアプリを開いたままにしてください。";
+"You can lock the screen or switch apps while this upload finishes." = "アップロード中は画面をロックしたり、別のアプリに切り替えたりできます。";
+"Upload paused. You can retry when you return." = "アップロードを一時停止しました。アプリに戻って再試行できます。";
+"Upload unfinished. You can retry when you return." = "アップロードが完了していません。アプリに戻って再試行できます。";
+"Cancelling upload..." = "アップロードをキャンセル中…";
+"Your upload is saved. Retry to continue, or discard it." = "アップロード内容は保存されています。再試行して続けるか、破棄してください。";
+"Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message." = "投稿処理が中断されました。重複投稿や重複送信を避けるため、再試行する前にフィードや会話を確認してください。";
+"Sign in to the account that started this upload." = "このアップロードを開始したアカウントにログインしてください。";
+"Later" = "後で";

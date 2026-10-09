@@ -11,6 +11,7 @@ struct PendingUploadDialog: View {
     let pendingUpload: TweetUploadManager.PendingTweetUpload
     let onRetry: () -> Void
     let onCancel: () -> Void
+    var onLater: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -125,6 +126,8 @@ struct PendingUploadDialog: View {
                     .foregroundColor(.red)
                     .cornerRadius(12)
                 }
+                Button(NSLocalizedString("Later", comment: "Pending upload action"), action: onLater)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(32)
@@ -136,24 +139,20 @@ struct PendingUploadDialog: View {
     }
     
     private var uploadInterruptedMessage: String {
-        if pendingUpload.retryCount > 0 {
-            return String(
-                format: NSLocalizedString("Your upload was interrupted and %d retry attempts have failed. Would you like to try again or discard it?", comment: "Dialog message"),
-                pendingUpload.retryCount
-            )
-        } else {
-            return NSLocalizedString("Your upload was interrupted, possibly because the app was closed. Would you like to retry the upload or discard it?", comment: "Dialog message")
+        if pendingUpload.publicationAttempted {
+            return NSLocalizedString("Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message.", comment: "Uncertain publication")
         }
+        return NSLocalizedString("Your upload is saved. Retry to continue, or discard it.", comment: "Pending upload")
     }
-    
+
     private var uploadTypeText: String {
-        if pendingUpload.tweet.originalTweetId != nil {
-            return NSLocalizedString("Comment", comment: "Upload type")
-        } else {
-            return NSLocalizedString("Tweet", comment: "Upload type")
+        switch pendingUpload.type {
+        case "comment": return NSLocalizedString("Comment", comment: "Upload type")
+        case "chat": return NSLocalizedString("Message", comment: "Upload type")
+        default: return NSLocalizedString("Tweet", comment: "Upload type")
         }
     }
-    
+
     private func formatTimestamp(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full

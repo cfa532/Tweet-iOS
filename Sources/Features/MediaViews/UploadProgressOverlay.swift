@@ -145,6 +145,14 @@ struct UploadProgressOverlay: View {
                         }
                     }
                     
+                    if progressManager.currentStage != .completed && progressManager.currentStage != .failed {
+                        Text(progressManager.canContinueInBackground
+                             ? NSLocalizedString("You can lock the screen or switch apps while this upload finishes.", comment: "Background upload granted")
+                             : NSLocalizedString("Keep the app open while uploading.", comment: "Foreground upload required"))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
                     // Error message
                     if progressManager.currentStage == .failed {
                         HStack(spacing: 8) {

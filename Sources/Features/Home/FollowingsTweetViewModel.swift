@@ -57,7 +57,7 @@ class FollowingsTweetViewModel: ObservableObject {
     func performForegroundFeedRefresh() async {
         let sessionGeneration = beginMainFeedSession()
         scheduleMainFeedSessionOpening(pageSize: 5, generation: sessionGeneration)
-        await performFeedRefreshPair(
+        _ = await performFeedRefreshPair(
             reason: "foreground feed refresh",
             pageSize: 5,
             renderGetTweetFeedUsingScrollState: true,
@@ -65,7 +65,7 @@ class FollowingsTweetViewModel: ObservableObject {
         )
     }
 
-    func performBackgroundFeedCheck() async {
+    func performBackgroundFeedCheck() async -> Bool {
         await performFeedRefreshPair(
             reason: "background main feed check",
             pageSize: 5,
@@ -78,58 +78,57 @@ class FollowingsTweetViewModel: ObservableObject {
         pageSize: UInt,
         renderGetTweetFeedUsingScrollState: Bool,
         includeFollowingTweetsUpdate: Bool = true
-    ) async {
-        let didBegin = await MainActor.run {
-            guard !isPeriodicFeedRefreshActive else { return false }
-            isPeriodicFeedRefreshActive = true
+    ) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard !isPeriodicFeedRefreshActive else {
+            print("DEBUG: [FollowingsTweetViewModel] Skipping duplicate \(reason)")
             return true
         }
-        guard didBegin else {
-            print("DEBUG: [FollowingsTweetViewModel] Skipping duplicate \(reason)")
-            return
-        }
+        isPeriodicFeedRefreshActive = true
         defer {
-            Task { @MainActor [weak self] in
-                self?.isPeriodicFeedRefreshActive = false
-            }
+            isPeriodicFeedRefreshActive = false
         }
 
         print("DEBUG: [FollowingsTweetViewModel] \(reason) via get_tweet_feed + update_following_tweets")
         guard await waitForAppInitializationIfNeeded(reason: reason) else {
-            return
+            return false
         }
+        guard !Task.isCancelled else { return false }
         guard !hproseInstance.appUser.isGuest else {
-            await MainActor.run {
-                pendingNewTweets.removeAll()
-                showNewTweetsBanner = false
-            }
+            pendingNewTweets.removeAll()
+            showNewTweetsBanner = false
             print("DEBUG: [FollowingsTweetViewModel] Skipping \(reason) for guest user")
-            return
+            return true
         }
 
+        // Preserve partial results and try both reads, but report any fetch
+        // failure to the scheduler. Transient network errors stay in the log.
+        var success = true
         do {
             let freshTweets = try await fetchForegroundMainFeedTweets(pageSize: pageSize)
-            await MainActor.run {
-                processForegroundMainFeedTweets(
-                    freshTweets,
-                    renderImmediately: renderGetTweetFeedUsingScrollState && shouldRenderForegroundMainFeedTweetsImmediately(),
-                    reason: "\(reason) get_tweet_feed"
-                )
-            }
+            guard !Task.isCancelled else { return false }
+            processForegroundMainFeedTweets(
+                freshTweets,
+                renderImmediately: renderGetTweetFeedUsingScrollState && shouldRenderForegroundMainFeedTweetsImmediately(),
+                reason: "\(reason) get_tweet_feed"
+            )
         } catch {
+            success = false
             print("ERROR: [FollowingsTweetViewModel] \(reason) get_tweet_feed failed: \(error)")
         }
 
-        guard includeFollowingTweetsUpdate else { return }
+        guard !Task.isCancelled else { return false }
+        guard includeFollowingTweetsUpdate else { return success }
 
         do {
             let followingTweets = try await fetchFollowingTweetsForBanner(pageSize: pageSize)
-            await MainActor.run {
-                updateNewTweetsSnapshot(followingTweets)
-            }
+            guard !Task.isCancelled else { return false }
+            updateNewTweetsSnapshot(followingTweets)
         } catch {
+            success = false
             print("ERROR: [FollowingsTweetViewModel] \(reason) update_following_tweets failed: \(error)")
         }
+        return success && !Task.isCancelled
     }
 
     private func beginMainFeedSession() -> Int {

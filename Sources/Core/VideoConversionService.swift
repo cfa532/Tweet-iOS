@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import AVFoundation
 import Darwin
 import ObjectiveC.runtime
 
@@ -385,7 +386,7 @@ final class VideoConversionService: @unchecked Sendable {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second pause
             logMemoryUsage("after cleanup pause")
             
-            guard resultHighQuality else {
+            guard resultHighQuality, !Task.isCancelled else {
                 await MainActor.run {
                     completion(HLSConversionResult(
                         success: false,
@@ -424,7 +425,7 @@ final class VideoConversionService: @unchecked Sendable {
         try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second pause
         logMemoryUsage("after final cleanup pause")
         
-        guard resultLowerRes else {
+        guard resultLowerRes, !Task.isCancelled else {
             await MainActor.run {
                 completion(HLSConversionResult(
                     success: false,
@@ -605,21 +606,12 @@ final class VideoConversionService: @unchecked Sendable {
         cachedVideoInfo: (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)?,
         isNormalized: Bool
     ) async -> Bool {
-        return await withCheckedContinuation { continuation in
-            convertToHLS(
-                inputURL: inputURL,
-                outputURL: outputURL,
-                resolution: resolution,
-                bitrate: bitrate,
-                aspectRatio: aspectRatio,
-                cachedVideoInfo: cachedVideoInfo,
-                isNormalized: isNormalized
-            ) { success in
-                continuation.resume(returning: success)
-            }
-        }
+        guard !Task.isCancelled else { return false }
+        return await convertToHLS(inputURL: inputURL, outputURL: outputURL, resolution: resolution,
+                                  bitrate: bitrate, aspectRatio: aspectRatio,
+                                  cachedVideoInfo: cachedVideoInfo, isNormalized: isNormalized)
     }
-    
+
     // MARK: - Convert to HLS with specific resolution
     
     /// Legacy function - kept for reference, no longer used in main conversion logic
@@ -677,149 +669,148 @@ final class VideoConversionService: @unchecked Sendable {
         bitrate: String,
         aspectRatio: Float?,
         cachedVideoInfo: (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)?,
-        isNormalized: Bool,
-        completion: @escaping @Sendable (Bool) -> Void
-    ) {
-        Task {
-            let targetResolution = Int(resolution) ?? 720
-            
-            // Determine if COPY can be used for normalized videos
-            // Matches Node.js server logic:
-            // - 720p variant: use COPY if normalized resolution is between 480p and 720p (avoids upscaling)
-            // - 480p variant: use COPY if normalized resolution is ≤480p (avoids upscaling)
-            let shouldUseCopy = isNormalized && {
-                if let videoInfo = cachedVideoInfo {
-                    // Calculate source resolution based on orientation
-                    // For landscape: resolution is height, for portrait: resolution is width
-                    let sourceResolution: Int
-                    if let aspectRatio = aspectRatio {
-                        if aspectRatio < 1.0 {
-                            // Portrait: resolution is width
-                            sourceResolution = videoInfo.displayWidth
-                        } else {
-                            // Landscape: resolution is height
-                            sourceResolution = videoInfo.displayHeight
-                        }
+        isNormalized: Bool
+    ) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        let duration = (try? await AVURLAsset(url: inputURL).load(.duration).seconds) ?? 0
+        let targetResolution = Int(resolution) ?? 720
+
+        // Determine if COPY can be used for normalized videos
+        // Matches Node.js server logic:
+        // - 720p variant: use COPY if normalized resolution is between 480p and 720p (avoids upscaling)
+        // - 480p variant: use COPY if normalized resolution is ≤480p (avoids upscaling)
+        let shouldUseCopy = isNormalized && {
+            if let videoInfo = cachedVideoInfo {
+                // Calculate source resolution based on orientation
+                // For landscape: resolution is height, for portrait: resolution is width
+                let sourceResolution: Int
+                if let aspectRatio = aspectRatio {
+                    if aspectRatio < 1.0 {
+                        // Portrait: resolution is width
+                        sourceResolution = videoInfo.displayWidth
                     } else {
-                        // Fallback: use height for landscape
+                        // Landscape: resolution is height
                         sourceResolution = videoInfo.displayHeight
                     }
-                    
-                    // Use COPY for 720p variant if normalized resolution is between 480p and 720p
-                    // This avoids upscaling (e.g., 576p content stays 576p but labeled as 720p)
-                    if targetResolution == 720 && sourceResolution > 480 && sourceResolution <= 720 {
-                        if sourceResolution < 720 {
-                            print("✅ [VIDEO CONVERSION] Using COPY for 720p variant (actual content: \(sourceResolution)p, labeled as 720p, no upscaling)")
-                        } else {
-                            print("✅ [VIDEO CONVERSION] Using COPY for 720p variant (normalized resolution \(sourceResolution)p matches variant)")
-                        }
-                        return true
-                    }
-                    
-                    // Use COPY for 480p variant if normalized resolution is ≤480p
-                    // This avoids upscaling (e.g., 360p content stays 360p but labeled as 480p)
-                    if targetResolution == 480 && sourceResolution <= 480 {
-                        if sourceResolution < 480 {
-                            print("✅ [VIDEO CONVERSION] Using COPY for 480p variant (actual content: \(sourceResolution)p, labeled as 480p, no upscaling)")
-                        } else {
-                            print("✅ [VIDEO CONVERSION] Using COPY for 480p variant (normalized resolution \(sourceResolution)p matches variant)")
-                        }
-                        return true
-                    }
-                    
-                    return false
+                } else {
+                    // Fallback: use height for landscape
+                    sourceResolution = videoInfo.displayHeight
                 }
-                return false
-            }()
 
-            if shouldUseCopy {
-                print("========== \(targetResolution)p VARIANT: COPY CODEC (No Re-encoding) ==========")
-                print("  Video already normalized")
-                print("  Target: \(targetResolution)p (no scaling needed)")
-                print("  Method: COPY codec - preserves standardized quality")
-                print("  No second normalization - just segmenting for HLS")
-                print("==============================================================")
-                
-                // COPY codec - no re-encoding needed for already normalized video
-                let copyCommand = buildCopyCommand(
-                    inputURL: inputURL,
-                    outputURL: outputURL
-                )
-
-                self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, completion: completion)
-            } else {
-                print("========== \(targetResolution)p VARIANT: RE-ENCODING (VideoToolbox H.264) ==========")
-                print("  Method: h264_videotoolbox re-encoding")
-                print("  Reason: Scaling or format conversion needed")
-                print("==========================================================")
-                
-                // Use Apple's hardware H.264 encoder for all other cases.
-                print("DEBUG: [VIDEO CONVERSION] Using h264_videotoolbox codec for resolution: \(resolution) (compatibility and normalization)")
-
-                // Determine scaling based on orientation and source resolution
-                // Never upscale - if source resolution is lower than target, keep original
-                let scaleFilter: String
-                if let videoInfo = cachedVideoInfo {
-                    let displayWidth = videoInfo.displayWidth
-                    let displayHeight = videoInfo.displayHeight
-
-                    // Calculate source video resolution (height for landscape, width for portrait)
-                    let sourceResolution: Int
-                    if let aspectRatio = aspectRatio {
-                        if aspectRatio < 1.0 {
-                            // Portrait: resolution is width
-                            sourceResolution = displayWidth
-                        } else {
-                            // Landscape: resolution is height
-                            sourceResolution = displayHeight
-                        }
+                // Use COPY for 720p variant if normalized resolution is between 480p and 720p
+                // This avoids upscaling (e.g., 576p content stays 576p but labeled as 720p)
+                if targetResolution == 720 && sourceResolution > 480 && sourceResolution <= 720 {
+                    if sourceResolution < 720 {
+                        print("✅ [VIDEO CONVERSION] Using COPY for 720p variant (actual content: \(sourceResolution)p, labeled as 720p, no upscaling)")
                     } else {
-                        // Fallback: use height
+                        print("✅ [VIDEO CONVERSION] Using COPY for 720p variant (normalized resolution \(sourceResolution)p matches variant)")
+                    }
+                    return true
+                }
+
+                // Use COPY for 480p variant if normalized resolution is ≤480p
+                // This avoids upscaling (e.g., 360p content stays 360p but labeled as 480p)
+                if targetResolution == 480 && sourceResolution <= 480 {
+                    if sourceResolution < 480 {
+                        print("✅ [VIDEO CONVERSION] Using COPY for 480p variant (actual content: \(sourceResolution)p, labeled as 480p, no upscaling)")
+                    } else {
+                        print("✅ [VIDEO CONVERSION] Using COPY for 480p variant (normalized resolution \(sourceResolution)p matches variant)")
+                    }
+                    return true
+                }
+
+                return false
+            }
+            return false
+        }()
+
+        if shouldUseCopy {
+            print("========== \(targetResolution)p VARIANT: COPY CODEC (No Re-encoding) ==========")
+            print("  Video already normalized")
+            print("  Target: \(targetResolution)p (no scaling needed)")
+            print("  Method: COPY codec - preserves standardized quality")
+            print("  No second normalization - just segmenting for HLS")
+            print("==============================================================")
+
+            // COPY codec - no re-encoding needed for already normalized video
+            let copyCommand = buildCopyCommand(
+                inputURL: inputURL,
+                outputURL: outputURL
+            )
+
+            return await self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, duration: duration)
+        } else {
+            print("========== \(targetResolution)p VARIANT: RE-ENCODING (VideoToolbox H.264) ==========")
+            print("  Method: h264_videotoolbox re-encoding")
+            print("  Reason: Scaling or format conversion needed")
+            print("==========================================================")
+
+            // Use Apple's hardware H.264 encoder for all other cases.
+            print("DEBUG: [VIDEO CONVERSION] Using h264_videotoolbox codec for resolution: \(resolution) (compatibility and normalization)")
+
+            // Determine scaling based on orientation and source resolution
+            // Never upscale - if source resolution is lower than target, keep original
+            let scaleFilter: String
+            if let videoInfo = cachedVideoInfo {
+                let displayWidth = videoInfo.displayWidth
+                let displayHeight = videoInfo.displayHeight
+
+                // Calculate source video resolution (height for landscape, width for portrait)
+                let sourceResolution: Int
+                if let aspectRatio = aspectRatio {
+                    if aspectRatio < 1.0 {
+                        // Portrait: resolution is width
+                        sourceResolution = displayWidth
+                    } else {
+                        // Landscape: resolution is height
                         sourceResolution = displayHeight
                     }
-
-                    // If source resolution is lower than target, don't scale (keep original)
-                    if sourceResolution < targetResolution {
-                        print("DEBUG: [VIDEO CONVERSION] Source resolution (\(displayWidth)x\(displayHeight), \(sourceResolution)p) is lower than target (\(targetResolution)p), keeping original resolution")
-                        scaleFilter = ""  // No scaling - will keep original dimensions
-                    } else {
-                        // Scale down to target resolution
-                        if let aspectRatio = aspectRatio {
-                            if aspectRatio < 1.0 {
-                                // Portrait: scale to target width
-                                scaleFilter = "scale=\(resolution):-2"
-                            } else {
-                                // Landscape: scale to target height
-                                scaleFilter = "scale=-2:\(resolution)"
-                            }
-                        } else {
-                            scaleFilter = "scale=-2:\(resolution)"
-                        }
-                        print("DEBUG: [VIDEO CONVERSION] Scaling \(displayWidth)x\(displayHeight) (\(sourceResolution)p) down to \(targetResolution)p")
-                    }
                 } else {
-                    // Fallback: use standard scaling
+                    // Fallback: use height
+                    sourceResolution = displayHeight
+                }
+
+                // If source resolution is lower than target, don't scale (keep original)
+                if sourceResolution < targetResolution {
+                    print("DEBUG: [VIDEO CONVERSION] Source resolution (\(displayWidth)x\(displayHeight), \(sourceResolution)p) is lower than target (\(targetResolution)p), keeping original resolution")
+                    scaleFilter = ""  // No scaling - will keep original dimensions
+                } else {
+                    // Scale down to target resolution
                     if let aspectRatio = aspectRatio {
                         if aspectRatio < 1.0 {
+                            // Portrait: scale to target width
                             scaleFilter = "scale=\(resolution):-2"
                         } else {
+                            // Landscape: scale to target height
                             scaleFilter = "scale=-2:\(resolution)"
                         }
                     } else {
                         scaleFilter = "scale=-2:\(resolution)"
                     }
+                    print("DEBUG: [VIDEO CONVERSION] Scaling \(displayWidth)x\(displayHeight) (\(sourceResolution)p) down to \(targetResolution)p")
                 }
-
-                let h264Command = buildVideoToolboxH264Command(
-                    inputURL: inputURL,
-                    outputURL: outputURL,
-                    resolution: resolution,
-                    bitrate: bitrate,
-                    scaleFilter: scaleFilter
-                )
-
-                self.executeFFmpegCommand(command: h264Command, outputURL: outputURL, resolution: resolution, completion: completion)
+            } else {
+                // Fallback: use standard scaling
+                if let aspectRatio = aspectRatio {
+                    if aspectRatio < 1.0 {
+                        scaleFilter = "scale=\(resolution):-2"
+                    } else {
+                        scaleFilter = "scale=-2:\(resolution)"
+                    }
+                } else {
+                    scaleFilter = "scale=-2:\(resolution)"
+                }
             }
+
+            let h264Command = buildVideoToolboxH264Command(
+                inputURL: inputURL,
+                outputURL: outputURL,
+                resolution: resolution,
+                bitrate: bitrate,
+                scaleFilter: scaleFilter
+            )
+
+            return await self.executeFFmpegCommand(command: h264Command, outputURL: outputURL, resolution: resolution, duration: duration)
         }
     }
     
@@ -902,63 +893,67 @@ final class VideoConversionService: @unchecked Sendable {
         command: String,
         outputURL: URL,
         resolution: String,
-        completion: @escaping @Sendable (Bool) -> Void
-    ) {
+        duration: Double
+    ) async -> Bool {
         print("🎬 [FFMPEG] Starting conversion to \(resolution)")
         print("  Full command: \(command)")
         
-        DynamicFFmpegKit.shared.executeAsync(command) { session in
-            guard let session = session else {
-                print("❌ [FFMPEG] Failed to create FFmpeg session for \(resolution)")
-                completion(false)
-                return
-            }
-            
-            let logs = session.logMessages
-            
-            print("🎬 [FFMPEG] Conversion to \(resolution) completed with return code: \(session.returnCodeDescription)")
-            
-            // Log FFmpeg output for debugging (show last 10 log entries, excluding verbose HLS segment messages)
-            if logs.count > 0 {
-                print("🎬 [FFMPEG] Showing last \(min(10, logs.count)) log entries:")
-                let lastLogs = logs.suffix(10)
-                for message in lastLogs {
-                    let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                    // Skip verbose HLS segment opening messages
-                    if !trimmed.isEmpty && !trimmed.contains("Opening") && !trimmed.contains("for writing") {
-                        print("  \(trimmed)")
-                    }
+        let callback = progressCallback
+        let session = await DynamicFFmpegKit.shared.execute(command, progress: { milliseconds in
+            guard duration > 0, duration.isFinite, milliseconds.isFinite else { return }
+            let fraction = min(max(milliseconds / 1000 / duration, 0), 1)
+            let start = resolution == "480" ? 60 : 10
+            callback?(ConversionProgress(stage: NSLocalizedString("Converting video...", comment: "Upload stage"), progress: start + Int(fraction * 30), estimatedTimeRemaining: nil))
+        })
+        guard let session = session else {
+            print("❌ [FFMPEG] Failed to create FFmpeg session for \(resolution)")
+            return false
+        }
+
+        let logs = session.logMessages
+
+        print("🎬 [FFMPEG] Conversion to \(resolution) completed with return code: \(session.returnCodeDescription)")
+
+        // Log FFmpeg output for debugging (show last 10 log entries, excluding verbose HLS segment messages)
+        if logs.count > 0 {
+            print("🎬 [FFMPEG] Showing last \(min(10, logs.count)) log entries:")
+            let lastLogs = logs.suffix(10)
+            for message in lastLogs {
+                let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Skip verbose HLS segment opening messages
+                if !trimmed.isEmpty && !trimmed.contains("Opening") && !trimmed.contains("for writing") {
+                    print("  \(trimmed)")
                 }
             }
-            
-            let success = session.isSuccess
-            
-            if success {
-                // Verify output file exists
-                if FileManager.default.fileExists(atPath: outputURL.path) {
-                    let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
-                    let fileSizeMB = Double(fileSize) / 1024 / 1024
-                    print("✅ [FFMPEG] Successfully converted to \(resolution)")
-                    print("  - Output: \(outputURL.lastPathComponent)")
-                    print("  - Size: \(String(format: "%.2f", fileSizeMB))MB (\(fileSize) bytes)")
-                    
-                    // Count segments if it's an HLS directory
-                    let directory = outputURL.deletingLastPathComponent()
-                    if let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path) {
-                        let segmentCount = files.filter { $0.hasSuffix(".ts") }.count
-                        if segmentCount > 0 {
-                            print("  - Segments: \(segmentCount) .ts files")
-                        }
+        }
+
+        let success = session.isSuccess
+
+        if success {
+            // Verify output file exists
+            if FileManager.default.fileExists(atPath: outputURL.path) {
+                let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+                let fileSizeMB = Double(fileSize) / 1024 / 1024
+                print("✅ [FFMPEG] Successfully converted to \(resolution)")
+                print("  - Output: \(outputURL.lastPathComponent)")
+                print("  - Size: \(String(format: "%.2f", fileSizeMB))MB (\(fileSize) bytes)")
+
+                // Count segments if it's an HLS directory
+                let directory = outputURL.deletingLastPathComponent()
+                if let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path) {
+                    let segmentCount = files.filter { $0.hasSuffix(".ts") }.count
+                    if segmentCount > 0 {
+                        print("  - Segments: \(segmentCount) .ts files")
                     }
-                    completion(true)
-                } else {
-                    print("❌ [FFMPEG] Output file does not exist: \(outputURL.path)")
-                    completion(false)
                 }
+                return true
             } else {
-                print("❌ [FFMPEG] Conversion failed for \(resolution)")
-                completion(false)
+                print("❌ [FFMPEG] Output file does not exist: \(outputURL.path)")
+                return false
             }
+        } else {
+            print("❌ [FFMPEG] Conversion failed for \(resolution)")
+            return false
         }
     }
     
@@ -1055,12 +1050,57 @@ final class DynamicFFmpegKit: @unchecked Sendable {
 
     private init() {}
 
-    func executeAsync(_ command: String, completion: @escaping @Sendable (DynamicFFmpegSession?) -> Void) {
+    private final class Execution: @unchecked Sendable {
+        private let lock = NSLock()
+        private var sessionID: Int?
+        private var cancelled = false
+        private var completed = false
+        func started(_ id: Int) {
+            lock.lock()
+            sessionID = id
+            let shouldCancel = cancelled && !completed
+            lock.unlock()
+            if shouldCancel { DynamicFFmpegKit.shared.cancel(id) }
+        }
+        func finish() { lock.lock(); completed = true; lock.unlock() }
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let id = completed ? nil : sessionID
+            lock.unlock()
+            if let id { DynamicFFmpegKit.shared.cancel(id) }
+        }
+    }
+
+    func execute(_ command: String, progress: (@Sendable (Double) -> Void)? = nil) async -> DynamicFFmpegSession? {
+        let execution = Execution()
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return nil }
+            return await withCheckedContinuation { continuation in
+                executeAsync(command, started: { execution.started($0) }, progress: progress) { session in
+                    execution.finish()
+                    continuation.resume(returning: session)
+                }
+            }
+        } onCancel: { execution.cancel() }
+    }
+
+    private func cancel(_ id: Int) {
+        do {
+            let cls: AnyClass = try loadFFmpegKitClass()
+            let selector = NSSelectorFromString("cancel:")
+            typealias Cancel = @convention(c) (AnyClass, Selector, Int) -> Void
+            let invoke = unsafeBitCast(try classImplementation(cls, selector: selector), to: Cancel.self)
+            invoke(cls, selector, id)
+        } catch { print("[FFmpeg] Could not cancel session: \(error)") }
+    }
+
+    func executeAsync(_ command: String, started: (@Sendable (Int) -> Void)? = nil, progress: (@Sendable (Double) -> Void)? = nil, completion: @escaping @Sendable (DynamicFFmpegSession?) -> Void) {
         do {
             let ffmpegClass: AnyClass = try loadFFmpegKitClass()
-            let selector = NSSelectorFromString("executeAsync:withCompleteCallback:")
+            let selector = NSSelectorFromString("executeAsync:withCompleteCallback:withLogCallback:withStatisticsCallback:")
             let implementation = try classImplementation(ffmpegClass, selector: selector)
-            typealias ExecuteAsync = @convention(c) (AnyClass, Selector, NSString, AnyObject) -> AnyObject?
+            typealias ExecuteAsync = @convention(c) (AnyClass, Selector, NSString, AnyObject, AnyObject?, AnyObject?) -> AnyObject?
             let executeAsync = unsafeBitCast(implementation, to: ExecuteAsync.self)
 
             let blockId = UUID()
@@ -1070,9 +1110,22 @@ final class DynamicFFmpegKit: @unchecked Sendable {
                 self?.releaseCompletionBlock(blockId)
             }
             let blockObject = unsafeBitCast(block, to: AnyObject.self)
-            retainCompletionBlock(blockObject, id: blockId)
+            let statistics: @convention(block) (AnyObject?) -> Void = { value in
+                guard let value, let progress else { return }
+                let timeSelector = NSSelectorFromString("getTime")
+                typealias GetTime = @convention(c) (AnyObject, Selector) -> Double
+                guard let implementation = try? Self.instanceImplementation(value, selector: timeSelector) else { return }
+                progress(unsafeBitCast(implementation, to: GetTime.self)(value, timeSelector))
+            }
+            let statisticsObject = unsafeBitCast(statistics, to: AnyObject.self)
+            retainCompletionBlock(NSArray(array: [blockObject, statisticsObject]), id: blockId)
 
-            _ = executeAsync(ffmpegClass, selector, command as NSString, blockObject)
+            if let session = executeAsync(ffmpegClass, selector, command as NSString, blockObject, nil, statisticsObject) {
+                let idSelector = NSSelectorFromString("getSessionId")
+                typealias SessionID = @convention(c) (AnyObject, Selector) -> Int
+                let getID = unsafeBitCast(try Self.instanceImplementation(session, selector: idSelector), to: SessionID.self)
+                started?(getID(session, idSelector))
+            }
         } catch {
             print("ERROR: [DynamicFFmpegKit] \(error)")
             completion(nil)
@@ -1163,7 +1216,7 @@ final class DynamicFFmpegKit: @unchecked Sendable {
     }
 }
 
-struct DynamicFFmpegSession {
+struct DynamicFFmpegSession: @unchecked Sendable {
     private let rawSession: AnyObject
 
     init(rawSession: AnyObject) {

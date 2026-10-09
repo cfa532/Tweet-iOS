@@ -1,352 +1,257 @@
-//
-//  UploadProgressManager.swift
-//  Tweet
-//
-//  Manages upload progress tracking and app backgrounding detection
-//
-
+// Owns each complete upload, including server processing and publication.
+import BackgroundTasks
 import Foundation
 import SwiftUI
-import Combine
 
 enum UploadStage {
-    case preparing
-    case convertingVideo
-    case uploadingAttachments
-    case submittingTweet
-    case completed
-    case failed
+    case preparing, convertingVideo, uploadingAttachments, submittingTweet, completed, failed
 }
 
 @MainActor
-class UploadProgressManager: ObservableObject {
+final class UploadProgressManager: ObservableObject {
     static let shared = UploadProgressManager()
-    
-    @Published var isUploading: Bool = false
+
+    @Published var isUploading = false
     @Published var currentStage: UploadStage = .preparing
-    @Published var stageMessage: String = ""
-    @Published var progress: Double = 0.0 // 0.0 to 1.0
-    @Published var detailedProgress: String = ""
-    @Published var uploadType: String = "" // "tweet", "comment", "chat"
+    @Published var stageMessage = ""
+    @Published var progress = 0.0
+    @Published var detailedProgress = ""
+    @Published var uploadType = ""
+    @Published private(set) var canContinueInBackground = false
+    var isProcessingVideo = false
 
-    private var uploadStartTime: Date?
-    private nonisolated(unsafe) var backgroundObserver: NSObjectProtocol?
-    private nonisolated(unsafe) var foregroundObserver: NSObjectProtocol?
-    private var wasBackgrounded: Bool = false
-    private var userInteractionDisabled: Bool = false
-    
-    // CRITICAL: Track if upload involves video conversion (FFmpeg)
-    // This prevents video player cache clearing during intensive processing
-    var isProcessingVideo: Bool = false
-    
-    // CRITICAL: Upload queue to prevent concurrent uploads from interfering
-    private var uploadQueue: [QueuedUpload] = []
-    private var isProcessingQueue: Bool = false
+    private var queue: [(pending: TweetUploadManager.PendingTweetUpload, saved: Task<Void, Error>)] = []
+    private var worker: Task<Void, Never>?
+    private var activeID: UUID?
+    private var discardActiveUpload = false
+    private var dismissal: Task<Void, Never>?
+    private let background = UploadBackgroundExecution()
 
-    var hasActiveOrQueuedUploads: Bool {
-        isUploading || isProcessingQueue || !uploadQueue.isEmpty
-    }
-    
-    struct QueuedUpload {
-        let id: UUID = UUID()
-        let type: String
-        let hasVideos: Bool
-        let execute: () async throws -> Void
-    }
-    
+    var hasActiveOrQueuedUploads: Bool { worker != nil || !queue.isEmpty }
+
     private init() {
-        setupBackgroundObserver()
-    }
-    
-    private func setupBackgroundObserver() {
-        // Observe app going to background
-        backgroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self = self else { return }
-            Task { @MainActor in
-                if self.isUploading {
-                    self.wasBackgrounded = true
-                    print("⚠️ [UploadProgress] App backgrounded during upload")
-                    
-                    // CRITICAL: Clear video processing flag immediately to allow video player cleanup
-                    // Video players need to release resources when backgrounding
-                    if self.isProcessingVideo {
-                        print("⚠️ [UploadProgress] Clearing video processing flag on background")
-                        self.isProcessingVideo = false
-                    }
-                }
-            }
+        background.didStart = { [weak self] in
+            self?.canContinueInBackground = true
+            UIApplication.shared.isIdleTimerDisabled = false
         }
-        
-        // Observe app returning to foreground
-        foregroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self = self else { return }
-            Task { @MainActor in
-                if self.wasBackgrounded {
-                    print("⚠️ [UploadProgress] App foregrounded after upload interruption")
-                    // Check if upload is still active
-                    if self.isUploading {
-                        // Upload may have failed, notify user
-                        self.handleBackgroundInterruption()
-                    }
-                    self.wasBackgrounded = false
-                }
-            }
+        background.didExpire = { [weak self] in
+            guard let self else { return }
+            self.canContinueInBackground = false
+            self.worker?.cancel()
+            VideoConversionService.shared.cancelCurrentConversion()
+            self.stageMessage = NSLocalizedString("Upload paused. You can retry when you return.", comment: "Upload paused")
+            self.currentStage = .failed
+            UIApplication.shared.isIdleTimerDisabled = false
         }
     }
-    
-    /// Enqueue an upload to be processed (prevents concurrent upload conflicts)
-    func enqueueUpload(type: String, hasVideos: Bool = false, execute: @escaping () async throws -> Void) {
-        let upload = QueuedUpload(type: type, hasVideos: hasVideos, execute: execute)
-        
-        uploadQueue.append(upload)
-        print("📥 [UploadQueue] Enqueued \(type) upload (queue size: \(uploadQueue.count))")
-        
-        // Start processing queue if not already processing
-        if !isProcessingQueue {
-            Task {
-                await processUploadQueue()
-            }
-        }
+
+    func enqueueUpload(pending: TweetUploadManager.PendingTweetUpload) {
+        guard activeID != pending.id, !queue.contains(where: { $0.pending.id == pending.id }) else { return }
+        // Save queued items too, so a process exit cannot lose a second post.
+        let saved = Task { try await HproseInstance.shared.uploadManager.savePendingUpload(pending) }
+        queue.append((pending, saved))
+        guard worker == nil else { return }
+        worker = Task { await processQueue() }
     }
-    
-    /// Process uploads one at a time from the queue
-    private func processUploadQueue() async {
-        guard !isProcessingQueue else {
-            print("⚠️ [UploadQueue] Already processing queue")
-            return
+
+    private func processQueue() async {
+        defer {
+            worker = nil
+            activeID = nil
+            isProcessingVideo = false
+            UIApplication.shared.isIdleTimerDisabled = false
         }
-        
-        isProcessingQueue = true
-        
-        while !uploadQueue.isEmpty {
-            let upload = uploadQueue.removeFirst()
-            print("📤 [UploadQueue] Processing \(upload.type) upload (remaining: \(uploadQueue.count))")
-            
-            // Start this upload
-            startUpload(type: upload.type, hasVideos: upload.hasVideos)
-            
+        while !queue.isEmpty && !Task.isCancelled {
+            let entry = queue.removeFirst()
+            let pending = entry.pending
+            activeID = pending.id
+            discardActiveUpload = false
+            dismissal?.cancel()
+            isUploading = true
+            uploadType = pending.type
+            currentStage = .preparing
+            stageMessage = NSLocalizedString("Preparing upload...", comment: "Upload stage")
+            detailedProgress = ""
+            progress = 0
+            isProcessingVideo = pending.hasVideos
+            canContinueInBackground = false
+            UIApplication.shared.isIdleTimerDisabled = true
+            // Requests originate only from the user-started foreground queue.
+            // Pending recovery waits for the user's Retry button.
+            background.request(title: uploadTitle, message: stageMessage)
             do {
-                try await upload.execute()
-                print("✅ [UploadQueue] \(upload.type) upload completed")
+                try await entry.saved.value
+                try Task.checkCancellation()
+                try await HproseInstance.shared.uploadManager.executeUpload(pending)
+                completeUpload()
             } catch {
-                print("❌ [UploadQueue] \(upload.type) upload failed: \(error)")
-                // Error handling is done by the upload execute function
+                background.finish(success: false)
+                if discardActiveUpload {
+                    do { try await HproseInstance.shared.uploadManager.removePendingUpload(pending) }
+                    catch { print("[Upload] Could not discard pending upload: \(error)") }
+                }
+                if Task.isCancelled {
+                    failUpload(message: NSLocalizedString(discardActiveUpload ? "Upload cancelled" :
+                        "Upload paused. You can retry when you return.", comment: "Upload stopped"))
+                } else {
+                    print("[Upload] Operation remains pending: \(error)")
+                    failUpload(message: NSLocalizedString("Upload unfinished. You can retry when you return.", comment: "Upload pending"))
+                }
+            }
+            background.finish(success: currentStage == .completed)
+            canContinueInBackground = false
+            isProcessingVideo = false
+            // A new background job cannot be requested without a foreground
+            // user action. Saved queued posts remain available for Retry.
+            if Task.isCancelled || UIApplication.shared.applicationState == .background {
+                for queued in queue { _ = try? await queued.saved.value }
+                queue.removeAll()
+                break
             }
         }
-        
-        isProcessingQueue = false
-        print("✅ [UploadQueue] Queue processing completed")
     }
-    
-    /// Cancel all queued uploads (but not the current one)
-    func cancelQueuedUploads() {
-        let cancelledCount = uploadQueue.count
-        uploadQueue.removeAll()
-        if cancelledCount > 0 {
-            print("🛑 [UploadQueue] Cancelled \(cancelledCount) queued upload(s)")
+
+    var uploadTitle: String {
+        switch uploadType {
+        case "tweet": return NSLocalizedString("Posting Tweet", comment: "Upload title")
+        case "comment": return NSLocalizedString("Posting Comment", comment: "Upload title")
+        case "chat": return NSLocalizedString("Sending Message", comment: "Upload title")
+        default: return NSLocalizedString("Uploading", comment: "Upload title")
         }
     }
-    
-    func startUpload(type: String, hasVideos: Bool = false) {
-        isUploading = true
-        uploadType = type
-        currentStage = .preparing
-        
-        // Show stronger warning for video uploads
-        if hasVideos {
-            stageMessage = NSLocalizedString("Preparing video upload... Please keep the app in foreground", comment: "Video upload warning")
-        } else {
-            stageMessage = NSLocalizedString("Preparing upload... Please stay on this screen", comment: "Upload stage")
-        }
 
-        progress = 0.0
-        detailedProgress = ""
-        uploadStartTime = Date()
-        wasBackgrounded = false
-        
-        // CRITICAL: Mark video processing state to prevent cache clearing
-        isProcessingVideo = hasVideos
-
-        // Prevent screen from auto-locking during upload
-        UIApplication.shared.isIdleTimerDisabled = true
-
-        // Note: User interaction blocking is handled by the overlay's background
-        // The dialog itself remains interactive for the close button
-
-        print("📤 [UploadProgress] Started \(type) upload (idle timer disabled, videos: \(hasVideos), processing video: \(hasVideos))")
+    func updateProgress(stage: UploadStage, message: String, progress: Double = 0, detail: String = "", operationID: UUID? = nil) {
+        // A callback from a cancelled media encoder belongs to its own operation.
+        if let operationID, operationID != activeID { return }
+        guard worker?.isCancelled != true else { return }
+        currentStage = stage
+        stageMessage = message
+        self.progress = max(self.progress, min(max(progress, 0), 0.99))
+        detailedProgress = detail
+        background.update(fraction: self.progress, message: message)
     }
-    
-    func updateProgress(stage: UploadStage, message: String, progress: Double = 0.0, detail: String = "") {
-        self.currentStage = stage
-        self.stageMessage = message
-        self.progress = min(max(progress, 0.0), 1.0)
-        self.detailedProgress = detail
-        
-        print("📊 [UploadProgress] \(message) - \(Int(progress * 100))%")
-    }
-    
+
     func completeUpload() {
         currentStage = .completed
         stageMessage = NSLocalizedString("Upload completed", comment: "Upload stage")
-        progress = 1.0
-
-        // Re-enable auto-lock
-        UIApplication.shared.isIdleTimerDisabled = false
-
-        // Restore user interaction
-        unblockUserInteraction()
-        
-        // CRITICAL: Clear video processing flag
-        isProcessingVideo = false
-
-        if let startTime = uploadStartTime {
-            let duration = Date().timeIntervalSince(startTime)
-            print("✅ [UploadProgress] Upload completed in \(String(format: "%.1f", duration))s (idle timer re-enabled, user interaction restored)")
-        }
-
-        // Reset after a short delay
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-            self.isUploading = false
-            self.uploadType = ""
-            self.progress = 0.0
-            self.detailedProgress = ""
-        }
+        progress = 1
+        background.finish(success: true)
+        scheduleDismissal(after: 1)
     }
-    
+
     func failUpload(message: String) {
         currentStage = .failed
         stageMessage = message
-        progress = 0.0
+        background.finish(success: false)
+        scheduleDismissal(after: 3)
+    }
 
-        // Re-enable auto-lock
+    private func scheduleDismissal(after seconds: Double) {
         UIApplication.shared.isIdleTimerDisabled = false
-
-        // Restore user interaction
-        unblockUserInteraction()
-        
-        // CRITICAL: Clear video processing flag
-        isProcessingVideo = false
-
-        print("❌ [UploadProgress] Upload failed: \(message) (idle timer re-enabled, user interaction restored)")
-
-        // Keep failed state visible longer
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-            self.isUploading = false
-            self.uploadType = ""
-            self.progress = 0.0
-            self.detailedProgress = ""
+        dismissal?.cancel()
+        dismissal = Task {
+            do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+            isUploading = false
+            uploadType = ""
+            detailedProgress = ""
         }
     }
-    
+
     func cancelUpload() {
-        print("🛑 [UploadProgress] User cancelled upload")
-        
-        // Cancel video conversion if in progress
+        guard worker != nil else { isUploading = false; return }
+        discardActiveUpload = true
+        worker?.cancel()
         VideoConversionService.shared.cancelCurrentConversion()
-        
-        // Cancel upload task in TweetUploadManager
-        HproseInstance.shared.uploadManager.cancelCurrentUpload()
-        
-        // Remove pending upload file
-        Task { @MainActor in
-            await HproseInstance.shared.uploadManager.removePendingUpload()
-        }
-        
-        // Re-enable auto-lock
-        UIApplication.shared.isIdleTimerDisabled = false
-        
-        // Restore user interaction
-        unblockUserInteraction()
-        
-        // CRITICAL: Clear video processing flag
-        isProcessingVideo = false
-        
-        // Reset upload state
-        currentStage = .failed
-        stageMessage = NSLocalizedString("Upload cancelled", comment: "Upload cancelled message")
-        progress = 0.0
-        isUploading = false
-        uploadType = ""
-        detailedProgress = ""
-        
-        // Post notification for upload cancellation
-        NotificationCenter.default.post(
-            name: .uploadCancelled,
-            object: nil
-        )
+        background.finish(success: false)
+        stageMessage = NSLocalizedString("Cancelling upload...", comment: "Upload cancellation")
+        // Wait for the worker before deleting its checkpoint or starting another
+        // operation. An in-flight publication may still return confirmed success.
+        NotificationCenter.default.post(name: .uploadCancelled, object: nil)
     }
-    
-    private func handleBackgroundInterruption() {
-        // If still uploading after backgrounding, it likely failed
-        // Clean up state to prevent video player issues
-        print("⚠️ [UploadProgress] Detected upload interruption - cleaning up state")
-        
-        // Re-enable auto-lock
-        UIApplication.shared.isIdleTimerDisabled = false
-        
-        // Restore user interaction
-        unblockUserInteraction()
-        
-        // CRITICAL: Clear video processing flag to allow video player recovery
-        isProcessingVideo = false
-        
-        // Reset upload state
-        currentStage = .failed
-        stageMessage = NSLocalizedString("Upload interrupted", comment: "Upload interrupted")
-        progress = 0.0
-        isUploading = false
-        uploadType = ""
-        detailedProgress = ""
-        
-        print("✅ [UploadProgress] State cleaned up after interruption")
-    }
+}
 
-    private func blockUserInteraction() {
-        guard !userInteractionDisabled else { return }
+/// Runtime for one finite, user-started upload. Never pretends that interrupted
+/// publication succeeded; the pending checkpoint records what remains uncertain.
+@MainActor
+private final class UploadBackgroundExecution {
+    private final class Completion { var success = false }
+    private var identifier: String?
+    private var completion: Completion?
+    private var task: BGTask?
+    private var fraction = 0.0
+    private var title = ""
+    private var message = ""
+    var didStart: (() -> Void)?
+    var didExpire: (() -> Void)?
 
-        Task { @MainActor in
-            userInteractionDisabled = true
-            // Block user interaction on all windows to prevent other tasks during upload
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                for window in windowScene.windows {
-                    window.isUserInteractionEnabled = false
+    func request(title: String, message: String) {
+        guard #available(iOS 26.0, *), UIApplication.shared.applicationState != .background else { return }
+        let id = (Bundle.main.bundleIdentifier ?? "com.example.Tweet") + ".upload." + UUID().uuidString
+        let completion = Completion()
+        self.identifier = id
+        self.completion = completion
+        self.title = title
+        self.message = message
+        fraction = 0
+        let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: id, using: .main) { [weak self] task in
+            Task { @MainActor in
+                guard let self, self.identifier == id else {
+                    // The upload can finish before iOS delivers the grant.
+                    task.setTaskCompleted(success: completion.success)
+                    return
                 }
-                print("🚫 [UploadProgress] User interaction blocked during upload")
+                self.task = task
+                guard let continued = task as? BGContinuedProcessingTask else {
+                    self.finish(success: false)
+                    return
+                }
+                continued.progress.totalUnitCount = 1_000_000
+                continued.expirationHandler = { [weak self] in
+                    Task { @MainActor in
+                        guard let self, self.identifier == id else { return }
+                        self.finish(success: false)
+                        self.didExpire?()
+                    }
+                }
+                self.update(fraction: self.fraction, message: self.message)
+                self.didStart?()
             }
         }
+        guard registered else { finish(success: false); return }
+        let request = BGContinuedProcessingTaskRequest(identifier: id, title: title, subtitle: message)
+        // Upload immediately in the foreground if iOS cannot grant runtime.
+        request.strategy = .fail
+        do { try BGTaskScheduler.shared.submit(request) }
+        catch {
+            print("[Upload] Background runtime unavailable; continuing in foreground: \(error)")
+            finish(success: false)
+        }
     }
 
-    private func unblockUserInteraction() {
-        guard userInteractionDisabled else { return }
+    func update(fraction: Double, message: String) {
+        self.fraction = max(self.fraction, min(fraction, 0.99))
+        self.message = message
+        if #available(iOS 26.0, *), let continued = task as? BGContinuedProcessingTask {
+            continued.progress.completedUnitCount = Int64(self.fraction * Double(continued.progress.totalUnitCount))
+            continued.updateTitle(title, subtitle: message)
+        }
+    }
 
-        Task { @MainActor in
-            userInteractionDisabled = false
-            // Restore user interaction on all windows
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                for window in windowScene.windows {
-                    window.isUserInteractionEnabled = true
-                }
-                print("✅ [UploadProgress] User interaction restored after upload")
+    func finish(success: Bool) {
+        let finished = task
+        let requested = identifier
+        completion?.success = success
+        completion = nil
+        task = nil
+        identifier = nil
+        finished?.expirationHandler = nil
+        if let finished {
+            if #available(iOS 26.0, *), let continued = finished as? BGContinuedProcessingTask, success {
+                continued.progress.completedUnitCount = continued.progress.totalUnitCount
             }
-        }
-    }
-    
-    deinit {
-        if let observer = backgroundObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        if let observer = foregroundObserver {
-            NotificationCenter.default.removeObserver(observer)
+            finished.setTaskCompleted(success: success)
+        } else if let requested {
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: requested)
         }
     }
 }

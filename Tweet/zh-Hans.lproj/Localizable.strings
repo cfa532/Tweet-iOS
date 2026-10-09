@@ -824,3 +824,18 @@
 "%ds" = "%d秒";
 "Unknown User" = "未知用户";
 "New message" = "新消息";
+
+/* Continued uploads */
+"Preparing upload..." = "正在准备上传…";
+"Uploading attachments..." = "正在上传附件…";
+"Publishing..." = "正在发布…";
+"Normalizing video..." = "正在处理视频…";
+"Keep the app open while uploading." = "上传时请保持应用打开。";
+"You can lock the screen or switch apps while this upload finishes." = "上传期间可以锁屏或切换应用。";
+"Upload paused. You can retry when you return." = "上传已暂停。返回应用后可以重试。";
+"Upload unfinished. You can retry when you return." = "上传尚未完成。返回应用后可以重试。";
+"Cancelling upload..." = "正在取消上传…";
+"Your upload is saved. Retry to continue, or discard it." = "上传内容已保存。可以重试继续上传，或将其丢弃。";
+"Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message." = "发布过程被中断。重试前请检查动态或会话，以免重复发布或发送。";
+"Sign in to the account that started this upload." = "请登录发起此次上传的账户。";
+"Later" = "稍后";

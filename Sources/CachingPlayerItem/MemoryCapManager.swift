@@ -299,8 +299,11 @@ final class MemoryCapManager: @unchecked Sendable {
         TweetCacheManager.shared.clearMemoryCache()
         ChatCacheManager.shared.clearMemoryCache()
         // Close pooled hprose URLSessions (keep-alive connections + buffers).
-        // Clients are recreated lazily on the next RPC after foregrounding.
-        HproseInstance.shared.clientPool.clear()
+        // Continued uploads reuse their client between chunks. Retiring it here
+        // would break the next chunk even though iOS granted background runtime.
+        if !UploadProgressManager.shared.hasActiveOrQueuedUploads {
+            HproseInstance.shared.clientPool.clear()
+        }
         // Refault Core Data registered objects / drop row caches (pure cache data).
         CoreDataManager.shared.releaseMemoryForBackground()
         // Drop CIContext internal buffer caches accumulated by video frame extraction.

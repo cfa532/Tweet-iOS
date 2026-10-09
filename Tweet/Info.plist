@@ -4,7 +4,7 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.zz.upload</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).upload.*</string>
 		<string>com.example.ZZ.messageCheck</string>
 		<string>com.example.ZZ.mainFeedCheck</string>
 	</array>
@@ -36,6 +36,7 @@
 	<array>
 		<string>audio</string>
 		<string>fetch</string>
+		<string>processing</string>
 	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>

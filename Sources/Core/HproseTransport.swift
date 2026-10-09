@@ -19,6 +19,7 @@ enum HproseTransport {
         args: [Any],
         priority: DispatchQoS.QoSClass = .userInitiated
     ) async -> Any? {
+        guard !Task.isCancelled else { return nil }
         // Claim the client for the duration of the call. Pooled clients are shared,
         // so another code path can retire (and invalidate the NSURLSession of) the
         // client we were handed at any moment; invoking on an invalidated session

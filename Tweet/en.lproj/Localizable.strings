@@ -819,3 +819,18 @@
 "%ds" = "%ds";
 "Unknown User" = "Unknown User";
 "New message" = "New message";
+
+/* Continued uploads */
+"Preparing upload..." = "Preparing upload...";
+"Uploading attachments..." = "Uploading attachments...";
+"Publishing..." = "Publishing...";
+"Normalizing video..." = "Normalizing video...";
+"Keep the app open while uploading." = "Keep the app open while uploading.";
+"You can lock the screen or switch apps while this upload finishes." = "You can lock the screen or switch apps while this upload finishes.";
+"Upload paused. You can retry when you return." = "Upload paused. You can retry when you return.";
+"Upload unfinished. You can retry when you return." = "Upload unfinished. You can retry when you return.";
+"Cancelling upload..." = "Cancelling upload...";
+"Your upload is saved. Retry to continue, or discard it." = "Your upload is saved. Retry to continue, or discard it.";
+"Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message." = "Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message.";
+"Sign in to the account that started this upload." = "Sign in to the account that started this upload.";
+"Later" = "Later";

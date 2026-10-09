@@ -649,6 +649,12 @@ class ImageCacheManager: @unchecked Sendable {
             return nil 
         }
         
+        return cacheImageData(data, forKey: key)
+    }
+
+    /// Accept a value snapshot so upload workers never read a media model off-main.
+    @discardableResult
+    func cacheImageData(_ data: Data, forKey key: String) -> UIImage? {
         let targetImage: UIImage
         if let downsampled = downsampleImageData(data, maxDimension: maxDownsampleDimension) {
             targetImage = downsampled

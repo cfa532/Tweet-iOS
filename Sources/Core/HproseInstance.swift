@@ -28,6 +28,16 @@ private func hproseError(_ message: @autoclosure () -> String) {
     hproseLogger.error("\(renderedMessage, privacy: .private)")
 }
 
+private final class UploadTransferProgress: NSObject, URLSessionTaskDelegate, Sendable {
+    let report: @Sendable (Double) -> Void
+    init(report: @escaping @Sendable (Double) -> Void) { self.report = report }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        report(min(Double(totalBytesSent) / Double(totalBytesExpectedToSend), 1))
+    }
+}
+
 @objc protocol HproseService {
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
@@ -5522,6 +5532,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             )
             hproseDebug("==========================================================")
             
+            try Task.checkCancellation()
             guard normalizationSuccess else {
                 hproseError("❌ [VIDEO UPLOAD] Video normalization failed, falling back to original video")
                 progressCallback?("Uploading original video...", 10)
@@ -5532,7 +5543,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     referenceId: referenceId,
                     mediaType: .video,
                     appUser: appUser,
-                    appId: appId
+                    appId: appId,
+                    progressCallback: { message, percent in progressCallback?(message, 50 + percent / 2) }
                 )
                 return (result, nil)
             }
@@ -5574,7 +5586,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     referenceId: referenceId,
                     mediaType: .video,
                     appUser: appUser,
-                    appId: appId
+                    appId: appId,
+                    progressCallback: { message, percent in progressCallback?(message, 50 + percent / 2) }
                 )
                 return (result, nil)
             } else {
@@ -5603,7 +5616,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         referenceId: referenceId,
                         mediaType: .video,
                         appUser: appUser,
-                        appId: appId
+                        appId: appId,
+                        progressCallback: { message, percent in progressCallback?(message, 50 + percent / 2) }
                     )
                     return (result, nil)
                 }
@@ -5625,7 +5639,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         referenceId: referenceId,
                         mediaType: .video,
                         appUser: appUser,
-                        appId: appId
+                        appId: appId,
+                        progressCallback: { message, percent in progressCallback?(message, 50 + percent / 2) }
                     )
                     return (result, nil)
                 }
@@ -5798,7 +5813,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     isNormalized: isNormalized,
                     progressCallback: { progress in
                         DispatchQueue.main.async {
-                            progressCallback?(progress.stage, 10 + Int(Double(progress.progress) * 0.2)) // 10-30% for conversion
+                            progressCallback?(progress.stage, 30 + Int(Double(progress.progress) * 0.3)) // 30-60% for conversion
                         }
                     }
                 ) { result in
@@ -5806,6 +5821,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 }
             }
             
+            try Task.checkCancellation()
             guard conversionResult.success,
                   let hlsDirectory = conversionResult.hlsDirectoryURL else {
                 hproseError("DEBUG: Video conversion failed: \(conversionResult.errorMessage ?? "Unknown error")")
@@ -5853,6 +5869,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             let maxRetries = 2
             
             for attempt in 1...maxRetries {
+                try Task.checkCancellation()
                 do {
                     // Resolve writableUrl (may use cached or resolve fresh)
                     _ = try await appUser.resolveWritableUrl()
@@ -5865,11 +5882,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         compressedURL: compressedURL,
                         fileName: "\(originalFileName)_hls.zip",
                         referenceId: referenceId,
-                        appUser: appUser
+                        appUser: appUser,
+                        progressCallback: progressCallback
                     )
                     break // Success - exit retry loop
                     
                 } catch let error {
+                    try Task.checkCancellation()
                     lastError = error
                     let nsError = error as NSError
                     hproseError("ERROR: [HLS Upload] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
@@ -5886,7 +5905,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     }
                     
                     // Small delay before retry
-                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                    try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
                 }
             }
             
@@ -5992,207 +6011,190 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async -> Bool {
             
-            return await withCheckedContinuation { continuation in
-                // Get video info to check original resolution and bitrate
-                Task(priority: .high) {
-                    // Try to get video info with AVFoundation first
-                    var videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
+            guard !Task.isCancelled else { return false }
+            // Try to get video info with AVFoundation first
+            var videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
+
+            // If AVFoundation fails, try with a temporary file with proper extension
+            if videoInfo == nil {
+                hproseError("AVFoundation probe failed, trying with temporary file...")
+                let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+                let tempVideoURL = tempDir.appendingPathComponent("\(UUID().uuidString).mp4")
+
+                do {
+                    // Copy file data to temporary location with .mp4 extension
+                    let fileData = try Data(contentsOf: inputURL)
+                    try fileData.write(to: tempVideoURL)
                     
-                    // If AVFoundation fails, try with a temporary file with proper extension
-                    if videoInfo == nil {
-                        hproseError("AVFoundation probe failed, trying with temporary file...")
-                        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-                        let tempVideoURL = tempDir.appendingPathComponent("\(UUID().uuidString).mp4")
-                        
-                        do {
-                            // Copy file data to temporary location with .mp4 extension
-                            let fileData = try Data(contentsOf: inputURL)
-                            try fileData.write(to: tempVideoURL)
-                            
-                            // Try to get video info using AVFoundation
-                            let dimensions = await HLSVideoProcessor.shared.getVideoDimensions(filePath: tempVideoURL.path)
-                            if dimensions.width > 0 && dimensions.height > 0 {
-                                // Get rotation info if available
-                                let asset = AVURLAsset(url: tempVideoURL)
-                                var rotation = 0
-                                if let tracks = try? await asset.loadTracks(withMediaType: .video),
-                                   let track = tracks.first {
-                                    let transform = try? await track.load(.preferredTransform)
-                                    if let transform = transform {
-                                        // Calculate rotation from transform
-                                        let angle = atan2(transform.b, transform.a) * 180 / .pi
-                                        rotation = Int(angle)
-                                    }
-                                }
-                                
-                                var displayWidth = Int(dimensions.width)
-                                var displayHeight = Int(dimensions.height)
-                                
-                                // Apply rotation if needed
-                                if rotation == 90 || rotation == -90 {
-                                    swap(&displayWidth, &displayHeight)
-                                }
-                                
-                                videoInfo = (Int(dimensions.width), Int(dimensions.height), displayWidth, displayHeight, rotation)
-                            }
-                            
-                            // Clean up temp file
-                            try? FileManager.default.removeItem(at: tempDir)
-                        } catch {
-                            hproseError("Failed to get video info via AVFoundation: \(error)")
-                            try? FileManager.default.removeItem(at: tempDir)
-                        }
-                    }
-                    
-                    let sourceBitrateKbps = try? await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: inputURL.path)
-                    
-                    // Get original resolution
-                    let originalWidth: Int?
-                    let originalHeight: Int?
-                    if let info = videoInfo {
-                        originalWidth = info.displayWidth
-                        originalHeight = info.displayHeight
-                    } else {
-                        originalWidth = nil
-                        originalHeight = nil
-                    }
-                    
-                    // Determine if we need to scale and calculate target bitrate
-                    let needsScaling: Bool
-                    let scaleFilter: String
-                    let targetBitrateKbps: Int
-                    let videoResolution: Int
-                    
-                    if let width = originalWidth, let height = originalHeight {
-                        let aspectRatio = Float(width) / Float(height)
-                        
-                        // Video resolution is defined by:
-                        // - Landscape (aspect >= 1.0): HEIGHT (e.g., 1280x720 is 720p)
-                        // - Portrait (aspect < 1.0): WIDTH (e.g., 720x1280 is 720p)
-                        if aspectRatio < 1.0 {
-                            // Portrait: resolution is width
-                            videoResolution = width
-                        } else {
-                            // Landscape: resolution is height
-                            videoResolution = height
-                        }
-                        
-                        needsScaling = videoResolution > 720
-                        
-                        if needsScaling {
-                            // Resolution > 720p: scale to 720p, capped at the source bitrate.
-                            if aspectRatio < 1.0 {
-                                // Portrait: scale to target width
-                                scaleFilter = "scale=720:-2"
-                            } else {
-                                // Landscape: scale to target height
-                                scaleFilter = "scale=-2:720"
-                            }
-                            let referenceBitrateKbps = Int(VideoConversionService.reference720pBitrate)
-                            if let sourceBitrateKbps, sourceBitrateKbps > 0, sourceBitrateKbps < referenceBitrateKbps {
-                                targetBitrateKbps = sourceBitrateKbps
-                            } else {
-                                targetBitrateKbps = referenceBitrateKbps
-                            }
-                        } else if videoResolution < 720, let sourceBitrateKbps, sourceBitrateKbps > 0 {
-                            // Sub-720p sources stay at their original bitrate instead of being raised by the 720p reference curve.
-                            scaleFilter = ""
-                            targetBitrateKbps = sourceBitrateKbps
-                        } else {
-                            // 720p sources keep the reference curve; bitrate detection can vary across formats.
-                            // If source bitrate is unavailable for sub-720p, fall back to the previous pixel-based estimate.
-                            scaleFilter = ""
-                            // Calculate proportional bitrate based on pixel count
-                            // Formula: bitrate = max(minBitrate, (pixel_count / REFERENCE_720P_PIXELS) * reference720pBitrate)
-                            // REFERENCE_720P_PIXELS = 1280 × 720 = 921,600
-                            let pixelCount = width * height
-                            let REFERENCE_720P_PIXELS = 921600
-                            let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
-                            let estimatedBitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
-                            if let sourceBitrateKbps, sourceBitrateKbps > 0, sourceBitrateKbps < estimatedBitrateKbps {
-                                targetBitrateKbps = sourceBitrateKbps
-                            } else {
-                                targetBitrateKbps = estimatedBitrateKbps
+                    // Try to get video info using AVFoundation
+                    let dimensions = await HLSVideoProcessor.shared.getVideoDimensions(filePath: tempVideoURL.path)
+                    if dimensions.width > 0 && dimensions.height > 0 {
+                        // Get rotation info if available
+                        let asset = AVURLAsset(url: tempVideoURL)
+                        var rotation = 0
+                        if let tracks = try? await asset.loadTracks(withMediaType: .video),
+                           let track = tracks.first {
+                            let transform = try? await track.load(.preferredTransform)
+                            if let transform = transform {
+                                // Calculate rotation from transform
+                                let angle = atan2(transform.b, transform.a) * 180 / .pi
+                                rotation = Int(angle)
                             }
                         }
-                    } else {
-                        // Fallback: assume scaling needed
-                        videoResolution = 720
-                        needsScaling = true
-                        scaleFilter = "scale=-2:720"
-                        targetBitrateKbps = Int(VideoConversionService.reference720pBitrate)
-                    }
-                    
-                    hproseDebug("📹 [NORMALIZE] Original: \(originalWidth ?? 0)x\(originalHeight ?? 0), target bitrate: \(targetBitrateKbps)k, scaling: \(needsScaling ? "YES (to 720p)" : "NO (keep original resolution)")")
-                    
-                    // Build FFmpeg command
-                    var command: String
-                    if needsScaling && !scaleFilter.isEmpty {
-                        command = """
-                            -i "\(inputURL.path)" \
-                            -c:v h264_videotoolbox \
-                            -allow_sw 1 \
-                            -profile:v main \
-                            -level 4.0 \
-                            -pix_fmt yuv420p \
-                            -vf "\(scaleFilter)" \
-                            -b:v \(targetBitrateKbps)k \
-                            -maxrate \(targetBitrateKbps)k \
-                            -bufsize \(targetBitrateKbps)k \
-                            -c:a aac \
-                            -ar 44100 \
-                            -b:a 128k \
-                            -movflags +faststart \
-                            -metadata:s:v:0 rotate=0 \
-                            "\(outputURL.path)"
-                            """
-                    } else {
-                        // Keep original resolution but encode with target bitrate
-                        command = """
-                            -i "\(inputURL.path)" \
-                            -c:v h264_videotoolbox \
-                            -allow_sw 1 \
-                            -profile:v main \
-                            -level 4.0 \
-                            -pix_fmt yuv420p \
-                            -b:v \(targetBitrateKbps)k \
-                            -maxrate \(targetBitrateKbps)k \
-                            -bufsize \(targetBitrateKbps)k \
-                            -c:a aac \
-                            -ar 44100 \
-                            -b:a 128k \
-                            -movflags +faststart \
-                            -metadata:s:v:0 rotate=0 \
-                            "\(outputURL.path)"
-                            """
-                    }
-                    
-                    DynamicFFmpegKit.shared.executeAsync(command) { session in
-                        guard let session = session else {
-                            hproseError("ERROR: Failed to create FFmpeg session for normalization")
-                            continuation.resume(returning: false)
-                            return
-                        }
                         
-                        let success = session.isSuccess
+                        var displayWidth = Int(dimensions.width)
+                        var displayHeight = Int(dimensions.height)
                         
-                        if success {
-                            if FileManager.default.fileExists(atPath: outputURL.path) {
-                                continuation.resume(returning: true)
-                            } else {
-                                hproseError("ERROR: Normalized output file missing")
-                                continuation.resume(returning: false)
-                            }
-                        } else {
-                            hproseError("ERROR: FFmpeg normalization failed (code: \(session.returnCodeDescription))")
-                            continuation.resume(returning: false)
+                        // Apply rotation if needed
+                        if rotation == 90 || rotation == -90 {
+                            swap(&displayWidth, &displayHeight)
                         }
+
+                        videoInfo = (Int(dimensions.width), Int(dimensions.height), displayWidth, displayHeight, rotation)
                     }
+
+                    // Clean up temp file
+                    try? FileManager.default.removeItem(at: tempDir)
+                } catch {
+                    hproseError("Failed to get video info via AVFoundation: \(error)")
+                    try? FileManager.default.removeItem(at: tempDir)
                 }
             }
+
+            let sourceBitrateKbps = try? await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: inputURL.path)
+
+            // Get original resolution
+            let originalWidth: Int?
+            let originalHeight: Int?
+            if let info = videoInfo {
+                originalWidth = info.displayWidth
+                originalHeight = info.displayHeight
+            } else {
+                originalWidth = nil
+                originalHeight = nil
+            }
+
+            // Determine if we need to scale and calculate target bitrate
+            let needsScaling: Bool
+            let scaleFilter: String
+            let targetBitrateKbps: Int
+            let videoResolution: Int
+
+            if let width = originalWidth, let height = originalHeight {
+                let aspectRatio = Float(width) / Float(height)
+
+                // Video resolution is defined by:
+                // - Landscape (aspect >= 1.0): HEIGHT (e.g., 1280x720 is 720p)
+                // - Portrait (aspect < 1.0): WIDTH (e.g., 720x1280 is 720p)
+                if aspectRatio < 1.0 {
+                    // Portrait: resolution is width
+                    videoResolution = width
+                } else {
+                    // Landscape: resolution is height
+                    videoResolution = height
+                }
+
+                needsScaling = videoResolution > 720
+
+                if needsScaling {
+                    // Resolution > 720p: scale to 720p, capped at the source bitrate.
+                    if aspectRatio < 1.0 {
+                        // Portrait: scale to target width
+                        scaleFilter = "scale=720:-2"
+                    } else {
+                        // Landscape: scale to target height
+                        scaleFilter = "scale=-2:720"
+                    }
+                    let referenceBitrateKbps = Int(VideoConversionService.reference720pBitrate)
+                    if let sourceBitrateKbps, sourceBitrateKbps > 0, sourceBitrateKbps < referenceBitrateKbps {
+                        targetBitrateKbps = sourceBitrateKbps
+                    } else {
+                        targetBitrateKbps = referenceBitrateKbps
+                    }
+                } else if videoResolution < 720, let sourceBitrateKbps, sourceBitrateKbps > 0 {
+                    // Sub-720p sources stay at their original bitrate instead of being raised by the 720p reference curve.
+                    scaleFilter = ""
+                    targetBitrateKbps = sourceBitrateKbps
+                } else {
+                    // 720p sources keep the reference curve; bitrate detection can vary across formats.
+                    // If source bitrate is unavailable for sub-720p, fall back to the previous pixel-based estimate.
+                    scaleFilter = ""
+                    // Calculate proportional bitrate based on pixel count
+                    // Formula: bitrate = max(minBitrate, (pixel_count / REFERENCE_720P_PIXELS) * reference720pBitrate)
+                    // REFERENCE_720P_PIXELS = 1280 × 720 = 921,600
+                    let pixelCount = width * height
+                    let REFERENCE_720P_PIXELS = 921600
+                    let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
+                    let estimatedBitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
+                    if let sourceBitrateKbps, sourceBitrateKbps > 0, sourceBitrateKbps < estimatedBitrateKbps {
+                        targetBitrateKbps = sourceBitrateKbps
+                    } else {
+                        targetBitrateKbps = estimatedBitrateKbps
+                    }
+                }
+            } else {
+                // Fallback: assume scaling needed
+                videoResolution = 720
+                needsScaling = true
+                scaleFilter = "scale=-2:720"
+                targetBitrateKbps = Int(VideoConversionService.reference720pBitrate)
+            }
+
+            hproseDebug("📹 [NORMALIZE] Original: \(originalWidth ?? 0)x\(originalHeight ?? 0), target bitrate: \(targetBitrateKbps)k, scaling: \(needsScaling ? "YES (to 720p)" : "NO (keep original resolution)")")
+
+            // Build FFmpeg command
+            var command: String
+            if needsScaling && !scaleFilter.isEmpty {
+                command = """
+                    -i "\(inputURL.path)" \
+                    -c:v h264_videotoolbox \
+                    -allow_sw 1 \
+                    -profile:v main \
+                    -level 4.0 \
+                    -pix_fmt yuv420p \
+                    -vf "\(scaleFilter)" \
+                    -b:v \(targetBitrateKbps)k \
+                    -maxrate \(targetBitrateKbps)k \
+                    -bufsize \(targetBitrateKbps)k \
+                    -c:a aac \
+                    -ar 44100 \
+                    -b:a 128k \
+                    -movflags +faststart \
+                    -metadata:s:v:0 rotate=0 \
+                    "\(outputURL.path)"
+                    """
+            } else {
+                // Keep original resolution but encode with target bitrate
+                command = """
+                    -i "\(inputURL.path)" \
+                    -c:v h264_videotoolbox \
+                    -allow_sw 1 \
+                    -profile:v main \
+                    -level 4.0 \
+                    -pix_fmt yuv420p \
+                    -b:v \(targetBitrateKbps)k \
+                    -maxrate \(targetBitrateKbps)k \
+                    -bufsize \(targetBitrateKbps)k \
+                    -c:a aac \
+                    -ar 44100 \
+                    -b:a 128k \
+                    -movflags +faststart \
+                    -metadata:s:v:0 rotate=0 \
+                    "\(outputURL.path)"
+                    """
+            }
+
+            guard !Task.isCancelled else { return false }
+            let duration = (try? await AVURLAsset(url: inputURL).load(.duration).seconds) ?? 0
+            guard let session = await DynamicFFmpegKit.shared.execute(command, progress: { milliseconds in
+                guard duration > 0, duration.isFinite, milliseconds.isFinite else { return }
+                let fraction = min(max(milliseconds / 1000 / duration, 0), 1)
+                progressCallback?(NSLocalizedString("Normalizing video...", comment: "Upload stage"), 10 + Int(fraction * 20))
+            }) else { return false }
+            return !Task.isCancelled && session.isSuccess && FileManager.default.fileExists(atPath: outputURL.path)
         }
-        
+
         /// Compress HLS directory into a zip file (memory-optimized streaming approach)
         private static func compressHLSDirectory(hlsDirectory: URL, originalFileName: String, progressCallback: (@Sendable (String, Int) -> Void)? = nil) async throws -> URL {
             let zipFileName = "\(originalFileName)_hls.zip"
@@ -6206,64 +6208,56 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             VideoConversionService.shared.logMemoryUsage("before zip creation")
 
             // Memory-optimized streaming approach: Process files sequentially without loading into memory
-            return try await withCheckedThrowingContinuation { continuation in
-                Task(priority: .high) {
-                    do {
-                        // Calculate total size and get file list
-                        var totalSize: Int64 = 0
-                        var fileURLs: [URL] = []
+            try Task.checkCancellation()
+            // Calculate total size and get file list
+            var totalSize: Int64 = 0
+            var fileURLs: [URL] = []
 
-                        // Use FileManager enumerator to get all files without loading them
-                        let enumerator = FileManager.default.enumerator(at: hlsDirectory,
-                                                                       includingPropertiesForKeys: [.fileSizeKey],
-                                                                       options: [],
-                                                                       errorHandler: nil)
+            // Use FileManager enumerator to get all files without loading them
+            let enumerator = FileManager.default.enumerator(at: hlsDirectory,
+                                                           includingPropertiesForKeys: [.fileSizeKey],
+                                                           options: [],
+                                                           errorHandler: nil)
 
-                        while let fileURL = enumerator?.nextObject() as? URL {
-                            var isDirectory: ObjCBool = false
-                            if FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) && !isDirectory.boolValue {
-                                if let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-                                   let size = attributes[.size] as? Int64 {
-                                    totalSize += size
-                                    fileURLs.append(fileURL)
-                                }
-                            }
-                        }
-
-                        hproseDebug("DEBUG: [ZIP CREATION] Found \(fileURLs.count) files, total size: \(totalSize / 1024)KB")
-                        
-                        // Force memory cleanup before zip creation
-                        autoreleasepool {}
-                        progressCallback?("Creating ZIP file...", 10)
-
-                        // Create ZIP file directly without copying directory
-                        // Use parent directory as base so "hls/" is included in ZIP structure
-                        let baseDirectory = hlsDirectory.deletingLastPathComponent()
-                        hproseDebug("DEBUG: [ZIP CREATION] Base directory: \(baseDirectory.path)")
-                        hproseDebug("DEBUG: [ZIP CREATION] HLS directory name: \(hlsDirectory.lastPathComponent)")
-                        try MediaProcessor.createZipFile(from: fileURLs, relativeTo: baseDirectory, to: zipURL, progressCallback: progressCallback)
-
-                        // Verify zip file was created and get its size
-                        if let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
-                           let zipSize = zipAttributes[.size] as? Int64 {
-                            hproseDebug("DEBUG: [ZIP CREATION] Zip file size: \(zipSize / 1024)KB (original: \(totalSize / 1024)KB)")
-
-                            // Log memory usage after zip creation
-                            VideoConversionService.shared.logMemoryUsage("after zip creation")
-
-                            continuation.resume(returning: zipURL)
-                        } else {
-                            throw NSError(domain: "ZipCreation", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to verify zip file creation"])
-                        }
-
-                    } catch {
-                        hproseError("DEBUG: [ZIP CREATION] Zip creation failed: \(error)")
-                        continuation.resume(throwing: error)
+            while let fileURL = enumerator?.nextObject() as? URL {
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) && !isDirectory.boolValue {
+                    if let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+                       let size = attributes[.size] as? Int64 {
+                        totalSize += size
+                        fileURLs.append(fileURL)
                     }
                 }
             }
+
+            hproseDebug("DEBUG: [ZIP CREATION] Found \(fileURLs.count) files, total size: \(totalSize / 1024)KB")
+
+            // Force memory cleanup before zip creation
+            autoreleasepool {}
+            progressCallback?("Creating ZIP file...", 10)
+
+            // Create ZIP file directly without copying directory
+            // Use parent directory as base so "hls/" is included in ZIP structure
+            let baseDirectory = hlsDirectory.deletingLastPathComponent()
+            hproseDebug("DEBUG: [ZIP CREATION] Base directory: \(baseDirectory.path)")
+            hproseDebug("DEBUG: [ZIP CREATION] HLS directory name: \(hlsDirectory.lastPathComponent)")
+            try MediaProcessor.createZipFile(from: fileURLs, relativeTo: baseDirectory, to: zipURL, progressCallback: progressCallback)
+
+            // Verify zip file was created and get its size
+            if let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
+               let zipSize = zipAttributes[.size] as? Int64 {
+                hproseDebug("DEBUG: [ZIP CREATION] Zip file size: \(zipSize / 1024)KB (original: \(totalSize / 1024)KB)")
+
+                // Log memory usage after zip creation
+                VideoConversionService.shared.logMemoryUsage("after zip creation")
+
+                return zipURL
+            } else {
+                throw NSError(domain: "ZipCreation", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to verify zip file creation"])
+            }
+
         }
-        
+
         /// Create ZIP file from array of file URLs using system ZIP functionality (memory efficient)
         private static func createZipFile(from fileURLs: [URL], relativeTo baseURL: URL, to zipURL: URL, progressCallback: (@Sendable (String, Int) -> Void)? = nil) throws {
             let fileManager = FileManager.default
@@ -6281,6 +6275,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
             // Process each file individually to minimize memory usage
             for fileURL in fileURLs {
+                try Task.checkCancellation()
                 autoreleasepool {
                     do {
                         let relativePath = fileURL.path.replacingOccurrences(of: baseURL.path + "/", with: "")
@@ -6419,7 +6414,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             compressedURL: URL,
             fileName: String,
             referenceId: String?,
-            appUser: User
+            appUser: User,
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> String {
             let userSnapshot = await MainActor.run {
                 (writableUrl: appUser.writableUrl, cloudDrivePort: appUser.cloudDrivePort)
@@ -6688,7 +6684,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             uploadConfig.timeoutIntervalForRequest = 6 * 60 * 60
             uploadConfig.timeoutIntervalForResource = 6 * 60 * 60
             let uploadSession = URLSession(configuration: uploadConfig)
-            let (responseData, response) = try await uploadSession.upload(for: request, fromFile: tempMultipartFile)
+            defer { uploadSession.finishTasksAndInvalidate() }
+            let delegate = UploadTransferProgress { fraction in
+                progressCallback?(NSLocalizedString("Uploading attachments...", comment: "Upload stage"), 60 + Int(fraction * 39))
+            }
+            let (responseData, response) = try await uploadSession.upload(for: request, fromFile: tempMultipartFile, delegate: delegate)
 
             if fileSize > maxMemoryEfficientSize {
                 VideoConversionService.shared.logMemoryUsage("after file-based upload")
@@ -6754,7 +6754,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             referenceId: String?,
             mediaType: MediaType,
             appUser: User,
-            appId: String
+            appId: String,
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> MimeiFileType {
             hproseDebug("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
             
@@ -6763,6 +6764,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             let maxRetries = 2
             
             for attempt in 1...maxRetries {
+                try Task.checkCancellation()
                 do {
                     // Resolve the writable host for this attempt.
                     let writableUrl = try await appUser.resolveWritableUrl()
@@ -6779,10 +6781,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         referenceId: referenceId,
                         mediaType: mediaType,
                         uploadClient: uploadClient,
-                        appId: appId
+                        appId: appId,
+                        progressCallback: progressCallback
                     )
                     
                 } catch let error as NSError {
+                    try Task.checkCancellation()
                     lastError = error
                     hproseError("ERROR: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) failed - domain: \(error.domain), code: \(error.code)")
                     
@@ -6799,7 +6803,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     }
                     
                     // Small delay before retry
-                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                    try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
                 }
             }
             
@@ -6814,7 +6818,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             referenceId: String?,
             mediaType: MediaType,
             uploadClient: HproseClient,
-            appId: String
+            appId: String,
+            progressCallback: (@Sendable (String, Int) -> Void)? = nil
         ) async throws -> MimeiFileType {
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try data.write(to: tempURL)
@@ -6834,6 +6839,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             
             var chunkCount = 0
             while true {
+                try Task.checkCancellation()
                 let chunkData = fileHandle.readData(ofLength: chunkSize)
                 if chunkData.isEmpty { break }
                 
@@ -6852,6 +6858,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         offset += Int64(chunkData.count)
                         request["offset"] = offset
                         request["fsid"] = fsid
+                        progressCallback?(NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                                          Int(Double(offset) / Double(max(data.count, 1)) * 99))
                     } else {
                         hproseError("ERROR: Chunk \(chunkCount) upload failed - invalid response type: \(type(of: response))")
                         throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Server returned invalid response", comment: "Upload error")])
@@ -6878,6 +6886,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 }
             }
             
+            try Task.checkCancellation()
             request["finished"] = "true"
             if let referenceId = referenceId {
                 request["referenceid"] = referenceId
@@ -7317,41 +7326,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
     }
     
-    private func uploadItemPair(_ pair: [PendingTweetUpload.ItemData]) async throws -> [MimeiFileType] {
-        let uploadTasks = pair.map { itemData in
-            Task {
-                let (result, _) = try await uploadToIPFS(
-                    data: itemData.data,
-                    typeIdentifier: itemData.typeIdentifier,
-                    fileName: itemData.fileName,
-                    noResample: itemData.noResample,
-                    progressCallback: { message, progress in
-                    }
-                )
-                return result
-            }
-        }
-        
-        return try await withThrowingTaskGroup(of: MimeiFileType?.self) { group in
-            for task in uploadTasks {
-                group.addTask {
-                    return try await task.value
-                }
-            }
-            
-            var uploadResults: [MimeiFileType?] = []
-            for try await result in group {
-                uploadResults.append(result)
-            }
-            
-            if uploadResults.contains(where: { $0 == nil }) {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
-            }
-            
-            return uploadResults.compactMap { $0 }
-        }
-    }
-    
     @MainActor func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
         // Delegate to upload manager
         uploadManager.scheduleTweetUpload(tweet: tweet, itemData: itemData)
@@ -7361,183 +7335,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // Delegate to upload manager
         uploadManager.scheduleChatMessageUpload(message: message, itemData: itemData)
     }
-    
-    private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0, videoJobId: String? = nil) async {
-        hproseWarning("DEBUG: [uploadTweetWithPersistenceAndRetry] Starting upload with retry count: \(retryCount)")
-        
-        // Save pending upload to disk for persistence
-        let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount, videoJobId: videoJobId)
-        await savePendingUpload(pendingUpload)
-        
-        do {
-            // Upload attachments first (no retry)
-            let (uploadedAttachments, _) = try await uploadAttachments(itemData: itemData)
-            
-            // Update tweet with uploaded attachments
-            await MainActor.run { tweet.attachments = uploadedAttachments }
-            
-            // Upload the tweet - this will handle retries internally via withRetry
-            if let uploadedTweet = try await self.uploadTweet(tweet) {
-                // Success - remove pending upload and notify
-                await removePendingUpload()
-                
-                // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
-                await MainActor.run {
-                    hproseDebug("DEBUG: [HproseInstance] Posting .newTweetCreated notification for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
-                    NotificationCenter.default.post(
-                        name: .newTweetCreated,
-                        object: nil,
-                        userInfo: ["tweet": uploadedTweet]
-                    )
-                }
-            } else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
-            }
-        } catch {
-            hproseError("Error uploading tweet: \(error)")
-            
-            // Check if we've reached max retries
-            let maxRetries = 2
-            
-            hproseDebug("DEBUG: [Error handling] retryCount=\(retryCount), maxRetries=\(maxRetries), will show error: \(retryCount >= maxRetries)")
-            
-            if retryCount >= maxRetries {
-                // All retries exhausted - show error to user
-                hproseError("DEBUG: [Error handling] MAX RETRIES REACHED - Showing error to user and removing pending upload")
-                let userFriendlyMessage = NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Tweet upload failed error")
-                
-                await MainActor.run {
-                    if !self.isAppInitializing {
-                        hproseError("DEBUG: [Error handling] Posting backgroundUploadFailed notification")
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": userFriendlyMessage]
-                        )
-                    } else {
-                        hproseError("DEBUG: [Error handling] App still initializing, NOT showing error")
-                    }
-                }
-                
-                // Remove pending upload since we're giving up
-                await removePendingUpload()
-            } else {
-                // Will retry in background - don't show error yet
-                hproseWarning("DEBUG: [Error handling] Retry \(retryCount + 1) of \(maxRetries + 1) failed, scheduling background retry")
-                
-                // Schedule immediate background retry
-                let delay = UInt64(retryCount + 1) * 2_000_000_000 // 2, 4 seconds exponential backoff
-                Task.detached(priority: .background) {
-                    try? await Task.sleep(nanoseconds: delay)
-                    await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
-                }
-            }
-        }
-    }
-
-    private func isVideoUploadTypeIdentifier(_ typeIdentifier: String) -> Bool {
-        let value = typeIdentifier.lowercased()
-        return value.hasPrefix("public.movie") ||
-            value.hasPrefix("public.video") ||
-            value.contains("video") ||
-            value.contains("movie") ||
-            value.contains("quicktime") ||
-            value.contains("mpeg-4") ||
-            value.contains("mpeg4") ||
-            value.contains("mp4") ||
-            value.contains("m4v") ||
-            value.contains("mov") ||
-            value.contains("avi") ||
-            value.contains("mkv") ||
-            value.contains("webm")
-    }
-    
-    private func uploadAttachments(itemData: [PendingTweetUpload.ItemData]) async throws -> ([MimeiFileType], String?) {
-        var uploadedAttachments: [MimeiFileType] = []
-        var videoJobId: String? = nil
-        
-        // Check if we have any video items that need job ID tracking
-        let hasVideoItems = itemData.contains { item in
-            isVideoUploadTypeIdentifier(item.typeIdentifier)
-        }
-        
-        if hasVideoItems {
-            // Upload video items individually to track job IDs
-            for item in itemData {
-                do {
-                    let (result, jobId) = try await uploadToIPFS(
-                        data: item.data,
-                        typeIdentifier: item.typeIdentifier,
-                        fileName: item.fileName,
-                        noResample: item.noResample,
-                        progressCallback: { message, progress in
-                        }
-                    )
-                    
-                    if let fileType = result {
-                        uploadedAttachments.append(fileType)
-                    }
-                    
-                    // Store the job ID for video items
-                    if let jobId = jobId {
-                        videoJobId = jobId
-                        hproseDebug("DEBUG: Stored video job ID: \(jobId)")
-                    }
-                } catch {
-                    hproseError("Error uploading item \(item.fileName): \(error)")
-                    throw error
-                }
-            }
-        } else {
-            // Use the existing pair upload for non-video items
-            let itemPairs = itemData.chunked(into: 2)
-            
-            for (pairIndex, pair) in itemPairs.enumerated() {
-                do {
-                    let pairAttachments = try await self.uploadItemPair(pair)
-                    uploadedAttachments.append(contentsOf: pairAttachments)
-                } catch {
-                    hproseError("Error uploading pair \(pairIndex + 1): \(error)")
-                    throw error
-                }
-            }
-        }
-        
-        if itemData.count != uploadedAttachments.count {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
-        }
-        
-        return (uploadedAttachments, videoJobId)
-    }
-    
-    private func savePendingUpload(_ pendingUpload: PendingTweetUpload) async {
-        do {
-            let data = try JSONEncoder().encode(pendingUpload)
-            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-            try data.write(to: fileURL)
-            hproseDebug("Saved pending upload to disk")
-        } catch {
-            hproseError("Failed to save pending upload: \(error)")
-        }
-    }
-    
-    private func removePendingUpload() async {
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-        try? FileManager.default.removeItem(at: fileURL)
-        hproseDebug("Removed pending upload from disk")
-    }
-    
-    // MARK: - Video Job Status Checking
-    
-    // MARK: - Recovery Methods
-    
-    // REMOVED: cleanupProblematicPendingUploads(), recoverPendingUploads(), recoverPendingUploads_old()
-    // Pending upload recovery is now handled by ContentView's dialog system
-    
-    // The old recoverPendingUploads_old function code removed (was 130+ lines)
-    // All retry logic is preserved in uploadTweetWithPersistenceAndRetry()
-    // New system: User sees dialog with retry/discard options instead of auto-retry
-    
     
     @MainActor func scheduleCommentUpload(
         comment: Tweet,
@@ -8453,6 +8250,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let appUserMid = await MainActor.run { self.appUser.mid }
 
         for attempt in 0...maxRetries {
+            try Task.checkCancellation()
             // On retry, force refresh appUser's baseUrl by passing empty string
             let forceRefresh = attempt > 0
             if forceRefresh {
@@ -8488,7 +8286,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 let errorMsg = "Failed to create client for sender node"
                 hproseError("[sendMessage] ❌ \(errorMsg) - writableUrl: nil")
                 if attempt < maxRetries {
-                    try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
+                    try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
                     continue
                 }
                 return MessageSendResult(
@@ -8521,7 +8319,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     if attempt < maxRetries {
                         let delay = UInt64(attempt + 1) * 2_000_000_000 // 2, 4 seconds
                         hproseWarning("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
-                        try? await Task.sleep(nanoseconds: delay)
+                        try await Task.sleep(nanoseconds: delay)
                         continue
                     }
                     
@@ -8554,7 +8352,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     hproseError("[sendMessage] ❌ \(errorMessage) (attempt \(attempt + 1)/\(maxRetries + 1))")
                     
                     if attempt < maxRetries {
-                        try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
+                        try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
                         continue
                     }
                 }
@@ -8592,6 +8390,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let appUserMid = await MainActor.run { self.appUser.mid }
 
         for attempt in 0...maxRetries {
+            try Task.checkCancellation()
             // On retry, force refresh recipient's baseUrl by passing empty string
             let forceRefresh = attempt > 0
             if forceRefresh {
@@ -8644,7 +8443,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 hproseError("[sendMessage] ❌ \(errorMsg) - writableUrl: nil")
                 if attempt < maxRetries {
                     // Wait before retry
-                    try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
+                    try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
                     continue
                 }
                 return MessageSendResult(
@@ -8678,7 +8477,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         // Wait before retry with exponential backoff
                         let delay = UInt64(attempt + 1) * 2_000_000_000 // 2, 4 seconds
                         hproseWarning("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
-                        try? await Task.sleep(nanoseconds: delay)
+                        try await Task.sleep(nanoseconds: delay)
                         continue
                     }
                     
@@ -8712,7 +8511,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     
                     if attempt < maxRetries {
                         // Wait before retry
-                        try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
+                        try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
                         continue
                     }
                 }

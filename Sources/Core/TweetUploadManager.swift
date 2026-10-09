@@ -24,40 +24,10 @@ final class TweetUploadManager {
     // Reference to parent HproseInstance for accessing shared properties
     weak var hproseInstance: HproseInstance?
     
-    // Track current upload task for cancellation
-    private var currentUploadTask: Task<Void, Never>?
-    
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
     }
 
-    private static func isVideoTypeIdentifier(_ typeIdentifier: String) -> Bool {
-        let value = typeIdentifier.lowercased()
-        return value.hasPrefix("public.movie") ||
-            value.hasPrefix("public.video") ||
-            value.contains("video") ||
-            value.contains("movie") ||
-            value.contains("quicktime") ||
-            value.contains("mpeg-4") ||
-            value.contains("mpeg4") ||
-            value.contains("mp4") ||
-            value.contains("m4v") ||
-            value.contains("mov") ||
-            value.contains("avi") ||
-            value.contains("mkv") ||
-            value.contains("webm")
-    }
-    
-    /// Cancel current upload task
-    func cancelCurrentUpload() {
-        if let task = currentUploadTask {
-            task.cancel()
-            currentUploadTask = nil
-            print("🛑 [TweetUploadManager] Current upload task cancelled")
-        }
-        // If no task exists, silently do nothing (this is normal when starting a new upload)
-    }
-    
     // MARK: - Public Upload Methods
     
     /// Upload data to IPFS with appropriate media processing
@@ -107,1526 +77,292 @@ final class TweetUploadManager {
             referenceId: referenceId,
             mediaType: mediaType,
             appUser: hproseInstance.appUser,
-            appId: hproseInstance.appId
+            appId: hproseInstance.appId,
+            progressCallback: progressCallback
         )
         return (result, nil)
     }
     
-    /// Schedule a tweet upload with persistence and retry
+    /// Persist each user-started operation before the queue begins its work.
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
-        // Check if any items contain videos
-        let hasVideos = itemData.contains { item in
-            Self.isVideoTypeIdentifier(item.typeIdentifier)
-        }
-        
-        // Use upload queue to prevent concurrent upload conflicts
-        Task { @MainActor in
-            UploadProgressManager.shared.enqueueUpload(type: "tweet", hasVideos: hasVideos) {
-                await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
-            }
-        }
+        enqueue(PendingTweetUpload(tweet: tweet, itemData: itemData))
     }
-    
-    /// Schedule a chat message upload
+
+    func scheduleCommentUpload(comment: Tweet, to tweet: Tweet,
+                               itemData: [PendingTweetUpload.ItemData], isQuoting: Bool = false) {
+        enqueue(PendingTweetUpload(tweet: comment, itemData: itemData,
+                                   parent: TweetRecord(tweet: tweet), isQuoting: isQuoting))
+    }
+
     func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
-        // Check if any items contain videos
-        let hasVideos = itemData.contains { item in
-            Self.isVideoTypeIdentifier(item.typeIdentifier)
-        }
-        
-        // Use upload queue to prevent concurrent upload conflicts
-        Task { @MainActor in
-            UploadProgressManager.shared.enqueueUpload(type: "chat", hasVideos: hasVideos) {
-                await self.uploadChatMessageWithPersistenceAndRetry(message: message, itemData: itemData)
-            }
-        }
+        let record = TweetRecord(mid: message.id, authorId: message.authorId,
+                                 content: message.content, timestamp: Date(timeIntervalSince1970: message.timestamp))
+        var pending = PendingTweetUpload(record: record, itemData: itemData)
+        pending.recipientId = message.receiptId
+        pending.chatSessionId = message.chatSessionId
+        enqueue(pending)
     }
-    
-    /// Schedule a comment upload
-    func scheduleCommentUpload(
-        comment: Tweet,
-        to tweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData],
-        isQuoting: Bool = false
-    ) {
-        // Check if any items contain videos
-        let hasVideos = itemData.contains { item in
-            Self.isVideoTypeIdentifier(item.typeIdentifier)
-        }
-        
-        // Use upload queue to prevent concurrent upload conflicts
-        Task { @MainActor in
-            UploadProgressManager.shared.enqueueUpload(type: "comment", hasVideos: hasVideos) {
-                await self.uploadCommentWithRetry(comment: comment, to: tweet, itemData: itemData, isQuoting: isQuoting)
-            }
-        }
+
+    func enqueue(_ pending: PendingTweetUpload) {
+        UploadProgressManager.shared.enqueueUpload(pending: pending)
     }
-    
-    /// Internal method to upload comment (called by queue)
-    private func uploadCommentWithRetry(
-        comment: Tweet,
-        to tweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData],
-        isQuoting: Bool = false
-    ) async {
-        Task(priority: .high) {
-            
-            do {                
-                // Update progress: uploading attachments
-                await MainActor.run {
-                    UploadProgressManager.shared.updateProgress(
-                        stage: .uploadingAttachments,
-                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
-                        progress: 0.2
-                    )
-                }
-                
-                // Upload attachments (same as tweet upload)
-                let (uploadedAttachments, jobIdMap) = try await self.uploadAttachments(itemData: itemData)
-                
-                // If we got any video job IDs, handle the same way as tweet uploads
-                if !jobIdMap.isEmpty {
-                    print("✅ [Comment Upload] Got \(jobIdMap.count) video job ID(s). Closing dialog and polling in background...")
-                    
-                    // Update itemData with job IDs for polling
-                    var updatedItemData = itemData
-                    for (index, item) in updatedItemData.enumerated() {
-                        if index < uploadedAttachments.count {
-                            let attachment = uploadedAttachments[index]
-                            let jobId = jobIdMap[item.identifier]
-                            
-                            updatedItemData[index] = PendingTweetUpload.ItemData(
-                                identifier: item.identifier,
-                                typeIdentifier: item.typeIdentifier,
-                                data: item.data,
-                                fileName: item.fileName,
-                                noResample: item.noResample,
-                                videoJobId: jobId,
-                                cid: attachment.mid,
-                                aspectRatio: attachment.aspectRatio,
-                                fileSize: attachment.size,
-                                mediaType: attachment.type.rawValue
-                            )
-                        }
-                    }
-                    
-                    // Close the dialog with message about server processing
-                    await MainActor.run {
-                        UploadProgressManager.shared.updateProgress(
-                            stage: .completed,
-                            message: NSLocalizedString("Processing on server...", comment: "Upload stage"),
-                            progress: 1.0,
-                            detail: NSLocalizedString("Your comment will be posted when ready", comment: "Background processing")
-                        )
-                    }
-                    
-                    // Small delay to show message
-                    try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds
-                    
-                    await MainActor.run {
-                        UploadProgressManager.shared.completeUpload()
-                    }
-                    
-                    // Start background polling for video jobs (same as tweets)
-                    Task(priority: .background) { @MainActor in
-                        await self.pollVideoJobsAndSubmitComment(
-                            comment: comment,
-                            to: tweet,
-                            itemData: updatedItemData,
-                            uploadedAttachments: uploadedAttachments,
-                            isQuoting: isQuoting
-                        )
-                    }
-                    
-                    return
-                }
-                
-                // No video jobs - images only, close dialog and submit comment in background
-                print("✅ [Comment Upload] All image attachments uploaded. Closing dialog and submitting comment in background...")
-                
-                comment.attachments = uploadedAttachments
-                
-                // Show completion message
-                await MainActor.run {
-                    UploadProgressManager.shared.updateProgress(
-                        stage: .completed,
-                        message: NSLocalizedString("Submitting comment...", comment: "Upload stage"),
-                        progress: 1.0,
-                        detail: ""
-                    )
-                }
-                
-                // Small delay to show message
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                
-                // Close dialog
-                await MainActor.run {
-                    UploadProgressManager.shared.completeUpload()
-                }
-                
-                // Submit comment in background (non-blocking)
-                Task(priority: .background) { @MainActor in
-                    guard let hproseInstance = self.hproseInstance else { return }
-                    
-                    print("📝 [Background Submit] Submitting comment with image attachments...")
 
-                    // Start the quote tweet alongside the comment. The two requests share no
-                    // data, so a slow or timed-out add_comment must not swallow the quote.
-                    let quoteTask = self.startQuoteTweetIfNeeded(
-                        isQuoting: isQuoting,
-                        comment: comment,
-                        quoting: tweet,
-                        hproseInstance: hproseInstance
-                    )
-
-                    do {
-                        if let newComment = try await hproseInstance.addComment(comment, to: tweet) {
-                            print("✅ [Background Submit] Comment posted successfully!")
-                            print("[TweetUploadManager] New comment mid: \(newComment.mid)")
-                            print("[TweetUploadManager] Parent tweet mid: \(tweet.mid)")
-                            // Success notification is posted by addComment()
-                        } else {
-                            let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to post comment", comment: "Comment error")])
-                            await MainActor.run {
-                                if !hproseInstance.isAppInitializing {
-                                    NotificationCenter.default.post(
-                                        name: .backgroundUploadFailed,
-                                        object: nil,
-                                        userInfo: ["error": error]
-                                    )
-                                }
-                            }
-                        }
-                    } catch {
-                        print("❌ [Background Submit] Failed to post comment: \(error)")
-                        await MainActor.run {
-                            if !hproseInstance.isAppInitializing {
-                                NotificationCenter.default.post(
-                                    name: .backgroundUploadFailed,
-                                    object: nil,
-                                    userInfo: ["error": error]
-                                )
-                            }
-                        }
-                    }
-
-                    await quoteTask?.value
-                }
-            } catch {
-                print("❌ [Comment Upload] Failed to upload attachments: \(error)")
-                await MainActor.run {
-                    UploadProgressManager.shared.failUpload(message: ErrorMessageHelper.userFriendlyMessage(from: error))
-                    
-                    guard let hproseInstance = self.hproseInstance else { return }
-                    if !hproseInstance.isAppInitializing {
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": error]
-                        )
-                    }
-                }
-            }
+    // The queue awaits this entire operation: attachment preparation, server
+    // processing and publication all share one cancellation and background grant.
+    func executeUpload(_ saved: PendingTweetUpload) async throws {
+        guard let hproseInstance else { throw uploadError("System error") }
+        guard saved.record.authorId == hproseInstance.appUser.mid else {
+            throw uploadError("Sign in to the account that started this upload.")
         }
-    }
-    
-    // REMOVED: recoverPendingUploads() and cleanupProblematicPendingUploads()
-    // Pending upload recovery is now handled by ContentView's dialog system
-    // which gives users control over retry/discard instead of automatic retry
-}
-
-// MARK: - Private Upload Implementation
-extension TweetUploadManager {
-    
-    func uploadTweetWithPersistenceAndRetry(
-        tweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData],
-        retryCount: Int = 0,
-        videoJobId: String? = nil
-    ) async {
-        print("DEBUG: [uploadTweetWithPersistenceAndRetry] Starting upload with retry count: \(retryCount)")
-        
-        guard let hproseInstance = hproseInstance else {
-            await MainActor.run {
-                UploadProgressManager.shared.failUpload(message: "System error")
-            }
-            return
-        }
-
-        if retryCount > 0 {
-            await forceRefreshBaseUrlForRetry(
-                userId: hproseInstance.appUser.mid,
-                context: "tweet upload"
-            )
-        }
-        
-        // Save pending upload to disk
-        let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount, videoJobId: videoJobId)
-        await savePendingUpload(pendingUpload)
-        
-        // RETRY LOGIC: Check if any items have job IDs (from previous upload attempt)
-        let itemsWithJobIds = itemData.filter { $0.videoJobId != nil }
-        
-        if !itemsWithJobIds.isEmpty {
-            print("📋 [Retry] Found \(itemsWithJobIds.count) item(s) with existing job IDs. Checking server status...")
-            
-            // Get base URL for polling
-            guard let baseURL = try? await hproseInstance.appUser.resolveWritableUrl(),
-                  let host = baseURL.host,
-                  hproseInstance.appUser.cloudDrivePort > 0,
-                  let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
-                print("❌ [Retry] Cannot construct polling URL")
-                await MainActor.run {
-                    UploadProgressManager.shared.failUpload(message: "Configuration error")
-                }
-                await removePendingUpload()
-                return
-            }
-            
-            // Update progress: checking job statuses
-            await MainActor.run {
-                UploadProgressManager.shared.updateProgress(
-                    stage: .uploadingAttachments,
-                    message: NSLocalizedString("Checking video status...", comment: "Upload stage"),
-                    progress: 0.5
-                )
-            }
-            
-            // Check status of ALL jobs
-            var allCompleted = true
-            var anyFailed = false
-            var completedCIDs: [String: String] = [:]
-            
-            for item in itemsWithJobIds {
-                guard let jobId = item.videoJobId else { continue }
-                
-                if let status = await checkVideoJobStatus(jobId: jobId, baseURL: pollURL) {
-                    switch status.status {
-                    case "completed":
-                        if let cid = status.cid, !cid.isEmpty {
-                            completedCIDs[jobId] = cid
-                            print("✅ [Retry] Job \(jobId) complete, CID: \(cid)")
-                        } else {
-                            print("❌ [Retry] Job completed but no CID")
-                            anyFailed = true
-                            break
-                        }
-                        
-                    case "uploading", "processing":
-                        allCompleted = false
-                        print("⏳ [Retry] Job \(jobId) still processing")
-                        
-                    case "failed":
-                        anyFailed = true
-                        print("❌ [Retry] Job \(jobId) failed: \(status.message ?? "Unknown error")")
-                        break
-                        
-                    default:
-                        anyFailed = true
-                        print("❌ [Retry] Unknown status for job \(jobId): \(status.status)")
-                        break
-                    }
-                } else {
-                    anyFailed = true
-                    print("❌ [Retry] Cannot check status for job \(jobId)")
-                    break
-                }
-            }
-            
-            // Handle results
-            if anyFailed {
-                await MainActor.run {
-                    UploadProgressManager.shared.failUpload(message: NSLocalizedString("Video processing failed", comment: "Error"))
-                }
-                await removePendingUpload()
-                return
-            } else if allCompleted {
-                print("✅ [Retry] ALL jobs completed! Submitting tweet...")
-                await submitTweetWithCompletedJobs(
-                    tweet: tweet,
-                    itemData: itemData,
-                    completedCIDs: completedCIDs,
-                    uploadedAttachments: [] // Will be built from itemData
-                )
-                return
-            } else {
-                print("⏳ [Retry] \(completedCIDs.count)/\(itemsWithJobIds.count) jobs complete. Continuing in background...")
-                await MainActor.run {
-                    UploadProgressManager.shared.updateProgress(
-                        stage: .completed,
-                        message: NSLocalizedString("Processing on server...", comment: "Upload stage"),
-                        progress: 1.0,
-                        detail: NSLocalizedString("Your tweet will be posted when ready", comment: "Background processing")
-                    )
-                }
-                
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                
-                await MainActor.run {
-                    UploadProgressManager.shared.completeUpload()
-                }
-                
-                // Remove pending upload file - background polling will handle completion
-                // This prevents dialog from appearing when user returns from background
-                await removePendingUpload()
-                
-                // Continue polling in background
-                Task(priority: .background) { @MainActor in
-                    await self.pollAllJobsAndSubmitTweet(
-                        tweet: tweet,
-                        itemData: itemData,
-                        uploadedAttachments: [] // Will be built from itemData
-                    )
-                }
-                return
-            }
-        }
-        
-        // NEW UPLOAD: No existing job ID, upload attachments in foreground
-        do {
-            // Update progress: uploading attachments
-            await MainActor.run {
-                UploadProgressManager.shared.updateProgress(
-                    stage: .uploadingAttachments,
-                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
-                    progress: 0.2
-                )
-            }
-            
-            // Upload attachments (FOREGROUND ONLY - dialog stays open)
-            let (uploadedAttachments, jobIdMap) = try await uploadAttachments(itemData: itemData)
-            
-            // If we got any video job IDs, update itemData and close dialog
-            if !jobIdMap.isEmpty {
-                print("✅ [Upload] All attachments uploaded. Got \(jobIdMap.count) job ID(s). Closing dialog and polling in background...")
-                
-                // Update itemData with job IDs, CIDs, and metadata
-                var updatedItemData = itemData
-                for (index, item) in updatedItemData.enumerated() {
-                    if index < uploadedAttachments.count {
-                        let attachment = uploadedAttachments[index]
-                        let jobId = jobIdMap[item.identifier]
-                        
-                        print("📋 [Upload] Storing item \(index + 1): identifier=\(item.identifier), jobId=\(jobId ?? "nil"), cid=\(attachment.mid), aspectRatio=\(attachment.aspectRatio ?? 0), size=\(attachment.size ?? 0)")
-                        
-                        updatedItemData[index] = PendingTweetUpload.ItemData(
-                            identifier: item.identifier,
-                            typeIdentifier: item.typeIdentifier,
-                            data: item.data,
-                            fileName: item.fileName,
-                            noResample: item.noResample,
-                            videoJobId: jobId,  // Job ID if video, nil if image
-                            cid: attachment.mid,  // Actual CID for all items (jobId for videos, real CID for images)
-                            aspectRatio: attachment.aspectRatio,  // Preserve aspect ratio
-                            fileSize: attachment.size,  // Preserve file size
-                            mediaType: attachment.type.rawValue  // Preserve media type
-                        )
-                    }
-                }
-                
-                print("📊 [Upload] Updated itemData: \(updatedItemData.count) items")
-                for (idx, item) in updatedItemData.enumerated() {
-                    print("  Item \(idx + 1): videoJobId=\(item.videoJobId ?? "nil"), cid=\(item.cid ?? "nil"), fileName=\(item.fileName)")
-                }
-                
-                // Close the dialog with message about server processing
-                await MainActor.run {
-                    UploadProgressManager.shared.updateProgress(
-                        stage: .completed,
-                        message: NSLocalizedString("Processing on server...", comment: "Upload stage"),
-                        progress: 1.0,
-                        detail: NSLocalizedString("Your tweet will be posted when ready", comment: "Background processing")
-                    )
-                }
-                
-                // Small delay to show message
-                try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds
-                
-                await MainActor.run {
-                    UploadProgressManager.shared.completeUpload()
-                }
-                
-                // IMPORTANT: Remove pending upload file since we're starting background polling
-                // This prevents the dialog from appearing when user returns from background
-                await removePendingUpload()
-                
-                // Start background polling for ALL jobs (non-blocking)
-                // If polling fails, it will show toast and won't save pending upload again
-                Task(priority: .background) { @MainActor in
-                    await self.pollAllJobsAndSubmitTweet(
-                        tweet: tweet,
-                        itemData: updatedItemData,
-                        uploadedAttachments: uploadedAttachments
-                    )
-                }
-                
-                return
-            }
-            
-            // No video jobs - images only, close dialog and submit tweet in background
-            print("✅ [Upload] All image attachments uploaded. Closing dialog and submitting tweet in background...")
-            
-            tweet.attachments = uploadedAttachments
-            
-            // Show completion message briefly
-            await MainActor.run {
-                UploadProgressManager.shared.updateProgress(
-                    stage: .completed,
-                    message: NSLocalizedString("Submitting tweet...", comment: "Upload stage"),
-                    progress: 1.0,
-                    detail: ""
-                )
-            }
-            
-            // Small delay to show message
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-            
-            // Close dialog
-            await MainActor.run {
-                UploadProgressManager.shared.completeUpload()
-            }
-            
-            // Remove pending upload file - background submission will handle completion
-            await removePendingUpload()
-            
-            // Submit tweet in background (non-blocking)
-            Task(priority: .background) { @MainActor in
-                guard let hproseInstance = self.hproseInstance else { return }
-                
-                print("📝 [Background Submit] Submitting tweet with image attachments...")
-                
+        var pending = saved
+        try Task.checkCancellation()
+        try await savePendingUpload(pending)
+        for index in pending.itemData.indices {
+            try Task.checkCancellation()
+            let item = pending.itemData[index]
+            if item.cid != nil || item.videoJobId != nil { continue }
+            var attachment: MimeiFileType?
+            var jobId: String?
+            // Only media transfers are safe to retry. Publication below is never
+            // automatically repeated after a lost response.
+            for attempt in 0...2 {
+                try Task.checkCancellation()
                 do {
-                    if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
-                        // Success! (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
-                        await MainActor.run {
-                            NotificationCenter.default.post(
-                                name: .newTweetCreated,
-                                object: nil,
-                                userInfo: ["tweet": uploadedTweet]
-                            )
-                        }
-                        print("✅ [Background Submit] Tweet posted successfully!")
-                    } else {
-                        throw NSError(domain: "TweetUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
-                    }
-                } catch {
-                    print("❌ [Background Submit] Tweet submit failed without retry because add_tweet is non-idempotent: \(error)")
-                    await self.showFailureToast(message: NSLocalizedString("Failed to post tweet. Please refresh before retrying.", comment: "Error"))
-                }
-            }
-            
-            return
-        } catch {
-            print("Error uploading tweet: \(error)")
-            
-            let maxRetries = 2
-            print("DEBUG: [Error handling] retryCount=\(retryCount), maxRetries=\(maxRetries)")
-            
-            if retryCount >= maxRetries {
-                print("DEBUG: [Error handling] MAX RETRIES REACHED - Showing error and removing pending upload")
-                let userFriendlyMessage = NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Tweet upload failed error")
-                
-                await MainActor.run {
-                    UploadProgressManager.shared.failUpload(message: userFriendlyMessage)
-                    
-                    if !hproseInstance.isAppInitializing {
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": userFriendlyMessage]
-                        )
-                    }
-                }
-                
-                await removePendingUpload()
-            } else {
-                print("DEBUG: [Error handling] Scheduling retry \(retryCount + 1)")
-                
-                // Don't fail the progress UI on retry
-                await MainActor.run {
-                    UploadProgressManager.shared.updateProgress(
-                        stage: .uploadingAttachments,
-                        message: NSLocalizedString("Retrying upload...", comment: "Upload stage"),
-                        progress: 0.1
-                    )
-                }
-                
-                let delay = UInt64(retryCount + 1) * 2_000_000_000
-                try? await Task.sleep(nanoseconds: delay)
-                await uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
-            }
-        }
-    }
-    
-    /// Poll for ALL video jobs and auto-submit tweet when ALL are ready
-    private func pollAllJobsAndSubmitTweet(
-        tweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData],
-        uploadedAttachments: [MimeiFileType]
-    ) async {
-        // Extract all job IDs from itemData
-        let jobItems = itemData.filter { $0.videoJobId != nil }
-        guard !jobItems.isEmpty else {
-            print("⚠️ [Background Poll] No job IDs to poll")
-            return
-        }
-        
-        print("🔄 [Background Poll] Starting background polling for \(jobItems.count) job(s)")
-        
-        guard let hproseInstance = hproseInstance else {
-            print("❌ [Background Poll] HproseInstance not available")
-            return
-        }
-        
-        // Get base URL for polling
-        guard let baseURL = try? await hproseInstance.appUser.resolveWritableUrl(),
-              let host = baseURL.host,
-              hproseInstance.appUser.cloudDrivePort > 0,
-              let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
-            print("❌ [Background Poll] Cannot construct polling URL")
-            await showFailureToast(message: NSLocalizedString("Failed to check video status", comment: "Error"))
-            await removePendingUpload()
-            return
-        }
-        
-        // Track completed job CIDs
-        var completedCIDs: [String: String] = [:] // jobId -> CID
-        var completedCount = 0
-        let totalJobs = jobItems.count
-        
-        // Poll until all complete or failed
-        var pollAttempts = 0
-        let maxPollAttempts = 120 // 10 minutes (5 second intervals)
-        
-        while pollAttempts < maxPollAttempts && completedCount < totalJobs {
-            pollAttempts += 1
-            
-            // Check status of all pending jobs
-            for jobItem in jobItems {
-                guard let jobId = jobItem.videoJobId else { continue }
-                
-                // Skip already completed jobs
-                if completedCIDs[jobId] != nil {
-                    continue
-                }
-                
-                if let status = await checkVideoJobStatus(jobId: jobId, baseURL: pollURL) {
-                    switch status.status {
-                    case "completed":
-                        if let cid = status.cid, !cid.isEmpty {
-                            completedCIDs[jobId] = cid
-                            completedCount += 1
-                            print("✅ [Background Poll] Job \(completedCount)/\(totalJobs) complete! Job: \(jobId), CID: \(cid)")
-                        } else {
-                            print("❌ [Background Poll] Job completed but no CID returned")
-                            await showFailureToast(message: NSLocalizedString("Video processing completed but no ID returned", comment: "Error"))
-                            await removePendingUpload()
-                            return
-                        }
-                        
-                    case "failed":
-                        print("❌ [Background Poll] Job failed: \(status.message ?? "Unknown error")")
-                        await showFailureToast(message: NSLocalizedString("Video processing failed", comment: "Error"))
-                        await removePendingUpload()
-                        return
-                        
-                    case "uploading", "processing":
-                        // Still processing, continue polling
-                        continue
-                        
-                    default:
-                        print("⚠️ [Background Poll] Unknown status for job \(jobId): \(status.status)")
-                        continue
-                    }
-                }
-            }
-            
-            // Check if all jobs completed
-            if completedCount == totalJobs {
-                print("✅ [Background Poll] ALL \(totalJobs) jobs completed!")
-                // Submit tweet with all completed videos
-                await submitTweetWithCompletedJobs(
-                    tweet: tweet,
-                    itemData: itemData,
-                    completedCIDs: completedCIDs,
-                    uploadedAttachments: uploadedAttachments
-                )
-                return
-            }
-            
-            // Wait before next poll
-            print("⏳ [Background Poll] \(completedCount)/\(totalJobs) jobs complete, polling... (\(pollAttempts)/\(maxPollAttempts))")
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-        }
-        
-        // Timeout
-        print("❌ [Background Poll] Polling timeout after \(maxPollAttempts) attempts (\(completedCount)/\(totalJobs) completed)")
-        await showFailureToast(message: NSLocalizedString("Video processing timed out", comment: "Error"))
-        await removePendingUpload()
-    }
-    
-    /// Submit tweet once ALL video jobs are complete (with retry)
-    private func submitTweetWithCompletedJobs(
-        tweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData],
-        completedCIDs: [String: String], // jobId -> CID mapping
-        uploadedAttachments: [MimeiFileType],
-        retryCount: Int = 0
-    ) async {
-        guard let hproseInstance = hproseInstance else { return }
-        
-        print("📝 [Submit] Submitting tweet with \(completedCIDs.count) completed job(s), retry: \(retryCount)")
-        print("📝 [Submit] ItemData count: \(itemData.count)")
-        
-        // Build final attachments using stored CIDs, completed job CIDs, and metadata
-        var finalAttachments: [MimeiFileType] = []
-        
-        for (index, item) in itemData.enumerated() {
-            print("📋 [Submit] Processing item \(index + 1): videoJobId=\(item.videoJobId ?? "nil"), cid=\(item.cid ?? "nil"), fileName=\(item.fileName)")
-            
-            if let jobId = item.videoJobId {
-                // This is a video - use the completed CID from server
-                if let completedCID = completedCIDs[jobId] {
-                    let attachment = MimeiFileType(
-                        mid: completedCID,
-                        mediaType: .hls_video,
-                        size: item.fileSize ?? Int64(item.data.count),
-                        fileName: item.fileName,
-                        timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-                        aspectRatio: item.aspectRatio,
-                        url: nil
-                    )
-                    finalAttachments.append(attachment)
-                    print("✅ [Submit] Added video attachment \(index + 1): CID: \(completedCID), size: \(item.fileSize ?? 0), aspectRatio: \(item.aspectRatio ?? 0), fileName: \(item.fileName)")
-                } else {
-                    print("❌ [Submit] WARNING: Missing completed CID for job: \(jobId)")
-                }
-            } else if let storedCID = item.cid {
-                // This is an image or non-video - use the stored CID and metadata
-                let mediaType = MediaType.fromString(item.mediaType ?? "Image")
-                let attachment = MimeiFileType(
-                    mid: storedCID,
-                    mediaType: mediaType,
-                    size: item.fileSize ?? Int64(item.data.count),
-                    fileName: item.fileName,
-                    timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-                    aspectRatio: item.aspectRatio,
-                    url: nil
-                )
-                finalAttachments.append(attachment)
-                print("✅ [Submit] Added \(mediaType.rawValue) attachment \(index + 1): CID: \(storedCID), size: \(item.fileSize ?? 0), aspectRatio: \(item.aspectRatio ?? 0), fileName: \(item.fileName)")
-            } else {
-                print("❌ [Submit] ERROR: Missing CID for attachment \(index + 1) - This should never happen!")
-            }
-        }
-        
-        print("📊 [Submit] Final attachments count: \(finalAttachments.count) (expected: \(itemData.count))")
-        tweet.attachments = finalAttachments
-        
-        // Submit the tweet
-        do {
-            if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
-                // Success! (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
-                await removePendingUpload()
-                
-                await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: .newTweetCreated,
-                        object: nil,
-                        userInfo: ["tweet": uploadedTweet]
-                    )
-                }
-                
-                print("✅ [Submit] Tweet posted successfully with \(finalAttachments.count) attachments!")
-            } else {
-                throw NSError(domain: "TweetUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
-            }
-        } catch {
-            print("❌ [Submit] Failed to post tweet (attempt \(retryCount + 1)): \(error)")
-            
-            print("❌ [Submit] Not retrying tweet submission because add_tweet is non-idempotent")
-            await showFailureToast(message: NSLocalizedString("Failed to post tweet. Please refresh before retrying.", comment: "Error"))
-            await removePendingUpload()
-        }
-    }
-    
-    /// Poll video jobs and submit comment (reuses tweet polling logic)
-    private func pollVideoJobsAndSubmitComment(
-        comment: Tweet,
-        to parentTweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData],
-        uploadedAttachments: [MimeiFileType],
-        isQuoting: Bool = false
-    ) async {
-        // Extract all job IDs from itemData
-        let jobItems = itemData.filter { $0.videoJobId != nil }
-        guard !jobItems.isEmpty else {
-            print("⚠️ [Comment Poll] No job IDs to poll")
-            return
-        }
-        
-        print("🔄 [Comment Poll] Starting background polling for \(jobItems.count) video job(s)")
-        
-        guard let hproseInstance = hproseInstance else {
-            print("❌ [Comment Poll] HproseInstance not available")
-            return
-        }
-        
-        // Get base URL for polling
-        guard let baseURL = try? await hproseInstance.appUser.resolveWritableUrl(),
-              let host = baseURL.host,
-              hproseInstance.appUser.cloudDrivePort > 0,
-              let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
-            print("❌ [Comment Poll] Cannot construct polling URL")
-            await showFailureToast(message: NSLocalizedString("Failed to check video status", comment: "Error"))
-            return
-        }
-        
-        // Track completed job CIDs
-        var completedCIDs: [String: String] = [:] // jobId -> CID
-        var completedCount = 0
-        let totalJobs = jobItems.count
-        
-        // Poll until all complete or failed
-        var pollAttempts = 0
-        let maxPollAttempts = 120 // 10 minutes (5 second intervals)
-        
-        while pollAttempts < maxPollAttempts && completedCount < totalJobs {
-            pollAttempts += 1
-            
-            // Check status of all pending jobs
-            for jobItem in jobItems {
-                guard let jobId = jobItem.videoJobId else { continue }
-                
-                // Skip already completed jobs
-                if completedCIDs[jobId] != nil {
-                    continue
-                }
-                
-                if let status = await checkVideoJobStatus(jobId: jobId, baseURL: pollURL) {
-                    switch status.status {
-                    case "completed":
-                        if let cid = status.cid, !cid.isEmpty {
-                            completedCIDs[jobId] = cid
-                            completedCount += 1
-                            print("✅ [Comment Poll] Job \(completedCount)/\(totalJobs) complete! Job: \(jobId), CID: \(cid)")
-                        } else {
-                            print("❌ [Comment Poll] Job completed but no CID returned")
-                            await showFailureToast(message: NSLocalizedString("Video processing completed but no ID returned", comment: "Error"))
-                            return
-                        }
-                        
-                    case "failed":
-                        print("❌ [Comment Poll] Job failed: \(status.message ?? "Unknown error")")
-                        await showFailureToast(message: NSLocalizedString("Video processing failed", comment: "Error"))
-                        return
-                        
-                    case "uploading", "processing":
-                        // Still processing, continue polling
-                        continue
-                        
-                    default:
-                        print("⚠️ [Comment Poll] Unknown status for job \(jobId): \(status.status)")
-                        continue
-                    }
-                }
-            }
-            
-            // Check if all jobs completed
-            if completedCount == totalJobs {
-                print("✅ [Comment Poll] ALL \(totalJobs) video jobs completed!")
-                // Submit comment with all completed videos
-                await submitCommentWithCompletedJobs(
-                    comment: comment,
-                    to: parentTweet,
-                    itemData: itemData,
-                    completedCIDs: completedCIDs,
-                    isQuoting: isQuoting
-                )
-                return
-            }
-            
-            // Wait before next poll
-            print("⏳ [Comment Poll] \(completedCount)/\(totalJobs) jobs complete, polling... (\(pollAttempts)/\(maxPollAttempts))")
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-        }
-        
-        // Timeout
-        print("❌ [Comment Poll] Polling timeout after \(maxPollAttempts) attempts (\(completedCount)/\(totalJobs) completed)")
-        await showFailureToast(message: NSLocalizedString("Video processing timed out", comment: "Error"))
-    }
-    
-    /// Submit comment once ALL video jobs are complete (with retry)
-    private func submitCommentWithCompletedJobs(
-        comment: Tweet,
-        to parentTweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData],
-        completedCIDs: [String: String],
-        retryCount: Int = 0,
-        isQuoting: Bool = false
-    ) async {
-        guard let hproseInstance = hproseInstance else { return }
-        
-        if retryCount > 0 {
-            let targetUserId: String? = parentTweet.authorId.isEmpty
-                ? parentTweet.author?.mid
-                : parentTweet.authorId
-            await forceRefreshBaseUrlForRetry(
-                userId: targetUserId,
-                context: "comment upload"
-            )
-        }
-        
-        print("📝 [Comment Submit] Submitting comment with \(completedCIDs.count) completed video job(s), retry: \(retryCount)")
-        
-        // Build final attachments using completed job CIDs
-        var finalAttachments: [MimeiFileType] = []
-        
-        for (index, item) in itemData.enumerated() {
-            if let jobId = item.videoJobId {
-                // This is a video - use the completed CID from server
-                if let completedCID = completedCIDs[jobId] {
-                    let attachment = MimeiFileType(
-                        mid: completedCID,
-                        mediaType: .hls_video,
-                        size: item.fileSize ?? Int64(item.data.count),
-                        fileName: item.fileName,
-                        timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-                        aspectRatio: item.aspectRatio,
-                        url: nil
-                    )
-                    finalAttachments.append(attachment)
-                    print("✅ [Comment Submit] Added video attachment \(index + 1): CID: \(completedCID)")
-                }
-            } else if let storedCID = item.cid {
-                // This is an image - use the stored CID
-                let mediaType = MediaType.fromString(item.mediaType ?? "Image")
-                let attachment = MimeiFileType(
-                    mid: storedCID,
-                    mediaType: mediaType,
-                    size: item.fileSize ?? Int64(item.data.count),
-                    fileName: item.fileName,
-                    timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-                    aspectRatio: item.aspectRatio,
-                    url: nil
-                )
-                finalAttachments.append(attachment)
-                print("✅ [Comment Submit] Added image attachment \(index + 1): CID: \(storedCID)")
-            }
-        }
-        
-        comment.attachments = finalAttachments
-
-        // Start the quote tweet alongside the comment. The two requests share no data, so a
-        // slow or timed-out add_comment must not swallow the quote.
-        let quoteTask = startQuoteTweetIfNeeded(
-            isQuoting: isQuoting,
-            comment: comment,
-            quoting: parentTweet,
-            hproseInstance: hproseInstance
-        )
-
-        // Submit the comment
-        do {
-            if let newComment = try await hproseInstance.addComment(comment, to: parentTweet) {
-                print("✅ [Comment Submit] Comment posted successfully with \(finalAttachments.count) attachments!")
-                print("[TweetUploadManager] New comment mid: \(newComment.mid)")
-                print("[TweetUploadManager] Parent tweet mid: \(parentTweet.mid)")
-                // Success notification is posted by addComment()
-            } else {
-                throw NSError(domain: "CommentUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to post comment"])
-            }
-        } catch {
-            print("❌ [Comment Submit] Failed to post comment (attempt \(retryCount + 1)): \(error)")
-            
-            let maxRetries = 2
-            if retryCount < maxRetries {
-                print("🔄 [Comment Submit] Retrying... (\(retryCount + 1)/\(maxRetries))")
-                try? await Task.sleep(nanoseconds: UInt64(retryCount + 1) * 2_000_000_000) // Exponential backoff
-                // isQuoting: false — the quote tweet is already in flight from this attempt.
-                // Re-arming it here would publish a second quote and count it twice.
-                await submitCommentWithCompletedJobs(
-                    comment: comment,
-                    to: parentTweet,
-                    itemData: itemData,
-                    completedCIDs: completedCIDs,
-                    retryCount: retryCount + 1,
-                    isQuoting: false
-                )
-            } else {
-                print("❌ [Comment Submit] Max retries reached")
-                await showFailureToast(message: NSLocalizedString("Failed to post comment after retries", comment: "Error"))
-            }
-        }
-
-        await quoteTask?.value
-    }
-
-    /// Kick off the quote tweet that accompanies a quoted comment, to run concurrently with
-    /// add_comment. Returns nil when the comment isn't a quote.
-    ///
-    /// The payload is snapshotted synchronously, before either request starts: addComment()
-    /// nils out the comment's author while encoding it and rewrites its mid afterwards, so a
-    /// concurrent read of the live comment object could capture it mid-flight. The quote
-    /// shares no state with the comment — they are separate objects server-side (add_comment.js
-    /// strips originalTweetId before storing the comment), and a comment must never influence
-    /// the original's retweetCount.
-    private func startQuoteTweetIfNeeded(
-        isQuoting: Bool,
-        comment: Tweet,
-        quoting originalTweet: Tweet,
-        hproseInstance: HproseInstance
-    ) -> Task<Void, Never>? {
-        guard isQuoting else { return nil }
-
-        let payload = Tweet.getInstance(
-            mid: "TEMP_QUOTE_\(UUID().uuidString)",
-            authorId: comment.authorId,
-            content: comment.content,
-            timestamp: comment.timestamp,
-            originalTweetId: originalTweet.mid,
-            originalAuthorId: originalTweet.authorId,
-            parentTweetId: comment.parentTweetId,
-            author: comment.author,
-            attachments: comment.attachments
-        )
-
-        return Task { @MainActor [weak self] in
-            await self?.publishQuoteTweet(
-                payload: payload,
-                quoting: originalTweet,
-                hproseInstance: hproseInstance
-            )
-        }
-    }
-
-    /// Publish a quote tweet and count it against the original.
-    ///
-    /// Creating the quote increments the original's retweetCount here; deleting it decrements
-    /// via HproseInstance.deleteTweet, keyed by the same mid, so the two stay symmetric.
-    private func publishQuoteTweet(
-        payload: Tweet,
-        quoting originalTweet: Tweet,
-        hproseInstance: HproseInstance
-    ) async {
-        // Read before uploading: uploadTweet()'s fallback path assigns the new server id onto
-        // the object it was handed, which would leave the temporary instance uncleared.
-        let temporaryId = payload.mid
-        print("📝 [Quote Tweet] Uploading quote tweet quoting \(originalTweet.mid)...")
-        defer { Tweet.clearInstance(mid: temporaryId) }
-
-        do {
-            guard let quoteTweet = try await hproseInstance.uploadTweet(payload) else {
-                print("❌ [Quote Tweet] Failed to post quote tweet")
-                return
-            }
-            print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
-
-            if let updatedTweet = await hproseInstance.updateRetweetCount(
-                tweet: originalTweet,
-                retweetId: quoteTweet.mid,
-                direction: true
-            ) {
-                // Cache the updated original tweet with its authorId as the cache key
-                TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
-                print("✅ [Quote Tweet] Updated retweet count for original tweet")
-            } else {
-                print("⚠️ [Quote Tweet] Failed to update retweet count")
-            }
-        } catch {
-            // Runs on its own task, so a failure here cannot surface as a comment failure and
-            // trigger the comment retry — which would duplicate the comment.
-            print("❌ [Quote Tweet] Failed to post quote tweet: \(error)")
-        }
-    }
-
-    private func forceRefreshBaseUrlForRetry(userId: String?, context: String) async {
-        guard let userId = userId,
-              !userId.isEmpty,
-              let hproseInstance = hproseInstance else {
-            return
-        }
-        
-        do {
-            _ = try await hproseInstance.fetchUser(userId, baseUrl: "")
-            print("DEBUG: [Upload Retry] Forced baseUrl refresh for user \(userId) during \(context)")
-        } catch {
-            print("DEBUG: [Upload Retry] Failed to refresh baseUrl for user \(userId) during \(context): \(error)")
-        }
-    }
-    
-    /// Poll video jobs and send chat message once complete
-    private func pollVideoJobsAndSendChatMessage(
-        message: ChatMessage,
-        itemData: [PendingTweetUpload.ItemData],
-        uploadedAttachments: [MimeiFileType]
-    ) async {
-        // Extract all job IDs from itemData
-        let jobItems = itemData.filter { $0.videoJobId != nil }
-        guard !jobItems.isEmpty else {
-            print("⚠️ [Chat Poll] No job IDs to poll")
-            return
-        }
-        
-        print("🔄 [Chat Poll] Starting background polling for \(jobItems.count) video job(s)")
-        print("🔄 [Chat Poll] Message content: '\(message.content ?? "nil")', receiptId: \(message.receiptId)")
-        for (idx, jobItem) in jobItems.enumerated() {
-            print("🔄 [Chat Poll] Job \(idx + 1): jobId=\(jobItem.videoJobId ?? "nil"), fileName=\(jobItem.fileName)")
-        }
-        
-        guard let hproseInstance = hproseInstance else {
-            print("❌ [Chat Poll] HproseInstance not available")
-            return
-        }
-        
-        // Get base URL for polling
-        guard let baseURL = try? await hproseInstance.appUser.resolveWritableUrl(),
-              let host = baseURL.host,
-              hproseInstance.appUser.cloudDrivePort > 0,
-              let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
-            print("❌ [Chat Poll] Cannot construct polling URL")
-            await showFailureToast(message: NSLocalizedString("Failed to check video status", comment: "Error"))
-            return
-        }
-        
-        // Track completed job CIDs
-        var completedCIDs: [String: String] = [:] // jobId -> CID
-        var completedCount = 0
-        let totalJobs = jobItems.count
-        
-        // Poll until all complete or failed
-        var pollAttempts = 0
-        let maxPollAttempts = 120 // 10 minutes (5 second intervals)
-        
-        while pollAttempts < maxPollAttempts && completedCount < totalJobs {
-            pollAttempts += 1
-            
-            // Check status of all pending jobs
-            for jobItem in jobItems {
-                guard let jobId = jobItem.videoJobId else { continue }
-                
-                // Skip already completed jobs
-                if completedCIDs[jobId] != nil {
-                    continue
-                }
-                
-                if let status = await checkVideoJobStatus(jobId: jobId, baseURL: pollURL) {
-                    switch status.status {
-                    case "completed":
-                        if let cid = status.cid, !cid.isEmpty {
-                            completedCIDs[jobId] = cid
-                            completedCount += 1
-                            print("✅ [Chat Poll] Job \(completedCount)/\(totalJobs) complete! Job: \(jobId), CID: \(cid)")
-                        } else {
-                            print("❌ [Chat Poll] Job completed but no CID returned")
-                            await showFailureToast(message: NSLocalizedString("Video processing completed but no ID returned", comment: "Error"))
-                            return
-                        }
-                        
-                    case "failed":
-                        print("❌ [Chat Poll] Job failed: \(status.message ?? "Unknown error")")
-                        await MainActor.run {
-                            NotificationCenter.default.post(
-                                name: .chatMessageSendFailed,
-                                object: nil,
-                                userInfo: ["error": NSError(domain: "ChatUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: status.message ?? NSLocalizedString("Video processing failed", comment: "Error")])]
-                            )
-                        }
-                        return
-                        
-                    case "uploading", "processing":
-                        // Still processing, continue polling
-                        continue
-                        
-                    default:
-                        print("⚠️ [Chat Poll] Unknown status for job \(jobId): \(status.status)")
-                        continue
-                    }
-                }
-            }
-            
-            // Check if all jobs completed
-            if completedCount == totalJobs {
-                print("✅ [Chat Poll] ALL \(totalJobs) video jobs completed!")
-                // Send chat message with all completed videos
-                await sendChatMessageWithCompletedJobs(
-                    message: message,
-                    itemData: itemData,
-                    completedCIDs: completedCIDs
-                )
-                return
-            }
-            
-            // Wait before next poll
-            print("⏳ [Chat Poll] \(completedCount)/\(totalJobs) jobs complete, polling... (\(pollAttempts)/\(maxPollAttempts))")
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-        }
-        
-        // Timeout
-        print("❌ [Chat Poll] Polling timeout after \(maxPollAttempts) attempts (\(completedCount)/\(totalJobs) completed)")
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .chatMessageSendFailed,
-                object: nil,
-                userInfo: ["error": NSError(domain: "ChatUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Video processing timed out", comment: "Error")])]
-            )
-        }
-    }
-    
-    /// Send chat message once ALL video jobs are complete
-    private func sendChatMessageWithCompletedJobs(
-        message: ChatMessage,
-        itemData: [PendingTweetUpload.ItemData],
-        completedCIDs: [String: String],
-        retryCount: Int = 0
-    ) async {
-        guard let hproseInstance = hproseInstance else { return }
-        
-        print("📝 [Chat Submit] Sending message with \(completedCIDs.count) completed video job(s), retry: \(retryCount)")
-        print("📝 [Chat Submit] ItemData count: \(itemData.count), completedCIDs: \(completedCIDs)")
-        
-        // Build final attachments using completed job CIDs
-        var finalAttachments: [MimeiFileType] = []
-        
-        for (index, item) in itemData.enumerated() {
-            print("📋 [Chat Submit] Processing item \(index + 1): videoJobId=\(item.videoJobId ?? "nil"), cid=\(item.cid ?? "nil"), fileName=\(item.fileName)")
-            
-            if let jobId = item.videoJobId {
-                // This is a video - use the completed CID from server
-                if let completedCID = completedCIDs[jobId] {
-                    // Use the mediaType from itemData if available, otherwise default to hls_video
-                    let mediaType = item.mediaType != nil ? MediaType.fromString(item.mediaType!) : .hls_video
-                    let attachment = MimeiFileType(
-                        mid: completedCID,
-                        mediaType: mediaType,
-                        size: item.fileSize ?? Int64(item.data.count),
-                        fileName: item.fileName,
-                        timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-                        aspectRatio: item.aspectRatio,
-                        url: nil
-                    )
-                    finalAttachments.append(attachment)
-                    print("✅ [Chat Submit] Added video attachment \(index + 1): CID: \(completedCID), mediaType: \(mediaType.rawValue), size: \(item.fileSize ?? 0), aspectRatio: \(item.aspectRatio ?? 0)")
-                } else {
-                    print("❌ [Chat Submit] WARNING: Missing completed CID for job: \(jobId)")
-                }
-            } else if let storedCID = item.cid {
-                // This is an image - use the stored CID
-                let mediaType = MediaType.fromString(item.mediaType ?? "Image")
-                let attachment = MimeiFileType(
-                    mid: storedCID,
-                    mediaType: mediaType,
-                    size: item.fileSize ?? Int64(item.data.count),
-                    fileName: item.fileName,
-                    timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-                    aspectRatio: item.aspectRatio,
-                    url: nil
-                )
-                finalAttachments.append(attachment)
-                print("✅ [Chat Submit] Added image attachment \(index + 1): CID: \(storedCID), mediaType: \(mediaType.rawValue)")
-            } else {
-                print("❌ [Chat Submit] ERROR: Missing CID for attachment \(index + 1) - This should never happen!")
-            }
-        }
-        
-        print("📊 [Chat Submit] Final attachments count: \(finalAttachments.count) (expected: \(itemData.count))")
-        
-        var finalMessage = message
-        finalMessage.attachments = finalAttachments
-        
-        print("📤 [Chat Submit] About to send message: content='\(finalMessage.content ?? "nil")', attachments=\(finalMessage.attachments?.count ?? 0), receiptId=\(finalMessage.receiptId)")
-        if let attachments = finalMessage.attachments {
-            for (idx, att) in attachments.enumerated() {
-                print("📤 [Chat Submit] Final attachment \(idx + 1):")
-                print("  mid: \(att.mid)")
-                print("  type: \(att.type.rawValue)")
-                print("  size: \(att.size ?? -1)")
-                print("  fileName: \(att.fileName ?? "nil")")
-                print("  aspectRatio: \(att.aspectRatio ?? -1)")
-                print("  timestamp: \(att.timestamp.timeIntervalSince1970 * 1000)")
-            }
-        }
-        print("📤 [Chat Submit] Full message JSON: \(finalMessage.toJSONString())")
-        
-        // Send the message
-        do {
-            let resultMessage = try await hproseInstance.sendMessage(receiptId: finalMessage.receiptId, message: finalMessage)
-            
-            if resultMessage.success == true {
-                print("✅ [Chat Submit] Message sent successfully with \(finalAttachments.count) attachments!")
-                print("✅ [Chat Submit] Result message ID: \(resultMessage.id), content: \(resultMessage.content ?? "nil"), attachments: \(resultMessage.attachments?.count ?? 0)")
-                
-                await MainActor.run {
-                    // Post notification for message sent
-                    NotificationCenter.default.post(
-                        name: .chatMessageSent,
-                        object: nil,
-                        userInfo: ["message": resultMessage]
-                    )
-                    print("✅ [Chat Submit] Posted chatMessageSent notification")
-                }
-            } else {
-                let errorMsg = resultMessage.errorMsg ?? "Failed to send message"
-                print("❌ [Chat Submit] Message send failed: \(errorMsg)")
-                throw NSError(domain: "ChatUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMsg])
-            }
-        } catch {
-            print("❌ [Chat Submit] Failed to send message (attempt \(retryCount + 1)): \(error)")
-            print("❌ [Chat Submit] Error details: \(error.localizedDescription)")
-            
-            let maxRetries = 2
-            if retryCount < maxRetries {
-                print("🔄 [Chat Submit] Retrying... (\(retryCount + 1)/\(maxRetries))")
-                try? await Task.sleep(nanoseconds: UInt64(retryCount + 1) * 2_000_000_000) // Exponential backoff
-                await sendChatMessageWithCompletedJobs(
-                    message: message,
-                    itemData: itemData,
-                    completedCIDs: completedCIDs,
-                    retryCount: retryCount + 1
-                )
-            } else {
-                print("❌ [Chat Submit] Max retries reached, giving up")
-                await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: .chatMessageSendFailed,
-                        object: nil,
-                        userInfo: ["error": error]
-                    )
-                }
-            }
-        }
-    }
-    
-    private func showFailureToast(message: String) async {
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .backgroundUploadFailed,
-                object: nil,
-                userInfo: ["error": message]
-            )
-        }
-    }
-    
-    private func uploadChatMessageWithPersistenceAndRetry(
-        message: ChatMessage,
-        itemData: [PendingTweetUpload.ItemData],
-        retryCount: Int = 0
-    ) async {
-        guard let hproseInstance = hproseInstance else { return }
-        
-        do {
-            // Update progress: uploading attachments
-            await MainActor.run {
-                UploadProgressManager.shared.updateProgress(
-                    stage: .uploadingAttachments,
-                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
-                    progress: 0.2
-                )
-            }
-            
-            let (uploadedAttachments, jobIdMap) = try await uploadAttachments(itemData: itemData)
-            
-            // Check if we have video jobs that need polling
-            if !jobIdMap.isEmpty {
-                print("✅ [Chat Upload] Got \(jobIdMap.count) video job ID(s). Closing dialog and polling in background...")
-                
-                // Update itemData with job IDs for polling
-                var updatedItemData = itemData
-                for (index, item) in updatedItemData.enumerated() {
-                    if index < uploadedAttachments.count {
-                        let attachment = uploadedAttachments[index]
-                        let jobId = jobIdMap[item.identifier]
-                        
-                        print("📋 [Chat Upload] Storing metadata for item \(index + 1): mediaType=\(attachment.type.rawValue), jobId=\(jobId ?? "nil"), cid=\(attachment.mid)")
-                        
-                        updatedItemData[index] = PendingTweetUpload.ItemData(
-                            identifier: item.identifier,
-                            typeIdentifier: item.typeIdentifier,
-                            data: item.data,
-                            fileName: item.fileName,
-                            noResample: item.noResample,
-                            videoJobId: jobId,
-                            cid: attachment.mid,
-                            aspectRatio: attachment.aspectRatio,
-                            fileSize: attachment.size,
-                            mediaType: attachment.type.rawValue
-                        )
-                    }
-                }
-                
-                // Close the dialog with message about server processing
-                await MainActor.run {
-                    UploadProgressManager.shared.updateProgress(
-                        stage: .completed,
-                        message: NSLocalizedString("Processing video on server...", comment: "Upload stage"),
-                        progress: 1.0,
-                        detail: NSLocalizedString("Your message will be sent when ready", comment: "Background processing")
-                    )
-                }
-                
-                // Small delay to show message
-                try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds
-                
-                await MainActor.run {
-                    UploadProgressManager.shared.completeUpload()
-                }
-                
-                // Start background polling for video jobs
-                Task(priority: .background) { @MainActor in
-                    await self.pollVideoJobsAndSendChatMessage(
-                        message: message,
-                        itemData: updatedItemData,
-                        uploadedAttachments: uploadedAttachments
-                    )
-                }
-                
-                return
-            }
-            
-            var finalMessage = message
-            finalMessage.attachments = uploadedAttachments
-            
-            // Update progress: sending message
-            await MainActor.run {
-                UploadProgressManager.shared.updateProgress(
-                    stage: .submittingTweet,
-                    message: NSLocalizedString("Sending message...", comment: "Upload stage"),
-                    progress: 0.9
-                )
-            }
-            
-            let resultMessage = try await hproseInstance.sendMessage(receiptId: finalMessage.receiptId, message: finalMessage)
-            
-            if resultMessage.success == true {
-                print("✅ [Chat Upload] Chat message sent successfully: \(resultMessage.id)")
-                
-                await MainActor.run {
-                    UploadProgressManager.shared.completeUpload()
-                    
-                    // Post notification for message sent
-                    NotificationCenter.default.post(
-                        name: .chatMessageSent,
-                        object: nil,
-                        userInfo: ["message": resultMessage]
-                    )
-                }
-            } else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: resultMessage.errorMsg ?? "Failed to send chat message"])
-            }
-        } catch {
-            print("❌ [Chat Upload] Error uploading chat message: \(error)")
-            await MainActor.run {
-                UploadProgressManager.shared.failUpload(message: ErrorMessageHelper.userFriendlyMessage(from: error))
-            }
-        }
-    }
-    
-    private func uploadAttachments(itemData: [PendingTweetUpload.ItemData]) async throws -> ([MimeiFileType], [String:String]) {
-        var uploadedAttachments: [MimeiFileType] = []
-        var jobIdMap: [String: String] = [:] // identifier -> jobId mapping
-        
-        let totalItems = itemData.count
-        
-        // Upload items one by one to show progress for each
-        for (index, item) in itemData.enumerated() {
-            let itemNumber = index + 1
-            
-            print("📋 [Upload] Starting item \(itemNumber)/\(totalItems): typeIdentifier=\(item.typeIdentifier), fileName=\(item.fileName)")
-            
-            // Determine if this is a video BEFORE calling uploadToIPFS so we can capture it in the closure
-            let typeIdLower = item.typeIdentifier.lowercased()
-            let isVideo = Self.isVideoTypeIdentifier(item.typeIdentifier)
-            
-            // Determine if this is an image for local caching
-            let isImage = typeIdLower.contains("image") ||
-                          typeIdLower.contains("jpeg") ||
-                          typeIdLower.contains("jpg") ||
-                          typeIdLower.contains("png") ||
-                          typeIdLower.contains("gif") ||
-                          typeIdLower.contains("heic") ||
-                          typeIdLower.contains("heif")
-            
-            do {
-                let (result, jobId) = try await uploadToIPFS(
-                    data: item.data,
-                    typeIdentifier: item.typeIdentifier,
-                    fileName: item.fileName,
-                    noResample: item.noResample,
-                    progressCallback: { [itemNumber, totalItems, index, isVideo] message, progress in
-                        Task { @MainActor in
-                            let overallProgress = 0.2 + (Double(index) / Double(totalItems) * 0.6) + (Double(progress) / 100.0 * (0.6 / Double(totalItems)))
-                            
-                            // Use the captured isVideo value, not message content
-                            let progressMessage: String
-                            if isVideo {
-                                progressMessage = String(format: NSLocalizedString("Processing video %d/%d - Please stay on this screen", comment: "Upload progress for video processing"), itemNumber, totalItems)
-                            } else {
-                                progressMessage = String(format: NSLocalizedString("Uploading image %d/%d", comment: "Upload progress"), itemNumber, totalItems)
+                    let count = pending.itemData.count
+                    let operationID = pending.id
+                    (attachment, jobId) = try await uploadToIPFS(
+                        data: item.data, typeIdentifier: item.typeIdentifier,
+                        fileName: item.fileName, noResample: item.noResample,
+                        progressCallback: { message, percent in
+                            Task { @MainActor in
+                                UploadProgressManager.shared.updateProgress(
+                                    stage: .uploadingAttachments, message: message,
+                                    progress: 0.05 + 0.7 * (Double(index) + Double(percent) / 100) / Double(count),
+                                    operationID: operationID)
                             }
-                            
-                            UploadProgressManager.shared.updateProgress(
-                                stage: .uploadingAttachments,
-                                message: progressMessage,
-                                progress: overallProgress,
-                                detail: "\(progress)%"
-                            )
-                        }
-                    }
-                )
-                
-                if let fileType = result {
-                    uploadedAttachments.append(fileType)
-                    print("✅ [Upload] Item \(itemNumber)/\(totalItems) uploaded as \(fileType.type.rawValue), fileName=\(fileType.fileName ?? "nil")")
-                    
-                    // CRITICAL FIX: For images, create local cache immediately after upload
-                    // This allows ChatImageThumbnail to display from cache instead of downloading from server
-                    // This is similar to how videos work - they cache locally via LocalHTTPServer
-                    if isImage {
-                        // Cache the image immediately so it's available for display.
-                        // Task.detached: cacheImageData does UIImage(data:) + disk write —
-                        // keep that decode off the main actor.
-                        Task.detached(priority: .userInitiated) {
-                            ImageCacheManager.shared.cacheImageData(item.data, for: fileType)
-                            print("💾 [Upload] Cached image locally for immediate display: \(fileType.mid)")
-                        }
-                    }
+                        })
+                    guard attachment != nil else { throw uploadError("Failed to upload attachment") }
+                    break
+                } catch {
+                    try Task.checkCancellation()
+                    print("[Upload] Attachment attempt \(attempt + 1) failed: \(error)")
+                    if attempt == 2 { throw error }
+                    try await Task.sleep(for: .seconds(2 * (attempt + 1)))
                 }
-                
-                if let jobId = jobId {
-                    jobIdMap[item.identifier] = jobId
-                    print("📝 [Upload] Item \(itemNumber)/\(totalItems) uploaded, job ID: \(jobId)")
-                } else {
-                    print("✅ [Upload] Item \(itemNumber)/\(totalItems) uploaded (no job ID)")
-                }
-            } catch {
-                print("❌ [Upload] Error uploading item \(itemNumber)/\(totalItems): \(error)")
-                throw error
             }
+            guard let attachment else { throw uploadError("Failed to upload attachment") }
+            pending.itemData[index] = PendingTweetUpload.ItemData(
+                identifier: item.identifier, typeIdentifier: item.typeIdentifier, data: item.data,
+                fileName: item.fileName, noResample: item.noResample, videoJobId: jobId,
+                cid: attachment.mid, aspectRatio: attachment.aspectRatio,
+                fileSize: attachment.size, mediaType: attachment.type.rawValue)
+            if attachment.type == .image {
+                let cacheKey = attachment.mid
+                Task.detached(priority: .utility) {
+                    ImageCacheManager.shared.cacheImageData(item.data, forKey: cacheKey)
+                }
+            }
+            // Keep the server receipt even if cancellation arrived during the transfer.
+            try await savePendingUpload(pending)
+            try Task.checkCancellation()
+            UploadProgressManager.shared.updateProgress(
+                stage: .uploadingAttachments,
+                message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                progress: 0.05 + 0.7 * Double(index + 1) / Double(pending.itemData.count))
         }
-        
-        if itemData.count != uploadedAttachments.count {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
+
+        if pending.itemData.contains(where: { $0.videoJobId != nil }) {
+            try await waitForVideoJobs(&pending)
         }
-        
-        print("📊 [Upload] All \(totalItems) attachments uploaded. Job IDs: \(jobIdMap.count)")
-        return (uploadedAttachments, jobIdMap)
+        try Task.checkCancellation()
+        let attachments = pending.itemData.compactMap { item -> MediaRecord? in
+            guard let cid = item.cid else { return nil }
+            return MediaRecord(mid: cid, type: MediaType.fromString(item.mediaType ?? "Image"),
+                               size: item.fileSize, fileName: item.fileName, aspectRatio: item.aspectRatio)
+        }
+        guard attachments.count == pending.itemData.count else { throw uploadError("Failed to upload attachment") }
+        pending.record.attachments = attachments
+        // A persisted marker prevents an interrupted non-idempotent publication
+        // from being silently resubmitted on the next launch.
+        pending.publicationAttempted = true
+        try await savePendingUpload(pending)
+        try Task.checkCancellation()
+        UploadProgressManager.shared.updateProgress(stage: .submittingTweet,
+            message: NSLocalizedString("Publishing...", comment: "Upload stage"), progress: 0.95)
+
+        if let recipient = pending.recipientId {
+            let message = ChatMessage(id: pending.record.mid, authorId: pending.record.authorId,
+                receiptId: recipient, chatSessionId: pending.chatSessionId ?? "",
+                content: pending.record.content, timestamp: pending.record.timestamp.timeIntervalSince1970,
+                attachments: attachments.map { $0.makeMedia() })
+            let sent = try await hproseInstance.sendMessage(receiptId: recipient, message: message)
+            guard sent.success == true else { throw uploadError(sent.errorMsg ?? "Failed to send message") }
+            NotificationCenter.default.post(name: .chatMessageSent, object: nil, userInfo: ["message": sent])
+        } else if let parentRecord = pending.parent {
+            let comment = pending.record.makeTweet()
+            let parent = parentRecord.makeTweet()
+            // Keep the independent quote request concurrent with add_comment, but
+            // structured so expiration cancels both and completion awaits both.
+            let quote = pending.isQuoting ? TweetRecord(
+                mid: "TEMP_QUOTE_\(UUID().uuidString)", authorId: comment.authorId,
+                content: comment.content, timestamp: comment.timestamp,
+                originalTweetId: parent.mid, originalAuthorId: parent.authorId,
+                parentTweetId: comment.parentTweetId, attachments: attachments) : nil
+            async let quoteResult: Void = publishQuoteIfNeeded(quote, original: parent)
+            var commentError: Error?
+            do {
+                guard try await hproseInstance.addComment(comment, to: parent) != nil else {
+                    throw uploadError("Failed to post comment")
+                }
+            } catch { commentError = error }
+            // A failed comment must not cancel the independently requested quote.
+            try await quoteResult
+            if let commentError { throw commentError }
+        } else {
+            guard let posted = try await hproseInstance.uploadTweet(pending.record.makeTweet()) else {
+                throw uploadError("Failed to upload tweet")
+            }
+            NotificationCenter.default.post(name: .newTweetCreated, object: nil, userInfo: ["tweet": posted])
+        }
+        // A confirmed publication wins even when cancellation raced the response.
+        try await removePendingUpload(pending)
     }
-    
-    private func savePendingUpload(_ pendingUpload: PendingTweetUpload) async {
-        do {
-            let data = try JSONEncoder().encode(pendingUpload)
-            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-            try data.write(to: fileURL)
-            print("Saved pending upload to disk")
-        } catch {
-            print("Failed to save pending upload: \(error)")
+
+    private func publishQuoteIfNeeded(_ record: TweetRecord?, original: Tweet) async throws {
+        guard let record, let hproseInstance else { return }
+        try Task.checkCancellation()
+        guard let posted = try await hproseInstance.uploadTweet(record.makeTweet()) else {
+            throw uploadError("Failed to post tweet. Please refresh before retrying.")
+        }
+        // Preserve the existing quote count update; this is a separate write.
+        if let updated = await hproseInstance.updateRetweetCount(tweet: original, retweetId: posted.mid, direction: true) {
+            TweetCacheManager.shared.saveTweet(updated, userId: updated.authorId)
         }
     }
-    
-    func removePendingUpload() async {
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-        try? FileManager.default.removeItem(at: fileURL)
-        print("Removed pending upload from disk")
+
+    private func waitForVideoJobs(_ pending: inout PendingTweetUpload) async throws {
+        guard let hproseInstance else { throw uploadError("System error") }
+        try Task.checkCancellation()
+        let rootURL = try await hproseInstance.appUser.resolveWritableUrl()
+        guard let host = rootURL.host, hproseInstance.appUser.cloudDrivePort > 0,
+              let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
+            throw uploadError("Failed to check video status")
+        }
+        let jobIndices = pending.itemData.indices.filter { pending.itemData[$0].videoJobId != nil }
+        var fractions = Dictionary(uniqueKeysWithValues: jobIndices.map { ($0, 0.0) })
+        for _ in 0..<120 {
+            try Task.checkCancellation()
+            for index in jobIndices {
+                guard let jobId = pending.itemData[index].videoJobId else { continue }
+                let status = await checkVideoJobStatus(jobId: jobId, baseURL: pollURL)
+                try Task.checkCancellation()
+                // A missed response is not a failed conversion. Leave its receipt
+                // intact and try the next scheduled poll without an alert.
+                guard let status else { continue }
+                if status.status == "failed" { throw uploadError("Video processing failed") }
+                fractions[index] = max(fractions[index] ?? 0, Double(min(max(status.progress, 0), 100)) / 100)
+                if status.status == "completed" {
+                    guard let cid = status.cid, !cid.isEmpty else {
+                        throw uploadError("Video processing completed but no ID returned")
+                    }
+                    let item = pending.itemData[index]
+                    pending.itemData[index] = PendingTweetUpload.ItemData(
+                        identifier: item.identifier, typeIdentifier: item.typeIdentifier, data: item.data,
+                        fileName: item.fileName, noResample: item.noResample, cid: cid,
+                        aspectRatio: item.aspectRatio, fileSize: item.fileSize, mediaType: item.mediaType)
+                    fractions[index] = 1
+                    try await savePendingUpload(pending)
+                }
+            }
+            UploadProgressManager.shared.updateProgress(stage: .uploadingAttachments,
+                message: NSLocalizedString("Processing on server...", comment: "Upload stage"),
+                progress: 0.75 + 0.19 * fractions.values.reduce(0, +) / Double(jobIndices.count))
+            if !pending.itemData.contains(where: { $0.videoJobId != nil }) { return }
+            try await Task.sleep(for: .seconds(5))
+        }
+        throw uploadError("Video processing timed out")
+    }
+
+    private func uploadError(_ message: String) -> NSError {
+        NSError(domain: "TweetUpload", code: -1,
+                userInfo: [NSLocalizedDescriptionKey: NSLocalizedString(message, comment: "Upload error")])
+    }
+
+    // Pending data contains only Sendable records. Encoding and disk I/O stay
+    // off the main actor, and each operation has its own atomic checkpoint.
+    func savePendingUpload(_ pending: PendingTweetUpload) async throws {
+        try await Task.detached(priority: .utility) {
+            let directory = Self.pendingDirectory
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var directoryURL = directory
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try directoryURL.setResourceValues(values)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            try encoder.encode(pending).write(to: Self.pendingURL(pending),
+                                             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }.value
+    }
+
+    func removePendingUpload(_ pending: PendingTweetUpload) async throws {
+        try await Task.detached(priority: .utility) {
+            let url = Self.pendingURL(pending)
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+        }.value
+    }
+
+    func pendingUploads() async throws -> [PendingTweetUpload] {
+        try await Task.detached(priority: .utility) {
+            let directory = Self.pendingDirectory
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            var uploads: [PendingTweetUpload] = []
+            if FileManager.default.fileExists(atPath: directory.path) {
+                uploads = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                    .filter { $0.pathExtension == "json" }
+                    .map { try decoder.decode(PendingTweetUpload.self, from: Data(contentsOf: $0)) }
+            }
+            // Keep the previous version's valid pending file available for an
+            // explicit Retry/Discard. Merely opening the app never rewrites it.
+            if FileManager.default.fileExists(atPath: Self.legacyPendingURL.path) {
+                let data = try Data(contentsOf: Self.legacyPendingURL)
+                let keys = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                if keys?["record"] != nil {
+                    uploads.append(try decoder.decode(PendingTweetUpload.self, from: data))
+                } else {
+                    let legacy = try decoder.decode(LegacyPendingUpload.self, from: data)
+                    var pending = PendingTweetUpload(record: legacy.tweet, itemData: legacy.itemData,
+                                                     retryCount: legacy.retryCount, videoJobId: legacy.videoJobId)
+                    pending.usesLegacyFile = true
+                    // Old checkpoints did not record whether publication began.
+                    pending.publicationAttempted = true
+                    uploads.append(pending)
+                }
+            }
+            return uploads.sorted { $0.timestamp < $1.timestamp }
+        }.value
+    }
+
+    private struct LegacyPendingUpload: Decodable {
+        let tweet: TweetRecord
+        let itemData: [PendingTweetUpload.ItemData]
+        let retryCount: Int
+        let videoJobId: String?
+    }
+
+    nonisolated private static var legacyPendingURL: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
+    }
+
+    nonisolated private static func pendingURL(_ pending: PendingTweetUpload) -> URL {
+        pending.usesLegacyFile == true ? legacyPendingURL :
+            pendingDirectory.appendingPathComponent(pending.id.uuidString + ".json")
+    }
+
+    nonisolated private static var pendingDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("PendingUploads", isDirectory: true)
     }
 }
 
@@ -1691,16 +427,51 @@ extension TweetUploadManager {
     
 }
 
-// MARK: - Pending Tweet Upload Structure
+// Values only: safe to encode and save away from the main actor.
 extension TweetUploadManager {
-    struct PendingTweetUpload: Codable {
-        let tweet: Tweet
-        let itemData: [ItemData]
+    struct PendingTweetUpload: Codable, Sendable {
+        let id: UUID
+        var record: TweetRecord
+        var itemData: [ItemData]
         let timestamp: Date
         let retryCount: Int
-        let videoJobId: String? // Legacy - kept for backward compatibility
-        
-        struct ItemData: Codable {
+        let videoJobId: String?
+        var parent: TweetRecord?
+        var isQuoting: Bool
+        var recipientId: String?
+        var chatSessionId: String?
+        var publicationAttempted: Bool
+        var usesLegacyFile: Bool?
+
+        @MainActor var tweet: Tweet { record.makeTweet() }
+        var type: String { recipientId != nil ? "chat" : (parent != nil ? "comment" : "tweet") }
+        var hasVideos: Bool { itemData.contains { Self.isVideo($0.typeIdentifier) } }
+        private static func isVideo(_ type: String) -> Bool {
+            let value = type.lowercased()
+            return ["video", "movie", "quicktime", "mpeg", "mp4", "m4v", "mov", "avi", "mkv", "webm"].contains { value.contains($0) }
+        }
+
+        @MainActor
+        init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil,
+             parent: TweetRecord? = nil, isQuoting: Bool = false) {
+            self.init(record: TweetRecord(tweet: tweet), itemData: itemData, retryCount: retryCount,
+                      videoJobId: videoJobId, parent: parent, isQuoting: isQuoting)
+        }
+
+        init(record: TweetRecord, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil,
+             parent: TweetRecord? = nil, isQuoting: Bool = false) {
+            id = UUID()
+            self.record = record
+            self.itemData = itemData
+            timestamp = Date()
+            self.retryCount = retryCount
+            self.videoJobId = videoJobId
+            self.parent = parent
+            self.isQuoting = isQuoting
+            publicationAttempted = false
+        }
+
+        struct ItemData: Codable, Sendable {
             let identifier: String
             let typeIdentifier: String
             let data: Data
@@ -1726,13 +497,6 @@ extension TweetUploadManager {
             }
         }
         
-        init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil) {
-            self.tweet = tweet
-            self.itemData = itemData
-            self.timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
-            self.retryCount = retryCount
-            self.videoJobId = videoJobId // Legacy compatibility
-        }
     }
 }
 
