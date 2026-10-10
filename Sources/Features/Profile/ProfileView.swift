@@ -24,10 +24,13 @@ struct ProfileView: View {
     @State private var showChatScreen = false
     @State private var chatNavigationPath = NavigationPath()
     @State private var showBlockUserMenu = false
+    @State private var showNodeSelection = false
+    @State private var providerAddresses: [String] = []
+    @State private var isLoadingProfileNode = true
     @State private var profileShareData: ShareSheetData?
     @State private var previousScrollOffset: CGFloat = 0
     @State private var didLoad = false
-    /// Bumped when stale-IP recovery changes this profile's read route so tweets reload without clearing cached content.
+    /// Bumped when recovery or manual node selection changes the profile's read route.
     @State private var profileTweetsRefreshToken = 0
     @State private var resyncedTweets: [Tweet] = []
     @State private var resyncedTweetsToken = 0
@@ -125,6 +128,18 @@ struct ProfileView: View {
             .sheet(item: $profileShareData) { data in
                 ShareSheetView(items: data.items)
             }
+            .confirmationDialog(
+                NSLocalizedString("Select Node", comment: "Profile provider picker title"),
+                isPresented: $showNodeSelection,
+                titleVisibility: .visible
+            ) {
+                ForEach(providerAddresses, id: \.self) { address in
+                    Button(address) {
+                        Task { await selectProfileNode(address) }
+                    }
+                }
+                Button(NSLocalizedString("Cancel", comment: "Cancel node selection"), role: .cancel) { }
+            }
     }
     
     private var contentWithNavigation: some View {
@@ -170,6 +185,8 @@ struct ProfileView: View {
             .task(id: user.mid) {
                 guard !didLoad else { return }
                 didLoad = true
+                isLoadingProfileNode = true
+                defer { isLoadingProfileNode = false }
                 await Task.yield()
                 guard !Task.isCancelled else { return }
                 await validateProfileRouteOnOpen()
@@ -474,6 +491,10 @@ struct ProfileView: View {
 
         ToolbarItem(placement: .navigationBarTrailing) {
             HStack(spacing: 12) {
+                if isLoadingProfileNode && hproseInstance.appUser.username == "admin" {
+                    ProgressView()
+                        .controlSize(.small)
+                }
                 if !isAppUser {
                     Button {
                         if hproseInstance.appUser.isGuest {
@@ -494,6 +515,18 @@ struct ProfileView: View {
                         }
                     } label: {
                         Label(NSLocalizedString("Share Profile", comment: "Share profile menu item"), systemImage: "square.and.arrow.up")
+                    }
+
+                    if hproseInstance.appUser.username == "admin" {
+                        Button {
+                            Task { await loadProfileNodes() }
+                        } label: {
+                            Label(
+                                NSLocalizedString("Select Node", comment: "Profile provider picker menu item"),
+                                systemImage: "network"
+                            )
+                        }
+                        .disabled(isLoadingProfileNode)
                     }
 
                     if !isAppUser {
@@ -944,6 +977,37 @@ struct ProfileView: View {
         _ = await (pinnedRefresh, profileRefresh)
     }
 
+    @MainActor
+    private func loadProfileNodes() async {
+        guard hproseInstance.appUser.username == "admin", !isLoadingProfileNode else { return }
+        isLoadingProfileNode = true
+        defer { isLoadingProfileNode = false }
+        do {
+            providerAddresses = try await hproseInstance.getProfileProviderAddresses(user.mid)
+            if providerAddresses.isEmpty {
+                showToastMessage(NSLocalizedString("No provider nodes found", comment: "Empty profile provider list"), type: .error)
+            } else {
+                showNodeSelection = true
+            }
+        } catch {
+            showToastMessage(error.localizedDescription, type: .error)
+        }
+    }
+
+    @MainActor
+    private func selectProfileNode(_ address: String) async {
+        guard hproseInstance.appUser.username == "admin", !isLoadingProfileNode else { return }
+        isLoadingProfileNode = true
+        defer { isLoadingProfileNode = false }
+        do {
+            try await hproseInstance.reloadProfileFromNode(userId: user.mid, address: address)
+            await refreshPinnedTweets()
+            profileTweetsRefreshToken += 1
+        } catch {
+            showToastMessage(error.localizedDescription, type: .error)
+        }
+    }
+
     private func refreshProfileData(includePinnedTweets: Bool = true) async {
         var refreshedProfileUser: User?
         var didRouteChange = false
@@ -997,6 +1061,9 @@ struct ProfileView: View {
     /// on the current access node and synchronizes the User plus its direct Tweet
     /// references from the home host before returning fresh data.
     private func resyncProfileDataForPull() async {
+        guard !isLoadingProfileNode else { return }
+        isLoadingProfileNode = true
+        defer { isLoadingProfileNode = false }
         let profileUserId = user.mid
         let hproseInstance = hproseInstance
 

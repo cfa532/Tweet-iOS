@@ -3109,6 +3109,76 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return providerIP
     }
 
+    /// One advertised public IP per provider, preserving the node groups that
+    /// get_provider_ips flattens. Used by the admin profile node picker.
+    func getProfileProviderAddresses(_ userId: String) async throws -> [String] {
+        guard let entryIP = try await findEntryIP() else {
+            throw HproseError.userNotFound(userId: userId, reason: "App entry unavailable")
+        }
+        let client = clientPool.getClientByIP(for: entryIP)
+        let raw = await HproseTransport.invoke(
+            "Getvar", using: client, args: ["", "mmprovsips", userId]
+        )
+        if let error = raw as? Error { throw error }
+        // Leither may JSON-encode the grouped value twice.
+        var decoded = raw
+        for _ in 0..<2 {
+            guard let text = decoded as? String else { break }
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
+            decoded = try JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed)
+        }
+        if decoded is NSNull { return [] }
+        guard let groups = decoded as? [[[Any]]] else {
+            throw HproseError.unexpectedResponse(description: "Invalid provider node list")
+        }
+
+        let candidates = groups.compactMap { group -> (address: String, score: Double)? in
+            group.compactMap { pair -> (address: String, score: Double)? in
+                guard pair.count >= 2, let address = pair[0] as? String,
+                      Gadget.isValidPublicIpAddress(address),
+                      let score = Double(String(describing: pair[1])) else { return nil }
+                return (normalizeHostPort(address), score)
+            }.min { $0.score < $1.score }
+        }.sorted { $0.score < $1.score }
+        var seen = Set<String>()
+        return Array(candidates.map(\.address).filter { seen.insert($0).inserted }.prefix(3))
+    }
+
+    /// A manual selection must read the chosen node, bypassing cached-user returns,
+    /// provider election and storage negotiation's automatic redirect to the root.
+    @MainActor
+    func reloadProfileFromNode(userId: String, address: String) async throws {
+        guard appUser.username == "admin" else { return }
+        guard let url = URL(string: ensureHttpPrefix(address)) else {
+            throw HproseError.userNotFound(userId: userId, reason: "Invalid provider address")
+        }
+        let client = clientPool.getClientByUrl(for: url.absoluteString, timeout: 15)
+        let params: [String: Any] = [
+            "aid": appId, "ver": "last", "version": "v3",
+            "userid": userId, "v4only": "false"
+        ]
+        let raw = await invokeApplication(using: client, entry: "get_user", params: params)
+        let response = try Self.unwrapV2Response(raw)
+        guard let data = response as? [String: Any],
+              data["mid"] as? String == userId,
+              let username = data["username"] as? String,
+              !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              data["hostIds"] is [String] else {
+            throw HproseError.invalidUserData(userId: userId, reason: "Selected node did not return this profile")
+        }
+        var decoded = try UserRecord.fromDictionary(data)
+        try Task.checkCancellation()
+        decoded.record.baseUrl = url
+        // A previous write can keep reads on the root. Only release that preference
+        // after the selected provider has returned a valid profile.
+        UserRoutes.shared.stopReadingFromWriteHost(for: userId)
+        let updatedUser = UserStore.shared.merge(decoded, shouldUpdateBaseUrl: true)
+        updatedUser.cacheStatus = .fresh
+        UserRoutes.shared.confirmReadRoute(url, for: userId)
+        TweetCacheManager.shared.saveUser(updatedUser)
+        NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": userId])
+    }
+
     /// Return fresh advertised public provider routes without a HEAD election.
     /// Detail loading validates them with get_user or get_tweet in three-wide batches.
     private func getProviderCandidates(_ mid: String) async throws -> [String] {

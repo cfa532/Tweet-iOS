@@ -832,3 +832,7 @@
 "Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message." = "投稿処理が中断されました。重複投稿や重複送信を避けるため、再試行する前にフィードや会話を確認してください。";
 "Sign in to the account that started this upload." = "このアップロードを開始したアカウントにログインしてください。";
 "Later" = "後で";
+
+/* Admin profile node selection */
+"Select Node" = "ノードを選択";
+"No provider nodes found" = "プロバイダーノードが見つかりません";

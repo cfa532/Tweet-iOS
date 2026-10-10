@@ -834,3 +834,7 @@
 "Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message." = "Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message.";
 "Sign in to the account that started this upload." = "Sign in to the account that started this upload.";
 "Later" = "Later";
+
+/* Admin profile node selection */
+"Select Node" = "Select Node";
+"No provider nodes found" = "No provider nodes found";

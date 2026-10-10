@@ -839,3 +839,7 @@
 "Publishing was interrupted. Check your feed or conversation before retrying to avoid a duplicate post or message." = "发布过程被中断。重试前请检查动态或会话，以免重复发布或发送。";
 "Sign in to the account that started this upload." = "请登录发起此次上传的账户。";
 "Later" = "稍后";
+
+/* Admin profile node selection */
+"Select Node" = "选择节点";
+"No provider nodes found" = "未找到提供节点";
