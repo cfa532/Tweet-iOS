@@ -491,10 +491,6 @@ struct ProfileView: View {
 
         ToolbarItem(placement: .navigationBarTrailing) {
             HStack(spacing: 12) {
-                if isLoadingProfileNode && hproseInstance.appUser.username == "admin" {
-                    ProgressView()
-                        .controlSize(.small)
-                }
                 if !isAppUser {
                     Button {
                         if hproseInstance.appUser.isGuest {
