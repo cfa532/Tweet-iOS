@@ -4613,7 +4613,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseError("⚠️ [updateRetweetCount] Failed to resolve original author root: \(error)")
             return nil
         }
-        guard let client = await author.writableClient(timeout: 15) else {
+        guard let client = await author.writableClient(timeout: 30) else {
             hproseWarning("⚠️ [updateRetweetCount] Original author writable client not initialized")
             return nil
         }
