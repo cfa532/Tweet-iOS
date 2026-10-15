@@ -916,6 +916,22 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
+    /// Expands the app header (instantly, no animation) ahead of a programmatic scroll.
+    ///
+    /// The header's show/hide is driven only by user drags: scrollViewDidScroll forwards
+    /// `onScroll` solely while `isUserDragging`. A scroll we start ourselves therefore never
+    /// reveals a header that was hidden by an earlier scroll-down, and since the table keeps
+    /// a constant top inset equal to the header height, that leaves a blank band where the
+    /// header should be until the user drags again.
+    private func revealBarsBeforeProgrammaticScroll() {
+        endBarAppearanceCompensation()
+        NotificationCenter.default.post(
+            name: .showBarsAfterScrollEnd,
+            object: nil,
+            userInfo: ["animated": false]
+        )
+    }
+
     func scrollToTop() {
         guard isTableVisibleForMutation else {
             pendingScrollRequest = .top
@@ -950,12 +966,7 @@ class TweetTableViewController: UITableViewController {
         // Requesting it here rather than via showBarsWithoutAnimation deliberately skips
         // the bar-appearance anchor: that machinery holds a row still while the bars
         // expand mid-coast, which is the opposite of what a scroll-to-top wants.
-        endBarAppearanceCompensation()
-        NotificationCenter.default.post(
-            name: .showBarsAfterScrollEnd,
-            object: nil,
-            userInfo: ["animated": false]
-        )
+        revealBarsBeforeProgrammaticScroll()
 
         // Belt and braces: the header expansion above still resizes this table, so let the
         // next layout passes re-pin the offset in case the animation is disturbed anyway.
@@ -985,6 +996,9 @@ class TweetTableViewController: UITableViewController {
         }
 
         isScrollingToTop = true
+        // The new-tweets banner lands here; reveal the header first (see scrollToTop for why
+        // before, not during, the animation).
+        revealBarsBeforeProgrammaticScroll()
         tableView.layoutIfNeeded()
 
         let indexPath = regularTweetIndexPath(0)
