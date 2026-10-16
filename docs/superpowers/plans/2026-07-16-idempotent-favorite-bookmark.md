@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Preserve the invariants in `TweetBackendApp/docs/LEITHER_DATA_AND_SYNC_CONTRACT.md`.
+- Preserve the invariants in [shared sync contract](https://github.com/cfa532/Leither/blob/main/cfa532-docs/integrations/tweet/DATA_AND_SYNC_CONTRACT.md).
 - Do not run tests unless the user explicitly asks.
 - Preserve unrelated changes in every working tree.
 - Keep Android and Web compatible through the legacy no-parameter toggle path.

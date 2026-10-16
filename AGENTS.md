@@ -10,7 +10,7 @@
 
 # Related Projects
 
-- **Canonical sync contract:** Before changing object creation, references, node routing, synchronization, profiles, tweets, comments, replies, or related APIs, read `/Users/cfa532/Documents/GitHub/TweetBackendApp/docs/LEITHER_DATA_AND_SYNC_CONTRACT.md` and preserve its cross-client invariants.
+- **Canonical sync contract:** Before changing object creation, references, node routing, synchronization, profiles, tweets, comments, replies, or related APIs, read `/Users/cfa532/Documents/GitHub/Leither/cfa532-docs/integrations/tweet/DATA_AND_SYNC_CONTRACT.md` and preserve its cross-client invariants.
 
 - `TweetAppBackend` is the shared backend companion project for this app and its sibling clients.
 - It lives at `/Users/cfa532/Documents/GitHub/TweetBackendApp`.
