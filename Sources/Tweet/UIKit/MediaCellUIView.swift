@@ -94,8 +94,9 @@ private final class RotatingLoadingSpinnerView: UIView {
     func startAnimating() {
         if !isAnimating {
             stallTimer?.invalidate()
+            // The Timer closure is @Sendable; `onStalled` is main-actor state, so hop explicitly.
             stallTimer = Timer.scheduledTimer(withTimeInterval: stallThreshold, repeats: false) { [weak self] _ in
-                self?.onStalled?()
+                Task { @MainActor in self?.onStalled?() }
             }
         }
         isAnimating = true
