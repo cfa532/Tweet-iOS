@@ -1815,7 +1815,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // its proven baseUrl, matching TweetWeb's author-first detail load.
         let author: User?
         if fromDetailView {
-            author = try await fetchUserForDetail(authorId)
+            author = try await authorForDetail(authorId)
         } else {
             author = try await fetchUser(authorId)
         }
@@ -2130,6 +2130,27 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         blackList.recordFailure(userId)
         throw HproseError.userNotFound(userId: userId, reason: "No provider returned valid author data")
+    }
+
+    /// Resolves the author for a detail read, checking the saved route before discovery.
+    ///
+    /// Discovery goes through the entry node (`get_provider_ips`, 5s timeout, no retry),
+    /// so a stalled entry node used to fail a cold-start deeplink even though the
+    /// author's saved route was alive — ProfileView opens fine on the same route because
+    /// it probes it first. `validateAndRepairProfileRoute` is that probe: a fresh health
+    /// check, and a replacement route when the probe fails. Only when the author has no
+    /// saved route, or none can be made healthy, does the read fall through to discovery.
+    /// A healthy route is not proof the profile fields are current; the profile and feed
+    /// reads refresh those.
+    private func authorForDetail(_ authorId: String) async throws -> User? {
+        guard authorId != Constants.GUEST_ID else { return nil }
+
+        let cached = await TweetCacheManager.shared.fetchUser(mid: authorId)
+        let hasSavedRoute = await MainActor.run { cached.username != nil && cached.baseUrl != nil }
+        if hasSavedRoute, await validateAndRepairProfileRoute(for: cached) {
+            return cached
+        }
+        return try await fetchUserForDetail(authorId)
     }
 
     /// A detail read starts with user-provider discovery because users usually have
