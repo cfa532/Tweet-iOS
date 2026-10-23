@@ -1802,6 +1802,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         checkSavedAuthorRoute: Bool = false
     ) async throws -> Tweet? {
         guard !TweetDeletionRegistry.shared.isDeleted(tweetId) else { return nil }
+        let readStartedAt = Date()
 
         // Ordinary reads respect the reliability blacklist. An initial detail read
         // is the one bounded user-triggered attempt that may recover a previously
@@ -1914,6 +1915,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         blackList.recordFailure(tweetId)
         hproseError("DEBUG: [getTweet] Author route and tweet providers failed for tweetId: \(tweetId)")
+        // Separates "node does not have it yet" (a fast server answer) from a refused
+        // call (~0s) or a timeout, and records whether the provider fallback was tried.
+        DiagnosticLog.error(
+            "tweet-read",
+            "get_tweet gave up after \(String(format: "%.1f", Date().timeIntervalSince(readStartedAt)))s mid=\(tweetId) via \(readNodeURL.absoluteString) fromDetailView=\(fromDetailView) providerFallbackTried=\(fromDetailView && nodeUrl == nil && author != nil) authorRouteError=\(initialError.map { "\($0)" } ?? "none")"
+        )
         if let initialError { throw initialError }
         return nil
     }
@@ -2151,12 +2158,30 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private func authorForDetail(_ authorId: String) async throws -> User? {
         guard authorId != Constants.GUEST_ID else { return nil }
 
+        let startedAt = Date()
         let cached = await TweetCacheManager.shared.fetchUser(mid: authorId)
-        let hasSavedRoute = await MainActor.run { cached.username != nil && cached.baseUrl != nil }
+        let (hasSavedRoute, savedRoute) = await MainActor.run {
+            (cached.username != nil && cached.baseUrl != nil, cached.baseUrl?.absoluteString ?? "none")
+        }
+        // One line per deeplink (not a failure): shows which branch resolved the author.
+        func record(_ branch: String) {
+            DiagnosticLog.error(
+                "deeplink",
+                "author \(authorId) resolved via \(branch) in \(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s savedRoute=\(savedRoute)"
+            )
+        }
         if hasSavedRoute, await validateAndRepairProfileRoute(for: cached) {
+            record("saved route")
             return cached
         }
-        return try await fetchUserForDetail(authorId)
+        do {
+            let discovered = try await fetchUserForDetail(authorId)
+            record(hasSavedRoute ? "discovery (saved route unhealthy)" : "discovery (no saved route)")
+            return discovered
+        } catch {
+            record("FAILED discovery: \(error)")
+            throw error
+        }
     }
 
     /// A detail read starts with user-provider discovery because users usually have
@@ -2175,7 +2200,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 .filter { !excludedRoutes.contains(normalizeHostPort($0)) }
         } catch {
             hproseDebug("DEBUG: [fetchTweetFromProviders] Discovery failed for \(tweetId): \(error)")
+            DiagnosticLog.error("tweet-read", "tweet provider discovery failed mid=\(tweetId): \(error)")
             return nil
+        }
+        if candidates.isEmpty {
+            DiagnosticLog.error("tweet-read", "tweet provider discovery found no provider besides the author route mid=\(tweetId)")
         }
 
         let batchSize = 3

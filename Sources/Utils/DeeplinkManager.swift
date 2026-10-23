@@ -275,6 +275,11 @@ class DeeplinkManager: ObservableObject {
         // The detail view hydrates cache/author/tweet independently and owns recovery.
         let destination = Tweet.getInstance(for: tweetId)
             ?? Tweet.getInstance(mid: tweetId, authorId: authorId)
+        // One line per deeplink (not a failure) so later log lines can be tied to an open.
+        DiagnosticLog.error(
+            "deeplink",
+            "open tweet=\(tweetId) author=\(authorId) hasContent=\(destination.hasDisplayPayload)"
+        )
         return await replaceNavigationPath(with: destination, navigationPath: navigationPath)
     }
     

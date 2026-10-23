@@ -2180,6 +2180,7 @@ struct TweetDetailView: View {
     // sync) only needs to fire once per detail-view open (isInitialLoad), except
     // for an embedded/quoted original that has no other "opened from feed" sync.
     private func doReadTweet(isInitialLoad: Bool) async {
+        let loadStartedAt = Date()
         if isInitialLoad {
             hasFinishedInitialTweetLoad = false
         }
@@ -2206,6 +2207,11 @@ struct TweetDetailView: View {
         // from a feed keeps plain discovery.
         let isDeeplinkStub = isInitialLoad && !tweet.hasDisplayPayload
 
+        // Errors of the two reads that fill an empty deeplink stub, kept only for the
+        // diagnostics line below; the reads themselves are best-effort.
+        var readFailure = "returned nil"
+        var recoveryFailure = "not run"
+
         var attemptedOriginalRead = false
         if let originalTweetId = tweet.originalTweetId,
            let originalAuthorId = tweet.originalAuthorId {
@@ -2228,22 +2234,31 @@ struct TweetDetailView: View {
                 hasLoadedOriginalTweet = true
             }
         } else {
-            if let refreshed = try? await hproseInstance.getTweet(
-                tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad,
-                checkSavedAuthorRoute: isDeeplinkStub
-            ) {
-                await MainActor.run { try? tweet.update(from: refreshed) }
+            do {
+                if let refreshed = try await hproseInstance.getTweet(
+                    tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad,
+                    checkSavedAuthorRoute: isDeeplinkStub
+                ) {
+                    await MainActor.run { try? tweet.update(from: refreshed) }
+                }
+            } catch {
+                readFailure = "\(error)"
             }
         }
 
         // Preserve the previous deeplink recovery, but run it after navigation so it
         // cannot hold the whole app behind the full-screen opening-link placeholder.
-        if isInitialLoad && !tweet.hasDisplayPayload,
-           let recovered = try? await hproseInstance.refreshTweet(
-               tweetId: tweet.mid,
-               authorId: tweet.authorId
-           ) {
-            try? tweet.update(from: recovered)
+        if isInitialLoad && !tweet.hasDisplayPayload {
+            do {
+                if let recovered = try await hproseInstance.refreshTweet(
+                    tweetId: tweet.mid,
+                    authorId: tweet.authorId
+                ) {
+                    try? tweet.update(from: recovered)
+                }
+            } catch {
+                recoveryFailure = "\(error)"
+            }
         }
 
         // A deeplink stub does not reveal that it is a quote/retweet until the wrapper
@@ -2262,6 +2277,14 @@ struct TweetDetailView: View {
                 adoptRefreshedOriginal(refreshedOriginal)
             }
             hasLoadedOriginalTweet = true
+        }
+
+        // This is the state that shows "Failed to load tweet" + Retry.
+        if isInitialLoad && !tweet.hasDisplayPayload {
+            DiagnosticLog.error(
+                "tweet-detail",
+                "initial load left no content after \(String(format: "%.1f", Date().timeIntervalSince(loadStartedAt)))s, mid=\(tweet.mid) author=\(tweet.authorId) deeplinkStub=\(isDeeplinkStub) getTweet=\(readFailure) refreshTweet=\(recoveryFailure)"
+            )
         }
     }
 

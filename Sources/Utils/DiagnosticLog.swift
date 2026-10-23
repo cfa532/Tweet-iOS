@@ -8,7 +8,9 @@ import Foundation
 /// rare and happen away from Xcode. `print` is discarded in a Release build with no
 /// debugger attached, and os_log text is redacted off-device, so neither can be read
 /// later. The console mirror to `app.log` is deliberately off (AppDelegate), so this
-/// records only failures — one line each — rather than all console output.
+/// records only failures — one line each — rather than all console output. The one
+/// exception is the "deeplink" category: one line per deeplink open and per author
+/// resolution, so a failure line can be tied to the open that caused it.
 ///
 /// Thread-safe and non-blocking: callers hand the line to a serial utility queue.
 enum DiagnosticLog {
