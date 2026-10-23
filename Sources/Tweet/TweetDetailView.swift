@@ -2201,6 +2201,11 @@ struct TweetDetailView: View {
             }
         }
 
+        // Still no payload after the cache step: a deeplink to a tweet never seen here.
+        // Its cached author's route is health-checked before discovery; a detail opened
+        // from a feed keeps plain discovery.
+        let isDeeplinkStub = isInitialLoad && !tweet.hasDisplayPayload
+
         var attemptedOriginalRead = false
         if let originalTweetId = tweet.originalTweetId,
            let originalAuthorId = tweet.originalAuthorId {
@@ -2216,7 +2221,7 @@ struct TweetDetailView: View {
                 hasLoadedOriginalTweet = true
             } else {
                 attemptedOriginalRead = true
-                async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad)
+                async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad, checkSavedAuthorRoute: isDeeplinkStub)
                 async let originalResult = hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true, fromDetailView: true)
                 if let refreshed = try? await tweetResult { await MainActor.run { try? tweet.update(from: refreshed) } }
                 if let refreshedOriginal = try? await originalResult { await MainActor.run { adoptRefreshedOriginal(refreshedOriginal) } }
@@ -2224,7 +2229,8 @@ struct TweetDetailView: View {
             }
         } else {
             if let refreshed = try? await hproseInstance.getTweet(
-                tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad
+                tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true, fromDetailView: isInitialLoad,
+                checkSavedAuthorRoute: isDeeplinkStub
             ) {
                 await MainActor.run { try? tweet.update(from: refreshed) }
             }

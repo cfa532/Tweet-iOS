@@ -1798,7 +1798,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         authorId: String,
         nodeUrl: String? = nil,
         bypassCache: Bool = false,
-        fromDetailView: Bool = false
+        fromDetailView: Bool = false,
+        checkSavedAuthorRoute: Bool = false
     ) async throws -> Tweet? {
         guard !TweetDeletionRegistry.shared.isDeleted(tweetId) else { return nil }
 
@@ -1815,7 +1816,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // its proven baseUrl, matching TweetWeb's author-first detail load.
         let author: User?
         if fromDetailView {
-            author = try await authorForDetail(authorId)
+            // Deep-link stubs only: a detail opened from a feed already has an author
+            // with a working route, so it keeps plain discovery.
+            author = checkSavedAuthorRoute
+                ? try await authorForDetail(authorId)
+                : try await fetchUserForDetail(authorId)
         } else {
             author = try await fetchUser(authorId)
         }
@@ -2132,7 +2137,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         throw HproseError.userNotFound(userId: userId, reason: "No provider returned valid author data")
     }
 
-    /// Resolves the author for a detail read, checking the saved route before discovery.
+    /// Resolves the author for a deep-link detail read, checking the saved route before
+    /// discovery (`getTweet(checkSavedAuthorRoute:)`).
     ///
     /// Discovery goes through the entry node (`get_provider_ips`, 5s timeout, no retry),
     /// so a stalled entry node used to fail a cold-start deeplink even though the
