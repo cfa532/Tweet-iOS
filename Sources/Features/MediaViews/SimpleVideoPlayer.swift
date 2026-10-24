@@ -370,7 +370,9 @@ final class VideoLastFrameCache {
 enum VideoFrameExtractor {
     static let ciContext = CIContext(options: [
         // Keep it lightweight; we only need fast, small frame extraction.
-        CIContextOption.useSoftwareRenderer: false
+        // EXPERIMENT: software renderer, to test whether Core Image is what opens Metal's
+        // archiveUsage.db lock that gets the app killed (0xDEAD10CC) on suspend.
+        CIContextOption.useSoftwareRenderer: true
     ])
     
     /// Convert a pixel buffer to a downscaled UIImage (for feed placeholders).

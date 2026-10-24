@@ -1204,7 +1204,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                 guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else { return nil }
                 guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else { return nil }
                 let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-                let context = CIContext(options: [.useSoftwareRenderer: false])
+                let context = CIContext(options: [.useSoftwareRenderer: true]) // EXPERIMENT: Metal lock / 0xDEAD10CC
                 guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
                 return UIImage(cgImage: cgImage)
             }
