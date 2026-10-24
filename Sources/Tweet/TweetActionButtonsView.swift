@@ -1366,7 +1366,7 @@ struct TweetActionButtonsView: View {
                 // This conversion happens synchronously within MainActor context, so CVBuffer never escapes
                 // The pixelBuffer is never passed across concurrency boundaries
                 let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-                let context = CIContext(options: [.useSoftwareRenderer: true]) // EXPERIMENT: Metal lock / 0xDEAD10CC
+                let context = CIContext(options: [.useSoftwareRenderer: false]) // Use hardware acceleration when possible
                 
                 guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
                     print("DEBUG: [SHARE] Failed to create CGImage from pixel buffer")
