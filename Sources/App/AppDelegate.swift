@@ -720,8 +720,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         AppDelegate.isVideoInfrastructureReady = false
         NotificationCenter.default.post(
             name: .prepareVisibleVideosForBackground,
-            object: nil,
-            userInfo: ["aggressive": true]
+            object: nil
         )
         MemoryCapManager.shared.performBackgroundMemoryRelease()
         AppDelegate.didPerformAggressiveCleanup = true

@@ -675,17 +675,12 @@ class TweetTableViewController: UITableViewController {
             forName: .prepareVisibleVideosForBackground,
             object: nil,
             queue: nil
-        ) { [weak self] notification in
-            let aggressive = notification.userInfo?["aggressive"] as? Bool ?? false
-            guard aggressive else { return }
+        ) { [weak self] _ in
             // AppDelegate posts this custom notification synchronously from its
             // @MainActor cleanup path. Finish local teardown before global caches
             // are released and the background task is ended.
             MainActor.assumeIsolated { [weak self] in
-                self?.prepareVisibleVideosForBackground(
-                    reason: "preGlobalMemoryRelease",
-                    aggressive: true
-                )
+                self?.prepareVisibleVideosForBackground(reason: "preGlobalMemoryRelease")
             }
         }
 
@@ -752,26 +747,25 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    private func prepareVisibleVideosForBackground(reason: String, aggressive: Bool = false) {
+    private func prepareVisibleVideosForBackground(reason: String) {
         guard videoCoordinator.isFeedVisible else { return }
         guard isTableAttachedForLayout else { return }
 
         cancelDirectionalImagePreloads()
 
-        // Save/pause visible videos before global memory release. Keep a captured
+        // Save/pause visible videos before global memory release. Keep the existing
         // cover frame on screen so foreground recovery can rebuild underneath it.
         guard !isTableViewUpdating else { return }
 
         var preparedCount = 0
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
-            tweetCell.tweetContentView.prepareMediaForBackground(aggressive: aggressive)
+            tweetCell.tweetContentView.prepareMediaForBackground()
             preparedCount += 1
         }
 
         if preparedCount > 0 {
-            let mode = aggressive ? "aggressive" : "short"
-            print("🌙 [BACKGROUND] Prepared \(preparedCount) visible tweet cell(s) for \(mode) background (\(reason))")
+            print("🌙 [BACKGROUND] Prepared \(preparedCount) visible tweet cell(s) for background (\(reason))")
         }
     }
 

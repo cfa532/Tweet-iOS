@@ -1049,8 +1049,8 @@ struct SimpleVideoPlayer: View {
                 .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in handleAppUserReady() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in handleWillResignActive() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
-                .onReceive(NotificationCenter.default.publisher(for: .prepareVisibleVideosForBackground)) { notification in
-                    handlePrepareForBackground(notification)
+                .onReceive(NotificationCenter.default.publisher(for: .prepareVisibleVideosForBackground)) { _ in
+                    handlePrepareForBackground()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
@@ -2166,9 +2166,7 @@ struct SimpleVideoPlayer: View {
     /// Release view-owned AVFoundation resources when AppDelegate's 10-second
     /// background grace period expires. The last-frame cache remains intact so
     /// visible videos still have a small poster during foreground recovery.
-    private func handlePrepareForBackground(_ notification: Notification) {
-        guard notification.userInfo?["aggressive"] as? Bool == true else { return }
-
+    private func handlePrepareForBackground() {
         // Preserve resume metadata before detaching the local player. The global
         // cleanup immediately converts VideoStateCache entries to metadata-only.
         cachePlayerStateForBackground()
