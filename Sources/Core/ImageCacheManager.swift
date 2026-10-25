@@ -66,7 +66,10 @@ class ImageCacheManager: @unchecked Sendable {
     // Disk cache: no size limit — only 7-day age expiry via cleanupOldCache()
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
     private let maxDownsampleDimension: CGFloat = 1024
-    
+    // Avatars are cached as thumbnails: the largest one shown is 80pt, so 240px
+    // covers a 3x screen. The full-screen avatar view fetches the original itself.
+    private let maxAvatarDimension: CGFloat = 240
+
     // The four queues below are locks, not work queues: every block is a short
     // dictionary mutation. They all carry an explicit `.userInitiated` floor.
     //
@@ -473,19 +476,19 @@ class ImageCacheManager: @unchecked Sendable {
     }
 
     /// Clear memory cache only (keep disk cache intact)
-    /// Use this for background cleanup - images will reload from disk when needed
+    /// Use this for background cleanup - images will reload from disk when needed.
+    /// Avatars stay in memory: they are small thumbnails (see `maxAvatarDimension`)
+    /// shown on nearly every screen, so dropping them made every avatar flash its
+    /// placeholder on return to the foreground.
     func clearMemoryCache() {
-        cache.removeAllObjects()
         cacheKeysQueue.sync(flags: .barrier) {
-            self.memoryCachedKeys.removeAll()
-            self.memoryCacheAccessTimes.removeAll()
-            self.recentImageCache.removeAll()
-            self.recentImageCacheCosts.removeAll()
-            self.recentImageCacheCost = 0
-            // Keep avatarCacheKeys - they'll be re-added when loaded from disk
+            for key in memoryCachedKeys.subtracting(avatarCacheKeys) {
+                cache.removeObject(forKey: key as NSString)
+                removeMemoryTrackingLocked(forKey: key)
+            }
         }
         cancelOngoingRequestsForBackground()
-        print("🧹 [ImageCacheManager] Cleared memory cache (disk cache preserved)")
+        print("🧹 [ImageCacheManager] Cleared memory cache except avatars (disk cache preserved)")
     }
 
     /// Cancel in-flight image loads and pending avatar requests when app enters background.
@@ -656,7 +659,8 @@ class ImageCacheManager: @unchecked Sendable {
     @discardableResult
     func cacheImageData(_ data: Data, forKey key: String) -> UIImage? {
         let targetImage: UIImage
-        if let downsampled = downsampleImageData(data, maxDimension: maxDownsampleDimension) {
+        let maxDimension = key.contains("avatar_") ? maxAvatarDimension : maxDownsampleDimension
+        if let downsampled = downsampleImageData(data, maxDimension: maxDimension) {
             targetImage = downsampled
         } else if let fallback = UIImage(data: data).map(decodedForDisplay) {
             targetImage = fallback
@@ -968,7 +972,7 @@ class ImageCacheManager: @unchecked Sendable {
                 userInfo: ["avatarId": key]
             )
         }
-        
+
         // Replace on disk (save original as both high-res preview and explicit original cache)
         let compressedFileURL = getCompressedCacheFileURL(for: key)
         let originalFileURL = getOriginalCacheFileURL(for: key)
