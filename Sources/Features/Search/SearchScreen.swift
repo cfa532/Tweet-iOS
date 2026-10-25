@@ -74,104 +74,100 @@ struct SearchScreen: View {
                 }
                 .padding()
                 
-                // Search Results
-                if searchViewModel.isLoading {
-                    Spacer()
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .scaleEffect(2.0)
-                        Text(String(format: NSLocalizedString("%ds", comment: "Search countdown in seconds"), searchViewModel.countdownSeconds))
-                            .font(.subheadline)
-                            .foregroundColor(XTheme.secondaryTextColor)
-                            .monospacedDigit()
-                    }
-                    Spacer()
-                } else if searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty && !searchViewModel.searchText.isEmpty {
-                    VStack {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 48))
-                            .foregroundColor(XTheme.secondaryTextColor)
-                        Text(LocalizedStringKey("No results found"))
-                            .font(.headline)
-                            .foregroundColor(XTheme.secondaryTextColor)
-                        Text(LocalizedStringKey("Try a different search term"))
-                            .font(.caption)
-                            .foregroundColor(XTheme.secondaryTextColor)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // Close keyboard when tapping on empty state
-                        hideKeyboard()
-                    }
-                } else if searchViewModel.searchText.isEmpty && searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty {
-                    VStack {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 48))
-                            .foregroundColor(XTheme.secondaryTextColor)
-                        Text(LocalizedStringKey("Search"))
-                            .font(.headline)
-                            .foregroundColor(XTheme.secondaryTextColor)
-                        Text(LocalizedStringKey("Search by @username or tweet content"))
-                            .font(.caption)
-                            .foregroundColor(XTheme.secondaryTextColor)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // Close keyboard when tapping on empty state
-                        hideKeyboard()
-                    }
-                } else {
-                    List {
-                        // User results section
-                        if !searchViewModel.userResults.isEmpty {
-                            Section(header: Text(LocalizedStringKey("Accounts"))) {
-                                ForEach(searchViewModel.visibleUserResults) { user in
-                                    UserSearchResultRow(user: user)
-                                }
-
-                                if searchViewModel.hasMoreUserResults {
-                                    Button {
-                                        searchViewModel.loadNextUserPage()
-                                    } label: {
-                                        Text(LocalizedStringKey("Load more"))
-                                            .frame(maxWidth: .infinity)
-                                            .foregroundColor(XTheme.accentColor)
+                // Search Results. Any tap in this area (outside the search bar) closes the
+                // keyboard; simultaneous so row navigation and "Load more" still fire.
+                VStack(spacing: 0) {
+                    if searchViewModel.isLoading {
+                        Spacer()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(2.0)
+                            Text(String(format: NSLocalizedString("%ds", comment: "Search countdown in seconds"), searchViewModel.countdownSeconds))
+                                .font(.subheadline)
+                                .foregroundColor(XTheme.secondaryTextColor)
+                                .monospacedDigit()
+                        }
+                        Spacer()
+                    } else if searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty && !searchViewModel.searchText.isEmpty {
+                        VStack {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 48))
+                                .foregroundColor(XTheme.secondaryTextColor)
+                            Text(LocalizedStringKey("No results found"))
+                                .font(.headline)
+                                .foregroundColor(XTheme.secondaryTextColor)
+                            Text(LocalizedStringKey("Try a different search term"))
+                                .font(.caption)
+                                .foregroundColor(XTheme.secondaryTextColor)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if searchViewModel.searchText.isEmpty && searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty {
+                        VStack {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 48))
+                                .foregroundColor(XTheme.secondaryTextColor)
+                            Text(LocalizedStringKey("Search"))
+                                .font(.headline)
+                                .foregroundColor(XTheme.secondaryTextColor)
+                            Text(LocalizedStringKey("Search by @username or tweet content"))
+                                .font(.caption)
+                                .foregroundColor(XTheme.secondaryTextColor)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        List {
+                            // User results section
+                            if !searchViewModel.userResults.isEmpty {
+                                Section(header: Text(LocalizedStringKey("Accounts"))) {
+                                    ForEach(searchViewModel.visibleUserResults) { user in
+                                        UserSearchResultRow(user: user)
                                     }
-                                    .buttonStyle(PlainButtonStyle())
+
+                                    if searchViewModel.hasMoreUserResults {
+                                        Button {
+                                            searchViewModel.loadNextUserPage()
+                                        } label: {
+                                            Text(LocalizedStringKey("Load more"))
+                                                .frame(maxWidth: .infinity)
+                                                .foregroundColor(XTheme.accentColor)
+                                        }
+                                        .buttonStyle(PlainButtonStyle())
+                                    }
+                                }
+                            }
+                            
+                            // Tweet results section
+                            if !searchViewModel.tweetResults.isEmpty {
+                                Section(header: Text(LocalizedStringKey("Tweets"))) {
+                                    ForEach(searchViewModel.visibleTweetResults) { tweet in
+                                        TweetSearchResultRow(tweet: tweet)
+                                    }
+
+                                    if searchViewModel.hasMoreTweetResults {
+                                        Button {
+                                            searchViewModel.loadNextTweetPage()
+                                        } label: {
+                                            Text(LocalizedStringKey("Load more"))
+                                                .frame(maxWidth: .infinity)
+                                                .foregroundColor(XTheme.accentColor)
+                                        }
+                                        .buttonStyle(PlainButtonStyle())
+                                    }
                                 }
                             }
                         }
-                        
-                        // Tweet results section
-                        if !searchViewModel.tweetResults.isEmpty {
-                            Section(header: Text(LocalizedStringKey("Tweets"))) {
-                                ForEach(searchViewModel.visibleTweetResults) { tweet in
-                                    TweetSearchResultRow(tweet: tweet)
-                                }
-
-                                if searchViewModel.hasMoreTweetResults {
-                                    Button {
-                                        searchViewModel.loadNextTweetPage()
-                                    } label: {
-                                        Text(LocalizedStringKey("Load more"))
-                                            .frame(maxWidth: .infinity)
-                                            .foregroundColor(XTheme.accentColor)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                }
-                            }
-                        }
+                        .scrollDismissesKeyboard(.immediately)
+                        .scrollContentBackground(.hidden)
+                        .background(XTheme.backgroundColor)
                     }
-                    .scrollDismissesKeyboard(.interactively)
-                    .scrollContentBackground(.hidden)
-                    .background(XTheme.backgroundColor)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded { hideKeyboard() })
             }
             .background(XTheme.backgroundColor)
             .navigationTitle(LocalizedStringKey("Search"))
