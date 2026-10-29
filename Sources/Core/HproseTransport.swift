@@ -13,6 +13,23 @@ enum HproseTransport {
         let priority: DispatchQoS.QoSClass
     }
 
+    private static let foregroundLock = NSLock()
+    nonisolated(unsafe) private static var foregroundCount = 0
+
+    /// RPCs in flight at any QoS above `.background`, i.e. everything except read-ahead
+    /// and housekeeping. BackgroundTweetPrefetcher waits for this to reach zero so its
+    /// pages never compete with a feed load, a comment or any other request the user
+    /// is waiting on.
+    static var foregroundInFlightCount: Int {
+        foregroundLock.lock(); defer { foregroundLock.unlock() }
+        return foregroundCount
+    }
+
+    private static func adjustForeground(_ priority: DispatchQoS.QoSClass, by delta: Int) {
+        guard priority != .background else { return }
+        foregroundLock.lock(); foregroundCount += delta; foregroundLock.unlock()
+    }
+
     static func invoke(
         _ method: String,
         using client: HproseClient,
@@ -26,6 +43,7 @@ enum HproseTransport {
         // raises an uncatchable NSGenericException. A retired client is reported
         // here as a failed RPC, which callers already handle as a nil response.
         guard HproseClientPool.shared.beginInvocation(on: client) else { return nil }
+        adjustForeground(priority, by: 1)
 
         let invocation = Invocation(
             client: client,
@@ -38,6 +56,7 @@ enum HproseTransport {
             DispatchQueue.global(qos: invocation.priority).async {
                 let response = invocation.client.invoke(invocation.method, withArgs: invocation.args)
                 HproseClientPool.shared.endInvocation(on: invocation.client)
+                adjustForeground(invocation.priority, by: -1)
                 continuation.resume(returning: response)
             }
         }

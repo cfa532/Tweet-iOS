@@ -141,6 +141,11 @@ final class BackgroundTweetPrefetcher {
         // Images the user can actually see come first, as does video player setup.
         guard GlobalImageLoadManager.shared.activeLoadCount == 0 else { return false }
         guard VideoLoadingManager.shared.activeLoadingCount == 0 else { return false }
+        // Posts, comments and messages: attachment transfers, video conversion and the
+        // publish RPC, which can hold the author's node for minutes while it commits.
+        guard !UploadProgressManager.shared.hasActiveOrQueuedUploads else { return false }
+        // Any request the user is waiting on — feed pages, comments, profiles, writes.
+        guard HproseTransport.foregroundInFlightCount == 0 else { return false }
         // Video is the app's real bandwidth consumer. Defer to the judgement it already
         // makes about its own preloads: bandwidth is spare once the primary and every
         // visible player has the buffer it wants.

@@ -1747,7 +1747,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "appuserid": appUserMid,
         ] as [String: Any]
 
-        let (rawResponse, responseClient) = await invokeRunMAppWithSource(using: client, entry: "get_tweet_feed", params: params)
+        // Background QoS marks this as read-ahead: it is excluded from
+        // HproseTransport.foregroundInFlightCount, which the prefetcher waits on.
+        let (rawResponse, responseClient) = await invokeRunMAppWithSource(
+            using: client, entry: "get_tweet_feed", params: params, priority: .background)
         guard let response = try Self.unwrapV2Response(rawResponse) as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in cacheMainFeedPage"])
         }
