@@ -13,6 +13,11 @@ struct SearchScreen: View {
         self.onShowToast = onShowToast
     }
     
+    private var isShowingResultsList: Bool {
+        !searchViewModel.isLoading &&
+        !(searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty)
+    }
+
     private func hideKeyboard() {
         isSearchFieldFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -167,7 +172,16 @@ struct SearchScreen: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
-                .simultaneousGesture(TapGesture().onEnded { hideKeyboard() })
+                // A tap recognizer above a List swallows row taps (NavigationLink rows stop
+                // responding), so only enable it for the non-list states. The list closes the
+                // keyboard on drag, and on row navigation via the path change below.
+                .simultaneousGesture(
+                    TapGesture().onEnded { hideKeyboard() },
+                    including: isShowingResultsList ? .subviews : .all
+                )
+            }
+            .onChange(of: navigationPath.count) { _, _ in
+                hideKeyboard()
             }
             .background(XTheme.backgroundColor)
             .navigationTitle(LocalizedStringKey("Search"))
