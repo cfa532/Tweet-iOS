@@ -189,6 +189,12 @@ final class TweetUploadManager {
         try Task.checkCancellation()
         UploadProgressManager.shared.updateProgress(stage: .submittingTweet,
             message: NSLocalizedString("Publishing...", comment: "Upload stage"), progress: 0.95)
+        // The publish RPC can run for minutes while the node commits, with no progress
+        // of its own. iOS expires a continued-processing task whose progress stalls for
+        // ~30s, which cancelled the upload and reported failure even though the server
+        // went on to publish. Keep progress advancing until publication returns.
+        let heartbeat = startPublishHeartbeat(from: 0.95)
+        defer { heartbeat.cancel() }
 
         if let recipient = pending.recipientId {
             let message = ChatMessage(id: pending.record.mid, authorId: pending.record.authorId,
@@ -226,6 +232,21 @@ final class TweetUploadManager {
         }
         // A confirmed publication wins even when cancellation raced the response.
         try await removePendingUpload(pending)
+    }
+
+    /// Creeps progress toward 0.99 every few seconds. Each step is 10% of the
+    /// remaining gap, so the reported unit count keeps changing for well past
+    /// the publish RPC's 240s timeout.
+    private func startPublishHeartbeat(from start: Double) -> Task<Void, Never> {
+        Task { @MainActor in
+            var fraction = start
+            while true {
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                fraction += (0.99 - fraction) * 0.1
+                UploadProgressManager.shared.updateProgress(stage: .submittingTweet,
+                    message: NSLocalizedString("Publishing...", comment: "Upload stage"), progress: fraction)
+            }
+        }
     }
 
     private func publishQuoteIfNeeded(_ record: TweetRecord?, original: Tweet) async throws {
