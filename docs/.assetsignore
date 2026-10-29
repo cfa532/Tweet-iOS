@@ -1,0 +1,6 @@
+# Publish only the public support site, not internal project documentation.
+**
+!index.html
+!styles.css
+!script.js
+!favicon.svg

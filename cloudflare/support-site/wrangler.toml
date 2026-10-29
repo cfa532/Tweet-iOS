@@ -1,0 +1,12 @@
+name = "dtweet-ios-support"
+compatibility_date = "2026-10-29"
+workers_dev = false
+preview_urls = false
+
+routes = [
+  { pattern = "support.dtweet.com", custom_domain = true }
+]
+
+[assets]
+directory = "../../docs"
+not_found_handling = "404-page"
