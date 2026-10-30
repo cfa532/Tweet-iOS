@@ -648,6 +648,7 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
 
     @MainActor
     private func performWritableUrlResolution() async throws -> URL {
+        self.writableUrl = nil
         guard let hostId = self.hostIds?.first, !hostId.isEmpty else {
             print("ERROR: [resolveWritableUrl] hostIds[0] is nil or empty")
             throw NSError(domain: "HproseService", code: -1, userInfo: [
@@ -662,8 +663,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         // recorded. Writes are rare next to reads, so a fresh resolution per write
         // is cheap and keeps the pool free of write-host entries.
         // IPv6 write routes are fine; only share URLs need a v4 literal.
-        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: false, usePool: false),
-           let url = URL(string: "http://\(hostIP)") {
+        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: false, usePool: false) {
+            let url = try HproseInstance.resolvedNodeURL(for: hostIP)
             print("DEBUG: [resolveWritableUrl] ✅ Health-checked IP: \(hostIP)")
             self.writableUrl = url
             return url

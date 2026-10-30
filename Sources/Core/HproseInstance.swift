@@ -81,6 +81,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// walks candidates one at a time, so this is also the per-candidate cost of a
     /// node that is down.
     private static let routeProbeTimeout: TimeInterval = 5.0
+    private static let migrationTimeout: TimeInterval = 60
 
     // IP Cache: Stores short-lived HEAD health results with 30-second expiry
     private var ipCache: [String: IPCacheEntry] = [:]
@@ -7667,7 +7668,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         hproseDebug("DEBUG: [registerUser] hostId parameter: \(hostId ?? "nil")")
         
         var hosts: [String]? = nil
-        if let hostId = hostId, !hostId.isEmpty {
+        if let hostId = hostId?.trimmingCharacters(in: .whitespacesAndNewlines), !hostId.isEmpty {
             hosts = [hostId]
             hproseDebug("DEBUG: [registerUser] Setting hosts to [\(hostId)]")
         } else {
@@ -7695,10 +7696,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "user": userJsonString
         ]
         
-        // Use the current appUser's client for all backend calls
-        let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
-        guard let baseUrl = appUserBaseUrl else {
-            hproseError("DEBUG: [registerUser] ERROR: appUser.baseUrl is nil")
+        // A chosen root must receive registration itself; metadata does not route it.
+        let baseUrl: URL
+        if let host = hosts?.first {
+            guard let address = await getHostIP(host, v4Only: false, usePool: false) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot resolve the selected registration host"])
+            }
+            baseUrl = try Self.resolvedNodeURL(for: address)
+        } else if let entryUrl = await MainActor.run(body: { self.appUser.baseUrl }) {
+            baseUrl = entryUrl
+        } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized. Please check your connection.", comment: "Client initialization error")])
         }
         // `register` is not an ordinary RPC and must not share their 15s budget. Creating an
@@ -7778,6 +7785,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let finalShareDomain = sanitizedDomain?.isEmpty == true ? nil : sanitizedDomain
         
         let entry = "set_author_core_data"
+        let (updatingUser, userID, currentHost) = await MainActor.run {
+            (self.appUser, self.appUser.mid, self.appUser.hostIds?.first)
+        }
+        let destinationHost = hostId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let migrating = !(destinationHost?.isEmpty ?? true)
 
         // Phase A (demotion prep): the copy of appUser and its encoding are @MainActor state —
         // build updatedUser and encode it on the main actor.
@@ -7819,7 +7831,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
             // Only set hostIds if hostId is provided and not empty; otherwise preserve existing.
             if let hostId = hostId, !hostId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                updatedUser.hostIds = [hostId]
+                updatedUser.hostIds = [hostId.trimmingCharacters(in: .whitespacesAndNewlines)]
             } else {
                 updatedUser.hostIds = self.appUser.hostIds
             }
@@ -7833,6 +7845,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "aid": appId,
             "ver": "last",
             "version": "v2",
+            "migrate": Self.rpcBool(migrating),
             "user": userJsonString
         ]
         
@@ -7847,12 +7860,24 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseDebug("DEBUG: updateUserCore - JSON snippet around domainToShare: ...\(snippet)...")
         }
 
-        let appUserBaseUrl = await MainActor.run { self.appUser.baseUrl }
-        guard let baseUrl = appUserBaseUrl else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        let writeURL: URL
+        let updateClient: HproseClient
+        if migrating, let destinationHost {
+            guard let address = await getHostIP(destinationHost, v4Only: false, usePool: false) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot resolve the new root host"])
+            }
+            writeURL = try Self.resolvedNodeURL(for: address)
+            updateClient = try await profileMigrationClient(userID: userID, currentHost: currentHost)
+        } else {
+            writeURL = try await updatingUser.resolveWritableUrl()
+            updateClient = clientPool.getClientByUrl(for: writeURL.absoluteString, timeout: 30)
         }
-        let updateClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 30)
-        let rawResponse = await invokeRunMApp(using: updateClient, entry: entry, params: params)
+        let rawResponse: Any?
+        if migrating {
+            rawResponse = await invokeApplication(using: updateClient, entry: entry, params: params)
+        } else {
+            rawResponse = await invokeRunMApp(using: updateClient, entry: entry, params: params)
+        }
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
@@ -7873,6 +7898,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         
         if let result = response["status"] as? String {
             if result == "success" {
+                if migrating, let destinationHost {
+                    guard response["migrationSaved"] as? Bool == true else {
+                        throw NSError(domain: "ProfileHostIdMigration", code: -1, userInfo: [NSLocalizedDescriptionKey: "The server did not acknowledge the migration source. Keep this session open and retry with an updated backend."])
+                    }
+                    try await confirmProfileMigration(userID: userID, hostID: destinationHost, url: writeURL)
+                }
                 hproseDebug("DEBUG: updateUserCore - server returned success")
                 
                 // Update in-memory appUser with new values on MainActor (User has @Published properties)
@@ -7885,7 +7916,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     }
                     // Update hostIds: if hostId is provided, set it; if nil/empty, preserve existing hostIds
                     if let hostId = hostId, !hostId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        self.appUser.hostIds = [hostId]
+                        self.appUser.hostIds = [hostId.trimmingCharacters(in: .whitespacesAndNewlines)]
                     }
                     // If hostId is nil/empty, don't modify appUser.hostIds - preserve existing value
                     // CRITICAL: Update cloudDrivePort
@@ -7904,7 +7935,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 }
                 hproseDebug("DEBUG: updateUserCore - saved updated user cache for: \(savedMid)")
 
-                await adoptWriteRouteForReads(await MainActor.run { self.appUser }, reason: entry)
+                // Migration was acknowledged by the new root, never the source copy.
+                await MainActor.run { updatingUser.writableUrl = writeURL }
+                await adoptWriteRouteForReads(updatingUser, reason: entry)
                 return true
             } else {
                 let errorMessage = response["reason"] as? String ?? "Unknown registration error."
@@ -7917,6 +7950,61 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return false
     }
     
+    /// Discovery must provide both host and port. Never let URL defaults supply one.
+    nonisolated static func resolvedNodeURL(for address: String) throws -> URL {
+        let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = raw.lastIndex(of: ":"),
+              let port = Int(raw[raw.index(after: separator)...]), (1...65535).contains(port),
+              let components = URLComponents(string: "http://\(raw)"),
+              let host = components.host, !host.isEmpty, components.port == port,
+              components.user == nil, components.password == nil, components.path.isEmpty,
+              components.query == nil, components.fragment == nil, let url = components.url else {
+            throw NSError(domain: "NodeResolution", code: -1, userInfo: [NSLocalizedDescriptionKey: "Node resolution did not return a valid IP and explicit port"])
+        }
+        return url
+    }
+
+    /// Only a failed account read permits provider recovery. An unresolved root
+    /// or malformed endpoint stops migration before any ownership is written.
+    private func profileMigrationClient(userID: String, currentHost: String?) async throws -> HproseClient {
+        guard let currentHost, let address = await getHostIP(currentHost, v4Only: false, usePool: false) else {
+            throw NSError(domain: "NodeResolution", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot resolve the current root IP and port"])
+        }
+        let rootURL = try Self.resolvedNodeURL(for: address)
+        if let client = await migrationSource(at: rootURL, userID: userID) { return client }
+        for address in try await getProviderCandidates(userID) {
+            let url = try Self.resolvedNodeURL(for: address)
+            if let client = await migrationSource(at: url, userID: userID) { return client }
+        }
+        throw NSError(domain: "ProfileHostIdMigration", code: -1, userInfo: [NSLocalizedDescriptionKey: "No surviving account copy is available for migration"])
+    }
+
+    private func migrationSource(at url: URL, userID: String) async -> HproseClient? {
+        let client = clientPool.getClientByUrl(for: url.absoluteString, timeout: Self.migrationTimeout)
+        let raw = await invokeApplication(using: client, entry: "get_user_core_data", params: [
+            "aid": appId, "ver": "last", "version": "v2", "userid": userID
+        ])
+        guard let record = try? Self.unwrapV2Response(raw) as? [String: Any],
+              record["mid"] as? String == userID,
+              let hosts = record["hostIds"] as? [String], !hosts.isEmpty else { return nil }
+        return client
+    }
+
+    private func confirmProfileMigration(userID: String, hostID: String, url: URL) async throws {
+        let client = clientPool.getClientByUrl(for: url.absoluteString, timeout: Self.migrationTimeout)
+        let raw = await invokeApplication(using: client, entry: "sync_user", params: [
+            "aid": appId, "ver": "last", "version": "v2", "mid": userID,
+            "hostid": hostID, "migrate": "true"
+        ])
+        guard let response = try Self.unwrapV2Response(raw) as? [String: Any],
+              response["migrationComplete"] as? Bool == true,
+              let user = response["user"] as? [String: Any], user["mid"] as? String == userID,
+              let hosts = user["hostIds"] as? [String], hosts.count > 1,
+              hosts[0] == hostID, hosts[1] == hostID else {
+            throw NSError(domain: "ProfileHostIdMigration", code: -1, userInfo: [NSLocalizedDescriptionKey: "The new root did not confirm migration. Keep this session open and retry the same Host ID."])
+        }
+    }
+
     // MARK: - Agent Token
     
     /// Generates a new agent token for AI agents to post on behalf of the user.
@@ -7958,7 +8046,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let entry = "set_author_core_data"
 
         // Phase A (demotion prep): snapshot @MainActor appUser reads.
-        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
+        let (appUserMid, owner) = await MainActor.run { (self.appUser.mid, self.appUser) }
 
         // Create minimal user object with just the fields we need to update
         let userUpdate: [String: Any] = [
@@ -7980,10 +8068,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "user": userJsonString
         ]
 
-        guard let baseUrl = appUserBaseUrl else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        let profileClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let rootURL = try await owner.resolveWritableUrl()
+        let profileClient = clientPool.getClientByUrl(for: rootURL.absoluteString, timeout: 30)
         let rawResponse = await invokeRunMApp(using: profileClient, entry: entry, params: params)
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
@@ -8010,8 +8096,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// Sets the user's avatar on the server and returns confirmed avatar
     func setUserAvatar(user: User, avatar: MimeiId) async throws -> String {
         let entry = "set_user_avatar"
-        // Phase A (demotion prep): snapshot @MainActor user.mid + appUser.baseUrl (client is appUser's).
-        let (userMid, appUserBaseUrl) = await MainActor.run { (user.mid, self.appUser.baseUrl) }
+        let userMid = await MainActor.run { user.mid }
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
@@ -8020,10 +8105,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "avatar": avatar
         ]
 
-        guard let baseUrl = appUserBaseUrl else {
-            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
-        }
-        let avatarClient = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let rootURL = try await user.resolveWritableUrl()
+        let avatarClient = clientPool.getClientByUrl(for: rootURL.absoluteString, timeout: 30)
         let rawResponse = await invokeRunMApp(using: avatarClient, entry: entry, params: params)
         guard rawResponse != nil else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
@@ -8095,11 +8178,20 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         hproseDebug("DEBUG: [getHostIP] Attempt 1: Resolving IPs from API for node \(nodeId)")
 
-        // First attempt with current appUser client
-        if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient, excludedIP: excludedIP, forceFresh: forceHealthCheck) {
+        // A write lookup has one explicit discovery route and a 60-second budget.
+        // Failure must not substitute an entry route or repair appUser behind the caller.
+        let lookupClient = await MainActor.run { () -> HproseClient? in
+            if !usePool, let url = self.appUser.baseUrl {
+                return self.clientPool.getClientByUrl(for: url.absoluteString, timeout: Self.migrationTimeout)
+            }
+            return self.appUser.hproseClient
+        }
+        if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: lookupClient, excludedIP: excludedIP, forceFresh: forceHealthCheck) {
             if usePool { NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip) }
             return ip
         }
+
+        if !usePool { return nil }
 
         hproseError("DEBUG: [getHostIP] Attempt 1 failed, checking appUser health...")
 
@@ -8904,12 +8996,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     
     /// Blocks a user
     func blockUser(userId: String) async throws {
-        // Phase A (demotion prep): snapshot @MainActor appUser reads.
-        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
-        guard let baseUrl = appUserBaseUrl else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let (appUserMid, owner) = await MainActor.run { (self.appUser.mid, self.appUser) }
+        let rootURL = try await owner.resolveWritableUrl()
+        let client = clientPool.getClientByUrl(for: rootURL.absoluteString, timeout: 30)
 
         let entry = "block_user"
         let params: [String: Any] = [
@@ -8920,17 +9009,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "blocked": userId
         ]
         
-        _ = await invokeRunMApp(using: client, entry: entry, params: params)
+        let raw = await invokeRunMApp(using: client, entry: entry, params: params)
+        guard let result = try Self.unwrapV2Response(raw) as? [String: Any],
+              result["success"] as? Bool == true else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "The server did not confirm blocking this user"])
+        }
+        await adoptWriteRouteForReads(owner, reason: entry)
     }
     
     /// Deletes the current user's account
     func deleteAccount() async throws -> [String: Any] {
-        // Phase A (demotion prep): snapshot @MainActor appUser reads.
-        let (appUserMid, appUserBaseUrl) = await MainActor.run { (self.appUser.mid, self.appUser.baseUrl) }
-        guard let baseUrl = appUserBaseUrl else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 15)
+        let (appUserMid, owner) = await MainActor.run { (self.appUser.mid, self.appUser) }
+        let rootURL = try await owner.resolveWritableUrl()
+        let client = clientPool.getClientByUrl(for: rootURL.absoluteString, timeout: 60)
 
         let entry = "delete_account"
         let params: [String: Any] = [
@@ -8940,8 +9031,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "userid": appUserMid
         ]
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-        let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
-        return unwrappedResponse as? [String: Any] ?? [:]
+        guard let response = try Self.unwrapV2Response(rawResponse) as? [String: Any],
+              response["success"] as? Bool == true else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "The server did not confirm account deletion"])
+        }
+        return response
     }
     
     /// Reports a tweet for inappropriate content and deletes it from backend

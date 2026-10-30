@@ -644,9 +644,8 @@ struct ProfileView: View {
         isSubmittingProfile = true
         print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), domainToShare: \(domainToShare ?? "nil")")
 
-        let originalHostId = hproseInstance.appUser.hostIds?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let submittedHostId = hostId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let hostIdChanged = submittedHostId.count == Constants.MIMEI_ID_LENGTH && submittedHostId != originalHostId
+        let hostIdChanged = submittedHostId.count == Constants.MIMEI_ID_LENGTH
 
         let success: Bool
         do {
@@ -659,19 +658,14 @@ struct ProfileView: View {
                 domainToShare: domainToShare
             )
         } catch {
-            if hostIdChanged && isTimeoutLikeError(error) {
-                print("DEBUG: Profile hostId update timed out after migration; logging out so user can verify result")
-                await completeHostIdMigration(
-                    message: NSLocalizedString("Host ID update timed out. Log in again to verify the result.", comment: "Host ID migration timeout message"),
-                    isError: true
-                )
-                throw NSError(
-                    domain: "ProfileHostIdMigration",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Host ID update timed out. Log in again to verify the result.", comment: "Host ID migration timeout message")]
-                )
-            }
+            // Preserve the recovery session and entered host after an uncertain
+            // migration; logging out can lose the only reachable account copy.
             isSubmittingProfile = false
+            if hostIdChanged && isTimeoutLikeError(error) {
+                throw NSError(domain: "ProfileHostIdMigration", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Migration timed out and may still be completing. Keep this session open and retry the same Host ID to verify completion."
+                ])
+            }
             throw error
         }
         print("DEBUG: Profile update result: \(success)")

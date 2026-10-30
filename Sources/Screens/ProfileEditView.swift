@@ -541,11 +541,12 @@ struct ProfileEditView: View {
         // Call the submit function asynchronously
         Task {
             do {
-                // For hostId, cloudDrivePort, and domainToShare:
-                // If user provided input, use it; otherwise use original value
+                // Blank Host ID preserves ownership; an edited host requests migration.
                 let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
-                let hostIdValue = trimmedHostId.isEmpty ? originalHostId : trimmedHostId
                 let hostIdChanged = trimmedHostId.count == Constants.MIMEI_ID_LENGTH && trimmedHostId != (originalHostId ?? "")
+                // Preserve migration intent across retries even if a background
+                // read learns the new root before destination sync completes.
+                let hostIdValue = hostIdChanged ? trimmedHostId : nil
                 
                 // For domainToShare: if empty, send empty string (will be converted to nil and excluded from JSON)
                 let trimmedShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
