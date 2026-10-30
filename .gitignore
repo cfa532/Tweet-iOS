@@ -1,14 +1,11 @@
-Tweet.xcworkspace/xcuserdata/cfa532.xcuserdatad/UserInterfaceState.xcuserstate
-Tweet.xcworkspace/xcuserdata/cfa532.xcuserdatad/UserInterfaceState.xcuserstate
-Tweet.xcworkspace/xcuserdata/cfa532.xcuserdatad/UserInterfaceState.xcuserstate
-Tweet.xcworkspace/xcuserdata/cfa532.xcuserdatad/UserInterfaceState.xcuserstate
+# Xcode personal UI state
+*.xcuserstate
 .DS_Store
 ./ffmpeg-ios/
 build.log
 build_output.txt
 .DS_Store
 .DS_Store
-Tweet.xcworkspace/xcuserdata/cfa532.xcuserdatad/UserInterfaceState.xcuserstate
 /build
 build/Logs/Build/LogStoreManifest.plist
 /build
