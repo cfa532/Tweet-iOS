@@ -630,9 +630,6 @@ struct ProfileView: View {
                 showToastMessage(NSLocalizedString("Avatar updated successfully!", comment: "Avatar update success"), type: .success)
                 hproseInstance.objectWillChange.send()
             },
-            onAvatarUploadFailure: { errorMessage in
-                showToastMessage(errorMessage, type: .error)
-            },
             onProfileUpdateFailure: { errorMessage in
                 showToastMessage(errorMessage, type: .error)
             }

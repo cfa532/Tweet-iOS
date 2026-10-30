@@ -15,7 +15,6 @@ struct ProfileEditView: View {
     var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
     var onAvatarUploadStateChange: ((Bool) -> Void)? = nil // Callback for avatar upload state
     var onAvatarUploadSuccess: (() -> Void)? = nil // Callback for successful avatar upload
-    var onAvatarUploadFailure: ((String) -> Void)? = nil // Callback for failed avatar upload
     var onProfileUpdateFailure: ((String) -> Void)? = nil // Callback for profile update failure
 
     @State private var username: String = ""
@@ -30,7 +29,6 @@ struct ProfileEditView: View {
     @FocusState private var focusedField: Field?
     @State private var avatarId: String? = nil
     @State private var isUploadingAvatar = false
-    @State private var avatarUploadError: String? = nil
     @State private var isSubmitting = false
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -54,12 +52,11 @@ struct ProfileEditView: View {
         case password, confirmPassword, alias, profile, hostId, cloudDrivePort, shareDomain
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int, String?) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil, onProfileUpdateFailure: ((String) -> Void)? = nil) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int, String?) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onProfileUpdateFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
         self.onSubmissionStateChange = onSubmissionStateChange
         self.onAvatarUploadStateChange = onAvatarUploadStateChange
         self.onAvatarUploadSuccess = onAvatarUploadSuccess
-        self.onAvatarUploadFailure = onAvatarUploadFailure
         self.onProfileUpdateFailure = onProfileUpdateFailure
     }
 
@@ -125,12 +122,6 @@ struct ProfileEditView: View {
                     .foregroundColor(.white)
                     .background(Circle().fill(Color.blue).frame(width: 28, height: 28))
                     .offset(x: -8, y: -8)
-            }
-            
-            if let avatarUploadError = avatarUploadError {
-                Text(avatarUploadError)
-                    .foregroundColor(.red)
-                    .font(.caption)
             }
         }
         .padding(.bottom, 8)
@@ -425,7 +416,6 @@ struct ProfileEditView: View {
     private func uploadCroppedImage(_ image: UIImage) {
         Task {
             isUploadingAvatar = true
-            avatarUploadError = nil
             onAvatarUploadStateChange?(true) // Notify parent about upload start
             
             do {
@@ -486,22 +476,20 @@ struct ProfileEditView: View {
                 } else {
                     let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
                     await MainActor.run {
-                        avatarUploadError = errorMessage
+                        showToastMessage(errorMessage, type: .error)
                         isUploadingAvatar = false
                         onAvatarUploadStateChange?(false)
                         avatarUpdateTrigger += 1
                     }
-                    onAvatarUploadFailure?(errorMessage)
                 }
             } catch {
                 let errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                 await MainActor.run {
-                    avatarUploadError = errorMessage
+                    showToastMessage(errorMessage, type: .error)
                     isUploadingAvatar = false
                     onAvatarUploadStateChange?(false)
                     avatarUpdateTrigger += 1
                 }
-                onAvatarUploadFailure?(errorMessage)
             }
         }
     }
