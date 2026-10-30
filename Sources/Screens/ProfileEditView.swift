@@ -614,13 +614,10 @@ struct ProfileEditView: View {
             } catch {
                 // Handle profile update failure with toast
                 await MainActor.run {
-                    if (error as NSError).domain == "ProfileHostIdMigration" {
-                        isSubmitting = false
-                        onSubmissionStateChange?(false)
-                        return
-                    }
-
-                    let errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                    // Migration errors already explain how to retry without losing the session.
+                    let errorMessage = (error as NSError).domain == "ProfileHostIdMigration"
+                        ? error.localizedDescription
+                        : ErrorMessageHelper.userFriendlyMessage(from: error)
                     showToastMessage(errorMessage, type: .error)
                     onProfileUpdateFailure?(errorMessage)
                     isSubmitting = false

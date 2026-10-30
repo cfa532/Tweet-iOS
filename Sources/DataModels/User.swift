@@ -648,7 +648,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
 
     @MainActor
     private func performWritableUrlResolution() async throws -> URL {
-        self.writableUrl = nil
+        // Keep the active root read route while resolving a fresh write endpoint.
+        // Callers must stop on a resolution error, never reuse the previous write URL.
         guard let hostId = self.hostIds?.first, !hostId.isEmpty else {
             print("ERROR: [resolveWritableUrl] hostIds[0] is nil or empty")
             throw NSError(domain: "HproseService", code: -1, userInfo: [

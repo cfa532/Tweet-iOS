@@ -8490,7 +8490,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // or one sent after a failure, pays for a resolution.
             let appUserWritableUrl = await MainActor.run { self.appUser.writableUrl }
             if forceRefresh || appUserWritableUrl == nil {
-                _ = try? await self.appUser.resolveWritableUrl()
+                _ = try await self.appUser.resolveWritableUrl()
             }
 
             let entry = "message_outgoing"
@@ -8645,7 +8645,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             // conversation resolves it once rather than per message.
             let recipientWritableUrl = await MainActor.run { recipient.writableUrl }
             if forceRefresh || recipientWritableUrl == nil {
-                _ = try? await recipient.resolveWritableUrl()
+                _ = try await recipient.resolveWritableUrl()
             }
 
             let receiptEntry = "message_incoming"
