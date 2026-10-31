@@ -49,8 +49,8 @@ private struct IPCacheEntry {
     let timestamp: Date
     
     var isExpired: Bool {
-        // 30 seconds expiry
-        return Date().timeIntervalSince(timestamp) > 30
+        // Five minutes for both healthy and unhealthy probe results.
+        return Date().timeIntervalSince(timestamp) >= 5 * 60
     }
 }
 
@@ -83,7 +83,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     private static let routeProbeTimeout: TimeInterval = 5.0
     private static let migrationTimeout: TimeInterval = 60
 
-    // IP Cache: Stores short-lived HEAD health results with 30-second expiry
+    // IP Cache: Stores HEAD health results with five-minute expiry
     private var ipCache: [String: IPCacheEntry] = [:]
     private let ipCacheLock = NSLock()
     private var heavyCallLastAttemptAt: [String: Date] = [:]
@@ -3364,7 +3364,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
     /// Every route liveness question in the app goes through here, so one policy
     /// decides them all: a 5s HEAD against `http://<host:port>/`, keyed in the shared
-    /// 30s health cache by the canonical address. Mirrors TweetWeb `isServerHealthy` —
+    /// five-minute health cache by the canonical address. Mirrors TweetWeb `isServerHealthy` —
     /// any HTTP response means reachable; only a network-level error (refused, timeout,
     /// cancelled) means it is not. The timeout goes straight to URLRequest, so there is
     /// no extra Task layer.
@@ -8230,7 +8230,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     ///     the caller just failed on.
     ///   - forceFresh: Re-probe candidates rather than trusting a cached verdict. An
     ///     alternate-route lookup runs seconds after the read failed, well inside the
-    ///     30s health cache, so without this it can hand back an address last judged
+    ///     five-minute health cache, so without this it can hand back an address last judged
     ///     healthy before anything went wrong.
     /// - Returns: A healthy IP address for the node, or nil if none found
     private func _getHostIP(_ nodeId: String, v4Only: Bool = false, hproseClient: HproseClient?, excludedIP: String? = nil, forceFresh: Bool = false) async -> String? {
