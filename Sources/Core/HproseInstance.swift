@@ -844,15 +844,18 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     lastInitializationAddresses = addrs
                 }
                 
-                let candidates = entryIPCandidates(from: addrs)
-                for entryIP in candidates {
-                    let normalizedEntryIP = normalizeHostPort(entryIP)
-                    hproseDebug("DEBUG: [findEntryIP] Testing entry IP: \(normalizedEntryIP)")
-                    if await isRouteAlive(normalizedEntryIP, forceFresh: true) {
-                        HproseInstance.baseUrl = URL(string: "http://\(normalizedEntryIP)")!
-                        return normalizedEntryIP
+                let candidates = Gadget.entryIPCandidates(from: addrs, addressesPerNode: 2)
+                if let entryIP = await raceEntryIPs(candidates) {
+                    HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
+                    return entryIP
+                }
+                // Retain the other public interfaces if the initial race fails.
+                let tried = Set(candidates)
+                for entryIP in Gadget.entryIPCandidates(from: addrs) where !tried.contains(entryIP) {
+                    if await isRouteAlive(entryIP, forceFresh: true) {
+                        HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
+                        return entryIP
                     }
-                    hproseWarning("DEBUG: [findEntryIP] Entry IP failed health check: \(normalizedEntryIP)")
                 }
             } catch {
                 hproseError("Error processing URL \(url): \(error)")
@@ -862,136 +865,25 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return nil
     }
 
-    /// Entry candidates ordered so that consecutive ones belong to different nodes.
-    ///
-    /// `addrs` groups its addresses BY NODE — one node appears several times in
-    /// its own group because it is reachable on several interfaces — and ranks
-    /// each node's addresses by how fast that interface answers for it. Sorting
-    /// every address into one flat list by that rank throws the grouping away,
-    /// and two addresses of the same machine can then sit next to each other.
-    /// `findEntryIP` probes candidates one at a time with a 5s timeout, so a
-    /// node that is down costs that timeout once per interface it published
-    /// before a different node is tried at all.
-    ///
-    /// Take one address per node per round instead — every node's fastest, then
-    /// every node's second fastest — so the candidate after a failure is always
-    /// a different machine. TweetWeb applies the same ordering to the same data
-    /// in `src/utils/entryRoutes.ts`.
-    private func entryIPCandidates(from nodeList: Any) -> [String] {
-        guard let raw = nodeList as? String else { return [] }
-
-        let nodes = nodeGroups(in: raw)
-            .map { addressPairs(in: $0).sorted { $0.responseTime < $1.responseTime } }
-            .filter { !$0.isEmpty }
-
-        if nodes.isEmpty, let legacyCandidate = Gadget.shared.filterIpAddresses(nodeList) {
-            return [normalizeHostPort(legacyCandidate)]
-        }
-
-        var ordered: [String] = []
-        var seen = Set<String>()
-        let deepest = nodes.map(\.count).max() ?? 0
-        for rank in 0..<deepest {
-            // One address from every node that still has one, quickest first.
-            // Rank decides who is in the round — that is what keeps consecutive
-            // candidates on different machines — and the published metric
-            // decides the order within it.
-            let round = nodes
-                .compactMap { rank < $0.count ? $0[rank] : nil }
-                .sorted { $0.responseTime < $1.responseTime }
-
-            for candidate in round {
-                // One address can be published by two nodes behind a single
-                // NAT. It is one way in either way, and belongs at its first
-                // position.
-                if seen.insert(candidate.ip).inserted {
-                    ordered.append(candidate.ip)
+    /// Race two selected IPs per node together. URLSession probes are cancellable,
+    /// so a slow interface cannot delay returning the first reachable address.
+    private func raceEntryIPs(_ addresses: [String]) async -> String? {
+        await withTaskGroup(of: String?.self) { group in
+            for ip in addresses {
+                group.addTask {
+                    guard !Task.isCancelled else { return nil }
+                    let alive = await self.isRouteAlive(ip, forceFresh: true, logFailures: false)
+                    return alive && !Task.isCancelled ? ip : nil
                 }
             }
-        }
-        return ordered
-    }
-
-    /// Split the raw `addrs` text into one substring per node.
-    ///
-    /// Quoted spans are skipped rather than counted: an IPv6 address is written
-    /// `"[2001:db8::1]:8080"`, and its brackets would otherwise read as nesting
-    /// and split a node's group in the middle.
-    private func nodeGroups(in raw: String) -> [Substring] {
-        var groups: [Substring] = []
-        var depth = 0
-        var groupStart: String.Index?
-        var inQuotes = false
-
-        for index in raw.indices {
-            let character = raw[index]
-            if character == "\"" {
-                inQuotes.toggle()
-                continue
-            }
-            guard !inQuotes else { continue }
-
-            if character == "[" {
-                depth += 1
-                // Depth 1 is the list of nodes; depth 2 is one node's addresses.
-                if depth == 2 { groupStart = index }
-            } else if character == "]" {
-                if depth == 2, let start = groupStart {
-                    groups.append(raw[start...index])
-                    groupStart = nil
+            for await candidate in group {
+                if let candidate {
+                    group.cancelAll()
+                    return candidate
                 }
-                depth -= 1
             }
-        }
-        return groups
-    }
-
-    /// The usable `"host:port", metric` pairs inside one node's group.
-    ///
-    /// The metric is read as a decimal: nodes publish it either as an integer
-    /// or in the fractional form the Android client documents, and an
-    /// integer-only pattern would truncate the latter to its leading digits and
-    /// rank the addresses by a number that is mostly gone.
-    private func addressPairs(in group: Substring) -> [(ip: String, responseTime: Double)] {
-        let pattern = #""([^"]+)"\s*,\s*(\d+(?:\.\d+)?)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-
-        let text = String(group)
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        var pairs: [(ip: String, responseTime: Double)] = []
-
-        for match in regex.matches(in: text, options: [], range: range) {
-            guard let ipRange = Range(match.range(at: 1), in: text),
-                  let timeRange = Range(match.range(at: 2), in: text),
-                  let responseTime = Double(text[timeRange]) else {
-                continue
-            }
-
-            let ip = normalizeHostPort(String(text[ipRange]))
-            guard let port = portNumber(from: ip),
-                  (8000...9000).contains(port),
-                  Gadget.isValidPublicIpAddress(ip) else {
-                continue
-            }
-
-            pairs.append((ip: ip, responseTime: responseTime))
-        }
-        return pairs
-    }
-
-    private func portNumber(from hostPort: String) -> Int? {
-        let normalized = normalizeHostPort(hostPort)
-        if normalized.hasPrefix("["),
-           let bracketEnd = normalized.firstIndex(of: "]") {
-            let suffix = normalized[normalized.index(after: bracketEnd)...]
-            guard suffix.hasPrefix(":") else { return nil }
-            return Int(suffix.dropFirst())
-        }
-
-        guard let portPart = normalized.split(separator: ":").last else {
             return nil
         }
-        return Int(portPart)
     }
 
     private func normalizeHostPort(_ hostPort: String) -> String {
@@ -3274,7 +3166,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return routes.compactMap { route in
             let trimmed = route.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty,
-                  Gadget.isValidPublicIpAddress(trimmed),
+                  Gadget.isValidIpAddress(trimmed),
                   seen.insert(normalizeHostPort(trimmed)).inserted else {
                 return nil
             }
@@ -3323,13 +3215,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         
         if let ipList = unwrappedResponse as? [String] {
 
-            // Filter and trim IP addresses, excluding private/reserved ranges
+            // The backend has already preferred public routes per provider node;
+            // retain its private-only node alternatives rather than filtering globally.
             let ipAddresses = ipList
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-                .filter { Gadget.isValidPublicIpAddress($0) }
+                .filter { Gadget.isValidIpAddress($0) }
 
-            hproseDebug("DEBUG: [_getProviderIP][RAW] mid=\(mid), filteredPublicIPs=\(providerIPDebugDescription(ipAddresses))")
+            hproseDebug("DEBUG: [_getProviderIP][RAW] mid=\(mid), eligibleIPs=\(providerIPDebugDescription(ipAddresses))")
             hproseDebug("DEBUG: [_getProviderIP] Retrieved \(ipAddresses.count) IP address(es) from get_provider_ips API")
             
             // Test IPs two at a time to match Android and avoid stampeding weak nodes.
@@ -8372,25 +8265,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         
         if let ipList = unwrappedResponse as? [String] {
-            // Filter and trim IP addresses. Nodes advertise every address they are
-            // bound to, including Tailscale CGNAT (100.64.0.0/10) and LAN addresses
-            // that are unreachable — or, worse, reachable but wrong — from another
-            // network. Only public literals are route candidates, matching
-            // _getProviderIP.
+            // Match TweetWeb's per-node preference; retain later public IPs for failover.
             let excludedKey = excludedIP.map { normalizeHostPort($0) }
-            let publicIPs = ipList
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .filter { Gadget.isValidPublicIpAddress($0) }
-            let ipAddresses = publicIPs
+            let ipAddresses = Gadget.preferredIpAddresses(ipList)
                 .filter { excludedKey == nil || normalizeHostPort($0) != excludedKey }
-
-            if publicIPs.count != ipList.count {
-                hproseDebug("DEBUG: [_getHostIP] Dropped \(ipList.count - publicIPs.count) non-public address(es) advertised by node \(nodeId)")
-            }
-            if let excludedKey, ipAddresses.count != publicIPs.count {
-                hproseDebug("DEBUG: [_getHostIP] Excluded \(excludedKey) from node \(nodeId) candidates")
-            }
             hproseDebug("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
 
             // Test IPs in batches of 2 to limit concurrent network health checks

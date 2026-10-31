@@ -62,86 +62,6 @@ final class Gadget: Sendable {
     
     private init() {}
     
-    // Filter IP addresses from a nested array structure
-    func filterIpAddresses(_ nodeList: Any) -> String? {
-        let cleanedInput = (nodeList as? String)?.replacingOccurrences(of: "\"", with: "") ?? ""
-        
-        // Split the input into groups
-        let groups = cleanedInput.components(separatedBy: "],[")
-            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "[]")) }
-            .filter { !$0.isEmpty }
-        
-        var fastestIP: String? = nil
-        var fastestResponseTime: UInt64 = UInt64.max
-        
-        for group in groups {
-            let pairs = group.components(separatedBy: "],[")
-                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "[]")) }
-                .filter { !$0.isEmpty }
-            
-            for pair in pairs {
-                let components = pair.components(separatedBy: ",")
-                guard components.count >= 2,
-                      let responseTime = UInt64(components[1].trimmingCharacters(in: .whitespaces)) else {
-                    continue
-                }
-                
-                let ipWithPort = components[0].trimmingCharacters(in: .whitespaces)
-                
-                // Extract IP and port
-                let ipComponents = ipWithPort.split(separator: ":")
-                guard ipComponents.count >= 2 else { continue }
-                
-                let port = String(ipComponents.last!)
-                guard let portNumber = Int(port), (8000...9000).contains(portNumber) else {
-                    continue
-                }
-                
-                // Get clean IP address
-                var ipAddress = ipWithPort.replacingOccurrences(of: ":" + port, with: "")
-                if ipAddress.hasPrefix("[") && ipAddress.hasSuffix("]") {
-                    ipAddress = String(ipAddress.dropFirst().dropLast())
-                }
-                
-                // Check if it's a private IP
-                if Gadget.isPrivateIP(ipAddress) {
-                    continue
-                }
-                
-                // Check if this is the fastest response so far
-                if responseTime < fastestResponseTime {
-                    fastestResponseTime = responseTime
-                    fastestIP = ipWithPort
-                }
-            }
-        }
-        
-        return fastestIP
-    }
-    
-//    func getAccessibleIP(ipList: [String]) async -> String? {
-//        await withTaskGroup(of: String?.self) { group in
-//            for ip in ipList {
-//                if Gadget.isValidPublicIpAddress(ip) {
-//                    group.addTask {
-//                        // Replace this with your actual async accessibility check
-//                        let accessible = await HproseInstance.isAccessible(ip)
-//                        return accessible
-//                    }
-//                }
-//            }
-//            // Wait for the first non-nil result, or nil if none found
-//            for await result in group {
-//                if let ip = result {
-//                    print("Fastest ip: \(ip)")
-//                    group.cancelAll() // Cancel remaining tasks
-//                    return ip
-//                }
-//            }
-//            return nil
-//        }
-//    }
-    
     /// IPv4 octets, or nil when `ip` is not a dotted-quad literal.
     private static func ipv4Octets(_ ip: String) -> [Int]? {
         let parts = ip.split(separator: ".", omittingEmptySubsequences: false)
@@ -162,38 +82,26 @@ final class Gadget: Sendable {
     /// port — use `isPrivateHostAddress(_:)` for `host:port` strings.
     static func isPrivateIP(_ ip: String) -> Bool {
         let address = ip.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-
         if isIPv6Address(address) {
-            // IPv4-mapped IPv6 (::ffff:10.0.0.1) is classified by its IPv4 half.
-            if let mappedStart = address.range(of: "::ffff:", options: [.anchored]),
-               address[mappedStart.upperBound...].contains(".") {
-                return isPrivateIP(String(address[mappedStart.upperBound...]))
-            }
-
-            // Loopback (::1) and unspecified (::)
-            if address == "::1" || address == "::" { return true }
-            // Unique local fc00::/7 — includes Tailscale's fd7a:115c:a1e0::/48
-            if address.hasPrefix("fc") || address.hasPrefix("fd") { return true }
-            // Link-local fe80::/10
-            if address.hasPrefix("fe8") || address.hasPrefix("fe9") ||
-               address.hasPrefix("fea") || address.hasPrefix("feb") { return true }
-            // Multicast ff00::/8
-            if address.hasPrefix("ff") { return true }
-            return false
+            guard let parsed = IPv6Address(address) else { return true }
+            let bytes = Array(parsed.rawValue)
+            let words = stride(from: 0, to: 16, by: 2).map { Int(bytes[$0]) * 256 + Int(bytes[$0 + 1]) }
+            return words[0] < 0x2000 || words[0] > 0x3fff ||
+                (words[0] == 0x2001 && words[1] == 0xdb8) ||
+                (words[0] == 0x3fff && words[1] < 0x1000) ||
+                (words[0] == 0x2001 && words[1] == 2 && words[2] == 0) ||
+                (Array(words.prefix(4)) == [0x2001, 0, 0, 0] &&
+                 words[4..<7].allSatisfy { $0 == 0xffff } && (0xfff0...0xfff3).contains(words[7]))
         }
-
         guard let octets = ipv4Octets(address) else { return false }
-        switch octets[0] {
-        case 0: return true                                    // 0.0.0.0/8 "this network"
-        case 10: return true                                   // 10.0.0.0/8 private
-        case 100: return (64...127).contains(octets[1])         // 100.64.0.0/10 CGNAT — Tailscale
-        case 127: return true                                  // 127.0.0.0/8 loopback
-        case 169: return octets[1] == 254                       // 169.254.0.0/16 link-local
-        case 172: return (16...31).contains(octets[1])          // 172.16.0.0/12 private
-        case 192: return octets[1] == 168                       // 192.168.0.0/16 private
-        case 224...255: return true                            // multicast + reserved + broadcast
-        default: return false
-        }
+        let (a, b, c) = (octets[0], octets[1], octets[2])
+        return a == 0 || a == 10 || a == 127 || a >= 224 ||
+            (a == 26 && b == 26 && c == 26) ||
+            (a == 100 && (64...127).contains(b)) || (a == 169 && b == 254) ||
+            (a == 172 && (16...31).contains(b)) || (a == 192 && b == 168) ||
+            (a == 192 && b == 0 && (c == 0 || c == 2)) ||
+            (a == 192 && b == 88 && c == 99) || (a == 198 && (18...19).contains(b)) ||
+            (a == 198 && b == 51 && c == 100) || (a == 203 && b == 0 && c == 113)
     }
 
     /// True when `hostPort` ("1.2.3.4:8002", "[fd7a::1]:8002", or a bare address)
@@ -253,13 +161,54 @@ final class Gadget: Sendable {
     /// address, so use it where an IP is expected (server-advertised node and
     /// provider address lists). IPv6 is allowed as long as it is public.
     static func isValidPublicIpAddress(_ fullIp: String) -> Bool {
-        guard let cleanIP = hostComponent(of: fullIp) else { return false }
+        guard let ip = hostComponent(of: fullIp) else { return false }
+        return isValidIpAddress(fullIp) && !isPrivateIP(ip)
+    }
 
-        if isIPv6Address(cleanIP) {
-            return !isPrivateIP(cleanIP)
+    static func isValidIpAddress(_ fullIp: String) -> Bool {
+        guard let ip = hostComponent(of: fullIp) else { return false }
+        return isIPv6Address(ip) ? IPv6Address(ip) != nil : ipv4Octets(ip) != nil
+    }
+
+    /// Input is already ranked. Retain private/VPN routes only for a node with
+    /// no public IP, and cap those alternatives at two, matching TweetWeb.
+    static func preferredIpAddresses(_ addresses: [String]) -> [String] {
+        var seen = Set<String>()
+        let valid = addresses.map(normalizeHostPort).filter {
+            isValidIpAddress($0) && seen.insert($0).inserted
         }
-        guard ipv4Octets(cleanIP) != nil else { return false }
-        return !isPrivateIP(cleanIP)
+        let publicIPs = valid.filter(isValidPublicIpAddress)
+        return publicIPs.isEmpty ? Array(valid.prefix(2)) : publicIPs
+    }
+
+    /// Decode the published JSON without flattening away node identity. Rank
+    /// within each node, prefer public IPs, then interleave nodes by address rank.
+    static func entryIPCandidates(from raw: String, addressesPerNode: Int = Int.max) -> [String] {
+        guard let decoded = try? JSONSerialization.jsonObject(with: Data(raw.utf8)),
+              let rawNodes = decoded as? [[[Any]]] else { return [] }
+        let nodes: [[(ip: String, responseTime: Double)]] = rawNodes.map { node in
+            let addresses: [(ip: String, responseTime: Double)] = node.compactMap { pair in
+                guard let address = pair.first as? String else { return nil }
+                let ip = normalizeHostPort(address)
+                guard isValidIpAddress(ip),
+                      let port = URLComponents(string: "http://\(ip)")?.port,
+                      (1...65535).contains(port) else { return nil }
+                let metric = pair.count > 1 ? (pair[1] as? NSNumber)?.doubleValue : nil
+                return (ip, metric.flatMap { $0.isFinite ? $0 : nil } ?? Double.infinity)
+            }.sorted { $0.responseTime < $1.responseTime }
+            let publicIPs = addresses.filter { isValidPublicIpAddress($0.ip) }
+            return Array((publicIPs.isEmpty ? Array(addresses.prefix(2)) : publicIPs).prefix(addressesPerNode))
+        }.filter { !$0.isEmpty }
+        var ordered: [String] = []
+        var seen = Set<String>()
+        for rank in 0..<(nodes.map(\.count).max() ?? 0) {
+            let round = nodes.compactMap { rank < $0.count ? $0[rank] : nil }
+                .sorted { $0.responseTime < $1.responseTime }
+            for candidate in round where seen.insert(candidate.ip).inserted {
+                ordered.append(candidate.ip)
+            }
+        }
+        return ordered
     }
 
     // Check if an IP is IPv6
@@ -343,7 +292,7 @@ final class Gadget: Sendable {
         if let addrsStartRange = paramText.range(of: "addrs: "),
            let bracketStart = paramText[addrsStartRange.upperBound...].firstIndex(of: "["),
            let lastBracketRange = paramText[bracketStart...].range(of: "]]]", options: .backwards) {
-            let addrsValue = paramText[bracketStart...lastBracketRange.upperBound]
+            let addrsValue = paramText[bracketStart..<lastBracketRange.upperBound]
             result["addrs"] = String(addrsValue)
         }
         
