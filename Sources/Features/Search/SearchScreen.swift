@@ -14,7 +14,6 @@ struct SearchScreen: View {
     }
     
     private var isShowingResultsList: Bool {
-        !searchViewModel.isLoading &&
         !(searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty)
     }
 
@@ -82,7 +81,7 @@ struct SearchScreen: View {
                 // Search Results. Any tap in this area (outside the search bar) closes the
                 // keyboard; simultaneous so row navigation and "Load more" still fire.
                 VStack(spacing: 0) {
-                    if searchViewModel.isLoading {
+                    if searchViewModel.isLoading && !isShowingResultsList {
                         Spacer()
                         VStack(spacing: 12) {
                             ProgressView()
@@ -163,6 +162,17 @@ struct SearchScreen: View {
                                         .buttonStyle(PlainButtonStyle())
                                     }
                                 }
+                            }
+
+                            if searchViewModel.isLoading {
+                                HStack(spacing: 12) {
+                                    ProgressView()
+                                    Text(String(format: NSLocalizedString("%ds", comment: "Search countdown in seconds"), searchViewModel.countdownSeconds))
+                                        .font(.subheadline)
+                                        .foregroundColor(XTheme.secondaryTextColor)
+                                        .monospacedDigit()
+                                }
+                                .frame(maxWidth: .infinity)
                             }
                         }
                         .scrollDismissesKeyboard(.immediately)
@@ -339,14 +349,12 @@ class SearchViewModel: ObservableObject {
             return
         }
 
-        await MainActor.run {
-            isLoading = true
-            countdownSeconds = Self.searchTimeoutSeconds
-            userResults = []
-            tweetResults = []
-            userPage = 1
-            tweetPage = 1
-        }
+        isLoading = true
+        countdownSeconds = Self.searchTimeoutSeconds
+        userResults = []
+        tweetResults = []
+        userPage = 1
+        tweetPage = 1
 
         let isUsernameOnly = query.hasPrefix("@")
         let userQuery = isUsernameOnly ? String(query.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines) : query
@@ -374,72 +382,53 @@ class SearchViewModel: ObservableObject {
         // Wait for the search to finish (naturally or via the 30 s cancel above)
         await searchTask.value
 
+        // A replaced search must not stop the new search's countdown or loading state.
+        guard activeSearchTask == searchTask else { return }
         countdownTask?.cancel()
-        await MainActor.run {
-            isLoading = false
-        }
+        activeSearchTask = nil
+        isLoading = false
     }
 
     private func runSearchQueries(query: String, isUsernameOnly: Bool, userQuery: String) async {
-        // Search users
-        if !userQuery.isEmpty {
-            var exactUser: User? = nil
-
-            // Always try exact match when @ is present (get userId from username and fetch from backend)
-            if isUsernameOnly {
-                if let userId = try? await hproseInstance.getUserId(userQuery),
-                   let user = try? await hproseInstance.fetchUser(userId) {
-                    // CRITICAL: Validate user has a username before adding to results
-                    if let username = user.username, !username.isEmpty {
-                        exactUser = user
-                    }
-                }
-            } else {
-                // For non-@ queries, only try exact match if no spaces
-                if !userQuery.contains(" ") {
-                    if let userId = try? await hproseInstance.getUserId(userQuery),
-                       let user = try? await hproseInstance.fetchUser(userId) {
-                        if let username = user.username, !username.isEmpty {
-                            exactUser = user
-                        }
-                    }
+        await withTaskGroup(of: Void.self) { group in
+            if !userQuery.isEmpty {
+                group.addTask {
+                    await self.searchUsers(query: userQuery, isUsernameOnly: isUsernameOnly)
                 }
             }
 
-            // Always do partial search of known usernames/names
-            // Capture exactUser as immutable to avoid Swift 6 concurrency error
-            let capturedExactUser = exactUser
-            await cacheManager.searchUsersIncremental(query: userQuery) { [weak self] users in
-                // Update UI immediately with each batch of results
-                guard let self = self else { return }
-                await MainActor.run {
-                    var finalResults = users
-
-                    // Merge exact match if found
-                    if let exactUser = capturedExactUser {
-                        // Add to results if not already there
-                        if !finalResults.contains(where: { $0.mid == exactUser.mid }) {
-                            finalResults.insert(exactUser, at: 0) // Put exact API match first
-                        } else {
-                            // Move exact match to the front if it exists
-                            if let index = finalResults.firstIndex(where: { $0.mid == exactUser.mid }) {
-                                let exactMatch = finalResults.remove(at: index)
-                                finalResults.insert(exactMatch, at: 0)
-                            }
-                        }
-                    }
-
-                    self.userResults = finalResults
+            // Account discovery must not delay cached tweet and comment results.
+            if !isUsernameOnly {
+                group.addTask {
+                    await self.searchTweets(query: query)
                 }
             }
         }
+    }
 
-        // Only search tweets if query doesn't start with @ (matches Android logic)
-        if !isUsernameOnly {
-            let tweets = await cacheManager.searchTweets(query: query)
-            await MainActor.run {
-                self.tweetResults = tweets
-            }
+    private func searchUsers(query: String, isUsernameOnly: Bool) async {
+        // Publish local matches before starting the slower exact-name lookup.
+        await cacheManager.searchUsersIncremental(query: query) { [weak self] users in
+            guard !Task.isCancelled, let self else { return }
+            self.userResults = users
+        }
+
+        // Preserve @-only lookup and exact-match priority without blocking cached results.
+        guard !Task.isCancelled,
+              isUsernameOnly || !query.contains(" "),
+              let userId = try? await hproseInstance.getUserId(query),
+              !Task.isCancelled,
+              let user = try? await hproseInstance.fetchUser(userId),
+              !Task.isCancelled,
+              let username = user.username, !username.isEmpty else { return }
+        userResults.removeAll { $0.mid == user.mid }
+        userResults.insert(user, at: 0)
+    }
+
+    private func searchTweets(query: String) async {
+        await cacheManager.searchTweetsIncremental(query: query) { [weak self] tweets in
+            guard !Task.isCancelled, let self else { return }
+            self.tweetResults = tweets
         }
     }
     

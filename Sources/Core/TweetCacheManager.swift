@@ -1602,10 +1602,15 @@ extension TweetCacheManager {
     
     /// Search every cached tweet and comment by content and title only (not author username/name).
     /// Comments and replies share the Tweet model and are included in the in-memory store.
+    /// Publish in-memory matches before waiting for the persistent cache.
     @MainActor
-    func searchTweets(query: String) async -> [Tweet] {
+    func searchTweetsIncremental(
+        query: String,
+        onResults: @escaping @MainActor @Sendable ([Tweet]) async -> Void
+    ) async {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return []
+            await onResults([])
+            return
         }
         
         let normalizedQuery = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1648,11 +1653,32 @@ extension TweetCacheManager {
                 scoredResults[tweet.mid] = (score, tweet)
             }
         }
+
+        func getSortedResults() -> [Tweet] {
+            let sortedResults = scoredResults.values
+                .sorted { lhs, rhs in
+                    if lhs.score != rhs.score {
+                        return lhs.score < rhs.score
+                    }
+                    return lhs.tweet.timestamp > rhs.tweet.timestamp
+                }
+                .map { $0.tweet }
+
+            // Every published batch needs authors ready for display.
+            for tweet in sortedResults where tweet.author == nil {
+                tweet.author = User.getInstance(mid: tweet.authorId)
+            }
+            return sortedResults
+        }
         
         // Step 1: Search in-memory tweet singletons (fast)
         let memoryTweets = Tweet.getAllInstances()
         for (_, tweet) in memoryTweets {
             consider(tweet)
+        }
+
+        if !scoredResults.isEmpty {
+            await onResults(getSortedResults())
         }
         
         // Step 2: Search cached tweets in Core Data
@@ -1682,24 +1708,6 @@ extension TweetCacheManager {
             consider(tweet)
         }
         
-        // Sort by score (lower is better), then by timestamp (newer first)
-        let sortedResults = scoredResults.values
-            .sorted { lhs, rhs in
-                if lhs.score != rhs.score {
-                    return lhs.score < rhs.score
-                }
-                // If scores are equal, sort by timestamp (newer first)
-                return lhs.tweet.timestamp > rhs.tweet.timestamp
-            }
-            .map { $0.tweet }
-        
-        // Ensure authors are loaded for display
-        for tweet in sortedResults {
-            if tweet.author == nil {
-                tweet.author = User.getInstance(mid: tweet.authorId)
-            }
-        }
-        
-        return Array(sortedResults)
+        await onResults(getSortedResults())
     }
 } 
