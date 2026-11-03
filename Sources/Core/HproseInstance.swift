@@ -266,34 +266,32 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return user
         }
         set {
-            // Update the singleton instance with new values, then switch to it
+            // Apply inline on MainActor so login/logout observers see the new identity immediately.
             let instance = User.getInstance(mid: newValue.mid)
-            Task { @MainActor in
-                // Update the singleton instance with new values. The route is not copied:
-                // it is keyed by mid in UserRoutes, which both objects already share.
-                instance.name = newValue.name
-                instance.username = newValue.username
-                instance.avatar = newValue.avatar
-                instance.email = newValue.email
-                instance.profile = newValue.profile
-                instance.cloudDrivePort = newValue.cloudDrivePort
-                
-                instance.tweetCount = newValue.tweetCount
-                instance.followingCount = newValue.followingCount
-                instance.followersCount = newValue.followersCount
-                instance.bookmarksCount = newValue.bookmarksCount
-                instance.favoritesCount = newValue.favoritesCount
-                instance.commentsCount = newValue.commentsCount
-                
-                instance.hostIds = newValue.hostIds
-                
-                // Update the reference to point to the singleton instance by storing its ID
-                // This ensures appUser getter always returns the same singleton instance
-                if self._appUserId != instance.mid {
-                    self._appUserId = instance.mid
-                    // Notify observers that appUser has changed
-                    self.objectWillChange.send()
-                }
+            // Update the singleton instance with new values. The route is not copied:
+            // it is keyed by mid in UserRoutes, which both objects already share.
+            instance.name = newValue.name
+            instance.username = newValue.username
+            instance.avatar = newValue.avatar
+            instance.email = newValue.email
+            instance.profile = newValue.profile
+            instance.cloudDrivePort = newValue.cloudDrivePort
+
+            instance.tweetCount = newValue.tweetCount
+            instance.followingCount = newValue.followingCount
+            instance.followersCount = newValue.followersCount
+            instance.bookmarksCount = newValue.bookmarksCount
+            instance.favoritesCount = newValue.favoritesCount
+            instance.commentsCount = newValue.commentsCount
+
+            instance.hostIds = newValue.hostIds
+
+            // Update the reference to point to the singleton instance by storing its ID
+            // This ensures appUser getter always returns the same singleton instance
+            if self._appUserId != instance.mid {
+                self._appUserId = instance.mid
+                // Notify observers that appUser has changed
+                self.objectWillChange.send()
             }
         }
     }
@@ -3738,28 +3736,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return backendError
     }
     
-    func logout() async {
-        // Don't clear tweet cache on logout - cache persists per user and is cleared periodically or manually
-        // Clear chat cache on signout
-        await ChatCacheManager.shared.clearAllCache()
-
-        // Clear all video cache files from disk
-        // await CachingPlayerItem.clearAllCache()
-
-        // Clear stale HTTP clients from previous user session
+    @MainActor func logout(onSignedOut: @MainActor () -> Void) async {
+        // Retire the previous session's clients before guest requests can start.
         clientPool.clear()
+        preferenceHelper?.setUserId(nil)
 
-        // Reset appUser to guest user with entry baseUrl (not the old user's node)
-        await MainActor.run {
-            self.preferenceHelper?.setUserId(nil)
+        let guestUser = User.getInstance(mid: Constants.GUEST_ID)
+        guestUser.baseUrl = HproseInstance.baseUrl
+        guestUser.followingList = Gadget.getAlphaIds()
+        appUser = guestUser
 
-            let guestUser = User.getInstance(mid: Constants.GUEST_ID)
-            guestUser.baseUrl = HproseInstance.baseUrl
-            guestUser.followingList = Gadget.getAlphaIds()
-            self.appUser = guestUser
-        }
+        // Dismiss account screens and reset the feed before awaiting cleanup or discovery.
+        onSignedOut()
 
-        // Fetch alphaId user for guest and notify FollowingsTweetView
+        // Tweet caches remain per user; preserve chat cleanup on signout.
+        await ChatCacheManager.shared.clearAllCache()
         await fetchAlphaIdUserForGuest()
     }
     

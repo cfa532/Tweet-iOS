@@ -719,8 +719,7 @@ struct ProfileView: View {
     }
 
     private func completeHostIdMigration(message: String, isError: Bool) async {
-        await hproseInstance.logout()
-        await MainActor.run {
+        await hproseInstance.logout {
             isSubmittingProfile = false
             showEditSheet = false
             if let onShowToast {

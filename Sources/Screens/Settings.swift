@@ -158,8 +158,7 @@ struct SettingsView: View {
     }
     
     private func handleLogout() async {
-        await hproseInstance.logout()
-        await MainActor.run {
+        await hproseInstance.logout {
             NotificationCenter.default.post(name: .userDidLogout, object: nil)
             dismiss()
         }
@@ -172,8 +171,7 @@ struct SettingsView: View {
             if let success = result["success"] as? Bool, success {
                 TweetCacheManager.shared.clearAllCache()
                 ImageCacheManager.shared.clearAllCache()
-                await hproseInstance.logout()
-                await MainActor.run {
+                await hproseInstance.logout {
                     NotificationCenter.default.post(name: .userDidLogout, object: nil)
                     isDeletingAccount = false
                     dismiss()
