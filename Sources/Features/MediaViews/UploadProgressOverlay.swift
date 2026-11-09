@@ -191,6 +191,8 @@ struct UploadProgressOverlay: View {
             return NSLocalizedString("Posting Comment", comment: "Upload title")
         case "chat":
             return NSLocalizedString("Sending Message", comment: "Upload title")
+        case "edit":
+            return NSLocalizedString("Updating Tweet", comment: "Upload title")
         default:
             return NSLocalizedString("Uploading", comment: "Upload title")
         }

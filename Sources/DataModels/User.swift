@@ -27,7 +27,8 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
         set { routeDidChange(UserRoutes.shared.setAccessRoute(newValue, for: mid)) }
     }
 
-    /// The resolved root host, refreshed before every mutation. Setting it does not
+    /// The resolved root host, refreshed before every mutation (a post's attachments
+    /// share one refresh, see `reusesResolvedWritableUrl`). Setting it does not
     /// change where reads go — `HproseInstance.adoptWriteRouteForReads` does that once a
     /// write has actually succeeded.
     var writableUrl: URL? {
@@ -627,11 +628,22 @@ class User: ObservableObject, @MainActor Codable, @MainActor Identifiable, @Main
     /// network resolution.
     private var resolveWritableUrlTask: Task<URL, Error>?
 
-    /// Returns the writable URL for the user, resolving hostIds[0] fresh.
+    /// Set by `TweetUploadManager.executeUpload` around a post's later attachments so
+    /// they reuse the route its first attachment resolved. A task-local keeps this to
+    /// that upload: other writes made meanwhile still resolve fresh. Upload retries set
+    /// `writableUrl` to nil first, so a retry always resolves again.
+    @TaskLocal static var reusesResolvedWritableUrl = false
+
+    /// Returns the writable URL for the user, resolving hostIds[0] fresh unless the
+    /// current task is inside `reusesResolvedWritableUrl`.
     /// Throws if no host ID is configured or the writable host can't be reached;
     /// otherwise always returns a valid URL.
     @MainActor
     func resolveWritableUrl() async throws -> URL {
+        if User.reusesResolvedWritableUrl, let writableUrl {
+            return writableUrl
+        }
+
         // Coalesce concurrent callers onto a single in-flight Task.
         if let inFlight = resolveWritableUrlTask {
             print("DEBUG: [resolveWritableUrl] Awaiting in-flight resolve Task")

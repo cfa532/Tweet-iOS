@@ -92,6 +92,20 @@ struct MediaRecord: Codable, Hashable, Sendable {
         }
         return media
     }
+
+    /// The attachment as add_tweet and update_tweet expect it. `url` is a local display
+    /// snapshot and is never sent.
+    var uploadPayload: [String: Any] {
+        var payload: [String: Any] = [
+            "mid": mid,
+            "type": type.rawValue,
+            "timestamp": timestamp.timeIntervalSince1970 * 1000
+        ]
+        if let size { payload["size"] = size }
+        if let fileName { payload["fileName"] = fileName }
+        if let aspectRatio { payload["aspectRatio"] = aspectRatio }
+        return payload
+    }
 }
 
 struct UserRecord: Codable, Sendable {

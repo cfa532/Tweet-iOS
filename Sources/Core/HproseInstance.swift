@@ -4911,7 +4911,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     }
 
     /// TweetWeb passes `appuserid: target author` so the server author check passes.
-    func updateTweetContent(tweetId: String, content: String, tweetAuthorId: String) async throws {
+    /// `attachments` replaces the tweet's whole list; the backend moves its references
+    /// from the old set to the new one.
+    func updateTweet(tweetId: String, content: String, tweetAuthorId: String, attachments: [MediaRecord]) async throws {
         // Phase A (demotion prep): snapshot @MainActor admin check + appUser.mid.
         let (isAdmin, appUserMid) = await MainActor.run { (Gadget.isResearchAdminUser(self.appUser), self.appUser.mid) }
         guard isAdmin else {
@@ -4929,6 +4931,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             requestUser = author
         }
 
+        let attachmentsJSON = try JSONSerialization.data(withJSONObject: attachments.map(\.uploadPayload))
         let entry = "update_tweet"
         let params: [String: Any] = [
             "aid": appId,
@@ -4936,11 +4939,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "version": "v2",
             "appuserid": tweetAuthorId,
             "tweetid": tweetId,
-            "content": content
+            "content": content,
+            "attachments": String(decoding: attachmentsJSON, as: UTF8.self)
         ]
-        // Mutation path should use writable client, same as other write APIs.
+        // Mutation path should use writable client, same as other write APIs. Referencing
+        // new media can take as long as publishing it, so this uses add_tweet's timeout.
         _ = try await requestUser.resolveWritableUrl()
-        guard let client = await requestUser.writableClient(timeout: 30) else {
+        guard let client = await requestUser.writableClient(timeout: 240) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
 
@@ -6773,14 +6778,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         ) async throws -> MimeiFileType {
             hproseDebug("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
             
-            // Retry logic: resolve the writable host for each attempt.
+            // Retry logic: a retry clears writableUrl, so it always resolves the host again.
             var lastError: Error?
             let maxRetries = 2
             
             for attempt in 1...maxRetries {
                 try Task.checkCancellation()
                 do {
-                    // Resolve the writable host for this attempt.
+                    // Resolves hostIds[0], or reuses the route this post already resolved.
                     let writableUrl = try await appUser.resolveWritableUrl()
                     hproseDebug("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl.absoluteString)")
                     
@@ -7226,26 +7231,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             uploadPayload["parentTweetId"] = parentTweetId
         }
         if let attachments = tweet.attachments, !attachments.isEmpty {
-            uploadPayload["attachments"] = attachments.map { attachment in
-                var attachmentDict: [String: Any] = [
-                    "mid": attachment.mid,
-                    "type": attachment.type.rawValue
-                ]
-                attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
-                
-                // Add optional fields
-                if let size = attachment.size {
-                    attachmentDict["size"] = size
-                }
-                if let fileName = attachment.fileName {
-                    attachmentDict["fileName"] = fileName
-                }
-                if let aspectRatio = attachment.aspectRatio {
-                    attachmentDict["aspectRatio"] = aspectRatio
-                }
-                
-                return attachmentDict
-            }
+            uploadPayload["attachments"] = attachments.map { MediaRecord(media: $0).uploadPayload }
         }
         if let isPrivate = tweet.isPrivate {
             uploadPayload["isPrivate"] = isPrivate

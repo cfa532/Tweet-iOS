@@ -276,29 +276,42 @@ struct MediaPreviewItem: View {
     let image: UIImage?
     let videoURL: URL?
     let item: PhotosPickerItem?
+    let attachment: (media: MimeiFileType, baseUrl: URL)?
     let onRemove: () -> Void
-    
+
     init(image: UIImage, onRemove: @escaping () -> Void) {
         self.image = image
         self.videoURL = nil
         self.item = nil
+        self.attachment = nil
         self.onRemove = onRemove
     }
-    
+
     init(videoURL: URL, onRemove: @escaping () -> Void) {
         self.image = nil
         self.videoURL = videoURL
         self.item = nil
+        self.attachment = nil
         self.onRemove = onRemove
     }
-    
+
     init(item: PhotosPickerItem, onRemove: @escaping () -> Void) {
         self.image = nil
         self.videoURL = nil
         self.item = item
+        self.attachment = nil
         self.onRemove = onRemove
     }
-    
+
+    /// An attachment already on a tweet, shown while editing that tweet.
+    init(attachment: MimeiFileType, baseUrl: URL, onRemove: @escaping () -> Void) {
+        self.image = nil
+        self.videoURL = nil
+        self.item = nil
+        self.attachment = (attachment, baseUrl)
+        self.onRemove = onRemove
+    }
+
     var body: some View {
         Group {
             if let image = image {
@@ -314,6 +327,10 @@ struct MediaPreviewItem: View {
                     .cornerRadius(8)
             } else if let item = item {
                 ThumbnailView(item: item)
+                    .frame(width: 60, height: 60)
+                    .cornerRadius(8)
+            } else if let attachment = attachment {
+                PublishedAttachmentThumbnail(attachment: attachment.media, baseUrl: attachment.baseUrl)
                     .frame(width: 60, height: 60)
                     .cornerRadius(8)
             }
@@ -334,6 +351,52 @@ struct MediaPreviewItem: View {
             .contentShape(Circle())
             .frame(width: 30, height: 30)
             .offset(x: 2, y: -2)
+        }
+    }
+}
+
+/// Images load through the shared cache; other media shows its kind and file name.
+private struct PublishedAttachmentThumbnail: View {
+    let attachment: MimeiFileType
+    let baseUrl: URL
+    @State private var image: UIImage?
+
+    private var symbolName: String {
+        switch attachment.type {
+        case .image: return "photo"
+        case .video, .hls_video: return "video.fill"
+        case .audio: return "waveform"
+        default: return "doc.fill"
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.gray.opacity(0.2)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                VStack(spacing: 2) {
+                    Image(systemName: symbolName)
+                        .foregroundColor(.gray)
+                        .font(.system(size: 16))
+                    if let fileName = attachment.fileName, attachment.type != .image {
+                        Text(fileName)
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .padding(.horizontal, 2)
+                    }
+                }
+            }
+        }
+        .clipped()
+        .task(id: attachment.mid) {
+            guard attachment.type == .image, let url = attachment.getUrl(baseUrl) else { return }
+            image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment)
         }
     }
 }

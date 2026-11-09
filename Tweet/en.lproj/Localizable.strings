@@ -28,6 +28,7 @@
 "Continue" = "Continue";
 "Posting Tweet" = "Posting Tweet";
 "Posting Comment" = "Posting Comment";
+"Updating Tweet" = "Updating Tweet";
 "Sending Message" = "Sending Message";
 "Uploading" = "Uploading";
 "Please keep the app open until upload completes" = "Please keep the app open until upload completes";
@@ -686,8 +687,6 @@
 "Retry video" = "Retry video";
 "Loading comments..." = "Loading comments...";
 "Edit (admin)" = "Edit (admin)";
-"Update Failed" = "Update Failed";
-"Edit content (admin)" = "Edit content (admin)";
 "Tweet options" = "Tweet options";
 "Double tap to open tweet menu" = "Double tap to open tweet menu";
 "Could not load parent tweet" = "Could not load parent tweet";

@@ -28,6 +28,7 @@
 "Continue" = "続ける";
 "Posting Tweet" = "ツイートを投稿中";
 "Posting Comment" = "コメントを投稿中";
+"Updating Tweet" = "ツイートを更新中";
 "Sending Message" = "メッセージを送信中";
 "Uploading" = "アップロード中";
 "Please keep the app open until upload completes" = "アップロードが完了するまでアプリを開いたままにしてください";
@@ -686,8 +687,6 @@
 "Retry video" = "動画を再試行";
 "Loading comments..." = "コメントを読み込み中…";
 "Edit (admin)" = "編集（管理者）";
-"Update Failed" = "更新に失敗しました";
-"Edit content (admin)" = "内容を編集（管理者）";
 "Tweet options" = "ツイートのオプション";
 "Double tap to open tweet menu" = "ダブルタップでツイートのメニューを開く";
 "Could not load parent tweet" = "親ツイートを読み込めませんでした";

@@ -39,12 +39,16 @@ final class TweetUploadManager {
         fileName: String? = nil,
         referenceId: String? = nil,
         noResample: Bool = false,
+        uploadUser: User? = nil,
         progressCallback: (@Sendable (String, Int) -> Void)? = nil
     ) async throws -> (MimeiFileType?, String?) {
         guard let hproseInstance = hproseInstance else {
             throw NSError(domain: "TweetUploadManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "HproseInstance not available"])
         }
-        
+        // Media goes to this user's root host: the signed-in user, unless a caller
+        // uploads on behalf of a tweet's author.
+        let uploadUser = uploadUser ?? hproseInstance.appUser
+
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
         // Detect media type
@@ -63,7 +67,7 @@ final class TweetUploadManager {
                 fileName: fileName,
                 referenceId: referenceId,
                 noResample: noResample,
-                appUser: hproseInstance.appUser,
+                appUser: uploadUser,
                 appId: hproseInstance.appId,
                 progressCallback: progressCallback
             )
@@ -76,7 +80,7 @@ final class TweetUploadManager {
             fileName: fileName,
             referenceId: referenceId,
             mediaType: mediaType,
-            appUser: hproseInstance.appUser,
+            appUser: uploadUser,
             appId: hproseInstance.appId,
             progressCallback: progressCallback
         )
@@ -103,6 +107,18 @@ final class TweetUploadManager {
         enqueue(pending)
     }
 
+    /// Queues an edit that replaces the tweet's text and attachments. New media uploads
+    /// first; the published list is `retainedAttachments` followed by the new media,
+    /// the same order TweetWeb's editor uses.
+    func scheduleTweetEdit(tweet: Tweet, content: String, retainedAttachments: [MediaRecord],
+                           itemData: [PendingTweetUpload.ItemData]) {
+        var record = TweetRecord(tweet: tweet)
+        record.content = content
+        var pending = PendingTweetUpload(record: record, itemData: itemData)
+        pending.retainedAttachments = retainedAttachments
+        enqueue(pending)
+    }
+
     func enqueue(_ pending: PendingTweetUpload) {
         UploadProgressManager.shared.enqueueUpload(pending: pending)
     }
@@ -111,12 +127,28 @@ final class TweetUploadManager {
     // processing and publication all share one cancellation and background grant.
     func executeUpload(_ saved: PendingTweetUpload) async throws {
         guard let hproseInstance else { throw uploadError("System error") }
-        guard saved.record.authorId == hproseInstance.appUser.mid else {
+        let appUser = hproseInstance.appUser
+        let isOwnTweet = saved.record.authorId == appUser.mid
+        guard isOwnTweet || (saved.retainedAttachments != nil && Gadget.isResearchAdminUser(appUser)) else {
             throw uploadError("Sign in to the account that started this upload.")
+        }
+        // An admin editing someone's tweet uploads to that author's root host, where
+        // update_tweet takes its references to the new media. Matches TweetWeb.
+        let uploadUser: User
+        if isOwnTweet {
+            uploadUser = appUser
+        } else {
+            guard let author = try await hproseInstance.fetchUser(saved.record.authorId) else {
+                throw uploadError("Cannot fetch tweet author")
+            }
+            uploadUser = author
         }
         var pending = saved
         try Task.checkCancellation()
         try await savePendingUpload(pending)
+        // One post resolves its write route once: the first upload resolves hostIds[0]
+        // fresh and later attachments reuse it. Any failed attempt resolves again.
+        var writeRouteResolved = false
         for index in pending.itemData.indices {
             try Task.checkCancellation()
             let item = pending.itemData[index]
@@ -130,21 +162,26 @@ final class TweetUploadManager {
                 do {
                     let count = pending.itemData.count
                     let operationID = pending.id
-                    (attachment, jobId) = try await uploadToIPFS(
-                        data: item.data, typeIdentifier: item.typeIdentifier,
-                        fileName: item.fileName, noResample: item.noResample,
-                        progressCallback: { message, percent in
-                            Task { @MainActor in
-                                UploadProgressManager.shared.updateProgress(
-                                    stage: .uploadingAttachments, message: message,
-                                    progress: 0.05 + 0.7 * (Double(index) + Double(percent) / 100) / Double(count),
-                                    operationID: operationID)
-                            }
-                        })
+                    (attachment, jobId) = try await User.$reusesResolvedWritableUrl.withValue(writeRouteResolved) {
+                        try await uploadToIPFS(
+                            data: item.data, typeIdentifier: item.typeIdentifier,
+                            fileName: item.fileName, noResample: item.noResample,
+                            uploadUser: uploadUser,
+                            progressCallback: { message, percent in
+                                Task { @MainActor in
+                                    UploadProgressManager.shared.updateProgress(
+                                        stage: .uploadingAttachments, message: message,
+                                        progress: 0.05 + 0.7 * (Double(index) + Double(percent) / 100) / Double(count),
+                                        operationID: operationID)
+                                }
+                            })
+                    }
                     guard attachment != nil else { throw uploadError("Failed to upload attachment") }
+                    writeRouteResolved = true
                     break
                 } catch {
                     try Task.checkCancellation()
+                    writeRouteResolved = false
                     print("[Upload] Attachment attempt \(attempt + 1) failed: \(error)")
                     if attempt == 2 { throw error }
                     try await Task.sleep(for: .seconds(2 * (attempt + 1)))
@@ -172,15 +209,16 @@ final class TweetUploadManager {
         }
 
         if pending.itemData.contains(where: { $0.videoJobId != nil }) {
-            try await waitForVideoJobs(&pending)
+            try await waitForVideoJobs(&pending, uploadUser: uploadUser)
         }
         try Task.checkCancellation()
-        let attachments = pending.itemData.compactMap { item -> MediaRecord? in
+        let uploaded = pending.itemData.compactMap { item -> MediaRecord? in
             guard let cid = item.cid else { return nil }
             return MediaRecord(mid: cid, type: MediaType.fromString(item.mediaType ?? "Image"),
                                size: item.fileSize, fileName: item.fileName, aspectRatio: item.aspectRatio)
         }
-        guard attachments.count == pending.itemData.count else { throw uploadError("Failed to upload attachment") }
+        guard uploaded.count == pending.itemData.count else { throw uploadError("Failed to upload attachment") }
+        let attachments = (pending.retainedAttachments ?? []) + uploaded
         pending.record.attachments = attachments
         // A persisted marker prevents an interrupted non-idempotent publication
         // from being silently resubmitted on the next launch.
@@ -196,7 +234,19 @@ final class TweetUploadManager {
         let heartbeat = startPublishHeartbeat(from: 0.95)
         defer { heartbeat.cancel() }
 
-        if let recipient = pending.recipientId {
+        if pending.retainedAttachments != nil {
+            let record = pending.record
+            try await hproseInstance.updateTweet(tweetId: record.mid, content: record.content ?? "",
+                                                 tweetAuthorId: record.authorId, attachments: attachments)
+            // applyRenderAffectingUpdate drops the typeset text and every derived height,
+            // so feed and detail both re-render the new content and media.
+            let tweet = Tweet.getInstance(for: record.mid) ?? record.makeTweet()
+            tweet.applyRenderAffectingUpdate {
+                tweet.content = record.content
+                tweet.attachments = attachments.map { $0.makeMedia() }
+            }
+            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+        } else if let recipient = pending.recipientId {
             let message = ChatMessage(id: pending.record.mid, authorId: pending.record.authorId,
                 receiptId: recipient, chatSessionId: pending.chatSessionId ?? "",
                 content: pending.record.content, timestamp: pending.record.timestamp.timeIntervalSince1970,
@@ -261,12 +311,11 @@ final class TweetUploadManager {
         }
     }
 
-    private func waitForVideoJobs(_ pending: inout PendingTweetUpload) async throws {
-        guard let hproseInstance else { throw uploadError("System error") }
+    private func waitForVideoJobs(_ pending: inout PendingTweetUpload, uploadUser: User) async throws {
         try Task.checkCancellation()
-        let rootURL = try await hproseInstance.appUser.resolveWritableUrl()
-        guard let host = rootURL.host, hproseInstance.appUser.cloudDrivePort > 0,
-              let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
+        let rootURL = try await uploadUser.resolveWritableUrl()
+        guard let host = rootURL.host, uploadUser.cloudDrivePort > 0,
+              let pollURL = URL(string: "http://\(host):\(uploadUser.cloudDrivePort)") else {
             throw uploadError("Failed to check video status")
         }
         let jobIndices = pending.itemData.indices.filter { pending.itemData[$0].videoJobId != nil }
@@ -463,9 +512,15 @@ extension TweetUploadManager {
         var chatSessionId: String?
         var publicationAttempted: Bool
         var usesLegacyFile: Bool?
+        /// Non-nil marks an edit of the existing tweet `record.mid`: the attachments it
+        /// keeps, published ahead of any new media in `itemData`.
+        var retainedAttachments: [MediaRecord]?
 
         @MainActor var tweet: Tweet { record.makeTweet() }
-        var type: String { recipientId != nil ? "chat" : (parent != nil ? "comment" : "tweet") }
+        var type: String {
+            if retainedAttachments != nil { return "edit" }
+            return recipientId != nil ? "chat" : (parent != nil ? "comment" : "tweet")
+        }
         var hasVideos: Bool { itemData.contains { Self.isVideo($0.typeIdentifier) } }
         private static func isVideo(_ type: String) -> Bool {
             let value = type.lowercased()

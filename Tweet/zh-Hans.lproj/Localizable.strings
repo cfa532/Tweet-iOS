@@ -28,6 +28,7 @@
 "Continue" = "继续";
 "Posting Tweet" = "正在发布推文";
 "Posting Comment" = "正在发布评论";
+"Updating Tweet" = "正在更新推文";
 "Sending Message" = "正在发送消息";
 "Uploading" = "上传中";
 "Please keep the app open until upload completes" = "请保持应用打开直到上传完成";
@@ -693,8 +694,6 @@
 "Retry video" = "重试视频";
 "Loading comments..." = "正在加载评论…";
 "Edit (admin)" = "编辑（管理员）";
-"Update Failed" = "更新失败";
-"Edit content (admin)" = "编辑内容（管理员）";
 "Tweet options" = "推文选项";
 "Double tap to open tweet menu" = "轻点两次打开推文菜单";
 "Could not load parent tweet" = "无法加载上级推文";

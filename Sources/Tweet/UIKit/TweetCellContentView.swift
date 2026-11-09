@@ -1040,7 +1040,7 @@ class TweetCellContentView: UIView {
 
         if showsAdminEdit {
             let editAction = UIAction(
-                title: NSLocalizedString("Edit content (admin)", comment: "Admin research menu"),
+                title: NSLocalizedString("Edit (admin)", comment: "Admin research menu"),
                 image: MenuSymbol.image("pencil.line")
             ) { [weak self] _ in
                 guard let self, let pvc = self.parentViewController else { return }

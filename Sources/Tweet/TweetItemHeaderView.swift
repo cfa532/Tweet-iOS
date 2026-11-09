@@ -1,12 +1,22 @@
+import PhotosUI
 import SwiftUI
 
-/// TweetWeb-style admin edit (username `admin`); same API as web `updateTweet(..., authorId)`.
+/// TweetWeb-style admin edit (username `admin`): changes a tweet's text and attachments
+/// with the same `update_tweet` request as web. Saving goes through the upload queue like
+/// a new post, so media keeps its video processing and retries, and a save that fails
+/// stays available from the pending-upload dialog after this sheet has closed.
 struct AdminTweetContentEditSheet: View {
     @ObservedObject var tweet: Tweet
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     @State private var text: String
-    @State private var originalText: String
+    @State private var retainedAttachments: [MimeiFileType]
+    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedImages: [UIImage] = []
+    @State private var selectedVideos: [URL] = []
+    @State private var selectedDocuments: [DocumentFile] = []
+    @State private var showCamera = false
+    @FocusState private var isEditorFocused: Bool
     @State private var saving = false
     @State private var showCancelConfirmation = false
     @State private var showErrorAlert = false
@@ -15,73 +25,70 @@ struct AdminTweetContentEditSheet: View {
     init(tweet: Tweet) {
         self.tweet = tweet
         _text = State(initialValue: tweet.content ?? "")
-        _originalText = State(initialValue: tweet.content ?? "")
+        _retainedAttachments = State(initialValue: tweet.attachments ?? [])
+    }
+
+    private var hasNewMedia: Bool {
+        !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty
     }
 
     private var hasUnsavedChanges: Bool {
-        text != originalText
+        text != (tweet.content ?? "")
+            || retainedAttachments != (tweet.attachments ?? [])
+            || hasNewMedia
+            || !selectedDocuments.isEmpty
+    }
+
+    private var mediaBaseUrl: URL {
+        tweet.author?.baseUrl ?? hproseInstance.appUser.baseUrl ?? HproseInstance.baseUrl
     }
 
     var body: some View {
         NavigationStack {
-            TextEditor(text: $text)
-                .padding(8)
-                .navigationTitle("Edit (admin)")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") {
-                            if hasUnsavedChanges {
-                                showCancelConfirmation = true
-                            } else {
-                                dismiss()
-                            }
-                        }
-                        .alert("Unsaved Changes", isPresented: $showCancelConfirmation) {
-                            Button("Discard Changes", role: .destructive) { dismiss() }
-                            Button("Keep Editing", role: .cancel) { }
-                        } message: {
-                            Text("You have unsaved changes. Are you sure you want to exit without saving?")
+            ScrollView {
+                VStack(spacing: 0) {
+                    TextEditor(text: $text)
+                        .frame(minHeight: 150, maxHeight: 292)
+                        .padding()
+                        .focused($isEditorFocused)
+                    attachmentPreviews
+                    attachmentToolbar
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            // As in the compose screen: while typing, let the TextEditor scroll long
+            // text instead of the outer ScrollView taking the gesture.
+            .scrollDisabled(isEditorFocused)
+            .navigationTitle("Edit (admin)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        if hasUnsavedChanges {
+                            showCancelConfirmation = true
+                        } else {
+                            dismiss()
                         }
                     }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") {
-                            Task {
-                                await MainActor.run { saving = true }
-                                defer { Task { @MainActor in saving = false } }
-                                do {
-                                    try await hproseInstance.updateTweetContent(
-                                        tweetId: tweet.mid,
-                                        content: text,
-                                        tweetAuthorId: tweet.authorId
-                                    )
-                                    await MainActor.run {
-                                        // applyRenderAffectingUpdate drops the typeset
-                                        // text and every derived height, so feed and
-                                        // detail both re-render the new content.
-                                        tweet.applyRenderAffectingUpdate {
-                                            tweet.content = text
-                                        }
-                                        if let singleton = Tweet.getInstance(for: tweet.mid), singleton !== tweet {
-                                            singleton.applyRenderAffectingUpdate {
-                                                singleton.content = text
-                                            }
-                                        }
-                                        TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
-                                        dismiss()
-                                    }
-                                } catch {
-                                    await MainActor.run {
-                                        errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
-                                        showErrorAlert = true
-                                        NotificationCenter.default.post(name: .errorOccurred, object: error)
-                                    }
-                                }
-                            }
-                        }
-                        .disabled(saving)
+                    .disabled(saving)
+                    .alert("Unsaved Changes", isPresented: $showCancelConfirmation) {
+                        Button("Discard Changes", role: .destructive) { dismiss() }
+                        Button("Keep Editing", role: .cancel) { }
+                    } message: {
+                        Text("You have unsaved changes. Are you sure you want to exit without saving?")
                     }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: save)
+                        .disabled(saving)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button(NSLocalizedString("Done", comment: "Dismiss keyboard")) {
+                        isEditorFocused = false
+                    }
+                }
+            }
         }
         .interactiveDismissDisabled(hasUnsavedChanges)
         .overlay {
@@ -94,10 +101,108 @@ struct AdminTweetContentEditSheet: View {
                 }
             }
         }
-        .alert("Update Failed", isPresented: $showErrorAlert) {
+        .alert("Error", isPresented: $showErrorAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(errorMessage)
+        }
+        // The pickers report rejected files, such as an oversized one, this way.
+        .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
+            guard let error = notification.object as? Error else { return }
+            errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+            showErrorAlert = true
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraView { image, videoURL in
+                if let image { selectedImages.append(image) }
+                if let videoURL { selectedVideos.append(videoURL) }
+            }
+        }
+    }
+
+    private var attachmentPreviews: some View {
+        VStack(spacing: 8) {
+            if !retainedAttachments.isEmpty {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                    ForEach(retainedAttachments) { attachment in
+                        MediaPreviewItem(attachment: attachment, baseUrl: mediaBaseUrl) {
+                            retainedAttachments.removeAll { $0.mid == attachment.mid }
+                        }
+                    }
+                }
+            }
+            if hasNewMedia {
+                MediaPreviewGrid(
+                    selectedItems: selectedItems,
+                    selectedImages: selectedImages,
+                    selectedVideos: selectedVideos,
+                    onRemoveItem: { selectedItems.remove(at: $0) },
+                    onRemoveImage: { selectedImages.remove(at: $0) },
+                    onRemoveVideo: { selectedVideos.remove(at: $0) }
+                )
+            }
+            if !selectedDocuments.isEmpty {
+                DocumentPreviewGrid(documents: selectedDocuments) { selectedDocuments.remove(at: $0) }
+                    .frame(height: 120)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+    }
+
+    private var attachmentToolbar: some View {
+        HStack(spacing: 20) {
+            MediaPicker(
+                selectedItems: $selectedItems,
+                selectedImages: $selectedImages,
+                selectedVideos: $selectedVideos,
+                showCamera: $showCamera,
+                maxSelectionCount: 20,
+                supportedTypes: [.image, .movie]
+            )
+            DocumentPickerButton(
+                selectedDocuments: $selectedDocuments,
+                allowedTypes: [.pdf, .text, .zip],
+                icon: "doc.fill",
+                color: .blue
+            )
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color.themeBackground)
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(Color.themeBorder),
+            alignment: .top
+        )
+    }
+
+    private func save() {
+        saving = true
+        Task {
+            defer { saving = false }
+            do {
+                // Load picked media before closing, so a file that cannot be read
+                // leaves the draft here instead of losing it.
+                let itemData = try await MediaUploadHelper.prepareItemData(
+                    selectedItems: selectedItems,
+                    selectedImages: selectedImages,
+                    selectedVideos: selectedVideos,
+                    selectedDocuments: selectedDocuments
+                )
+                hproseInstance.uploadManager.scheduleTweetEdit(
+                    tweet: tweet,
+                    content: text,
+                    retainedAttachments: retainedAttachments.map(MediaRecord.init(media:)),
+                    itemData: itemData
+                )
+                dismiss()
+            } catch {
+                errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                showErrorAlert = true
+            }
         }
     }
 }
@@ -227,7 +332,7 @@ struct TweetMenu: View {
             }
         })
         if Gadget.isResearchAdminUser(appUser) {
-            actions.append(UIAction(title: NSLocalizedString("Edit content (admin)", comment: "Admin research menu"), image: UIImage(systemName: "pencil.line")) { _ in
+            actions.append(UIAction(title: NSLocalizedString("Edit (admin)", comment: "Admin research menu"), image: UIImage(systemName: "pencil.line")) { _ in
                 showAdminEditSheet = true
             })
         }
@@ -358,7 +463,7 @@ struct TweetMenu: View {
 
                 if Gadget.isResearchAdminUser(appUser) {
                     Button(action: { showAdminEditSheet = true }) {
-                        Label("Edit content (admin)", systemImage: "pencil.line")
+                        Label("Edit (admin)", systemImage: "pencil.line")
                     }
                 }
                 
