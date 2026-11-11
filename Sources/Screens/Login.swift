@@ -14,6 +14,7 @@ struct LoginView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var showRegistration = false
+    @State private var showOwnerPairing = false
     @State private var isLoading = false
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
@@ -129,8 +130,22 @@ struct LoginView: View {
                 }
                 .foregroundColor(.themeAccent)
                 .disabled(isLoading)
+
+                // The owner of a node has no username or password: they pair this
+                // device with the node from an identity issued on it.
+                Button(LocalizedStringKey("Pair with my node")) {
+                    showOwnerPairing = true
+                }
+                .foregroundColor(.themeAccent)
+                .disabled(isLoading)
             }
             .padding()
+            .sheet(isPresented: $showOwnerPairing) {
+                OwnerPairingView {
+                    showOwnerPairing = false
+                    dismiss()
+                }
+            }
             .navigationBarItems(trailing: Button(LocalizedStringKey("Close")) {
                 dismiss()
             })

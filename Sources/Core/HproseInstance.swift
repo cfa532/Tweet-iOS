@@ -138,7 +138,133 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// The account an entry writes to, for the entries where the backend checks
+    /// that the caller owns it. Mirrors the `requireOwner` calls in TweetBackendApp;
+    /// nil for every other entry.
+    nonisolated private static func ownedAccountID(entry: String, params: [String: Any]) -> String? {
+        func field(_ name: String, inJSON key: String) -> String? {
+            guard let text = params[key] as? String, let data = text.data(using: .utf8),
+                  let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            return record[name] as? String
+        }
+        switch entry {
+        case "update_tweet", "toggle_tweet_privacy", "toggle_pinned_tweet":
+            return params["appuserid"] as? String
+        case "delete_tweet", "toggle_following", "block_user", "remove_blacklisted_relationship",
+             "set_user_avatar", "delete_account", "message_outgoing", "message_fetch", "share_file":
+            return params["userid"] as? String
+        case "add_tweet":
+            return field("authorId", inJSON: "tweet")
+        case "set_author_core_data":
+            return field("mid", inJSON: "user")
+        default:
+            return nil
+        }
+    }
+
+    /// True when the node answered that it does not recognise the user session:
+    /// it expired after an hour, or the node restarted.
+    nonisolated private static func isSessionInvalid(_ response: Any?) -> Bool {
+        guard let dict = normalizeHproseContainers(jsonObjectIfEncodedAsString(response)) as? [String: Any] else {
+            return false
+        }
+        return (dict["message"] as? String ?? dict["error"] as? String) == "Session invalid"
+    }
+
+    /// Whether the node's backend checks user sessions (it advertises `userSessions`
+    /// in `health`). A node still on an older backend ignores them, and must keep
+    /// receiving requests in the old form.
+    private func nodeChecksUserSessions(node: String, client: HproseClient) async -> Bool {
+        if let known = await UserSessionStore.shared.knownSupport(node: node) {
+            return known
+        }
+        let raw = await sendApplication(using: client, entry: "health", params: ["aid": appId, "ver": "last"])
+        guard let reply = Self.asStringKeyedDictionary(raw) else {
+            // No answer says nothing about the node; ask again next time.
+            return false
+        }
+        let supported = reply["userSessions"] as? Bool == true
+        await UserSessionStore.shared.setSupport(supported, node: node)
+        return supported
+    }
+
+    /// Calls one of Leither's own sign-in methods on a node — these are the node's
+    /// RPCs, not application entries — and returns the session it opened.
+    private func leitherSignIn(_ method: String, args: [Any], using client: HproseClient) async -> (sid: String, uid: String)? {
+        let raw = await HproseTransport.invoke(method, using: client, args: args)
+        guard let reply = Self.asStringKeyedDictionary(raw),
+              let sid = (reply["Sid"] ?? reply["sid"]) as? String, !sid.isEmpty,
+              let uid = (reply["Uid"] ?? reply["uid"]) as? String, !uid.isEmpty else {
+            return nil
+        }
+        return (sid, uid)
+    }
+
+    /// The Leither session proving to this node that the caller controls
+    /// `accountID`, signing in when there is none. An owner signs in with the key
+    /// their device was paired with; a guest with the username and password
+    /// Leither holds. Nil when this device holds no secret for the account (an
+    /// admin acting on another user's tweet, a just-registered account), the node
+    /// does not check sessions, or it refused the sign-in.
+    private func userSession(accountID: String, node: String, client: HproseClient) async -> String? {
+        if let sid = await UserSessionStore.shared.session(accountID: accountID, node: node) {
+            return sid
+        }
+        let identity = OwnerIdentityStore.load().flatMap { $0.accountID == accountID ? $0 : nil }
+        let credential = identity == nil ? OwnerCredentialStore.load(for: accountID) : nil
+        guard identity != nil || credential != nil,
+              await nodeChecksUserSessions(node: node, client: client) else {
+            return nil
+        }
+        let signedIn: (sid: String, uid: String)?
+        if let identity, let passport = try? identity.passport() {
+            signedIn = await leitherSignIn("LoginWithPPT", args: [passport], using: client)
+        } else if let credential {
+            signedIn = await leitherSignIn("Login", args: [credential.username, credential.password], using: client)
+        } else {
+            signedIn = nil
+        }
+        guard let signedIn else {
+            hproseWarning("[userSession] \(node) did not sign \(accountID) in; writing without a session")
+            return nil
+        }
+        await UserSessionStore.shared.setSession(signedIn.sid, accountID: accountID, node: node)
+        return signedIn.sid
+    }
+
+    /// Every RPC passes through here. A write to the signed-in user's own data is
+    /// sent with that user's Leither session on the target node, so the backend
+    /// can verify the caller controls the account. A node that has dropped the
+    /// session says so before writing anything, so the request is repeated once
+    /// after signing in again.
     private func invokeApplication(
+        using client: HproseClient,
+        entry: String,
+        params: [String: Any],
+        priority: DispatchQoS.QoSClass = .userInitiated
+    ) async -> Any? {
+        guard let accountID = Self.ownedAccountID(entry: entry, params: params),
+              let node = (client as? HproseHttpClient)?.uri,
+              let sid = await userSession(accountID: accountID, node: node, client: client) else {
+            return await sendApplication(using: client, entry: entry, params: params, priority: priority)
+        }
+        var ownerParams = params
+        ownerParams["usersid"] = sid
+        let response = await sendApplication(using: client, entry: entry, params: ownerParams, priority: priority)
+        guard Self.isSessionInvalid(response) else {
+            return response
+        }
+        await UserSessionStore.shared.discard(accountID: accountID, node: node)
+        guard let renewed = await userSession(accountID: accountID, node: node, client: client) else {
+            return response
+        }
+        ownerParams["usersid"] = renewed
+        return await sendApplication(using: client, entry: entry, params: ownerParams, priority: priority)
+    }
+
+    private func sendApplication(
         using client: HproseClient,
         entry: String,
         params: [String: Any],
@@ -3627,6 +3753,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         hproseDebug("DEBUG: [login] Using provider URL for authentication: \(loginUrl.absoluteString)")
 
+        // A node that checks sessions holds the guest's username and password in
+        // Leither. When that sign-in does not apply — an older node, or an account
+        // created before sessions — the stored-password login below still does.
+        if await sessionLogin(loginUser, username: loginUsername!, password: loginPassword!) {
+            return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
+        }
 
         return try await retryOperation(maxRetries: 3) {
             hproseDebug("DEBUG: [login] Creating client for: \(loginUrl.absoluteString)")
@@ -3661,6 +3793,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 // success is true, check for user data
                 if response["user"] != nil || response["data"] != nil {
                     hproseDebug("DEBUG: [login] Login successful, setting appUser")
+                    // Kept so an owner session can be reopened after the node drops it.
+                    OwnerCredentialStore.save(.init(username: loginUsername!, password: loginPassword!), for: loginMid)
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
@@ -3670,7 +3804,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         await self.populateFellowLists(user: loginUser)
                     }
                     Task {
-                        _ = try? await loginUser.resolveWritableUrl()
+                        await self.bindLegacyAccount(loginUser, username: loginUsername!, password: loginPassword!)
                     }
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
@@ -3686,6 +3820,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     return ["reason": localizedReason, "status": "failure"]
                 } else if status == "success" && response["user"] != nil {
                     hproseDebug("DEBUG: [login] Login successful (status field), setting appUser")
+                    // Kept so an owner session can be reopened after the node drops it.
+                    OwnerCredentialStore.save(.init(username: loginUsername!, password: loginPassword!), for: loginMid)
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
@@ -3695,7 +3831,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         await self.populateFellowLists(user: loginUser)
                     }
                     Task {
-                        _ = try? await loginUser.resolveWritableUrl()
+                        await self.bindLegacyAccount(loginUser, username: loginUsername!, password: loginPassword!)
                     }
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
@@ -3736,10 +3872,126 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         return backendError
     }
     
+    /// The account's root node and whether its backend checks user sessions.
+    /// Leither keeps a guest's credential on the root node only, so that is where
+    /// a guest signs in.
+    private func sessionRoot(of user: User) async -> (client: HproseClient, node: String)? {
+        guard let rootURL = try? await user.resolveWritableUrl() else { return nil }
+        let client = clientPool.getClientByUrl(for: rootURL.absoluteString, timeout: 30)
+        guard let node = (client as? HproseHttpClient)?.uri,
+              await nodeChecksUserSessions(node: node, client: client) else {
+            return nil
+        }
+        return (client, node)
+    }
+
+    /// Asks the node which account a Leither session controls. `username` and
+    /// `password` are a guest's; an owner's session needs neither.
+    private func accountForSession(
+        _ sid: String, username: String?, password: String?, using client: HproseClient
+    ) async throws -> [String: Any] {
+        var params: [String: Any] = ["aid": appId, "ver": "last", "version": "v2", "usersid": sid]
+        if let username { params["username"] = username }
+        if let password { params["password"] = password }
+        let raw = await sendApplication(using: client, entry: "login", params: params)
+        guard let reply = try Self.unwrapV2Response(raw) as? [String: Any],
+              let account = reply["user"] as? [String: Any], account["mid"] is String else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Login failed", comment: "Generic login failure message")])
+        }
+        return reply
+    }
+
+    /// Signs a guest in through Leither on the account's root node. False when
+    /// that does not apply, so the caller falls back to the stored-password login.
+    private func sessionLogin(_ loginUser: User, username: String, password: String) async -> Bool {
+        guard let root = await sessionRoot(of: loginUser),
+              let signedIn = await leitherSignIn("Login", args: [username, password], using: root.client),
+              (try? await accountForSession(signedIn.sid, username: username, password: password, using: root.client)) != nil else {
+            return false
+        }
+        let loginMid = await MainActor.run { loginUser.mid }
+        OwnerCredentialStore.save(.init(username: username, password: password), for: loginMid)
+        await UserSessionStore.shared.setSession(signedIn.sid, accountID: loginMid, node: root.node)
+        await MainActor.run {
+            self.preferenceHelper?.setUserId(loginUser.mid)
+            self.appUser = loginUser
+            NodePool.shared.updateFromUser(loginUser)
+        }
+        Task {
+            await self.populateFellowLists(user: loginUser)
+        }
+        return true
+    }
+
+    /// An account created before sessions has its password stored in the account
+    /// and none in Leither. After such a login succeeds, register the same
+    /// username and password with Leither on the root node and have the node bind
+    /// the account to that Leither user, so its writes can be verified from now on.
+    private func bindLegacyAccount(_ loginUser: User, username: String, password: String) async {
+        guard let root = await sessionRoot(of: loginUser) else { return }
+        // Fails when Leither already knows the name; the sign-in below settles
+        // whether the password matches.
+        _ = await HproseTransport.invoke("Register", using: root.client, args: [username, password, ""])
+        guard let signedIn = await leitherSignIn("Login", args: [username, password], using: root.client) else {
+            hproseWarning("[bindLegacyAccount] Leither did not sign \(username) in on \(root.node)")
+            return
+        }
+        do {
+            _ = try await accountForSession(signedIn.sid, username: username, password: password, using: root.client)
+            let loginMid = await MainActor.run { loginUser.mid }
+            await UserSessionStore.shared.setSession(signedIn.sid, accountID: loginMid, node: root.node)
+        } catch {
+            hproseWarning("[bindLegacyAccount] \(root.node) did not bind \(username): \(error.localizedDescription)")
+        }
+    }
+
+    /// Pairs this device with a node as one of its owners, from the identity
+    /// `tweet-owner.sh` issued there (a scanned QR code, or the identity file).
+    /// The node signs the key in and returns the owner's account, creating it the
+    /// first time. No username or password is involved.
+    func pairOwner(identityData: Data) async throws {
+        var identity = try OwnerIdentity.parse(identityData)
+        guard let address = await getHostIP(identity.nodeID, v4Only: false, usePool: false) else {
+            throw NSError(domain: "OwnerPairing", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot reach the node this identity belongs to.", comment: "Owner pairing error")])
+        }
+        let nodeURL = try Self.resolvedNodeURL(for: address)
+        let client = clientPool.getClientByUrl(for: nodeURL.absoluteString, timeout: 60)
+        guard let node = (client as? HproseHttpClient)?.uri,
+              await nodeChecksUserSessions(node: node, client: client) else {
+            throw NSError(domain: "OwnerPairing", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("This node's software does not support pairing yet. Update it and try again.", comment: "Owner pairing error")])
+        }
+        guard let signedIn = await leitherSignIn("LoginWithPPT", args: [try identity.passport()], using: client),
+              signedIn.uid == identity.uid else {
+            throw NSError(domain: "OwnerPairing", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("The node did not accept this identity.", comment: "Owner pairing error")])
+        }
+        let reply = try await accountForSession(signedIn.sid, username: nil, password: nil, using: client)
+        guard reply["owner"] as? Bool == true, let account = reply["user"] as? [String: Any] else {
+            throw NSError(domain: "OwnerPairing", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("This identity is not listed as an owner of the node.", comment: "Owner pairing error")])
+        }
+        let owner = try await mergeUserFromDict(account)
+        let ownerMid = await MainActor.run { owner.mid }
+        identity.accountID = ownerMid
+        try OwnerIdentityStore.save(identity)
+        await UserSessionStore.shared.setSession(signedIn.sid, accountID: ownerMid, node: node)
+        await MainActor.run {
+            // The owner's account lives on the node the device was just paired with.
+            owner.baseUrl = nodeURL
+            owner.writableUrl = nodeURL
+            self.preferenceHelper?.setUserId(owner.mid)
+            self.appUser = owner
+            NodePool.shared.updateFromUser(owner)
+        }
+        Task {
+            await self.populateFellowLists(user: owner)
+        }
+    }
+
     @MainActor func logout(onSignedOut: @MainActor () -> Void) async {
         // Retire the previous session's clients before guest requests can start.
         clientPool.clear()
         preferenceHelper?.setUserId(nil)
+        OwnerCredentialStore.delete(for: appUser.mid)
+        OwnerIdentityStore.delete()
 
         let guestUser = User.getInstance(mid: Constants.GUEST_ID)
         guestUser.baseUrl = HproseInstance.baseUrl
@@ -3750,6 +4002,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         onSignedOut()
 
         // Tweet caches remain per user; preserve chat cleanup on signout.
+        await UserSessionStore.shared.clear()
         await ChatCacheManager.shared.clearAllCache()
         await fetchAlphaIdUserForGuest()
     }
@@ -7545,27 +7798,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseDebug("DEBUG: [registerUser] No hostId provided, hosts will be nil")
         }
         
-        // Phase A (demotion prep): User is a @MainActor type — create + encode it on the main actor.
-        let (userJsonString, newUserHostIdsLog): (String, [String]) = try await MainActor.run {
-            let newUser = User(mid: self.appUser.mid, name: alias, username: username, password: password,
-                               profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .millisecondsSince1970
-            let data = try encoder.encode(newUser)
-            return (String(data: data, encoding: .utf8) ?? "", newUser.hostIds ?? [])
-        }
-        hproseDebug("DEBUG: [registerUser] Created User object with hostIds: \(newUserHostIdsLog)")
-        hproseDebug("DEBUG: [registerUser] Encoded user JSON: \(userJsonString)")
-
         let entry = "register"
-        
-        let params: [String: Any] = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "user": userJsonString
-        ]
-        
+
         // A chosen root must receive registration itself; metadata does not route it.
         let baseUrl: URL
         if let host = hosts?.first {
@@ -7586,6 +7820,42 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // app reported a timeout, and the retry then failed with "Username is taken".
         let client = clientPool.getClientByUrl(for: baseUrl.absoluteString, timeout: 30)
         let targetUrl = baseUrl.absoluteString
+
+        // On a node that checks sessions, Leither keeps the guest's username and
+        // password and the account stores neither: the session opened here becomes
+        // the identity that controls the new account. An older node still expects
+        // the password inside the account.
+        var userSid: String?
+        if let node = (client as? HproseHttpClient)?.uri, await nodeChecksUserSessions(node: node, client: client) {
+            // Fails when Leither already knows the name on this node, which also
+            // happens when an earlier attempt got this far; the sign-in settles it.
+            _ = await HproseTransport.invoke("Register", using: client, args: [username, password, ""])
+            guard let signedIn = await leitherSignIn("Login", args: [username, password], using: client) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Username is taken", comment: "Registration error message")])
+            }
+            userSid = signedIn.sid
+        }
+
+        // Phase A (demotion prep): User is a @MainActor type — create + encode it on the main actor.
+        let accountPassword = userSid == nil ? password : nil
+        let userJsonString: String = try await MainActor.run {
+            let newUser = User(mid: self.appUser.mid, name: alias, username: username, password: accountPassword,
+                               profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let data = try encoder.encode(newUser)
+            return String(data: data, encoding: .utf8) ?? ""
+        }
+
+        var params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "user": userJsonString
+        ]
+        if let userSid {
+            params["usersid"] = userSid
+        }
         
         hproseDebug("DEBUG: [registerUser] Sending registration request to server")
         hproseDebug("DEBUG: [registerUser] Using target URL: \(targetUrl)")
@@ -7775,6 +8045,18 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     try await confirmProfileMigration(userID: userID, hostID: destinationHost, url: writeURL)
                 }
                 hproseDebug("DEBUG: updateUserCore - server returned success")
+                // On a node that checks sessions the password is Leither's, not the
+                // account's: change it there, then keep it for later sign-ins.
+                if let password, !password.isEmpty, let credential = OwnerCredentialStore.load(for: userID) {
+                    if let node = (updateClient as? HproseHttpClient)?.uri,
+                       let sid = await userSession(accountID: userID, node: node, client: updateClient) {
+                        let changed = await HproseTransport.invoke("SetUserInfo", using: updateClient, args: [sid, ["newpass": password]])
+                        if let failure = changed as? NSError {
+                            throw failure
+                        }
+                    }
+                    OwnerCredentialStore.save(.init(username: credential.username, password: password), for: userID)
+                }
                 
                 // Update in-memory appUser with new values on MainActor (User has @Published properties)
                 await MainActor.run {

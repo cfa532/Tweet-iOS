@@ -65,6 +65,7 @@
 		467494212DF885940082FAC6 /* UserRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467494202DF8858F0082FAC6 /* UserRowView.swift */; };
 		468384A12DFE9EAB0079ECC5 /* MediaBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */; };
 		4683F6312F49578E001E163C /* AgentTokenManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4683F6302F49578D001E163C /* AgentTokenManager.swift */; };
+		46A0E5522F9C000100AA0002 /* OwnerSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A0E5512F9C000100AA0001 /* OwnerSession.swift */; };
 		468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF20D2E39AF3900D49038 /* ChatRepository.swift */; };
 		468CF2102E39AF5900D49038 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF20F2E39AF5900D49038 /* ChatMessage.swift */; };
 		468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2172E39B06900D49038 /* BadgeView.swift */; };
@@ -131,6 +132,8 @@
 		46E5B3572DDF74B500AEF31F /* CommentComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3562DDF74B500AEF31F /* CommentComposeView.swift */; };
 		46E5B3592DE005EC00AEF31F /* ThumbnailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3582DE005EC00AEF31F /* ThumbnailView.swift */; };
 		46E5B3612DE16FD800AEF31F /* Login.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3602DE16FD300AEF31F /* Login.swift */; };
+		46A0E5562F9C000100AA0006 /* OwnerPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A0E5552F9C000100AA0005 /* OwnerPairingView.swift */; };
+		46A0E5542F9C000100AA0004 /* CodeScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A0E5532F9C000100AA0003 /* CodeScanner.swift */; };
 		46E5B3632DE1703200AEF31F /* Registration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3622DE1702C00AEF31F /* Registration.swift */; };
 		46E5B3652DE21A3400AEF31F /* UserListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3642DE21A3400AEF31F /* UserListView.swift */; };
 		46E5B3672DE2DD2900AEF31F /* TweetListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3662DE2DD2900AEF31F /* TweetListView.swift */; };
@@ -231,6 +234,7 @@
 		467494202DF8858F0082FAC6 /* UserRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserRowView.swift; sourceTree = "<group>"; };
 		468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaBrowserView.swift; sourceTree = "<group>"; };
 		4683F6302F49578D001E163C /* AgentTokenManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTokenManager.swift; sourceTree = "<group>"; };
+		46A0E5512F9C000100AA0001 /* OwnerSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnerSession.swift; sourceTree = "<group>"; };
 		468CF20D2E39AF3900D49038 /* ChatRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRepository.swift; sourceTree = "<group>"; };
 		468CF20F2E39AF5900D49038 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		468CF2172E39B06900D49038 /* BadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeView.swift; sourceTree = "<group>"; };
@@ -298,6 +302,8 @@
 		46E5B3562DDF74B500AEF31F /* CommentComposeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentComposeView.swift; sourceTree = "<group>"; };
 		46E5B3582DE005EC00AEF31F /* ThumbnailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailView.swift; sourceTree = "<group>"; };
 		46E5B3602DE16FD300AEF31F /* Login.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Login.swift; sourceTree = "<group>"; };
+		46A0E5552F9C000100AA0005 /* OwnerPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnerPairingView.swift; sourceTree = "<group>"; };
+		46A0E5532F9C000100AA0003 /* CodeScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeScanner.swift; sourceTree = "<group>"; };
 		46E5B3622DE1702C00AEF31F /* Registration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Registration.swift; sourceTree = "<group>"; };
 		46E5B3642DE21A3400AEF31F /* UserListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserListView.swift; sourceTree = "<group>"; };
 		46E5B3662DE2DD2900AEF31F /* TweetListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetListView.swift; sourceTree = "<group>"; };
@@ -410,6 +416,8 @@
 				46A8F6832E52BDDC0050F4A0 /* ProfileEditView.swift */,
 				46E5B3622DE1702C00AEF31F /* Registration.swift */,
 				46E5B3602DE16FD300AEF31F /* Login.swift */,
+				46A0E5552F9C000100AA0005 /* OwnerPairingView.swift */,
+				46A0E5532F9C000100AA0003 /* CodeScanner.swift */,
 				46E5B3502DDC9FFC00AEF31F /* Settings.swift */,
 			);
 			path = Screens;
@@ -419,6 +427,7 @@
 			isa = PBXGroup;
 			children = (
 				4683F6302F49578D001E163C /* AgentTokenManager.swift */,
+				46A0E5512F9C000100AA0001 /* OwnerSession.swift */,
 				46B25DF02F35836100F0EE94 /* TweetHeightCache.swift */,
 				46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */,
 				A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */,
@@ -896,6 +905,8 @@
 				469A99562DEC744200954049 /* ProfileHeaderSection.swift in Sources */,
 				46E5B3492DDC0F6900AEF31F /* MediaGridView.swift in Sources */,
 				46E5B3612DE16FD800AEF31F /* Login.swift in Sources */,
+				46A0E5562F9C000100AA0006 /* OwnerPairingView.swift in Sources */,
+				46A0E5542F9C000100AA0004 /* CodeScanner.swift in Sources */,
 				46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */,
 				46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */,
 				469A99622DEF318C00954049 /* TweetModel.xcdatamodeld in Sources */,
@@ -963,6 +974,7 @@
 				4608E2DA2DD5CD920051A92D /* User.swift in Sources */,
 				468CF2252E39CC7C00D49038 /* AppHeaderView.swift in Sources */,
 				4683F6312F49578E001E163C /* AgentTokenManager.swift in Sources */,
+				46A0E5522F9C000100AA0002 /* OwnerSession.swift in Sources */,
 				468CF2262E39CC7C00D49038 /* TabButton.swift in Sources */,
 				460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */,
 				46E5B3632DE1703200AEF31F /* Registration.swift in Sources */,
