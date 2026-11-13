@@ -150,13 +150,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return record[name] as? String
         }
         switch entry {
-        case "update_tweet", "toggle_tweet_privacy", "toggle_pinned_tweet":
+        case "update_tweet", "toggle_tweet_privacy", "toggle_pinned_tweet", "delete_comment":
             return params["appuserid"] as? String
         case "delete_tweet", "toggle_following", "block_user", "remove_blacklisted_relationship",
              "set_user_avatar", "delete_account", "message_outgoing", "message_fetch", "share_file":
             return params["userid"] as? String
         case "add_tweet":
             return field("authorId", inJSON: "tweet")
+        case "add_comment":
+            return field("authorId", inJSON: "comment")
         case "set_author_core_data":
             return field("mid", inJSON: "user")
         default:
@@ -188,6 +190,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let supported = reply["userSessions"] as? Bool == true
         await UserSessionStore.shared.setSupport(supported, node: node)
         return supported
+    }
+
+    /// Whether a node takes comments through the writer's own root (it
+    /// advertises `commentDelegation` in `health`). The parent author's node
+    /// decides: it is the node that must accept the write, so it is where the
+    /// two comment forms are told apart. Not cached — commenting is a
+    /// user-paced action and one health call rides along with it.
+    private func nodeSupportsCommentDelegation(_ client: HproseClient) async -> Bool {
+        let raw = await sendApplication(using: client, entry: "health", params: ["aid": appId, "ver": "last"])
+        guard let reply = Self.asStringKeyedDictionary(raw) else {
+            // No answer says nothing about the node; the old form is the one
+            // every backend understands.
+            return false
+        }
+        return reply["commentDelegation"] as? Bool == true
     }
 
     /// Calls one of Leither's own sign-in methods on a node — these are the node's
@@ -5218,7 +5235,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // add_comment is non-idempotent: a retry after a lost/late response can create
         // a second comment even though the first request already succeeded on the node.
         // Surface ambiguous failures to the caller instead of automatically resubmitting.
-            // Writes belong to the parent author's root, independently of the read node.
+            // The comment's author object is needed either way: it names the parent
+            // author whose node owns the write, and the backend is capability-gated
+            // below on that node.
             let existingAuthor = await MainActor.run { tweet.author }
             let author: User
             if let existingAuthor {
@@ -5241,15 +5260,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
 
             let authorSnap = await MainActor.run { UserRecord(user: author) }
-            let writableUrl = try await author.resolveWritableUrl()
-            // add_comment commits several related objects before returning and must not be
-            // retried after an ambiguous timeout. Give it the same extended response window
-            // as add_tweet so a slow commit can return its authoritative comment id/count.
-            guard let commentClient = await author.writableClient(timeout: 240) else {
+            _ = try await author.resolveWritableUrl()
+            guard let authorClient = await author.writableClient(timeout: 240) else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's writable client not initialized", comment: "Client initialization error")])
             }
-
-            hproseDebug("DEBUG: [addComment] add_comment via parent's author writableUrl (\(writableUrl.absoluteString)), tweet hostid: \(authorSnap.hostIds?.first ?? "nil")")
 
             // Encode the comment and read tweet.mid on the main actor (Tweet is @MainActor).
             let (commentJSON, tweetMid): (String, String) = try await MainActor.run {
@@ -5257,6 +5271,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 let data = try JSONEncoder().encode(comment)
                 return (String(data: data, encoding: .utf8) ?? "", tweet.mid)
             }
+            let entry = "add_comment"
+            // hostid names the parent author's node: the routing target for an
+            // old backend, and the delegation hint on a new one.
             let params: [String: Any] = [
                 "aid": self.appId,
                 "ver": "last",
@@ -5266,7 +5283,26 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "tweetid": tweetMid,
                 "tweetauthorid": authorSnap.mid
             ]
-            let entry = "add_comment"
+
+            // A backend with commentDelegation takes add_comment on the signed-in
+            // user's own root, signed by their session; that node asks the parent
+            // author's node to perform the write, so a guest never needs a session
+            // anywhere but their own node. An older backend still takes the request
+            // on the parent author's node, in the old form.
+            // add_comment commits several related objects before returning and must not be
+            // retried after an ambiguous timeout. Give it the same extended response window
+            // as add_tweet so a slow commit can return its authoritative comment id/count.
+            var commentClient = authorClient
+            if await nodeSupportsCommentDelegation(authorClient) {
+                let appUser = await MainActor.run { self.appUser }
+                _ = try await appUser.resolveWritableUrl()
+                guard let ownClient = await appUser.writableClient(timeout: 240) else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Client initialization error")])
+                }
+                commentClient = ownClient
+            }
+            hproseDebug("DEBUG: [addComment] add_comment via \((commentClient as? HproseHttpClient)?.uri ?? "?"), tweet hostid: \(authorSnap.hostIds?.first ?? "nil")")
+
             let rawResponse = await self.invokeRunMApp(using: commentClient, entry: entry, params: params)
             
             if let err = rawResponse as? Error {
@@ -5393,7 +5429,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let (authorSnap, appUserMid, parentTweetMid) = await MainActor.run {
             (UserRecord(user: author), self.appUser.mid, parentTweet.mid)
         }
-        let params = [
+        let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
@@ -5402,12 +5438,28 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             "commentid": commentId,
             "appuserid": appUserMid
         ]
-        let writableUrl = try await author.resolveWritableUrl()
-        guard let client = await author.writableClient(timeout: 15) else {
+        _ = try await author.resolveWritableUrl()
+        guard let authorClient = await author.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's writable client not initialized", comment: "Client initialization error")])
         }
-        hproseDebug("DEBUG: [deleteComment] delete_comment via parent's author writableUrl (\(writableUrl.absoluteString))")
-        
+
+        // As with add_comment: a backend with commentDelegation takes the
+        // request on the deleter's own root, signed by their session, and asks
+        // the parent author's node to perform the deletion. An older backend
+        // still takes it on the parent author's node. The window is wider than
+        // the old one because the request now makes two hops before the
+        // parent's data changes.
+        var client = authorClient
+        if await nodeSupportsCommentDelegation(authorClient) {
+            let appUser = await MainActor.run { self.appUser }
+            _ = try await appUser.resolveWritableUrl()
+            guard let ownClient = await appUser.writableClient(timeout: 30) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Client initialization error")])
+            }
+            client = ownClient
+        }
+        hproseDebug("DEBUG: [deleteComment] delete_comment via \((client as? HproseHttpClient)?.uri ?? "?")")
+
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
         if let err = rawResponse as? Error {
             throw err

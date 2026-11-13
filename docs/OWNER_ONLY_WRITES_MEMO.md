@@ -1,8 +1,8 @@
 # Owner-only writes: status memo
 
-Date: 2026-11-11
-Branches: `owner-only-writes` in Tweet-iOS (`c2a0e0aa5`) and TweetBackendApp (`941e68d`). Nothing is pushed.
-Live on: the debug backend only (`twbe`, version 1717). Release, Android and web are unchanged.
+Date: 2026-11-13
+Branches: `owner-only-writes` in Tweet-iOS and TweetBackendApp. Nothing is pushed.
+Live on: the debug backend only (`twbe`, version 1721). Release, Android and web are unchanged.
 
 ## 1. The request
 
@@ -95,6 +95,26 @@ the account: `add_tweet`, `update_tweet`, `delete_tweet`,
 - iOS attaches the session at the single point every RPC passes through, only
   for writes to the signed-in user's own data.
 
+### Comments through the writer's own node
+
+A comment still lives on its parent author's node, but the writer no longer
+sends the request there. `add_comment` is called on the **writer's root** with
+their session; that node verifies the writer, creates the quote-retweet half
+locally, and asks the parent author's node to perform the parent-side write
+through `apply_comment`, a peer entry that accepts only the application
+author's session (no client can obtain one) and re-derives the parent's author
+from the parent object rather than trusting the request's names. Deletion
+splits the same way: `delete_comment` on the **deleter's root**, then
+`remove_comment` on the parent author's node, and only the comment's author or
+the parent's author may delete. `forgetSavedComment` moved to the deleter's
+root, where those lists live. `health` advertises `commentDelegation: true`;
+iOS sends the new form to a node that has it and the old form to one that does
+not, so release and old debug nodes keep working.
+
+`apply_comment` is where a parent author's comment policy — a tweet closed to
+comments, or open only to selected users — will be checked. No such setting
+exists yet.
+
 ### Decisions made along the way
 
 - The username stays in the account as the public handle. Only the password
@@ -108,14 +128,15 @@ the account: `add_tweet`, `update_tweet`, `delete_tweet`,
 | Item | State |
 |---|---|
 | Enforcement | Off. A request without `usersid`, or for an account with no `authUid`, is still accepted. One function in the backend, `ownerSessionRequired`, turns it on. It must wait until Android and web send sessions and existing accounts are bound. |
-| Admin as a delegate | Not started. Admin still poses as the author. There is no per-user setting to reject admin, and no check for it. |
+| Admin as a delegate | Not started. Admin still poses as the author. There is no per-user setting to reject admin, and no check for it. On a node with `commentDelegation`, admin can no longer delete another user's comment: the server refuses with "Only the comment's author or the parent's author may delete this comment". |
 | Likes, bookmarks, retweets, followers | Not started. Still written into the tweet's or the followed user's data. |
-| Comments and replies | Not started. Still stored on, and referenced from, the parent author's data. This is the largest step and requires rewriting the "Comment and Reply" and one-level-sync sections of the sync contract. |
+| Comments and replies | Done (storage unchanged, writes delegated). The comment peer entries (`apply_comment`, `remove_comment`) accept only the application author's session. What that guard does not do is authenticate *which* node is calling: any instance of the app holding the author identity can ask, so a compromised node could still attach or remove comments. Comments on nodes without `commentDelegation` keep the old unchecked form; old debug builds lose commenting against the new backend. |
 | Messages | Not started. The sender still writes into the recipient's store. |
-| Node-to-node calls | Unverified. Entries meant for peer nodes (the follower-side update, the user-side like and bookmark updates) can be called by any client. |
-| Android and web clients | Unchanged, and not reviewed. |
+| Node-to-node calls | Partly hardened. The comment peer entries check the author session; `toggle_follower`, `toggle_favorite_by_user` and `toggle_bookmark_by_user` remain callable by any client. The structural facts this rests on (author-identity scope, the `BELoginAsAuthor` freeze, node app codes) are posed to the Leither developers in `Leither/cfa532-docs/integrations/tweet/LEITHER_STRUCTURAL_QUESTIONS.md`. |
+| Comment policy | The hook exists (`apply_comment`); no per-tweet setting is stored or checked yet. |
+| Android and web clients | Unchanged, and not reviewed. They keep the old comment form, which only works against nodes without `commentDelegation`. |
 | Release backend | Unchanged. |
-| Existing data | Old comments on parent authors' nodes and old like lists inside tweets need a decision: read both formats, or migrate once. |
+| Existing data | Comments written before the change are indistinguishable from new ones — same object, same list, same reference — so nothing to migrate. Old like lists inside tweets still need a decision when engagement moves. |
 | Leither sign-up | Anyone who can reach a node can create a bare Leither user on it. Denying guests only blocks account creation. |
 
 ## 5. Test status
@@ -135,10 +156,32 @@ changes only what `login` returns for a session):
 **Passed in the iOS simulator against 1717:** pairing as `pairtest1` and one
 post from that session.
 
+**Passed as backend unit tests (`go test`, comment_entries_test.go):** the
+comment delegation wiring — `add_comment` on the writer's root forwards
+`apply_comment` to the parent author's node with the author session and the
+quote fields stripped; `apply_comment` refuses a caller without the author
+session before writing anything, refuses a parent object that does not belong
+to the named author, and refuses a request that is not on the parent author's
+root; `remove_comment` allows the comment's author and the parent's author and
+refuses anyone else; `delete_comment` on the deleter's root delegates
+`remove_comment`, propagates a refusal unchanged and leaves the deleter's saved
+lists alone, and runs entirely locally when the deleter is the parent author.
+
+**Passed live against debug version 1721 with curl (same-node path):** a
+comment created through `add_comment` on the writer's root appears in
+`get_comments` with the right author and count; a third party's
+`delete_comment` is refused with "Only the comment's author or the parent's
+author may delete this comment"; the author's deletion empties the list; a
+bare client call to `apply_comment` or `remove_comment` is refused with "Not
+called from a peer node". No session was needed for these probes — the
+authority and peer checks do not depend on `ownerSessionRequired`.
+
 **Not tested:** guest registration, login and password change from the app's
 screens; sign-out; QR scanning on a real camera; paste and file import (the
 identity was fed in through a temporary hook, now removed); the
-`--guests deny` path end to end.
+`--guests deny` path end to end; commenting from the app's screens against
+1721 (the simulator run below); and the cross-node `apply_comment` hop on a
+real two-node setup.
 
 ## 6. How to test
 
@@ -208,6 +251,23 @@ With two accounts on the same node, a write to account A carrying account B's
 session must be refused with "This session does not own account …". This needs
 a script or a modified client; the app never sends another user's session.
 
+### Comments through the writer's node
+
+1. Confirm `health` reports `"commentDelegation":true`.
+2. Signed in as any account, open someone else's tweet and comment on it. The
+   request goes to your own root; the comment must still appear (it was written
+   by the author's node) and the count must rise.
+3. Delete your own comment. Reply to a comment and delete the reply the same
+   way.
+4. As the tweet's author, delete someone else's comment from the comment menu.
+5. A third account (not the comment's author, not the parent's author, not
+   admin) must get "Only the comment's author or the parent's author may delete
+   this comment" when it tries.
+6. A quote-comment must still produce both halves: the comment on the parent
+   author's node and the retweet on the writer's.
+7. Point the app at a node without `commentDelegation` (release or an older
+   debug build): commenting must take the old form and keep working.
+
 ### Old nodes
 
 Point the app at a node still on the previous backend. Registration, login
@@ -217,7 +277,9 @@ and writes must behave as before, with no session sent.
 
 - gen8, `/home/pi/demo`: `tweet-owner.sh`, `tweet.node.json` listing
   `pairtest1` as an owner, that owner's identity file, and the pre-change
-  sources in `deploy-backups/twbe-go-20261111T075217Z`.
+  sources in `deploy-backups/twbe-go-20261111T075217Z`. The comment
+  delegation change is live as version 1721; the probe comment it created on
+  pairtest1's tweet was deleted again.
 - Debug network: test accounts `pairtest1` (one tweet) and `gt94398670`, with
   a matching Leither user for the guest on gen8.
 - This Mac's Leither node: one throwaway Leither user, `twprobe_1794382923`.
