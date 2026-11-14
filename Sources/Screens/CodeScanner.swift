@@ -39,6 +39,13 @@ private struct FrameScanner: UIViewControllerRepresentable {
     }
 }
 
+/// AVCaptureSession is not Sendable and DispatchQueue's closures are. Every
+/// touch of the scanner's session happens on sessionQueue, so this box states
+/// that contract where the capture crosses the boundary.
+private struct QueuedSession: @unchecked Sendable {
+    let session: AVCaptureSession
+}
+
 private final class ScannerController: UIViewController, AVCaptureVideoDataOutputSampleBufferDelegate {
     var onScan: ((String) -> Void)?
 
@@ -88,7 +95,8 @@ private final class ScannerController: UIViewController, AVCaptureVideoDataOutpu
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        sessionQueue.async { [session] in if session.isRunning { session.stopRunning() } }
+        let queued = QueuedSession(session: session)
+        sessionQueue.async { if queued.session.isRunning { queued.session.stopRunning() } }
     }
 
     func setRunning(_ running: Bool) {
@@ -100,9 +108,10 @@ private final class ScannerController: UIViewController, AVCaptureVideoDataOutpu
     /// startRunning and stopRunning both block, so neither belongs on the main queue.
     private func apply() {
         let run = wantsRunning && configured && view.window != nil
-        sessionQueue.async { [session] in
-            if run, !session.isRunning { session.startRunning() }
-            if !run, session.isRunning { session.stopRunning() }
+        let queued = QueuedSession(session: session)
+        sessionQueue.async {
+            if run, !queued.session.isRunning { queued.session.startRunning() }
+            if !run, queued.session.isRunning { queued.session.stopRunning() }
         }
     }
 
