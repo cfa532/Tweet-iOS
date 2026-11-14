@@ -8,7 +8,6 @@ struct ChatListScreen: View {
     let onShowToast: ((String, Bool) -> Void)?
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
-    @State private var messageCheckTimer: Timer?
     @State private var sessionToDelete: ChatSession?
     @State private var showDeleteConfirmation = false
     @State private var followingUsers: [User] = []
@@ -144,10 +143,7 @@ struct ChatListScreen: View {
                 Task {
                     await chatSessionManager.checkBackendForNewMessages()
                 }
-                
-                // Start periodic checking for new messages
-                startPeriodicMessageCheck()
-                
+
                 // Clear badge count when chat list is opened
                 DispatchQueue.main.async {
                     // Clear system badge (app icon)
@@ -162,10 +158,6 @@ struct ChatListScreen: View {
                     print("[ChatListScreen] Cleared all unread message badges")
                 }
             }
-            .onDisappear {
-                // Stop periodic checking when view disappears
-                stopPeriodicMessageCheck()
-            }
             .alert(NSLocalizedString("Delete Chat", comment: "Delete chat alert title"), isPresented: $showDeleteConfirmation) {
                 Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
                     sessionToDelete = nil
@@ -175,37 +167,15 @@ struct ChatListScreen: View {
                 }
             } message: {
                 if let session = sessionToDelete {
-                    Text(String(format: NSLocalizedString("Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation.", comment: "Delete chat confirmation"), session.receiptId))
+                    Text(String(format: NSLocalizedString("Are you sure you want to delete the chat with %@. This will permanently delete all messages in this conversation.", comment: "Delete chat confirmation"), session.receiptId))
                 }
             }
     }
-    
+
     private func loadChatSessions() async {
         await chatRepository.loadChatSessions()
     }
-    
-    // MARK: - Periodic Message Checking
-    
-    private func startPeriodicMessageCheck() {
-        // Check for new messages every 60 seconds
-        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in stopPeriodicMessageCheck()
-        messageCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
-            Task {
-                await chatSessionManager.checkBackendForNewMessages()
-            }
-        }
-        
-        // Also check immediately when starting
-        Task {
-            await chatSessionManager.checkBackendForNewMessages()
-        }
-    }
-    
-    private func stopPeriodicMessageCheck() {
-        messageCheckTimer?.invalidate()
-        messageCheckTimer = nil
-    }
-    
+
     // MARK: - Chat Session Management
     
     private func deleteChatSession(offsets: IndexSet) {

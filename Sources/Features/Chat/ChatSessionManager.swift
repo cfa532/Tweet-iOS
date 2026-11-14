@@ -90,25 +90,10 @@ class ChatSessionManager: ObservableObject {
     /// Check backend for new messages (for notification purposes only)
     /// - Parameter suppressNotifications: If true, only updates badge, doesn't trigger notifications
     func checkBackendForNewMessages(suppressNotifications: Bool = false) async {
-        // The check is one-shot at startup and foreground entry, so a transient
-        // failure gets one immediate retry rather than waiting for the next
-        // trigger to discover messages.
-        let newMessages: [ChatMessage]
-        do {
-            newMessages = try await hproseInstance.checkNewMessages()
-        } catch {
-            print("[ChatSessionManager] Message check failed, retrying once: \(error)")
-            do {
-                try await Task.sleep(nanoseconds: 2_000_000_000)
-                newMessages = try await hproseInstance.checkNewMessages()
-            } catch {
-                print("[ChatSessionManager] Error checking backend for new messages: \(error)")
-                return
-            }
-        }
-        do {
-            
-            if !newMessages.isEmpty {
+        // A failed check reads as "no messages" and waits for the next poll —
+        // the app-wide 60-second timer makes that cheap.
+        let newMessages = (try? await hproseInstance.checkNewMessages()) ?? []
+        if !newMessages.isEmpty {
                 print("[ChatSessionManager] Found \(newMessages.count) new messages from backend")
                 
                 // Group messages by conversation partner
@@ -173,11 +158,8 @@ class ChatSessionManager: ObservableObject {
                     }
                 }
                 
-                // Update unread message count
-                updateUnreadMessageCount()
-            }
-        } catch {
-            print("[ChatSessionManager] Error checking backend for new messages: \(error)")
+            // Update unread message count
+            updateUnreadMessageCount()
         }
     }
     

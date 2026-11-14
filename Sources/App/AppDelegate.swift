@@ -21,6 +21,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private var isRecoveringVideoInfrastructure = false
     private var isRestartingInfrastructure = false
 
+    /// App-wide new-message polling. Runs while the app is active on every
+    /// screen (not only the chat list), so a missed startup or foreground
+    /// check costs at most one interval.
+    private var messageCheckTimer: Timer?
+
     private var backgroundCleanupTask: UIBackgroundTaskIdentifier = .invalid
     private var pendingBackgroundCleanupWorkItem: DispatchWorkItem?
     /// True once background memory release has actually run.
@@ -666,6 +671,31 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Post notification to restore video state (handled by SimpleVideoPlayer)
         NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
+
+        startPeriodicMessageCheck()
+    }
+
+    /// Start the 60-second new-message poll (immediately, then repeating).
+    /// The check is read-only and silent in the foreground — it updates the
+    /// unread count and badge; local notifications fire only from the
+    /// background-task paths.
+    private func startPeriodicMessageCheck() {
+        guard messageCheckTimer == nil else { return }
+        messageCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
+            Task {
+                await ChatSessionManager.shared.checkBackendForNewMessages(suppressNotifications: true)
+            }
+        }
+        Task {
+            await ChatSessionManager.shared.checkBackendForNewMessages(suppressNotifications: true)
+        }
+        print("[AppDelegate] Started app-wide message check (60s)")
+    }
+
+    private func stopPeriodicMessageCheck() {
+        messageCheckTimer?.invalidate()
+        messageCheckTimer = nil
+        print("[AppDelegate] Stopped app-wide message check")
     }
     
     @objc private func handleAppDidEnterBackground() {
@@ -674,6 +704,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
+
+        // Foreground polling stops here; the background-task paths do their own
+        // checks at the system's discretion.
+        stopPeriodicMessageCheck()
 
         // Short backgrounds keep video infrastructure alive so existing players can resume.
         // If the app stays backgrounded past the grace window, the delayed cleanup below

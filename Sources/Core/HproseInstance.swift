@@ -9188,16 +9188,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         ]
         
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-        // A failed check must not read as "no messages": the caller is one-shot
-        // at startup and foreground entry, and swallowing the error here made a
-        // flaky route look like an empty inbox until the next trigger.
-        if let error = rawResponse as? NSError {
-            throw error
-        }
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        guard let response = unwrappedResponse as? [[String: Any]] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-        }
+        // A failed check reads as "no messages" — deliberately. The app-wide
+        // 60-second poll retries soon enough that surfacing transient check
+        // failures would only add noise.
+        let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
+        let response = unwrappedResponse as? [[String: Any]] ?? []
 
         return response.compactMap { messageData in
             do {
