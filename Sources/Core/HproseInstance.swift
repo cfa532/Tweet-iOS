@@ -9188,10 +9188,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         ]
         
         let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
-        let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
-        
-        let response = unwrappedResponse as? [[String: Any]] ?? []
-        
+        // A failed check must not read as "no messages": the caller is one-shot
+        // at startup and foreground entry, and swallowing the error here made a
+        // flaky route look like an empty inbox until the next trigger.
+        if let error = rawResponse as? NSError {
+            throw error
+        }
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        guard let response = unwrappedResponse as? [[String: Any]] else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+        }
+
         return response.compactMap { messageData in
             do {
                 let jsonData = try JSONSerialization.data(withJSONObject: messageData)

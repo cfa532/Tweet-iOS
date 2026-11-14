@@ -32,16 +32,24 @@ struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.errorMsg = errorMsg
     }
     
-    // Custom decoding to ignore id and chatSessionId from backend
+    // Custom decoding to derive a stable id and chatSessionId from backend data
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        
-        // Create id locally, ignore any values from backend
-        self.id = UUID().uuidString
-        
+
         // Decode other fields from backend first
         self.authorId = try container.decode(MimeiId.self, forKey: .authorId)
         self.receiptId = try container.decode(MimeiId.self, forKey: .receiptId)
+
+        // The backend stamps each delivered copy with the node's delivery key
+        // ("stamp"). It identifies the same message on every read, so id-based
+        // dedup — unread-notification guards, cache merges, session updates —
+        // works. Without it (messages stored by older backends), fall back to
+        // a fresh id and accept that the same old message decodes as new.
+        if let stamp = try? container.decode(String.self, forKey: .stamp), !stamp.isEmpty {
+            self.id = "\(authorId)-\(stamp)"
+        } else {
+            self.id = UUID().uuidString
+        }
         
         // Generate consistent session ID based on user IDs
         self.chatSessionId = ChatMessage.generateSessionId(userId: self.authorId, receiptId: self.receiptId)
@@ -89,7 +97,7 @@ struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     }
     
     private enum CodingKeys: String, CodingKey {
-        case authorId, receiptId, content, timestamp, attachments, success, errorMsg
+        case authorId, receiptId, content, timestamp, attachments, success, errorMsg, stamp
     }
     
     /// Convert ChatMessage to JSON string

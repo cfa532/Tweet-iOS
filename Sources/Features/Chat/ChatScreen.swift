@@ -1211,6 +1211,19 @@ struct ChatScreen: View {
     
     
     private func refreshMessagesFromBackend() async {
+        // message_fetch marks the conversation read server-side, so the
+        // refresh must only run while the user can actually see this
+        // conversation. Running it while the app is backgrounded — a
+        // background-refresh window keeps timers eligible — or while the
+        // screen is covered silently consumed the unread state the badge
+        // check reports from, and new messages vanished without a trace.
+        let (screenVisible, appState) = await MainActor.run {
+            (isChatScreenVisible, UIApplication.shared.applicationState)
+        }
+        guard screenVisible, appState == .active else {
+            print("[ChatScreen] Skipping periodic refresh: screen covered or app not active")
+            return
+        }
         do {
             let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
             let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
