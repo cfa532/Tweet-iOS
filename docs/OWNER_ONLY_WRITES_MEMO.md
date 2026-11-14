@@ -192,12 +192,18 @@ bare client call to `apply_comment` or `remove_comment` is refused with "Not
 called from a peer node". No session was needed for these probes — the
 authority and peer checks do not depend on `ownerSessionRequired`.
 
+**Passed live across two nodes (2026-11-14, driven by the TweetWeb port):** a
+comment posted from the web client as `gen8` (root on gen8) on `pcadmin`'s
+tweet (root on ksbox) crossed the network — `RemoteRunMApp entry=apply_comment
+err=<nil>` on gen8, the platform-injected node app code naming the delegating
+node — and deleting it took the same path (`remove_comment`). This is the
+cross-node hop the unit tests cover with a mocked transport.
+
 **Not tested:** guest registration, login and password change from the app's
 screens; sign-out; QR scanning on a real camera; paste and file import (the
 identity was fed in through a temporary hook, now removed); the
 `--guests deny` path end to end; commenting from the app's screens against
-1721 (the simulator run below); and the cross-node `apply_comment` hop on a
-real two-node setup.
+1721 (the simulator run below).
 
 ## 6. How to test
 
