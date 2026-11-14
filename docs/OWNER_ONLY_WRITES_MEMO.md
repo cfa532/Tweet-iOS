@@ -153,6 +153,7 @@ trusts that node itself.
 | Android and web clients | Unchanged, and not reviewed. They keep the old comment form, which only works against nodes without `commentDelegation`. |
 | Release backend | Unchanged. |
 | Existing data | Comments written before the change are indistinguishable from new ones — same object, same list, same reference — so nothing to migrate. Old like lists inside tweets still need a decision when engagement moves. |
+| Duplicate submissions | Fixed (2026-11-14, twbe 1729). A caller-generated `requestid` names each tweet or comment submission; the object's Mimei id is derived from it, so a retry after a lost response resolves the same object instead of creating a duplicate — verified live with double-submitted tweet and comment probes (one object each). TweetWeb keeps the id per composition (Re-submit reuses it; the quote half is `<id>-quote`); iOS passes the persisted upload operation's id, so a retry after an app restart converges too. Submissions without a requestid keep the old mint-a-fresh-id behavior. |
 | Leither sign-up | Anyone who can reach a node can create a bare Leither user on it. Denying guests only blocks account creation. |
 
 ## 5. Test status

@@ -257,6 +257,12 @@ final class TweetUploadManager {
         } else if let parentRecord = pending.parent {
             let comment = pending.record.makeTweet()
             let parent = parentRecord.makeTweet()
+            // The pending operation's id names this submission: a retry after a
+            // lost response resolves the same comment and the same quote tweet
+            // on the node instead of creating duplicates ("-quote" keeps the
+            // quote's id apart from the comment's, matching the backend's own
+            // quote path).
+            let requestId = pending.id.uuidString
             // Keep the independent quote request concurrent with add_comment, but
             // structured so expiration cancels both and completion awaits both.
             let quote = pending.isQuoting ? TweetRecord(
@@ -264,10 +270,11 @@ final class TweetUploadManager {
                 content: comment.content, timestamp: comment.timestamp,
                 originalTweetId: parent.mid, originalAuthorId: parent.authorId,
                 parentTweetId: comment.parentTweetId, attachments: attachments) : nil
-            async let quoteResult: Void = publishQuoteIfNeeded(quote, original: parent)
+            async let quoteResult: Void = publishQuoteIfNeeded(quote, original: parent,
+                requestId: requestId + "-quote")
             var commentError: Error?
             do {
-                guard try await hproseInstance.addComment(comment, to: parent) != nil else {
+                guard try await hproseInstance.addComment(comment, to: parent, requestId: requestId) != nil else {
                     throw uploadError("Failed to post comment")
                 }
             } catch { commentError = error }
@@ -275,7 +282,8 @@ final class TweetUploadManager {
             try await quoteResult
             if let commentError { throw commentError }
         } else {
-            guard let posted = try await hproseInstance.uploadTweet(pending.record.makeTweet()) else {
+            guard let posted = try await hproseInstance.uploadTweet(pending.record.makeTweet(),
+                requestId: pending.id.uuidString) else {
                 throw uploadError("Failed to upload tweet")
             }
             NotificationCenter.default.post(name: .newTweetCreated, object: nil, userInfo: ["tweet": posted])
@@ -299,10 +307,10 @@ final class TweetUploadManager {
         }
     }
 
-    private func publishQuoteIfNeeded(_ record: TweetRecord?, original: Tweet) async throws {
+    private func publishQuoteIfNeeded(_ record: TweetRecord?, original: Tweet, requestId: String? = nil) async throws {
         guard let record, let hproseInstance else { return }
         try Task.checkCancellation()
-        guard let posted = try await hproseInstance.uploadTweet(record.makeTweet()) else {
+        guard let posted = try await hproseInstance.uploadTweet(record.makeTweet(), requestId: requestId) else {
             throw uploadError("Failed to post tweet. Please refresh before retrying.")
         }
         // Preserve the existing quote count update; this is a separate write.

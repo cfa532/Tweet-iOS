@@ -5231,7 +5231,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         await adoptWriteRouteForReads(requestUser, reason: entry)
     }
     
-    func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
+    func addComment(_ comment: Tweet, to tweet: Tweet, requestId: String? = nil) async throws -> Tweet? {
         // add_comment is non-idempotent: a retry after a lost/late response can create
         // a second comment even though the first request already succeeded on the node.
         // Surface ambiguous failures to the caller instead of automatically resubmitting.
@@ -5273,8 +5273,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             let entry = "add_comment"
             // hostid names the parent author's node: the routing target for an
-            // old backend, and the delegation hint on a new one.
-            let params: [String: Any] = [
+            // old backend, and the delegation hint on a new one. A requestId
+            // names the submission: a retry after a lost response resolves the
+            // same comment instead of creating a duplicate.
+            var params: [String: Any] = [
                 "aid": self.appId,
                 "ver": "last",
                 "version": "v2",
@@ -5283,6 +5285,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "tweetid": tweetMid,
                 "tweetauthorid": authorSnap.mid
             ]
+            if let requestId {
+                params["requestid"] = requestId
+            }
 
             // A backend with commentDelegation takes add_comment on the signed-in
             // user's own root, signed by their session; that node asks the parent
@@ -7504,10 +7509,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     // Keeping type alias for compatibility
     typealias PendingTweetUpload = TweetUploadManager.PendingTweetUpload
     
-    func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
-        // add_tweet is non-idempotent on the backend: it creates a fresh server
-        // tweet id on every accepted request. Do not automatically retry this
-        // call after a timeout; only media/attachment upload is safe to retry.
+    func uploadTweet(_ tweet: Tweet, requestId: String? = nil) async throws -> Tweet? {
+        // add_tweet names the new tweet after a caller-supplied requestId when
+        // there is one: a retry after a lost response resolves the same server
+        // tweet id instead of creating a duplicate. Without one the backend
+        // mints a fresh id, so this call is still not automatically retried;
+        // only media/attachment upload is safe to retry unconditionally.
         // Use a longer timeout so tweets with large attachment references can
         // finish without triggering duplicate creates.
         // Create a clean upload payload with only allowed fields (excluding nil values).
@@ -7565,14 +7572,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
         }
             
-        let params: [String: Any] = [
+        var params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "hostid": hostId as Any,
             "tweet": tweetJSON
         ]
-            
+        if let requestId {
+            params["requestid"] = requestId
+        }
+
         hproseDebug("DEBUG: [uploadTweet] Tweet authorId: \(tweetAuthorId), content: \(logContent), attachments count: \(logAttachCount)")
         
         let rawResponse = await invokeRunMApp(using: client, entry: "add_tweet", params: params)
