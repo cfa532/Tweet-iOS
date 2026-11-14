@@ -115,6 +115,21 @@ not, so release and old debug nodes keep working.
 comments, or open only to selected users — will be checked. No such setting
 exists yet.
 
+**Peer guard, rebuilt 2026-11-14 after the Leither maintainers' answers**
+(`requirePeerCall`): a cross-node `RunMApp` deletes `sid` before forwarding, so
+the first guard — which compared sessions — would have refused every genuine
+cross-node peer call; only the same-node path had been exercised. The rebuilt
+guard admits the delegating node by the `nodeappcode` the platform injects on
+the target (minted there under the calling node's transport session), bound to
+the comment writer's (or deleter's) own root — a code minted by an ordinary
+user carries that user's uid and cannot match. The same-node hop still carries
+the local author session, now checked against the node-injected `author` key
+instead of logging in as the author again (the `BELoginAsAuthor` freeze rules
+out new call sites). If this node holds no copy of the writer's account, one is
+pulled once with `MiMeiSync` to resolve their root. Residual, documented: a
+code leaked from the expected node replays for about an hour, and the check
+trusts that node itself.
+
 ### Decisions made along the way
 
 - The username stays in the account as the public handle. Only the password
@@ -130,9 +145,10 @@ exists yet.
 | Enforcement | Off. A request without `usersid`, or for an account with no `authUid`, is still accepted. One function in the backend, `ownerSessionRequired`, turns it on. It must wait until Android and web send sessions and existing accounts are bound. |
 | Admin as a delegate | Not started. Admin still poses as the author. There is no per-user setting to reject admin, and no check for it. On a node with `commentDelegation`, admin can no longer delete another user's comment: the server refuses with "Only the comment's author or the parent's author may delete this comment". |
 | Likes, bookmarks, retweets, followers | Not started. Still written into the tweet's or the followed user's data. |
-| Comments and replies | Done (storage unchanged, writes delegated). The comment peer entries (`apply_comment`, `remove_comment`) accept only the application author's session. What that guard does not do is authenticate *which* node is calling: any instance of the app holding the author identity can ask, so a compromised node could still attach or remove comments. Comments on nodes without `commentDelegation` keep the old unchecked form; old debug builds lose commenting against the new backend. |
+| Comments and replies | Done (storage unchanged, writes delegated). The comment peer entries admit only the delegating node — named by the platform-injected `nodeappcode`, bound to the writer's/deleter's own root (rebuilt 2026-11-14; see §3). Residual: a code leaked from the expected node replays ≈1h, and the check trusts that node. Comments on nodes without `commentDelegation` keep the old unchecked form; old debug builds lose commenting against the new backend. |
 | Messages | Not started. The sender still writes into the recipient's store. |
-| Node-to-node calls | Partly hardened. The comment peer entries check the author session; `toggle_follower`, `toggle_favorite_by_user` and `toggle_bookmark_by_user` remain callable by any client. The structural facts this rests on (author-identity scope, the `BELoginAsAuthor` freeze, node app codes) are posed to the Leither developers in `Leither/cfa532-docs/integrations/tweet/LEITHER_STRUCTURAL_QUESTIONS.md`. |
+| Node-to-node calls | Partly hardened. The comment peer entries bind the injected `nodeappcode` to the expected node; `toggle_follower`, `toggle_favorite_by_user` and `toggle_bookmark_by_user` remain callable by any client. The maintainers' answers (2026-11-13) are in `Leither/cfa532-docs/integrations/tweet/LEITHER_STRUCTURAL_QUESTIONS.md` and the reply beside it. |
+| Structural answers | The Leither maintainers answered the questions memo (V0.24.74 baseline). Key facts: `byname` (our guests) is legacy and node-local by design — keep, but do not extend; no root-only version enforcement, so the app's misrouted-write refusals are the only protection; `MMOpenAppDataUser` is the per-user-owned data primitive for the engagement phase; a transport-set caller-node identity (`fromnid`) is judged feasible upstream, pending an author ruling. |
 | Comment policy | The hook exists (`apply_comment`); no per-tweet setting is stored or checked yet. |
 | Android and web clients | Unchanged, and not reviewed. They keep the old comment form, which only works against nodes without `commentDelegation`. |
 | Release backend | Unchanged. |
