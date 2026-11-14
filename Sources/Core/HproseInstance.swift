@@ -150,9 +150,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return record[name] as? String
         }
         switch entry {
-        case "update_tweet", "toggle_tweet_privacy", "toggle_pinned_tweet", "delete_comment":
+        case "update_tweet", "toggle_tweet_privacy", "toggle_pinned_tweet", "delete_comment",
+             "toggle_favorite", "retweet_added", "retweet_removed":
             return params["appuserid"] as? String
-        case "delete_tweet", "toggle_following", "block_user", "remove_blacklisted_relationship",
+        case "delete_tweet", "toggle_following", "toggle_bookmark", "block_user", "remove_blacklisted_relationship",
              "set_user_avatar", "delete_account", "message_outgoing", "message_fetch", "share_file":
             return params["userid"] as? String
         case "add_tweet":
@@ -198,13 +199,31 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// two comment forms are told apart. Not cached — commenting is a
     /// user-paced action and one health call rides along with it.
     private func nodeSupportsCommentDelegation(_ client: HproseClient) async -> Bool {
+        await nodeAdvertises("commentDelegation", client)
+    }
+
+    /// The same probe for likes, bookmarks and retweet counts: the storage
+    /// author's node decides whether the toggle runs on the engaging user's
+    /// own root.
+    private func nodeSupportsEngagementDelegation(_ client: HproseClient) async -> Bool {
+        await nodeAdvertises("engagementDelegation", client)
+    }
+
+    /// The same probe for messages: the sender's root delivers the recipient's
+    /// copy itself, so the client stops writing message_incoming directly.
+    private func nodeSupportsMessageDelegation(_ client: HproseClient) async -> Bool {
+        await nodeAdvertises("messageDelegation", client)
+    }
+
+    /// One health probe answering whether the node advertises a capability
+    /// flag. No answer says nothing about the node; the old wire form is the
+    /// one every backend understands.
+    private func nodeAdvertises(_ flag: String, _ client: HproseClient) async -> Bool {
         let raw = await sendApplication(using: client, entry: "health", params: ["aid": appId, "ver": "last"])
         guard let reply = Self.asStringKeyedDictionary(raw) else {
-            // No answer says nothing about the node; the old form is the one
-            // every backend understands.
             return false
         }
-        return reply["commentDelegation"] as? Bool == true
+        return reply[flag] as? Bool == true
     }
 
     /// Calls one of Leither's own sign-in methods on a node — these are the node's
@@ -4606,8 +4625,20 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         do {
             _ = try await storageAuthor.resolveWritableUrl()
-            guard let client = await storageAuthor.writableClient(timeout: 60) else {
+            guard var client = await storageAuthor.writableClient(timeout: 60) else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            }
+            // A backend with engagementDelegation takes the toggle on the
+            // signed-in user's own root, signed by their session; that node
+            // asks the tweet author's node to perform its half. An older
+            // backend takes the toggle on the author's node, in the old form.
+            if await nodeSupportsEngagementDelegation(client) {
+                let appUser = await MainActor.run { self.appUser }
+                _ = try await appUser.resolveWritableUrl()
+                guard let ownClient = await appUser.writableClient(timeout: 60) else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Client initialization error")])
+                }
+                client = ownClient
             }
             let params = [
                 "aid": appId,
@@ -4676,8 +4707,18 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         do {
             _ = try await storageAuthor.resolveWritableUrl()
-            guard let client = await storageAuthor.writableClient(timeout: 60) else {
+            guard var client = await storageAuthor.writableClient(timeout: 60) else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            }
+            // As with toggle_favorite: the user's own root on a delegating
+            // backend, the author's node otherwise.
+            if await nodeSupportsEngagementDelegation(client) {
+                let appUser = await MainActor.run { self.appUser }
+                _ = try await appUser.resolveWritableUrl()
+                guard let ownClient = await appUser.writableClient(timeout: 60) else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Client initialization error")])
+                }
+                client = ownClient
             }
             let params = [
                 "aid": appId,
@@ -4827,9 +4868,19 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseError("⚠️ [updateRetweetCount] Failed to resolve original author root: \(error)")
             return nil
         }
-        guard let client = await author.writableClient(timeout: 30) else {
+        guard var client = await author.writableClient(timeout: 30) else {
             hproseWarning("⚠️ [updateRetweetCount] Original author writable client not initialized")
             return nil
+        }
+        // On a delegating backend the retweeter's own root performs the
+        // request and the original author's node is only the target of its
+        // delegation.
+        if await nodeSupportsEngagementDelegation(client) {
+            let appUser = await MainActor.run { self.appUser }
+            if (try? await appUser.resolveWritableUrl()) != nil,
+               let ownClient = await appUser.writableClient(timeout: 30) {
+                client = ownClient
+            }
         }
 
         // Both entries key the original tweet's retweet list by retweetId (Hset / Hdel),
@@ -8702,7 +8753,10 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 "msg": message.toJSONString()
             ]
 
-            guard let senderClient = await self.appUser.writableClient(timeout: 15) else {
+            // message_outgoing now writes both halves on a delegating backend
+            // — the sender's copy, then the recipient's through a cross-node
+            // peer call — so the window must cover two writes, not one.
+            guard let senderClient = await self.appUser.writableClient(timeout: 30) else {
                 let errorMsg = "Failed to create client for sender node"
                 hproseError("[sendMessage] ❌ \(errorMsg) - writableUrl: nil")
                 if attempt < maxRetries {
@@ -8977,7 +9031,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             message: message,
             maxRetries: 2
         )
-        
+
         if !senderSendResult.success {
             guard let errorMessage = senderSendResult.errorMessage else {
                 return ChatMessage(
@@ -8994,30 +9048,47 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             return errorMessage
         }
-        
-        
-        // Step 2: Send to recipient's node (message_incoming) with retry
-        let recipientSendResult = try await sendToRecipientNodeWithRetry(
-            receiptId: receiptId,
-            message: message,
-            maxRetries: 2
-        )
-        
-        if !recipientSendResult.success {
-            guard let errorMessage = recipientSendResult.errorMessage else {
-                return ChatMessage(
-                    id: message.id,
-                    authorId: message.authorId,
-                    receiptId: message.receiptId,
-                    chatSessionId: message.chatSessionId,
-                    content: message.content,
-                    timestamp: message.timestamp,
-                    attachments: message.attachments,
-                    success: false,
-                    errorMsg: "Failed to send message to recipient node"
-                )
+
+        // On a delegating backend, message_outgoing delivered both halves —
+        // it asked the recipient's node itself, through the guarded peer entry
+        // no client may call. Only an older backend still needs the client to
+        // write the recipient's copy directly.
+        let appUserForProbe = await MainActor.run { self.appUser }
+        var senderClient: HproseClient?
+        if (try? await appUserForProbe.resolveWritableUrl()) != nil {
+            senderClient = await appUserForProbe.writableClient(timeout: 15)
+        }
+        let clientDeliversRecipientCopy: Bool
+        if let senderClient {
+            clientDeliversRecipientCopy = !(await nodeSupportsMessageDelegation(senderClient))
+        } else {
+            clientDeliversRecipientCopy = true
+        }
+
+        if clientDeliversRecipientCopy {
+            // Step 2: Send to recipient's node (message_incoming) with retry
+            let recipientSendResult = try await sendToRecipientNodeWithRetry(
+                receiptId: receiptId,
+                message: message,
+                maxRetries: 2
+            )
+
+            if !recipientSendResult.success {
+                guard let errorMessage = recipientSendResult.errorMessage else {
+                    return ChatMessage(
+                        id: message.id,
+                        authorId: message.authorId,
+                        receiptId: message.receiptId,
+                        chatSessionId: message.chatSessionId,
+                        content: message.content,
+                        timestamp: message.timestamp,
+                        attachments: message.attachments,
+                        success: false,
+                        errorMsg: "Failed to send message to recipient node"
+                    )
+                }
+                return errorMessage
             }
-            return errorMessage
         }
         
         
