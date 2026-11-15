@@ -60,63 +60,24 @@ class ComposeTweetViewModel: ObservableObject {
         )
     }
     
-    func postTweet() async {
-        let trimmedContent = tweetContent.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Allow empty content if there are attachments
-        guard MediaUploadHelper.validateContent(
-            content: tweetContent,
+    func postTweet() async throws {
+        guard canPostTweet else { throw TweetError.emptyTweet }
+
+        let record = TweetRecord(
+            mid: Constants.GUEST_ID,
+            authorId: hproseInstance.appUser.mid,
+            content: tweetContent.trimmingCharacters(in: .whitespacesAndNewlines),
+            isPrivate: isPrivate
+        )
+        let itemData = try await MediaUploadHelper.prepareItemData(
             selectedItems: selectedItems,
             selectedImages: selectedImages,
             selectedVideos: selectedVideos,
             selectedDocuments: selectedDocuments
-        ) else {
-            print("DEBUG: Tweet validation failed - empty content and no attachments")
-            toastMessage = NSLocalizedString("Tweet cannot be empty.", comment: "Empty tweet error")
-            toastType = .error
-            showToast = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                withAnimation { self.showToast = false }
-            }
-            return
-        }
-        
-        // Create tweet object using singleton
-        let tweet = Tweet.getInstance(
-            mid: Constants.GUEST_ID,        // placeholder Mimei Id
-            authorId: hproseInstance.appUser.mid,
-            content: trimmedContent,
-            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-            author: hproseInstance.appUser,
-            attachments: nil,
-            isPrivate: isPrivate
         )
-        
-        // Prepare item data using helper
-        let itemData: [HproseInstance.PendingTweetUpload.ItemData]
-        
-        do {
-            itemData = try await MediaUploadHelper.prepareItemData(
-                selectedItems: selectedItems,
-                selectedImages: selectedImages,
-                selectedVideos: selectedVideos,
-                selectedDocuments: selectedDocuments
-            )
-        } catch {
-            print("DEBUG: Error preparing item data: \(error)")
-            toastMessage = NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Upload failed error")
-            toastType = .error
-            showToast = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                withAnimation { self.showToast = false }
-            }
-            return
-        }
-        
-        print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
-        hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
+        try await hproseInstance.uploadManager.scheduleTweetUpload(record: record, itemData: itemData)
     }
-    
+
     func clearForm() {
         tweetContent = ""
         selectedItems = []

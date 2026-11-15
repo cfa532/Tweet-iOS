@@ -13,6 +13,9 @@ struct ComposeTweetView: View {
     @State private var showCamera = false
     @State private var showLoginAlert = false
     @State private var showLoginView = false
+    @State private var preparingDraft = false
+    @State private var showPublishError = false
+    @State private var publishError = ""
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     private func hideKeyboard() {
@@ -38,8 +41,11 @@ struct ComposeTweetView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                mainContent
+                mainContent.disabled(preparingDraft)
                 toastOverlay
+                if preparingDraft {
+                    ProgressView()
+                }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -59,44 +65,14 @@ struct ComposeTweetView: View {
                             dismiss()
                         }
                     }
+                    .disabled(preparingDraft)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(NSLocalizedString("Publish", comment: "Publish tweet button")) {
-                        // Check if user is guest
-                        if hproseInstance.appUser.isGuest {
-                            // Show login alert
-                            showLoginAlert = true
-                            return
-                        }
-                        
-                        // Capture the data before dismissing
-                        let tweetContent = viewModel.tweetContent
-                        let selectedItems = viewModel.selectedItems
-                        let selectedImages = viewModel.selectedImages
-                        let selectedVideos = viewModel.selectedVideos
-                        let selectedDocuments = viewModel.selectedDocuments
-                        let isPrivate = viewModel.isPrivate
-                        
-                        // Note: Upload dialog is now shown by the upload queue
-                        // No need to call startUpload here - scheduleTweetUpload handles it
-                        
-                        viewModel.clearForm()
-                        dismiss()
-                        
-                        // Post tweet in background after dismissing using captured data
-                        Task {
-                            await postTweetInBackground(
-                                content: tweetContent,
-                                selectedItems: selectedItems,
-                                selectedImages: selectedImages,
-                                selectedVideos: selectedVideos,
-                                selectedDocuments: selectedDocuments,
-                                isPrivate: isPrivate
-                            )
-                        }
+                        submitDraft()
                     }
-                    .disabled(!viewModel.canPostTweet)
+                    .disabled(preparingDraft || !viewModel.canPostTweet)
                 }
 
                 // Keyboard accessory: always provide an explicit "Done".
@@ -130,7 +106,12 @@ struct ComposeTweetView: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .interactiveDismissDisabled(hasUnsavedChanges)
+        .interactiveDismissDisabled(preparingDraft || hasUnsavedChanges)
+        .alert("Error", isPresented: $showPublishError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(publishError)
+        }
         .alert(NSLocalizedString("Discard Tweet?", comment: "Cancel confirmation title"), isPresented: $showCancelConfirmation) {
             Button(NSLocalizedString("Discard", comment: "Discard button"), role: .destructive) {
                 viewModel.clearForm()
@@ -237,71 +218,25 @@ struct ComposeTweetView: View {
         .background(Color(.systemBackground))
     }
     
-    private func postTweetInBackground(
-        content: String,
-        selectedItems: [PhotosPickerItem],
-        selectedImages: [UIImage],
-        selectedVideos: [URL],
-        selectedDocuments: [DocumentFile],
-        isPrivate: Bool
-    ) async {
-        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Allow empty content if there are attachments
-        guard MediaUploadHelper.validateContent(
-            content: content,
-            selectedItems: selectedItems,
-            selectedImages: selectedImages,
-            selectedVideos: selectedVideos,
-            selectedDocuments: selectedDocuments
-        ) else {
-            print("DEBUG: Tweet validation failed - empty content and no attachments")
+    private func submitDraft() {
+        guard !preparingDraft else { return }
+        guard !hproseInstance.appUser.isGuest else {
+            showLoginAlert = true
             return
         }
-        
-        // Create tweet object using singleton
-        let tweet = Tweet.getInstance(
-            mid: Constants.GUEST_ID,        // placeholder Mimei Id
-            authorId: hproseInstance.appUser.mid,
-            content: trimmedContent,
-            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-            author: hproseInstance.appUser,
-            attachments: nil,
-            isPrivate: isPrivate
-        )
-        
-        // Prepare item data using helper
-        let itemData: [HproseInstance.PendingTweetUpload.ItemData]
-        
-        do {
-            // Show "Preparing..." in dialog while loading media data
-            await MainActor.run {
-                UploadProgressManager.shared.updateProgress(
-                    stage: .preparing,
-                    message: NSLocalizedString("Preparing attachments...", comment: "Preparing attachments"),
-                    progress: 0.1,
-                    detail: ""
-                )
+        hideKeyboard()
+        preparingDraft = true
+        Task {
+            defer { preparingDraft = false }
+            do {
+                try await viewModel.postTweet()
+                viewModel.clearForm()
+                dismiss()
+            } catch {
+                publishError = ErrorMessageHelper.userFriendlyMessage(from: error)
+                showPublishError = true
             }
-            
-            itemData = try await MediaUploadHelper.prepareItemData(
-                selectedItems: selectedItems,
-                selectedImages: selectedImages,
-                selectedVideos: selectedVideos,
-                selectedDocuments: selectedDocuments
-            )
-        } catch {
-            print("DEBUG: Error preparing item data: \(error)")
-            await MainActor.run {
-                UploadProgressManager.shared.failUpload(
-                    message: NSLocalizedString("Failed to prepare attachments", comment: "Failed to prepare attachments")
-                )
-            }
-            return
         }
-        
-        print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
-        hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
     }
 
     private var attachmentToolbar: some View {

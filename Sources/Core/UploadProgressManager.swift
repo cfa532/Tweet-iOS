@@ -23,7 +23,7 @@ final class UploadProgressManager: ObservableObject {
 
     private struct QueuedUpload {
         let pending: TweetUploadManager.PendingTweetUpload
-        let saved: Task<Void, Error>
+        let saved: Task<Void, Error>?
         let completion: CheckedContinuation<Void, Error>?
     }
 
@@ -60,7 +60,8 @@ final class UploadProgressManager: ObservableObject {
 
     func enqueueUpload(
         pending: TweetUploadManager.PendingTweetUpload,
-        completion: CheckedContinuation<Void, Error>? = nil
+        completion: CheckedContinuation<Void, Error>? = nil,
+        alreadySaved: Bool = false
     ) {
         guard activeID != pending.id, !queue.contains(where: { $0.pending.id == pending.id }) else {
             completion?.resume(throwing: NSError(domain: "TweetUpload", code: -1, userInfo: [
@@ -69,7 +70,9 @@ final class UploadProgressManager: ObservableObject {
             return
         }
         // Save queued items too, so a process exit cannot lose a second post.
-        let saved = Task { try await HproseInstance.shared.uploadManager.savePendingUpload(pending) }
+        let saved = alreadySaved ? nil : Task {
+            try await HproseInstance.shared.uploadManager.savePendingUpload(pending)
+        }
         queue.append(QueuedUpload(pending: pending, saved: saved, completion: completion))
         if pending.recipientId != nil { pendingChatUploads.append(pending) }
         guard worker == nil else { return }
@@ -102,7 +105,7 @@ final class UploadProgressManager: ObservableObject {
             // Pending recovery waits for the user's Retry button.
             background.request(title: uploadTitle, message: stageMessage)
             do {
-                try await entry.saved.value
+                try await entry.saved?.value
                 try Task.checkCancellation()
                 try await HproseInstance.shared.uploadManager.executeUpload(pending)
                 completeUpload()
@@ -122,6 +125,18 @@ final class UploadProgressManager: ObservableObject {
                         ? ErrorMessageHelper.userFriendlyMessage(from: error)
                         : NSLocalizedString("Upload unfinished. You can retry when you return.", comment: "Upload pending")
                     failUpload(message: message)
+                    if pending.type == "tweet" {
+                        NotificationCenter.default.post(
+                            name: .tweetPublishFailed, object: nil,
+                            userInfo: ["error": ErrorMessageHelper.userFriendlyMessage(from: error)]
+                        )
+                    } else if pending.type == "edit", entry.completion == nil {
+                        // The editor presents its own alert when it is waiting for the operation.
+                        NotificationCenter.default.post(
+                            name: .backgroundUploadFailed, object: nil,
+                            userInfo: ["error": message]
+                        )
+                    }
                 }
                 entry.completion?.resume(throwing: error)
             }
@@ -144,7 +159,7 @@ final class UploadProgressManager: ObservableObject {
         while !queue.isEmpty {
             let queued = queue.removeFirst()
             do {
-                try await queued.saved.value
+                try await queued.saved?.value
                 queued.completion?.resume(throwing: pausedError)
             } catch {
                 queued.completion?.resume(throwing: error)

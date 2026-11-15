@@ -82,8 +82,13 @@ struct TweetApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var themeManager = ThemeManager.shared
     @StateObject private var orientationManager = OrientationManager.shared
-    @State private var showGlobalAlert = false
-    @State private var globalAlertMessage = ""
+    @State private var globalAlert: ErrorAlert?
+    @State private var queuedGlobalAlerts: [ErrorAlert] = []
+
+    private struct ErrorAlert: Identifiable {
+        let id = UUID()
+        let message: String
+    }
     
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
@@ -125,48 +130,29 @@ struct TweetApp: App {
                     ProgressView(NSLocalizedString("Loading...", comment: "App loading progress"))
                 }
             }
-            .alert(isPresented: $showGlobalAlert) {
-                Alert(title: Text(LocalizedStringKey("Error")), message: Text(globalAlertMessage), dismissButton: .default(Text(LocalizedStringKey("OK"))))
+            .alert(item: $globalAlert) { alert in
+                Alert(title: Text("Error"), message: Text(alert.message), dismissButton: .default(Text("OK")))
+            }
+            .onChange(of: globalAlert?.id) { _, id in
+                // Keep the current error visible, then show the next after dismissal.
+                if id == nil, !queuedGlobalAlerts.isEmpty {
+                    globalAlert = queuedGlobalAlerts.removeFirst()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
-                if let msg = notification.userInfo?["error"] as? String {
-                    globalAlertMessage = msg
-                } else {
-                    globalAlertMessage = NSLocalizedString("Background upload failed.", comment: "Background upload error")
-                }
-                showGlobalAlert = true
+                presentError(notification, fallback: NSLocalizedString("Background upload failed.", comment: "Background upload error"))
             }
             .onReceive(NotificationCenter.default.publisher(for: .tweetPublishFailed)) { notification in
-                if let msg = notification.userInfo?["error"] as? String {
-                    globalAlertMessage = msg
-                } else {
-                    globalAlertMessage = NSLocalizedString("Failed to publish tweet.", comment: "Tweet publish error")
-                }
-                showGlobalAlert = true
+                presentError(notification, fallback: NSLocalizedString("Failed to publish tweet.", comment: "Tweet publish error"))
             }
-            .onReceive(NotificationCenter.default.publisher(for: .tweetDeletdFailed)) { notification in
-                if let msg = notification.userInfo?["error"] as? String {
-                    globalAlertMessage = msg
-                } else {
-                    globalAlertMessage = NSLocalizedString("Failed to delete tweet.", comment: "Tweet delete error")
-                }
-                showGlobalAlert = true
+            .onReceive(NotificationCenter.default.publisher(for: .tweetDeleteFailed)) { notification in
+                presentError(notification, fallback: NSLocalizedString("Failed to delete tweet.", comment: "Tweet delete error"))
             }
             .onReceive(NotificationCenter.default.publisher(for: .commentPublishFailed)) { notification in
-                if let msg = notification.userInfo?["error"] as? String {
-                    globalAlertMessage = msg
-                } else {
-                    globalAlertMessage = NSLocalizedString("Failed to publish comment.", comment: "Comment publish error")
-                }
-                showGlobalAlert = true
+                presentError(notification, fallback: NSLocalizedString("Failed to publish comment.", comment: "Comment publish error"))
             }
             .onReceive(NotificationCenter.default.publisher(for: .commentDeleteFailed)) { notification in
-                if let msg = notification.userInfo?["error"] as? String {
-                    globalAlertMessage = msg
-                } else {
-                    globalAlertMessage = NSLocalizedString("Failed to delete comment.", comment: "Comment delete error")
-                }
-                showGlobalAlert = true
+                presentError(notification, fallback: NSLocalizedString("Failed to delete comment.", comment: "Comment delete error"))
             }
             .onReceive(NotificationCenter.default.publisher(for: .openChatFromNotification)) { notification in
                 // Handle chat notification tap
@@ -183,6 +169,15 @@ struct TweetApp: App {
                 
                 DeeplinkDelivery.shared.deliver(url)
             }
+        }
+    }
+
+    private func presentError(_ notification: Notification, fallback: String) {
+        let alert = ErrorAlert(message: notification.userInfo?["error"] as? String ?? fallback)
+        if globalAlert == nil, queuedGlobalAlerts.isEmpty {
+            globalAlert = alert
+        } else {
+            queuedGlobalAlerts.append(alert)
         }
     }
 } 

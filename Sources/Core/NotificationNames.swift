@@ -104,7 +104,7 @@ extension Notification.Name {
     static let backgroundUploadRetrying = Notification.Name("backgroundUploadRetrying")
     static let uploadCancelled = Notification.Name("uploadCancelled")
     static let tweetPublishFailed = Notification.Name("TweetPublishFailed")
-    static let tweetDeletdFailed = Notification.Name("TweetDeletdFailed")
+    static let tweetDeleteFailed = Notification.Name("TweetDeleteFailed")
     static let commentPublishFailed = Notification.Name("CommentPublishFailed")
     static let commentDeleteFailed = Notification.Name("CommentDeleteFailed")
     

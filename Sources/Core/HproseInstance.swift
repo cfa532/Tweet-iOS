@@ -5004,7 +5004,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let (appUserInstance, appUserMid, isAdminDeletingAnotherUsersTweet) = await MainActor.run {
             (self.appUser, self.appUser.mid, tweetAuthorId != self.appUser.mid && Gadget.isResearchAdminUser(self.appUser))
         }
-        let entry = isAdminDeletingAnotherUsersTweet ? "admin_mutate_tweet" : "delete_tweet"
+        var entry = isAdminDeletingAnotherUsersTweet ? "admin_mutate_tweet" : "delete_tweet"
         // Snapshot the retweet link BEFORE deleting: removeDeletedTweetLocally() clears the
         // singleton and the cache row, so afterwards there is no way to find the original.
         // The backend's delete_tweet does not touch the original tweet's retweet list, so
@@ -5030,7 +5030,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
 
         let writableUrl = try await appUserInstance.resolveWritableUrl()
-        guard let client = await appUserInstance.writableClient(timeout: 30) else {
+        guard let client = await appUserInstance.writableClient(timeout: 60) else {
             throw NSError(domain: "HproseClient", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
@@ -5040,6 +5040,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         let unwrappedResponse: Any?
         do {
             unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        } catch where entry == "admin_mutate_tweet"
+            && error.localizedDescription == "User \(tweetAuthorId) is not known here" {
+            // Delegation cannot reach the author's root. Remove the entry from
+            // the admin's own lists on the admin's root and wait for confirmation.
+            entry = "delete_tweet"
+            params["action"] = nil
+            let feedResponse = await invokeRunMApp(using: client, entry: entry, params: params)
+            unwrappedResponse = try Self.unwrapV2Response(feedResponse)
         } catch {
             if Self.isTweetNotFoundDeleteFailure(error, response: rawResponse) {
                 hproseDebug("DEBUG: [deleteTweet] Tweet \(tweetId) is already missing on server; clearing local cache")
@@ -5077,7 +5085,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                           userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid delete response from server", comment: "Server response error")])
         }
 
-        if isAdminDeletingAnotherUsersTweet {
+        if entry == "admin_mutate_tweet" {
             removeDeletedTweetFromAdminFeed(deletedTweetId, authorId: tweetAuthorId, adminId: appUserMid)
         }
         await adoptWriteRouteForReads(appUserInstance, reason: entry)
@@ -5147,10 +5155,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 hproseWarning("[deleteTweet] Tweet \(tweetId) deleted, but admin feed removal failed: \(error)")
                 await MainActor.run {
                     NotificationCenter.default.post(
-                        name: .errorOccurred,
-                        object: NSError(domain: "TweetDeletion", code: -1, userInfo: [
-                            NSLocalizedDescriptionKey: NSLocalizedString("Tweet deleted, but failed to remove it from your feed", comment: "Admin feed removal error") + ": " + ErrorMessageHelper.userFriendlyMessage(from: error)
-                        ])
+                        name: .tweetDeleteFailed,
+                        object: nil,
+                        userInfo: [
+                            "error": NSLocalizedString("Tweet deleted, but failed to remove it from your feed", comment: "Admin feed removal error") + ": " + ErrorMessageHelper.userFriendlyMessage(from: error)
+                        ]
                     )
                 }
             }
@@ -7611,7 +7620,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // account, so it goes to the writable route: hostid no longer makes the
         // backend route the call, and a post arriving anywhere else is refused.
         _ = try await self.appUser.resolveWritableUrl()
-        guard let client = await MainActor.run(body: { self.appUser.writableClient(timeout: 45) }) else {
+        // Media references and the author's feed are committed before add_tweet returns.
+        let timeout: TimeInterval = logAttachCount > 0 ? 180 : 45
+        guard let client = await MainActor.run(body: { self.appUser.writableClient(timeout: timeout) }) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
         }
             
@@ -7682,11 +7693,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
             return uploadedTweet
         }
-    }
-    
-    @MainActor func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
-        // Delegate to upload manager
-        uploadManager.scheduleTweetUpload(tweet: tweet, itemData: itemData)
     }
     
     @MainActor func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {

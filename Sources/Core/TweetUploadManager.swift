@@ -88,8 +88,10 @@ final class TweetUploadManager {
     }
     
     /// Persist each user-started operation before the queue begins its work.
-    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
-        enqueue(PendingTweetUpload(tweet: tweet, itemData: itemData))
+    func scheduleTweetUpload(record: TweetRecord, itemData: [PendingTweetUpload.ItemData]) async throws {
+        let pending = PendingTweetUpload(record: record, itemData: itemData)
+        try await savePendingUpload(pending)
+        UploadProgressManager.shared.enqueueUpload(pending: pending, alreadySaved: true)
     }
 
     func scheduleCommentUpload(comment: Tweet, to tweet: Tweet,

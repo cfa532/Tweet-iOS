@@ -326,6 +326,9 @@ struct ContentView: View {
             setupNotificationObservers()
             handlePendingDeeplinks()
         }
+        .onChange(of: uploadProgressManager.isUploading) { _, isUploading in
+            if !isUploading { checkForPendingUpload() }
+        }
         .onDisappear {
             cleanupNotificationObservers()
         }
@@ -541,33 +544,18 @@ struct ContentView: View {
             }
         )
 
-        // 6a. Tweet action failed
+        // 6a. Pin toggle failed
         notificationObservers.append(
             NotificationCenter.default.addObserver(
                 forName: .errorOccurred,
                 object: nil,
                 queue: .main
             ) { notification in
-                let actionError: (message: String, type: ToastView.ToastType)?
-                if let error = notification.object as? NSError {
-                    switch error.domain {
-                    case "TweetDeletion":
-                        actionError = (ErrorMessageHelper.userFriendlyMessage(from: error), .error)
-                    case "PinToggle":
-                        actionError = (ErrorMessageHelper.userFriendlyMessage(from: error), .warning)
-                    default:
-                        actionError = nil
-                    }
-                } else {
-                    actionError = nil
-                }
+                guard let error = notification.object as? NSError, error.domain == "PinToggle" else { return }
+                let message = ErrorMessageHelper.userFriendlyMessage(from: error)
                 MainActor.assumeIsolated {
-                    guard let actionError else {
-                        return
-                    }
-
-                    self.toastMessage = actionError.message
-                    self.toastType = actionError.type
+                    self.toastMessage = message
+                    self.toastType = .warning
                     self.showToast = true
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
