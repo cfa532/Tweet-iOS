@@ -1,8 +1,14 @@
 # Owner-only writes: status memo
 
-Date: 2026-11-13
-Branches: `owner-only-writes` in Tweet-iOS and TweetBackendApp. Nothing is pushed.
-Live on: the debug backend only (`twbe`, version 1721). Release, Android and web are unchanged.
+Updated: 2026-11-15 (Shanghai time)
+
+Gen8 debug serves `twbe` version 1755 with owner-only enforcement enabled. The
+debug package includes the Go moderation fixes and the restored TweetWeb
+editor. The backend's checked-in default remains off for the release rollout.
+
+Published branches: Tweet-iOS `owner-only-writes` at `489e4fd66`, Android Tweet
+`owner-only-writes` at `f571a145`, TweetBackendApp `main` at `57cbd5e`, and
+TweetWeb `main` at `236e2f1` for the existing session and moderation work.
 
 ## 1. The request
 
@@ -76,8 +82,8 @@ records the id that controls it (`authUid`).
   The account stores no password. Password change goes through Leither.
 - `register` is refused when the node denies guests.
 - An account created before this change is bound to a Leither user on its next
-  login, after its stored password is checked. The stored password is left in
-  place so Android and web can still sign in.
+  login, after its stored password is checked. The legacy password remains
+  available for clients and nodes still using the legacy login flow.
 - Nodes still on the old backend keep the old flow.
 
 ### Owner check on writes
@@ -130,6 +136,22 @@ pulled once with `MiMeiSync` to resolve their root. Residual, documented: a
 code leaked from the expected node replays for about an hour, and the check
 trusts that node itself.
 
+### Admin delegation for tweets
+
+The admin's root verifies the admin account and its bound session in
+`admin_mutate_tweet`. The author's root receives
+`apply_admin_tweet_mutation`, verifies the delegating node and checks the
+author's permission and timeline membership before editing or deleting a
+top-level tweet. Authors allow this by default. An author can change the
+setting on their root through `admin_tweet_access` with their own session.
+The test build exposes this through the API and has no settings UI for it.
+Comment and reply deletion follows the separate ownership rules above.
+
+If the author's root cannot be resolved during an iOS admin deletion, the
+client can remove the entry from the admin's own server-side lists. It waits
+for the admin's root to confirm that removal. Permanent deletion of the tweet
+object still requires the author's root.
+
 ### Decisions made along the way
 
 - The username stays in the account as the public handle. Only the password
@@ -138,25 +160,67 @@ trusts that node itself.
   same username replaces the old one.
 - Signing out removes the owner key from the device.
 
-## 4. What is missing
+## 4. Rollout status
 
 | Item | State |
 |---|---|
-| Enforcement | Off, deliberately kept that way (2026-11-14 decision) for backward compatibility: a request without `usersid`, or for an account with no `authUid`, is still accepted. One function in the backend, `ownerSessionRequired`, turns it on. Every write family is ported; the flip now waits only on Android and remaining old clients. |
-| Admin as a delegate | Not started. Admin still poses as the author. There is no per-user setting to reject admin, and no check for it. On a node with `commentDelegation`, admin can no longer delete another user's comment: the server refuses with "Only the comment's author or the parent's author may delete this comment". |
+| Enforcement | On for gen8 debug. The deployed `session_entries.go` sets `ownerSessionRequired()` to `true`. The Go source on `main` defaults to `false` for release. Gen8 debug rejects missing sessions and unbound accounts on the enforced owner path. |
+| Admin as a delegate | Implemented in TweetBackendApp `48800ac` and integrated in iOS and TweetWeb. Admin edit and delete passed on the simulator with enforcement enabled. The author-side revocation path is implemented and awaits an end-to-end test. |
 | Likes, bookmarks, retweets, followers | Done across backend, TweetWeb and iOS (2026-11-14). `toggle_favorite`/`toggle_bookmark` run on the engaging user's root with their session and delegate the tweet-side write to `apply_favorite`/`apply_bookmark`; `retweet_added`/`retweet_removed` delegate to `apply_retweet`; `toggle_follower` is peer-only (reached from `toggle_following`). The peer entries bind the injected `nodeappcode` to the acting user's root, re-derive the tweet's author from the tweet object (a check the old entries never made), and pull an unknown actor's account once. `health` advertises `engagementDelegation`; all three clients gate on it. Same residuals as comments. |
 | Messages | Done (2026-11-14). `message_outgoing` on the sender's root stores the sender's copy and delivers the recipient's through the now peer-only `message_incoming` — a refused or unreachable recipient fails the send. `health` advertises `messageDelegation`; iOS probes it and stops writing the recipient's copy directly. Verified live same-node and cross-node (gen8 → ksbox, the recipient's `message_check` returned the message). Old clients that still call `message_incoming` directly are refused by the guard — same accepted breakage class as comments. |
 | Comments and replies | Done (storage unchanged, writes delegated). The comment peer entries admit only the delegating node — named by the platform-injected `nodeappcode`, bound to the writer's/deleter's own root (rebuilt 2026-11-14; see §3). Residual: a code leaked from the expected node replays ≈1h, and the check trusts that node. Comments on nodes without `commentDelegation` keep the old unchecked form; old debug builds lose commenting against the new backend. |
-| Node-to-node calls | Hardened for comments, engagement, the follower side and messages (all peer entries bind the injected `nodeappcode` to the expected node). `toggle_favorite_by_user`/`toggle_bookmark_by_user` remain registered as legacy, callable by any client, but nothing current calls them. The maintainers' answers (2026-11-13) are in `Leither/cfa532-docs/integrations/tweet/LEITHER_STRUCTURAL_QUESTIONS.md` and the reply beside it; follow-up questions in `LEITHER_STRUCTURAL_QUESTIONS_2.md`. |
+| Node-to-node calls | Hardened for comments, engagement, the follower side and messages (all peer entries bind the injected `nodeappcode` to the expected node). `toggle_favorite_by_user`/`toggle_bookmark_by_user` are removed (2026-11-14 review): they let any caller edit any user's saved lists. A node still on the old backend that calls them on a new node is refused. The maintainers' answers (2026-11-13) are in `Leither/cfa532-docs/integrations/tweet/LEITHER_STRUCTURAL_QUESTIONS.md` and the reply beside it; follow-up questions in `LEITHER_STRUCTURAL_QUESTIONS_2.md`. |
 | Structural answers | The Leither maintainers answered the questions memo (V0.24.74 baseline). Key facts: `byname` (our guests) is legacy and node-local by design — keep, but do not extend; no root-only version enforcement, so the app's misrouted-write refusals are the only protection; `MMOpenAppDataUser` is the per-user-owned data primitive for the engagement phase; a transport-set caller-node identity (`fromnid`) is judged feasible upstream, pending an author ruling. |
 | Comment policy | The hook exists (`apply_comment`); no per-tweet setting is stored or checked yet. |
-| Android and web clients | TweetWeb ported (see above). Android ported 2026-11-14 (`Tweet` `owner-only-writes`, `cc838fee`): Leither byname Login/Register on the node RPC surface, a session cache with one re-sign-in, a runWrite choke point mapping entries to owning accounts, capability-gated reroutes for comments/engagement/messages, requestid on tweet and comment submission, session login/registration, and logout clearing the credential and sessions. Not yet exercised on a device beyond build/install; the owner-pairing UI is out of scope (guests and legacy passwords, as on web). |
-| Release backend | Unchanged. |
+| Android and web clients | Both use Leither sessions on the account root. The Mate 30 passed sign-in, publish, delete and background attachment publishing against gen8 debug. TweetWeb carries the session and delegation changes on `main`. The original web editor was restored in `twbe` 1755 after the native publishing changes. |
+| Release rollout | Owner-only enforcement remains off by default. A release enforcement rollout and its compatibility checks are still pending. |
 | Existing data | Comments written before the change are indistinguishable from new ones — same object, same list, same reference — so nothing to migrate. Old like lists inside tweets still need a decision when engagement moves. |
 | Duplicate submissions | Fixed (2026-11-14, twbe 1729). A caller-generated `requestid` names each tweet or comment submission; the object's Mimei id is derived from it, so a retry after a lost response resolves the same object instead of creating a duplicate — verified live with double-submitted tweet and comment probes (one object each). TweetWeb keeps the id per composition (Re-submit reuses it; the quote half is `<id>-quote`); iOS passes the persisted upload operation's id, so a retry after an app restart converges too. Submissions without a requestid keep the old mint-a-fresh-id behavior. |
+| Backend review fixes | `a310488` was pushed to `main` and deployed to gen8 debug. Comment deletion now requires the object to be one of the parent's comments (before this, the author of any tweet on a node could have any other object there destroyed by naming it as a comment). Request ids are namespaced by kind and author, so one user's id cannot resolve to another's object. A repeated named submission no longer adds its references twice. A retweet record can be cleared or replaced only by the user it names. `message_outgoing` delivers before storing the sender's copy. Peer entries refuse a caller with nothing to show before resolving the acting user's root. Consequence of the new marks: a submission first sent to an older backend and retried against this one creates a second object. |
 | Leither sign-up | Anyone who can reach a node can create a bare Leither user on it. Denying guests only blocks account creation. |
 
 ## 5. Test status
+
+### 2026-11-15 device and simulator results
+
+Times below are in Shanghai time.
+
+- **Mate 30 ownership.** Two early posts were rejected after enforcement was
+  enabled. The app had a legacy credential entry and sent no `usersid`.
+  Signing out and back in stored the credential in the current Keystore-backed
+  format. Gen8 logged completion of `add_tweet` at **15:57:07** and
+  `delete_tweet` at **15:57:47** after both passed the required owner check. The Android upload error fix was pushed as `8a68f54e`.
+- **iOS admin moderation.** Gen8 saved an edit to another user's tweet at
+  **16:03:18**. The first delegated deletion finished after the simulator's
+  30-second timeout. With the timeout raised to 60 seconds, gen8's
+  `apply_admin_tweet_mutation` handler completed the retest from **16:27:00**
+  to **16:27:08**. The edit and both deletes used admin delegation with
+  owner-only enforcement enabled. The Go error for a tweet missing from the author's
+  timeline now reads **Cannot find the tweet** (`57cbd5e`).
+- **iOS admin feed removal.** For a tweet whose author's root could not be
+  resolved, Tahoe, the admin's root, removed the entry from
+  `followings_tweets` at **16:37:31**. It published the updated admin account
+  and logged completion at **16:37:33**. This was a feed-only removal.
+- **Mate 30 attachment publishing.** Both files in the first retry uploaded.
+  Gen8 committed the tweet at **17:28:33**, 2 minutes 9 seconds after receiving
+  `add_tweet`, which exceeded the old Android 60-second timeout. The retest
+  after leaving the composer uploaded at **17:47:27** and committed at
+  **17:47:38**. WorkManager marked the job successful on its first attempt
+  and cleared the saved draft. The next check found neither published draft
+  on the phone. Both posts appeared in the web feed and then in the
+  simulator's main feed after a delay.
+- **Native publishing and draft recovery.** Android `f571a145` and iOS
+  `489e4fd66` allow up to 3 minutes for attachment posts to commit. Both
+  save the draft before closing the composer, retain it for manual retry on
+  failure, and clear it after confirmation. Publish errors stay visible
+  until dismissed. The updated iOS publishing build passed the user's
+  simulator retest.
+- **Direct messages and media previews.** The Mate 30 and simulator exchanged
+  messages both ways. The simulator resolved the Mate 30 sender after
+  discovery recovered. The simulator's optimistic image preview matched
+  the final size on retest, and both clients' 60% attachment widths passed.
+
+### Earlier verification
 
 **Passed, called directly against debug version 1715** (the reply fix in 1717
 changes only what `login` returns for a session):
@@ -200,33 +264,34 @@ err=<nil>` on gen8, the platform-injected node app code naming the delegating
 node — and deleting it took the same path (`remove_comment`). This is the
 cross-node hop the unit tests cover with a mocked transport.
 
-**Not tested:** guest registration, login and password change from the app's
-screens; sign-out; QR scanning on a real camera; paste and file import (the
-identity was fed in through a temporary hook, now removed); the
-`--guests deny` path end to end; commenting from the app's screens against
-1721 (the simulator run below).
+### Still to verify
+
+- Revoke admin access as the tweet author, then confirm that the delegated
+  edit and delete are both refused with enforcement on. The November 15
+  simulator run exercised the default permission.
+- Complete real-camera QR pairing, identity-file import and paste, and
+  end-to-end guest registration denial. The earlier simulator pairing used a
+  temporary identity hook.
+- Run the iOS guest registration and password-change checks and the native
+  comment and reply checks in §6. The earlier cross-node comment test used
+  TweetWeb.
 
 ## 6. How to test
 
 ### Publish the backend (debug)
 
-From TweetBackendApp:
+Follow the gen8 debug deployment procedure in `TweetBackendApp/README.md`.
+Stage the Go sources for `twbe` with the debug
+`ownerSessionRequired()` override set to `true` before uploading. The
+checked-in source defaults to `false`. Preserve the installed override
+during web-only publications. Run the existing `twbe.sh` with
+`bash -e` and capture its output privately because it can contain signing
+material.
 
-```bash
-rsync -av -e 'ssh -p 220' --exclude='*_test.go' --include='*.go' --exclude='*' ./ pi@gen8.leither.uk:/home/pi/demo/twbe/
-```
-
-```bash
-ssh -p 220 pi@gen8.leither.uk 'cd /home/pi/demo && ./twbe.sh'
-```
-
-Confirm the new version answers with the session fields:
-
-```bash
-curl -s "http://gen8.leither.uk:8002/entry?aid=d4lRyhABgqOnqY4bURSm_T-4FZ4&ver=last&entry=health"
-```
-
-The reply must contain `"userSessions":true` and `"guestRegistration":true`.
+After a backend change, check the numbered debug version and `last` using
+the runbook. `health` advertises session and delegation support. Exercise
+the owner check separately with a disposable test account to verify that a
+sessionless owner write is refused and an authenticated one succeeds.
 
 ### Owner pairing
 
@@ -274,6 +339,16 @@ With two accounts on the same node, a write to account A carrying account B's
 session must be refused with "This session does not own account …". This needs
 a script or a modified client; the app never sends another user's session.
 
+### Admin delegation and revocation
+
+1. With enforcement enabled, sign in as admin and edit and delete test tweets
+   belonging to an author who allows admin access.
+2. On the author's root, call `admin_tweet_access` with the author's session
+   and `allowed=false`. Repeat the edit and delete as admin and confirm that
+   the author's root refuses both.
+3. Confirm the author can still manage their own tweets. Restore the test
+   account's default permission with `allowed=true` if needed.
+
 ### Comments through the writer's node
 
 1. Confirm `health` reports `"commentDelegation":true`.
@@ -283,9 +358,8 @@ a script or a modified client; the app never sends another user's session.
 3. Delete your own comment. Reply to a comment and delete the reply the same
    way.
 4. As the tweet's author, delete someone else's comment from the comment menu.
-5. A third account (not the comment's author, not the parent's author, not
-   admin) must get "Only the comment's author or the parent's author may delete
-   this comment" when it tries.
+5. A third account, including admin, must get "Only the comment's author or
+   the parent's author may delete this comment" when it tries.
 6. A quote-comment must still produce both halves: the comment on the parent
    author's node and the retweet on the writer's.
 7. Point the app at a node without `commentDelegation` (release or an older
@@ -301,8 +375,8 @@ and writes must behave as before, with no session sent.
 - gen8, `/home/pi/demo`: `tweet-owner.sh`, `tweet.node.json` listing
   `pairtest1` as an owner, that owner's identity file, and the pre-change
   sources in `deploy-backups/twbe-go-20261111T075217Z`. The comment
-  delegation change is live as version 1721; the probe comment it created on
-  pairtest1's tweet was deleted again.
+  delegation probe from version 1721 was cleaned up. Current debug rollout
+  and verification are recorded above.
 - Debug network: test accounts `pairtest1` (one tweet) and `gt94398670`, with
   a matching Leither user for the guest on gen8.
 - This Mac's Leither node: one throwaway Leither user, `twprobe_1794382923`.
