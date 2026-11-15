@@ -13,7 +13,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 private enum ChatAttachmentLayout {
-    @MainActor static var width: CGFloat { UIScreen.main.bounds.width * 0.5 }
+    @MainActor static var width: CGFloat { UIScreen.main.bounds.width * 0.6 }
 }
 
 // MARK: - Chat Message View
