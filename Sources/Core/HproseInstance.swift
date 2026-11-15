@@ -245,6 +245,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// admin acting on another user's tweet, a just-registered account), the node
     /// does not check sessions, or it refused the sign-in.
     private func userSession(accountID: String, node: String, client: HproseClient) async -> String? {
+        // The account's secret is shown to its own root node and to no other. An
+        // owned entry can still be addressed elsewhere — a like or a comment sent
+        // in the old form goes to the other user's node — and signing in there
+        // would hand that node the guest's password, or a pass an owner's key
+        // signed that stays usable on the root until it expires. A guest's
+        // credential exists only on the root anyway.
+        guard Self.isRootNode(of: accountID, client) else {
+            return nil
+        }
         if let sid = await UserSessionStore.shared.session(accountID: accountID, node: node) {
             return sid
         }
@@ -268,6 +277,16 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         await UserSessionStore.shared.setSession(signedIn.sid, accountID: accountID, node: node)
         return signedIn.sid
+    }
+
+    /// Whether a client points at the node an account is rooted on, by the root
+    /// address resolved for its writes.
+    nonisolated private static func isRootNode(of accountID: String, _ client: HproseClient) -> Bool {
+        guard let root = UserRoutes.shared.writableRoute(for: accountID),
+              let node = try? storageBaseURL(for: client) else {
+            return false
+        }
+        return root.host == node.host && root.port == node.port
     }
 
     /// Every RPC passes through here. A write to the signed-in user's own data is
