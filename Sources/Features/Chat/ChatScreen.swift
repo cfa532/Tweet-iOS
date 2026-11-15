@@ -12,6 +12,7 @@ struct ChatScreen: View {
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messages: [ChatMessage] = []
+    @State private var pendingChatUploads: [HproseInstance.PendingTweetUpload] = []
     @State private var allCachedMessages: [ChatMessage] = [] // All messages from cache for pagination
     @State private var messageText = ""
     @State private var user: User?
@@ -92,6 +93,12 @@ struct ChatScreen: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
                 keyboardHeight = 0
+            }
+            .onReceive(UploadProgressManager.shared.$pendingChatUploads) { uploads in
+                let currentUserId = HproseInstance.shared.appUser.mid
+                pendingChatUploads = uploads.filter {
+                    $0.recipientId == receiptId && $0.record.authorId == currentUserId
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .chatMessageSent)) { notification in
                 handleMessageSent(notification)
@@ -182,7 +189,23 @@ struct ChatScreen: View {
     }
     
     private var messagesScrollView: some View {
-        ScrollViewReader { proxy in
+        let confirmedIds = Set(messages.map(\.id))
+        let pending = pendingChatUploads.filter { !confirmedIds.contains($0.record.mid) }
+        let localAttachments = pending.reduce(into: [String: HproseInstance.PendingTweetUpload.ItemData]()) {
+            $0[$1.record.mid] = $1.itemData.first
+        }
+        let displayedMessages = (messages + pending.map { upload in
+            ChatMessage(
+                id: upload.record.mid,
+                authorId: upload.record.authorId,
+                receiptId: receiptId,
+                chatSessionId: upload.chatSessionId ?? "",
+                content: upload.record.content,
+                timestamp: upload.record.timestamp.timeIntervalSince1970
+            )
+        }).sorted { $0.timestamp < $1.timestamp }
+
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 8) {
                     // Load more indicator at TOP (for loading older messages)
@@ -222,9 +245,9 @@ struct ChatScreen: View {
                     }
 
                     // Messages in chronological order (oldest to newest)
-                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                    ForEach(Array(displayedMessages.enumerated()), id: \.element.id) { index, message in
                         if index > 0 {
-                            let timeDiff = message.timestamp - messages[index - 1].timestamp
+                            let timeDiff = message.timestamp - displayedMessages[index - 1].timestamp
                             if timeDiff > 3600 {
                                 TimeDividerView(timestamp: message.timestamp)
                             }
@@ -232,7 +255,8 @@ struct ChatScreen: View {
 
                         ChatMessageView(
                             message: message,
-                            allMessages: messages,
+                            pendingAttachment: localAttachments[message.id],
+                            allMessages: displayedMessages,
                             currentIndex: index,
                             isChatScreenVisible: isChatScreenVisible,
                             receiptId: receiptId,
@@ -255,7 +279,7 @@ struct ChatScreen: View {
             .defaultScrollAnchor(.bottom)
             .defaultScrollAnchor(.top, for: .alignment)
             .onChange(of: shouldScrollToBottom) { _, newValue in
-                guard newValue, let lastMessage = messages.last else { return }
+                guard newValue, let lastMessage = displayedMessages.last else { return }
 
                 if shouldAnimateScroll {
                     withAnimation(.easeInOut(duration: 0.3)) {
@@ -269,7 +293,7 @@ struct ChatScreen: View {
             }
             .onChange(of: keyboardHeight) { _, newHeight in
                 // Keep the latest message visible when the keyboard appears.
-                if newHeight > 0, let lastMessage = messages.last {
+                if newHeight > 0, let lastMessage = displayedMessages.last {
                     withAnimation(.easeOut(duration: 0.25)) {
                         proxy.scrollTo(lastMessage.id)
                     }
@@ -427,7 +451,9 @@ struct ChatScreen: View {
     }
     
     private func handleMessageSent(_ notification: Notification) {
-        if let sentMessage = notification.userInfo?["message"] as? ChatMessage {
+        if let sentMessage = notification.userInfo?["message"] as? ChatMessage,
+           sentMessage.receiptId == receiptId,
+           sentMessage.authorId == HproseInstance.shared.appUser.mid {
             print("[ChatScreen] Received notification for sent message: \(sentMessage.id)")
             print("[ChatScreen] Message content: \(sentMessage.content ?? "nil")")
             print("[ChatScreen] Message attachments count: \(sentMessage.attachments?.count ?? 0)")
@@ -739,6 +765,8 @@ struct ChatScreen: View {
         
         // Delegate to TweetUploadManager - same as tweet attachments!
         HproseInstance.shared.scheduleChatMessageUpload(message: message, itemData: [itemData])
+        shouldAnimateScroll = true
+        shouldScrollToBottom = true
     }
     
     private func loadUser() async {

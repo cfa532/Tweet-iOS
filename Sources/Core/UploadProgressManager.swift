@@ -18,6 +18,7 @@ final class UploadProgressManager: ObservableObject {
     @Published var detailedProgress = ""
     @Published var uploadType = ""
     @Published private(set) var canContinueInBackground = false
+    @Published private(set) var pendingChatUploads: [TweetUploadManager.PendingTweetUpload] = []
     var isProcessingVideo = false
 
     private var queue: [(pending: TweetUploadManager.PendingTweetUpload, saved: Task<Void, Error>)] = []
@@ -50,6 +51,7 @@ final class UploadProgressManager: ObservableObject {
         // Save queued items too, so a process exit cannot lose a second post.
         let saved = Task { try await HproseInstance.shared.uploadManager.savePendingUpload(pending) }
         queue.append((pending, saved))
+        if pending.recipientId != nil { pendingChatUploads.append(pending) }
         guard worker == nil else { return }
         worker = Task { await processQueue() }
     }
@@ -98,6 +100,9 @@ final class UploadProgressManager: ObservableObject {
                     failUpload(message: NSLocalizedString("Upload unfinished. You can retry when you return.", comment: "Upload pending"))
                 }
             }
+            if pending.recipientId != nil {
+                pendingChatUploads.removeAll { $0.id == pending.id }
+            }
             background.finish(success: currentStage == .completed)
             canContinueInBackground = false
             isProcessingVideo = false
@@ -106,6 +111,7 @@ final class UploadProgressManager: ObservableObject {
             if Task.isCancelled || UIApplication.shared.applicationState == .background {
                 for queued in queue { _ = try? await queued.saved.value }
                 queue.removeAll()
+                if !pendingChatUploads.isEmpty { pendingChatUploads.removeAll() }
                 break
             }
         }

@@ -9,11 +9,14 @@ import SwiftUI
 import AVKit
 import QuickLook
 import Combine
+import ImageIO
+import UniformTypeIdentifiers
 
 // MARK: - Chat Message View
 
 struct ChatMessageView: View {
     let message: ChatMessage
+    let pendingAttachment: HproseInstance.PendingTweetUpload.ItemData?
     let allMessages: [ChatMessage] // Stable reference to compute properties
     let currentIndex: Int          // Stable index to compute properties
     let isChatScreenVisible: Bool
@@ -110,7 +113,9 @@ struct ChatMessageView: View {
                 }
                 
                 // Row 2: Attachments
-                if let attachments = message.attachments, !attachments.isEmpty {
+                if let pendingAttachment {
+                    PendingChatAttachmentView(attachment: pendingAttachment)
+                } else if let attachments = message.attachments, !attachments.isEmpty {
                     HStack(spacing: 4) {
                         if attachments.count == 1, let attachment = attachments.first {
                             // Single attachment
@@ -192,6 +197,95 @@ struct ChatMessageView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+}
+
+private struct PendingChatAttachmentView: View {
+    let attachment: HproseInstance.PendingTweetUpload.ItemData
+    @State private var thumbnail: CGImage?
+
+    private var mediaType: UTType? {
+        UTType(attachment.typeIdentifier) ?? UTType(filenameExtension: (attachment.fileName as NSString).pathExtension)
+    }
+
+    var body: some View {
+        let isVideo = mediaType?.conforms(to: .movie) == true || mediaType?.conforms(to: .video) == true
+        let isImage = mediaType?.conforms(to: .image) == true
+
+        Group {
+            if isImage {
+                Group {
+                    if let thumbnail {
+                        ChatImageBubble(image: Image(decorative: thumbnail, scale: 1))
+                            .accessibilityLabel(attachment.fileName)
+                    } else {
+                        Label(attachment.fileName, systemImage: "photo")
+                            .lineLimit(1)
+                            .padding(8)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(6)
+                        .background(.regularMaterial, in: Circle())
+                        .padding(6)
+                        .accessibilityLabel(Text("Uploading attachments..."))
+                }
+                .frame(maxWidth: 280, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let thumbnail {
+                        Image(decorative: thumbnail, scale: 1)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 280, maxHeight: 200)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .accessibilityLabel(attachment.fileName)
+                    } else {
+                        Label(attachment.fileName, systemImage: isVideo ? "film" : "doc")
+                            .lineLimit(1)
+                    }
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Uploading attachments...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(8)
+                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .task {
+            guard isImage || isVideo else { return }
+            let item = attachment
+            let preview = await Task.detached(priority: .userInitiated) { () -> CGImage? in
+                if isVideo {
+                    let url = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString)
+                        .appendingPathExtension((item.fileName as NSString).pathExtension)
+                    defer { try? FileManager.default.removeItem(at: url) }
+                    do {
+                        try item.data.write(to: url)
+                        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+                        generator.appliesPreferredTrackTransform = true
+                        generator.maximumSize = CGSize(width: 600, height: 600)
+                        return try await generator.image(at: .zero).image
+                    } catch {
+                        return nil
+                    }
+                }
+                guard let source = CGImageSourceCreateWithData(item.data as CFData, nil) else { return nil }
+                return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 600
+                ] as CFDictionary)
+            }.value
+            if !Task.isCancelled { thumbnail = preview }
+        }
     }
 }
 
@@ -292,6 +386,21 @@ struct AttachmentView: View {
     }
 }
 
+// Share the image frame across the local preview, cached image, and final image.
+private struct ChatImageBubble: View {
+    let image: Image
+
+    var body: some View {
+        let maxWidth = UIScreen.main.bounds.width * 0.7
+        image
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(maxWidth: maxWidth, maxHeight: maxWidth * 1.1)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 // MARK: - Chat Image Thumbnail
 
 struct ChatImageThumbnail: View {
@@ -371,12 +480,7 @@ struct ChatImageThumbnail: View {
         // Use the same approach as MediaCell
         if let image = image {
             // Show loaded image
-            Image(uiImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(maxWidth: maxWidth, maxHeight: maxHeight)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            ChatImageBubble(image: Image(uiImage: image))
                 .onTapGesture {
                     showFullScreen = true
                 }
@@ -384,12 +488,7 @@ struct ChatImageThumbnail: View {
             // Show loading state with cached placeholder
             // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
             if let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) {
-                Image(uiImage: cachedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                ChatImageBubble(image: Image(uiImage: cachedImage))
                     .overlay(
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -418,12 +517,7 @@ struct ChatImageThumbnail: View {
             // Show cached placeholder if available, otherwise fallback
             // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
             if let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) {
-                Image(uiImage: cachedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                ChatImageBubble(image: Image(uiImage: cachedImage))
                     .onTapGesture {
                         showFullScreen = true
                     }
