@@ -238,7 +238,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// their device was paired with; a guest with the username and password
     /// Leither holds. Nil when this device holds no secret for the account,
     /// the node does not check sessions, or it refused the sign-in.
-    private func userSession(accountID: String, node: String, client: HproseClient) async -> String? {
+    private func userSession(
+        accountID: String, node: String, client: HproseClient, required: Bool = false
+    ) async -> String? {
         // The account's secret is shown to its own root node and to no other. An
         // owned entry can still be addressed elsewhere — a like or a comment sent
         // in the old form goes to the other user's node — and signing in there
@@ -253,8 +255,12 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
         let identity = OwnerIdentityStore.load().flatMap { $0.accountID == accountID ? $0 : nil }
         let credential = identity == nil ? OwnerCredentialStore.load(for: accountID) : nil
-        guard identity != nil || credential != nil,
-              await nodeChecksUserSessions(node: node, client: client) else {
+        guard identity != nil || credential != nil else {
+            return nil
+        }
+        // Entries that require a session already establish that they need a
+        // Leither login. Only optional sessions depend on a health probe.
+        if !required, !(await nodeChecksUserSessions(node: node, client: client)) {
             return nil
         }
         let signedIn: (sid: String, uid: String)?
@@ -266,7 +272,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             signedIn = nil
         }
         guard let signedIn else {
-            hproseWarning("[userSession] \(node) did not sign \(accountID) in; writing without a session")
+            hproseWarning("[userSession] \(node) did not sign \(accountID) in")
             return nil
         }
         await UserSessionStore.shared.setSession(signedIn.sid, accountID: accountID, node: node)
@@ -294,9 +300,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         params: [String: Any],
         priority: DispatchQoS.QoSClass = .userInitiated
     ) async -> Any? {
+        // Release still accepts unsigned calls for some writes. Moderation
+        // always requires a bound session.
+        let requiresSession = entry == "admin_mutate_tweet"
         guard let accountID = Self.ownedAccountID(entry: entry, params: params),
               let node = (client as? HproseHttpClient)?.uri,
-              let sid = await userSession(accountID: accountID, node: node, client: client) else {
+              let sid = await userSession(accountID: accountID, node: node, client: client, required: requiresSession) else {
+            if requiresSession {
+                return Self.adminSessionRequiredError()
+            }
             return await sendApplication(using: client, entry: entry, params: params, priority: priority)
         }
         var ownerParams = params
@@ -306,11 +318,20 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return response
         }
         await UserSessionStore.shared.discard(accountID: accountID, node: node)
-        guard let renewed = await userSession(accountID: accountID, node: node, client: client) else {
-            return response
+        guard let renewed = await userSession(accountID: accountID, node: node, client: client, required: requiresSession) else {
+            return requiresSession ? Self.adminSessionRequiredError() : response
         }
         ownerParams["usersid"] = renewed
         return await sendApplication(using: client, entry: entry, params: ownerParams, priority: priority)
+    }
+
+    nonisolated private static func adminSessionRequiredError() -> NSError {
+        NSError(domain: "AdminSession", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: NSLocalizedString(
+                "Sign out and sign in again as admin, then retry.",
+                comment: "An admin moderation request requires a Leither session"
+            )
+        ])
     }
 
     private func sendApplication(
@@ -3809,7 +3830,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
         }
 
-        return try await retryOperation(maxRetries: 3) {
+        let result: [String: Any] = try await retryOperation(maxRetries: 3) {
             hproseDebug("DEBUG: [login] Creating client for: \(loginUrl.absoluteString)")
             let newClient = self.clientPool.getClientByUrl(for: loginUrl.absoluteString, timeout: 30)
 
@@ -3841,20 +3862,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 }
                 // success is true, check for user data
                 if response["user"] != nil || response["data"] != nil {
-                    hproseDebug("DEBUG: [login] Login successful, setting appUser")
-                    // Kept so an owner session can be reopened after the node drops it.
-                    OwnerCredentialStore.save(.init(username: loginUsername!, password: loginPassword!), for: loginMid)
-                    await MainActor.run {
-                        self.preferenceHelper?.setUserId(loginUser.mid)
-                        self.appUser = loginUser
-                        NodePool.shared.updateFromUser(loginUser)
-                    }
-                    Task {
-                        await self.populateFellowLists(user: loginUser)
-                    }
-                    Task {
-                        await self.bindLegacyAccount(loginUser, username: loginUsername!, password: loginPassword!)
-                    }
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
@@ -3868,20 +3875,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     hproseError("DEBUG: [login] Login failed with status: \(status), reason: \(serverReason)")
                     return ["reason": localizedReason, "status": "failure"]
                 } else if status == "success" && response["user"] != nil {
-                    hproseDebug("DEBUG: [login] Login successful (status field), setting appUser")
-                    // Kept so an owner session can be reopened after the node drops it.
-                    OwnerCredentialStore.save(.init(username: loginUsername!, password: loginPassword!), for: loginMid)
-                    await MainActor.run {
-                        self.preferenceHelper?.setUserId(loginUser.mid)
-                        self.appUser = loginUser
-                        NodePool.shared.updateFromUser(loginUser)
-                    }
-                    Task {
-                        await self.populateFellowLists(user: loginUser)
-                    }
-                    Task {
-                        await self.bindLegacyAccount(loginUser, username: loginUsername!, password: loginPassword!)
-                    }
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
@@ -3889,6 +3882,35 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             hproseError("DEBUG: [login] Login failed - no success field or no user data")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
+        guard result["status"] as? String == "success" else { return result }
+
+        let isModeratingAdmin = loginUsername == "admin" && Gadget.isNonAppStoreInstall
+        if isModeratingAdmin, let root = await sessionRoot(of: loginUser) {
+            // A legacy password login proves the account password. Finish
+            // binding before exposing admin actions that need a Leither session.
+            try await bindLegacyAccount(loginMid, username: loginUsername!, password: loginPassword!, root: root)
+        }
+
+        OwnerCredentialStore.save(.init(username: loginUsername!, password: loginPassword!), for: loginMid)
+        await MainActor.run {
+            self.preferenceHelper?.setUserId(loginMid)
+            self.appUser = loginUser
+            NodePool.shared.updateFromUser(loginUser)
+        }
+        Task {
+            await self.populateFellowLists(user: loginUser)
+        }
+        if !isModeratingAdmin {
+            Task {
+                guard let root = await self.sessionRoot(of: loginUser) else { return }
+                do {
+                    try await self.bindLegacyAccount(loginMid, username: loginUsername!, password: loginPassword!, root: root)
+                } catch {
+                    hproseWarning("[bindLegacyAccount] \(root.node) did not bind \(loginUsername!): \(error.localizedDescription)")
+                }
+            }
+        }
+        return result
     }
     
     /// Maps backend login error messages to localized versions
@@ -3976,22 +3998,22 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// and none in Leither. After such a login succeeds, register the same
     /// username and password with Leither on the root node and have the node bind
     /// the account to that Leither user, so its writes can be verified from now on.
-    private func bindLegacyAccount(_ loginUser: User, username: String, password: String) async {
-        guard let root = await sessionRoot(of: loginUser) else { return }
+    private func bindLegacyAccount(
+        _ accountID: String, username: String, password: String, root: (client: HproseClient, node: String)
+    ) async throws {
         // Fails when Leither already knows the name; the sign-in below settles
         // whether the password matches.
         _ = await HproseTransport.invoke("Register", using: root.client, args: [username, password, ""])
         guard let signedIn = await leitherSignIn("Login", args: [username, password], using: root.client) else {
-            hproseWarning("[bindLegacyAccount] Leither did not sign \(username) in on \(root.node)")
-            return
+            throw NSError(domain: "UserSession", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: NSLocalizedString(
+                    "Could not open a session on your account’s server. Please try again.",
+                    comment: "Failed to sign in to Leither while binding a legacy account"
+                )
+            ])
         }
-        do {
-            _ = try await accountForSession(signedIn.sid, username: username, password: password, using: root.client)
-            let loginMid = await MainActor.run { loginUser.mid }
-            await UserSessionStore.shared.setSession(signedIn.sid, accountID: loginMid, node: root.node)
-        } catch {
-            hproseWarning("[bindLegacyAccount] \(root.node) did not bind \(username): \(error.localizedDescription)")
-        }
+        _ = try await accountForSession(signedIn.sid, username: username, password: password, using: root.client)
+        await UserSessionStore.shared.setSession(signedIn.sid, accountID: accountID, node: root.node)
     }
 
     /// Pairs this device with a node as one of its owners, from the identity
