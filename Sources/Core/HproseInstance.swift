@@ -209,12 +209,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         await nodeAdvertises("engagementDelegation", client)
     }
 
-    /// The same probe for messages: the sender's root delivers the recipient's
-    /// copy itself, so the client stops writing message_incoming directly.
-    private func nodeSupportsMessageDelegation(_ client: HproseClient) async -> Bool {
-        await nodeAdvertises("messageDelegation", client)
-    }
-
     /// One health probe answering whether the node advertises a capability
     /// flag. No answer says nothing about the node; the old wire form is the
     /// one every backend understands.
@@ -8871,169 +8865,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         )
     }
     
-    /// Helper function to send message to recipient's node with retry and baseUrl refresh
-    private func sendToRecipientNodeWithRetry(
-        receiptId: String,
-        message: ChatMessage,
-        maxRetries: Int = 2
-    ) async throws -> MessageSendResult {
-        var receiptUser: User?
-        var lastError: String?
-        // Phase A (demotion prep): appUser.mid doesn't change across retries.
-        let appUserMid = await MainActor.run { self.appUser.mid }
-
-        for attempt in 0...maxRetries {
-            try Task.checkCancellation()
-            // On retry, force refresh recipient's baseUrl by passing empty string
-            let forceRefresh = attempt > 0
-            if forceRefresh {
-                hproseWarning("[sendMessage] 🔄 Retry attempt \(attempt): Refreshing recipient's baseUrl for userId: \(receiptId)")
-            }
-            
-            // Fetch recipient user (with forced refresh on retry)
-            receiptUser = try await fetchUser(receiptId, baseUrl: forceRefresh ? "" : "")
-            
-            guard let recipient = receiptUser else {
-                let errorMsg = "Recipient user not found"
-                hproseError("[sendMessage] ❌ \(errorMsg) for userId: \(receiptId)")
-                return MessageSendResult(
-                    success: false,
-                    errorMessage: ChatMessage(
-                        id: message.id,
-                        authorId: message.authorId,
-                        receiptId: message.receiptId,
-                        chatSessionId: message.chatSessionId,
-                        content: message.content,
-                        timestamp: message.timestamp,
-                        attachments: message.attachments,
-                        success: false,
-                        errorMsg: errorMsg
-                    )
-                )
-            }
-            
-            // The recipient's copy is written on their root node, so this goes to
-            // their writable route. It is cached per user like the sender's, so a
-            // conversation resolves it once rather than per message.
-            let recipientWritableUrl = await MainActor.run { recipient.writableUrl }
-            if forceRefresh || recipientWritableUrl == nil {
-                _ = try await recipient.resolveWritableUrl()
-            }
-
-            let receiptEntry = "message_incoming"
-            let receiptParams: [String: Any] = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "senderid": appUserMid,
-                "receiptid": receiptId,
-                "msg": message.toJSONString()
-            ]
-
-            // Get fresh client (will be recreated if the writable route changed)
-            guard let recipientClient = await recipient.writableClient(timeout: 15) else {
-                let errorMsg = "Failed to create client for recipient node"
-                hproseError("[sendMessage] ❌ \(errorMsg) - writableUrl: nil")
-                if attempt < maxRetries {
-                    // Wait before retry
-                    try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
-                    continue
-                }
-                return MessageSendResult(
-                    success: false,
-                    errorMessage: ChatMessage(
-                        id: message.id,
-                        authorId: message.authorId,
-                        receiptId: message.receiptId,
-                        chatSessionId: message.chatSessionId,
-                        content: message.content,
-                        timestamp: message.timestamp,
-                        attachments: message.attachments,
-                        success: false,
-                        errorMsg: errorMsg
-                    )
-                )
-            }
-            
-            let rawReceiptResponse = await invokeRunMApp(using: recipientClient, entry: receiptEntry, params: receiptParams)
-            let receiptResponseUnwrapped = try? Self.unwrapV2Response(rawReceiptResponse)
-            let receiptResponse = receiptResponseUnwrapped ?? Self.normalizeHproseContainers(rawReceiptResponse)
-            
-            // Handle new response format for message_incoming
-            if let receiptResponseDict = Self.asStringKeyedDictionary(receiptResponse) {
-                if let success = receiptResponseDict["success"] as? Bool, !success {
-                    let errorMessage = receiptResponseDict["error"] as? String ?? "Failed to send to recipient node"
-                    lastError = errorMessage
-                    hproseError("[sendMessage] ❌ Failed to send to recipient node (attempt \(attempt + 1)/\(maxRetries + 1)): \(errorMessage)")
-                    
-                    if attempt < maxRetries {
-                        // Wait before retry with exponential backoff
-                        let delay = UInt64(attempt + 1) * 2_000_000_000 // 2, 4 seconds
-                        hproseWarning("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
-                        try await Task.sleep(nanoseconds: delay)
-                        continue
-                    }
-                    
-                    return MessageSendResult(
-                        success: false,
-                        errorMessage: ChatMessage(
-                            id: message.id,
-                            authorId: message.authorId,
-                            receiptId: message.receiptId,
-                            chatSessionId: message.chatSessionId,
-                            content: message.content,
-                            timestamp: message.timestamp,
-                            attachments: message.attachments,
-                            success: false,
-                            errorMsg: errorMessage
-                        )
-                    )
-                } else {
-                    // Success!
-                    return MessageSendResult(success: true, errorMessage: nil)
-                }
-            } else {
-                // Legacy boolean response
-                let receiptSuccess = receiptResponse as? Bool ?? false
-                if receiptSuccess {
-                    return MessageSendResult(success: true, errorMessage: nil)
-                } else {
-                    let errorMessage = "Failed to send to recipient node (legacy format)"
-                    lastError = errorMessage
-                    hproseError("[sendMessage] ❌ \(errorMessage) (attempt \(attempt + 1)/\(maxRetries + 1))")
-                    
-                    if attempt < maxRetries {
-                        // Wait before retry
-                        try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
-                        continue
-                    }
-                }
-            }
-        }
-        
-        // All retries exhausted
-        let finalError = lastError ?? "Failed to send message after \(maxRetries + 1) attempts"
-        hproseError("[sendMessage] ❌ All retry attempts exhausted: \(finalError)")
-        return MessageSendResult(
-            success: false,
-            errorMessage: ChatMessage(
-                id: message.id,
-                authorId: message.authorId,
-                receiptId: message.receiptId,
-                chatSessionId: message.chatSessionId,
-                content: message.content,
-                timestamp: message.timestamp,
-                attachments: message.attachments,
-                success: false,
-                errorMsg: finalError
-            )
-        )
-    }
-    
-    /// Send a chat message to a recipient
-    /// This function performs two steps:
-    /// 1. Send message_outgoing to sender's own node (with retry and baseUrl refresh)
-    /// 2. Send message_incoming to recipient's node (with retry and baseUrl refresh)
+    /// Send through the sender's root, which delivers the recipient's copy.
     func sendMessage(receiptId: String, message: ChatMessage) async throws -> ChatMessage {
         // Check if app user is blacklisted by the recipient
         guard let recipient = try await fetchUser(receiptId) else {
@@ -9044,7 +8876,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot send a message to this user because you are blocked", comment: "Message blocked error")])
         }
         
-        // Step 1: Send to sender's own node (message_outgoing) with retry
         let senderSendResult = try await sendToSenderNodeWithRetry(
             receiptId: receiptId,
             message: message,
@@ -9068,50 +8899,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return errorMessage
         }
 
-        // On a delegating backend, message_outgoing delivered both halves —
-        // it asked the recipient's node itself, through the guarded peer entry
-        // no client may call. Only an older backend still needs the client to
-        // write the recipient's copy directly.
-        let appUserForProbe = await MainActor.run { self.appUser }
-        var senderClient: HproseClient?
-        if (try? await appUserForProbe.resolveWritableUrl()) != nil {
-            senderClient = await appUserForProbe.writableClient(timeout: 15)
-        }
-        let clientDeliversRecipientCopy: Bool
-        if let senderClient {
-            clientDeliversRecipientCopy = !(await nodeSupportsMessageDelegation(senderClient))
-        } else {
-            clientDeliversRecipientCopy = true
-        }
-
-        if clientDeliversRecipientCopy {
-            // Step 2: Send to recipient's node (message_incoming) with retry
-            let recipientSendResult = try await sendToRecipientNodeWithRetry(
-                receiptId: receiptId,
-                message: message,
-                maxRetries: 2
-            )
-
-            if !recipientSendResult.success {
-                guard let errorMessage = recipientSendResult.errorMessage else {
-                    return ChatMessage(
-                        id: message.id,
-                        authorId: message.authorId,
-                        receiptId: message.receiptId,
-                        chatSessionId: message.chatSessionId,
-                        content: message.content,
-                        timestamp: message.timestamp,
-                        attachments: message.attachments,
-                        success: false,
-                        errorMsg: "Failed to send message to recipient node"
-                    )
-                }
-                return errorMessage
-            }
-        }
-        
-        
-        // Both steps succeeded
         return ChatMessage(
             id: message.id,
             authorId: message.authorId,
@@ -9461,7 +9248,7 @@ extension HproseInstance {
              "toggle_following", "toggle_followed", "toggle_follower", "toggle_pinned_tweet",
              "toggle_tweet_privacy", "retweet_added", "retweet_removed", "block_user",
              "remove_blacklisted_relationship", "set_author_core_data", "set_user_avatar", "delete_account",
-             "message_outgoing", "message_incoming", "message_fetch", "share_file",
+             "message_outgoing", "message_fetch", "share_file",
              "resync_user", "sync_user", "refresh_tweet", "update_following_tweets":
             // Includes explicit recovery: it must stay on the requested access
             // node and must not silently turn into an ordinary root read.
