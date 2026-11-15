@@ -12,6 +12,10 @@ import Combine
 import ImageIO
 import UniformTypeIdentifiers
 
+private enum ChatAttachmentLayout {
+    @MainActor static var width: CGFloat { UIScreen.main.bounds.width * 0.5 }
+}
+
 // MARK: - Chat Message View
 
 struct ChatMessageView: View {
@@ -117,41 +121,46 @@ struct ChatMessageView: View {
                     PendingChatAttachmentView(attachment: pendingAttachment)
                 } else if let attachments = message.attachments, !attachments.isEmpty {
                     HStack(spacing: 4) {
-                        if attachments.count == 1, let attachment = attachments.first {
-                            // Single attachment
-                            if attachment.type == .image {
-                                ChatImageThumbnail(
-                                    attachment: attachment, 
-                                    isFromCurrentUser: isFromCurrentUser,
-                                    senderUser: messageSenderUser,
-                                    senderBaseUrl: messageSenderBaseUrl
-                                )
-                            } else if attachment.type == .video || attachment.type == .hls_video {
-                                // Display the video player with chat-specific UI
-                                ChatVideoContainer(
-                                    messageId: message.id,
-                                    attachment: attachment,
-                                    isFromCurrentUser: isFromCurrentUser,
-                                    senderUser: messageSenderUser,
-                                    senderBaseUrl: messageSenderBaseUrl,
-                                    isChatScreenVisible: isChatScreenVisible,
-                                    receiptId: receiptId
-                                )
+                        Group {
+                            if attachments.count == 1, let attachment = attachments.first {
+                                // Single attachment
+                                if attachment.type == .image {
+                                    ChatImageThumbnail(
+                                        attachment: attachment,
+                                        isFromCurrentUser: isFromCurrentUser,
+                                        senderUser: messageSenderUser,
+                                        senderBaseUrl: messageSenderBaseUrl
+                                    )
+                                } else if attachment.type == .video || attachment.type == .hls_video {
+                                    // Display the video player with chat-specific UI
+                                    ChatVideoContainer(
+                                        messageId: message.id,
+                                        attachment: attachment,
+                                        isFromCurrentUser: isFromCurrentUser,
+                                        senderUser: messageSenderUser,
+                                        senderBaseUrl: messageSenderBaseUrl,
+                                        isChatScreenVisible: isChatScreenVisible,
+                                        receiptId: receiptId
+                                    )
+                                } else {
+                                    // Document attachments - use DocumentAttachmentsView
+                                    let documentAttachments = [attachment]
+                                    let baseUrl = messageSenderBaseUrl ?? HproseInstance.baseUrl
+                                    DocumentAttachmentsView(
+                                        documents: documentAttachments,
+                                        baseUrl: baseUrl,
+                                        maxDocuments: nil
+                                    )
+                                }
                             } else {
-                                // Document attachments - use DocumentAttachmentsView
-                                let documentAttachments = [attachment]
-                                let baseUrl = messageSenderBaseUrl ?? HproseInstance.baseUrl
-                                DocumentAttachmentsView(
-                                    documents: documentAttachments,
-                                    baseUrl: baseUrl,
-                                    maxDocuments: nil
-                                )
+                                // Multiple attachments
+                                ChatMultipleAttachmentsLoader(attachments: attachments, isFromCurrentUser: isFromCurrentUser)
                             }
-                        } else {
-                            // Multiple attachments
-                            ChatMultipleAttachmentsLoader(attachments: attachments, isFromCurrentUser: isFromCurrentUser)
                         }
-                        
+                        .frame(width: ChatAttachmentLayout.width)
+                        .clipped()
+                        .contentShape(Rectangle())
+
                         // Show failure icon for sent messages with attachments that failed
                         if isFromCurrentUser && message.success == false {
                             Button(action: {
@@ -164,9 +173,6 @@ struct ChatMessageView: View {
                             .help(message.errorMsg ?? "Message failed to send")
                         }
                     }
-                    .frame(maxWidth: 280, alignment: .leading)
-                    .clipped()
-                    .contentShape(Rectangle())
                 }
                 
                 // Timestamp - show for last message from each party
@@ -232,14 +238,14 @@ private struct PendingChatAttachmentView: View {
                         .padding(6)
                         .accessibilityLabel(Text("Uploading attachments..."))
                 }
-                .frame(maxWidth: 280, alignment: .leading)
+                .frame(width: ChatAttachmentLayout.width)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if let thumbnail {
                         Image(decorative: thumbnail, scale: 1)
                             .resizable()
                             .scaledToFit()
-                            .frame(maxWidth: 280, maxHeight: 200)
+                            .frame(maxHeight: 200)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                             .accessibilityLabel(attachment.fileName)
                     } else {
@@ -255,6 +261,7 @@ private struct PendingChatAttachmentView: View {
                     }
                 }
                 .padding(8)
+                .frame(width: ChatAttachmentLayout.width)
                 .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
             }
         }
@@ -391,11 +398,12 @@ private struct ChatImageBubble: View {
     let image: Image
 
     var body: some View {
-        let maxWidth = UIScreen.main.bounds.width * 0.7
+        let width = ChatAttachmentLayout.width
         image
             .resizable()
             .aspectRatio(contentMode: .fill)
-            .frame(maxWidth: maxWidth, maxHeight: maxWidth * 1.1)
+            .frame(width: width)
+            .frame(maxHeight: width * 1.1)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 8))
     }
@@ -474,8 +482,8 @@ struct ChatImageThumbnail: View {
     
     @ViewBuilder
     private func chatImageThumbnail() -> some View {
-        let maxWidth = UIScreen.main.bounds.width * 0.7
-        let maxHeight = maxWidth * 1.1 // Standard height for chat images
+        let width = ChatAttachmentLayout.width
+        let maxHeight = width * 1.1 // Standard height for chat images
         
         // Use the same approach as MediaCell
         if let image = image {
@@ -506,7 +514,8 @@ struct ChatImageThumbnail: View {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle())
                     .scaleEffect(1.2)
-                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                    .frame(width: width)
+                    .frame(maxHeight: maxHeight)
                     .background(Color(.systemGray6).opacity(0.5))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .onTapGesture {
@@ -524,7 +533,8 @@ struct ChatImageThumbnail: View {
             } else {
                 // Show fallback placeholder
                 Color(.systemGray6)
-                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                    .frame(width: width)
+                    .frame(maxHeight: maxHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(
                         VStack(spacing: 8) {
@@ -546,11 +556,11 @@ struct ChatImageThumbnail: View {
     @ViewBuilder
     private var chatImageFallback: some View {
         let aspectRatio = CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8))
-        let maxWidth = UIScreen.main.bounds.width * 0.7
+        let width = ChatAttachmentLayout.width
         
         RoundedRectangle(cornerRadius: 8)
             .fill(Color(.systemGray6))
-            .frame(maxWidth: maxWidth)
+            .frame(width: width)
             .aspectRatio(aspectRatio, contentMode: .fit)
             .overlay(
                 VStack(spacing: 8) {
@@ -663,9 +673,6 @@ struct ChatVideoContainer: View {
     @State private var cancellables = Set<AnyCancellable>()
     @ObservedObject private var muteState = MuteState.shared
 
-    // Cache expensive calculations
-    private static let maxWidth = UIScreen.main.bounds.width * 0.7
-
     private var baseUrl: URL {
         if isFromCurrentUser {
             return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
@@ -683,7 +690,7 @@ struct ChatVideoContainer: View {
     }
 
     private var gridHeight: CGFloat {
-        Self.maxWidth / gridAspectRatio
+        ChatAttachmentLayout.width / gridAspectRatio
     }
 
     var body: some View {
@@ -692,7 +699,7 @@ struct ChatVideoContainer: View {
             if let player = player {
                 VideoPlayer(player: player)
                     .aspectRatio(videoAR, contentMode: .fill)
-                    .frame(width: Self.maxWidth, height: gridHeight)
+                    .frame(width: ChatAttachmentLayout.width, height: gridHeight)
                     .clipped()
                     .disabled(true) // Disable built-in controls to prevent tap interception
                     .onAppear {
@@ -730,7 +737,7 @@ struct ChatVideoContainer: View {
             } else {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(.systemGray5))
-                    .frame(width: Self.maxWidth, height: gridHeight)
+                    .frame(width: ChatAttachmentLayout.width, height: gridHeight)
                     .overlay(
                         VStack(spacing: 12) {
                             ProgressView()
@@ -784,9 +791,9 @@ struct ChatVideoContainer: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
             }
-            .frame(width: Self.maxWidth, height: gridHeight)
+            .frame(width: ChatAttachmentLayout.width, height: gridHeight)
         }
-        .frame(width: Self.maxWidth, height: gridHeight)
+        .frame(width: ChatAttachmentLayout.width, height: gridHeight)
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
@@ -1598,7 +1605,7 @@ struct ChatMultipleAttachmentsLoader: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -1615,7 +1622,7 @@ struct ChatMultipleAttachmentsLoader: View {
                         .foregroundColor(.primary)
                     Spacer()
                 }
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color(.systemGray6))
