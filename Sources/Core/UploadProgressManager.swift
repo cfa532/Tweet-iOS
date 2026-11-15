@@ -21,7 +21,13 @@ final class UploadProgressManager: ObservableObject {
     @Published private(set) var pendingChatUploads: [TweetUploadManager.PendingTweetUpload] = []
     var isProcessingVideo = false
 
-    private var queue: [(pending: TweetUploadManager.PendingTweetUpload, saved: Task<Void, Error>)] = []
+    private struct QueuedUpload {
+        let pending: TweetUploadManager.PendingTweetUpload
+        let saved: Task<Void, Error>
+        let completion: CheckedContinuation<Void, Error>?
+    }
+
+    private var queue: [QueuedUpload] = []
     private var worker: Task<Void, Never>?
     private var activeID: UUID?
     private var discardActiveUpload = false
@@ -46,11 +52,25 @@ final class UploadProgressManager: ObservableObject {
         }
     }
 
-    func enqueueUpload(pending: TweetUploadManager.PendingTweetUpload) {
-        guard activeID != pending.id, !queue.contains(where: { $0.pending.id == pending.id }) else { return }
+    func enqueueUploadAndWait(pending: TweetUploadManager.PendingTweetUpload) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            enqueueUpload(pending: pending, completion: continuation)
+        }
+    }
+
+    func enqueueUpload(
+        pending: TweetUploadManager.PendingTweetUpload,
+        completion: CheckedContinuation<Void, Error>? = nil
+    ) {
+        guard activeID != pending.id, !queue.contains(where: { $0.pending.id == pending.id }) else {
+            completion?.resume(throwing: NSError(domain: "TweetUpload", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: NSLocalizedString("This edit is already being saved.", comment: "Duplicate edit upload")
+            ]))
+            return
+        }
         // Save queued items too, so a process exit cannot lose a second post.
         let saved = Task { try await HproseInstance.shared.uploadManager.savePendingUpload(pending) }
-        queue.append((pending, saved))
+        queue.append(QueuedUpload(pending: pending, saved: saved, completion: completion))
         if pending.recipientId != nil { pendingChatUploads.append(pending) }
         guard worker == nil else { return }
         worker = Task { await processQueue() }
@@ -86,6 +106,7 @@ final class UploadProgressManager: ObservableObject {
                 try Task.checkCancellation()
                 try await HproseInstance.shared.uploadManager.executeUpload(pending)
                 completeUpload()
+                entry.completion?.resume()
             } catch {
                 background.finish(success: false)
                 if discardActiveUpload {
@@ -97,8 +118,12 @@ final class UploadProgressManager: ObservableObject {
                         "Upload paused. You can retry when you return.", comment: "Upload stopped"))
                 } else {
                     print("[Upload] Operation remains pending: \(error)")
-                    failUpload(message: NSLocalizedString("Upload unfinished. You can retry when you return.", comment: "Upload pending"))
+                    let message = pending.type == "edit"
+                        ? ErrorMessageHelper.userFriendlyMessage(from: error)
+                        : NSLocalizedString("Upload unfinished. You can retry when you return.", comment: "Upload pending")
+                    failUpload(message: message)
                 }
+                entry.completion?.resume(throwing: error)
             }
             if pending.recipientId != nil {
                 pendingChatUploads.removeAll { $0.id == pending.id }
@@ -108,13 +133,24 @@ final class UploadProgressManager: ObservableObject {
             isProcessingVideo = false
             // A new background job cannot be requested without a foreground
             // user action. Saved queued posts remain available for Retry.
-            if Task.isCancelled || UIApplication.shared.applicationState == .background {
-                for queued in queue { _ = try? await queued.saved.value }
-                queue.removeAll()
-                if !pendingChatUploads.isEmpty { pendingChatUploads.removeAll() }
-                break
+            if Task.isCancelled || UIApplication.shared.applicationState == .background { break }
+        }
+
+        // A paused worker must also finish any editor that was waiting in the
+        // queue, while preserving the queued uploads on disk for explicit retry.
+        let pausedError = NSError(domain: "TweetUpload", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: NSLocalizedString("Upload paused. You can retry when you return.", comment: "Upload paused")
+        ])
+        while !queue.isEmpty {
+            let queued = queue.removeFirst()
+            do {
+                try await queued.saved.value
+                queued.completion?.resume(throwing: pausedError)
+            } catch {
+                queued.completion?.resume(throwing: error)
             }
         }
+        if !pendingChatUploads.isEmpty { pendingChatUploads.removeAll() }
     }
 
     var uploadTitle: String {

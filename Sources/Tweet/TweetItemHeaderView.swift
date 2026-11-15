@@ -1,10 +1,7 @@
 import PhotosUI
 import SwiftUI
 
-/// TweetWeb-style admin edit (username `admin`): changes a tweet's text and attachments
-/// with the same `update_tweet` request as web. Saving goes through the upload queue like
-/// a new post, so media keeps its video processing and retries, and a save that fails
-/// stays available from the pending-upload dialog after this sheet has closed.
+/// Edits tweet text and attachments, keeping the draft open until the write is confirmed.
 struct AdminTweetContentEditSheet: View {
     @ObservedObject var tweet: Tweet
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -18,6 +15,7 @@ struct AdminTweetContentEditSheet: View {
     @State private var showCamera = false
     @FocusState private var isEditorFocused: Bool
     @State private var saving = false
+    @State private var pendingAttachmentEditID: UUID?
     @State private var showCancelConfirmation = false
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
@@ -33,7 +31,8 @@ struct AdminTweetContentEditSheet: View {
     }
 
     private var hasUnsavedChanges: Bool {
-        text != (tweet.content ?? "")
+        pendingAttachmentEditID != nil
+            || text != (tweet.content ?? "")
             || retainedAttachments != (tweet.attachments ?? [])
             || hasNewMedia
             || !selectedDocuments.isEmpty
@@ -55,6 +54,7 @@ struct AdminTweetContentEditSheet: View {
                     attachmentToolbar
                 }
             }
+            .disabled(saving)
             .scrollDismissesKeyboard(.interactively)
             // As in the compose screen: while typing, let the TextEditor scroll long
             // text instead of the outer ScrollView taking the gesture.
@@ -72,7 +72,7 @@ struct AdminTweetContentEditSheet: View {
                     }
                     .disabled(saving)
                     .alert("Unsaved Changes", isPresented: $showCancelConfirmation) {
-                        Button("Discard Changes", role: .destructive) { dismiss() }
+                        Button("Discard Changes", role: .destructive, action: discardChanges)
                         Button("Keep Editing", role: .cancel) { }
                     } message: {
                         Text("You have unsaved changes. Are you sure you want to exit without saving?")
@@ -90,7 +90,7 @@ struct AdminTweetContentEditSheet: View {
                 }
             }
         }
-        .interactiveDismissDisabled(hasUnsavedChanges)
+        .interactiveDismissDisabled(saving || hasUnsavedChanges)
         .overlay {
             if saving {
                 ZStack {
@@ -180,24 +180,56 @@ struct AdminTweetContentEditSheet: View {
     }
 
     private func save() {
+        guard !saving else { return }
         saving = true
         Task {
             defer { saving = false }
             do {
-                // Load picked media before closing, so a file that cannot be read
-                // leaves the draft here instead of losing it.
                 let itemData = try await MediaUploadHelper.prepareItemData(
                     selectedItems: selectedItems,
                     selectedImages: selectedImages,
                     selectedVideos: selectedVideos,
                     selectedDocuments: selectedDocuments
                 )
-                hproseInstance.uploadManager.scheduleTweetEdit(
-                    tweet: tweet,
-                    content: text,
-                    retainedAttachments: retainedAttachments.map(MediaRecord.init(media:)),
-                    itemData: itemData
-                )
+                var record = TweetRecord(tweet: tweet)
+                record.content = text
+                let uploads = hproseInstance.uploadManager
+                if itemData.isEmpty {
+                    try await discardPendingAttachmentEdit()
+                    let attachmentsChanged = retainedAttachments != (tweet.attachments ?? [])
+                    let attachments = attachmentsChanged ? retainedAttachments.map(MediaRecord.init(media:)) : nil
+                    try await uploads.saveTweetEdit(record, attachments: attachments)
+                } else {
+                    // Reuse the draft checkpoint on an explicit retry from this editor.
+                    let id = pendingAttachmentEditID ?? UUID()
+                    pendingAttachmentEditID = id
+                    try await uploads.submitTweetEdit(
+                        record,
+                        retainedAttachments: retainedAttachments.map(MediaRecord.init(media:)),
+                        itemData: itemData,
+                        id: id
+                    )
+                    pendingAttachmentEditID = nil
+                }
+                dismiss()
+            } catch {
+                errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                showErrorAlert = true
+            }
+        }
+    }
+    private func discardPendingAttachmentEdit() async throws {
+        guard let pendingAttachmentEditID else { return }
+        try await hproseInstance.uploadManager.removePendingUpload(id: pendingAttachmentEditID)
+        self.pendingAttachmentEditID = nil
+    }
+
+    private func discardChanges() {
+        saving = true
+        Task {
+            defer { saving = false }
+            do {
+                try await discardPendingAttachmentEdit()
                 dismiss()
             } catch {
                 errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)

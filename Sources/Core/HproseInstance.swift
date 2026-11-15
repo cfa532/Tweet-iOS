@@ -153,7 +153,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         case "update_tweet", "toggle_tweet_privacy", "toggle_pinned_tweet", "delete_comment",
              "toggle_favorite", "retweet_added", "retweet_removed":
             return params["appuserid"] as? String
-        case "delete_tweet", "toggle_following", "toggle_bookmark", "block_user", "remove_blacklisted_relationship",
+        case "delete_tweet", "admin_mutate_tweet",
+             "toggle_following", "toggle_bookmark", "block_user", "remove_blacklisted_relationship",
              "set_user_avatar", "delete_account", "message_outgoing", "message_fetch", "share_file":
             return params["userid"] as? String
         case "add_tweet":
@@ -235,9 +236,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
     /// The Leither session proving to this node that the caller controls
     /// `accountID`, signing in when there is none. An owner signs in with the key
     /// their device was paired with; a guest with the username and password
-    /// Leither holds. Nil when this device holds no secret for the account (an
-    /// admin acting on another user's tweet, a just-registered account), the node
-    /// does not check sessions, or it refused the sign-in.
+    /// Leither holds. Nil when this device holds no secret for the account,
+    /// the node does not check sessions, or it refused the sign-in.
     private func userSession(accountID: String, node: String, client: HproseClient) async -> String? {
         // The account's secret is shown to its own root node and to no other. An
         // owned entry can still be addressed elsewhere — a like or a comment sent
@@ -4997,14 +4997,14 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
      * Delete a tweet.
      * Sends the current app user as the requester and the tweet author as owner metadata.
      * The backend decides whether to permanently delete the tweet or only remove it
-     * from the requester's personal lists. Admin deletion deletes on the author's
-     * root first, then removes the admin's feed entry in a separate task.
+     * from the requester's personal lists. For moderation, the admin's root
+     * delegates deletion to the author's root, then the client cleans up its feed.
      */
     func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String {
-        let entry = "delete_tweet"
         let (appUserInstance, appUserMid, isAdminDeletingAnotherUsersTweet) = await MainActor.run {
             (self.appUser, self.appUser.mid, tweetAuthorId != self.appUser.mid && Gadget.isResearchAdminUser(self.appUser))
         }
+        let entry = isAdminDeletingAnotherUsersTweet ? "admin_mutate_tweet" : "delete_tweet"
         // Snapshot the retweet link BEFORE deleting: removeDeletedTweetLocally() clears the
         // singleton and the cache row, so afterwards there is no way to find the original.
         // The backend's delete_tweet does not touch the original tweet's retweet list, so
@@ -5016,33 +5016,21 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                   let originalAuthorId = tweet?.originalAuthorId else { return nil }
             return (originalTweetId, originalAuthorId)
         }
-        let params = [
+        var params = [
             "aid": appId,
             "ver": "last",
             "version": "v3",
-            // The backend permanently deletes only when userid == authorid. Admin
-            // deletes are already gated client-side and routed to the author's host.
-            "userid": isAdminDeletingAnotherUsersTweet ? tweetAuthorId : appUserMid,
-            "appuserid": isAdminDeletingAnotherUsersTweet ? tweetAuthorId : appUserMid,
+            "userid": appUserMid,
+            "appuserid": appUserMid,
             "authorid": tweetAuthorId,
             "tweetid": tweetId
         ]
-
-        let requestUser: User
         if isAdminDeletingAnotherUsersTweet {
-            guard let author = try await fetchUser(tweetAuthorId) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "Author fetch error")])
-            }
-            requestUser = author
-        } else {
-            requestUser = appUserInstance
+            params["action"] = "delete"
         }
 
-        // Delete is a mutation, so it must run directly against the current
-        // writable/root host. resolveWritableUrl() always resolves hostIds[0]
-        // fresh rather than reusing the last writable URL.
-        let writableUrl = try await requestUser.resolveWritableUrl()
-        guard let client = await requestUser.writableClient(timeout: 30) else {
+        let writableUrl = try await appUserInstance.resolveWritableUrl()
+        guard let client = await appUserInstance.writableClient(timeout: 30) else {
             throw NSError(domain: "HproseClient", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
@@ -5061,7 +5049,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                 await removeDeletedTweetLocally(tweetId)
                 // retweet_removed is an idempotent Hdel, so it is safe to send even when
                 // another client already unlinked this retweet.
-                if let retweetOrigin {
+                if let retweetOrigin, !isAdminDeletingAnotherUsersTweet {
                     await decrementRetweetCountOfOriginal(
                         originalTweetId: retweetOrigin.0,
                         originalAuthorId: retweetOrigin.1,
@@ -5092,13 +5080,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         if isAdminDeletingAnotherUsersTweet {
             removeDeletedTweetFromAdminFeed(deletedTweetId, authorId: tweetAuthorId, adminId: appUserMid)
         }
-        await adoptWriteRouteForReads(requestUser, reason: entry)
+        await adoptWriteRouteForReads(appUserInstance, reason: entry)
 
         await removeDeletedTweetLocally(deletedTweetId)
 
         // Deleting a retweet/quote must unlink it from the original tweet's retweet list,
         // otherwise the original keeps counting a retweet that no longer exists.
-        if let retweetOrigin {
+        if let retweetOrigin, !isAdminDeletingAnotherUsersTweet {
             await decrementRetweetCountOfOriginal(
                 originalTweetId: retweetOrigin.0,
                 originalAuthorId: retweetOrigin.1,
@@ -5244,40 +5232,35 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// TweetWeb passes `appuserid: target author` so the server author check passes.
-    /// `attachments` replaces the tweet's whole list; the backend moves its references
-    /// from the old set to the new one.
-    func updateTweet(tweetId: String, content: String, tweetAuthorId: String, attachments: [MediaRecord]) async throws {
-        // Phase A (demotion prep): snapshot @MainActor admin check + appUser.mid.
-        let (isAdmin, appUserMid) = await MainActor.run { (Gadget.isResearchAdminUser(self.appUser), self.appUser.mid) }
-        guard isAdmin else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not available in this distribution"])
+    /// An omitted attachment list leaves the server's existing references in place.
+    func updateTweet(tweetId: String, content: String, tweetAuthorId: String, attachments: [MediaRecord]?) async throws {
+        let (requestUser, isAdmin, appUserMid) = await MainActor.run {
+            (self.appUser, Gadget.isResearchAdminUser(self.appUser), self.appUser.mid)
         }
-        // Execute mutation using the original author's writable client context so
-        // the update is performed in the author's name, not the admin's.
-        let requestUser: User
-        if tweetAuthorId == appUserMid {
-            requestUser = await MainActor.run { self.appUser }
-        } else {
-            guard let author = try await fetchUser(tweetAuthorId) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "Author fetch error")])
-            }
-            requestUser = author
+        guard isAdmin || tweetAuthorId == appUserMid else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not authorized to edit this tweet"])
         }
 
-        let attachmentsJSON = try JSONSerialization.data(withJSONObject: attachments.map(\.uploadPayload))
-        let entry = "update_tweet"
-        let params: [String: Any] = [
+        let delegated = tweetAuthorId != appUserMid
+        let entry = delegated ? "admin_mutate_tweet" : "update_tweet"
+        var params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "appuserid": tweetAuthorId,
+            "appuserid": appUserMid,
             "tweetid": tweetId,
-            "content": content,
-            "attachments": String(decoding: attachmentsJSON, as: UTF8.self)
+            "content": content
         ]
-        // Mutation path should use writable client, same as other write APIs. Referencing
-        // new media can take as long as publishing it, so this uses add_tweet's timeout.
+        if let attachments {
+            let data = try JSONSerialization.data(withJSONObject: attachments.map(\.uploadPayload))
+            params["attachments"] = String(decoding: data, as: UTF8.self)
+        }
+        if delegated {
+            params["action"] = "update"
+            params["userid"] = appUserMid
+            params["authorid"] = tweetAuthorId
+        }
+        // Attachment edits can take longer while the node updates media references.
         _ = try await requestUser.resolveWritableUrl()
         guard let client = await requestUser.writableClient(timeout: 240) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
@@ -7579,8 +7562,6 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // tweet id instead of creating a duplicate. Without one the backend
         // mints a fresh id, so this call is still not automatically retried;
         // only media/attachment upload is safe to retry unconditionally.
-        // Use a longer timeout so tweets with large attachment references can
-        // finish without triggering duplicate creates.
         // Create a clean upload payload with only allowed fields (excluding nil values).
         // Phase A (demotion prep): the whole payload is @MainActor Tweet state — build it on the main actor.
         let (tweetJSON, tweetAuthorId, logContent, logAttachCount): (String, String, String, Int) = try await MainActor.run {
@@ -7629,10 +7610,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         // The tweet is created on the author's root node and referenced by their
         // account, so it goes to the writable route: hostid no longer makes the
         // backend route the call, and a post arriving anywhere else is refused.
-        // Non-idempotent add_tweet can be slow server-side: use a dedicated 240s
-        // timeout class instead of mutating the shared 15s client.
         _ = try await self.appUser.resolveWritableUrl()
-        guard let client = await MainActor.run(body: { self.appUser.writableClient(timeout: 240) }) else {
+        guard let client = await MainActor.run(body: { self.appUser.writableClient(timeout: 45) }) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
         }
             

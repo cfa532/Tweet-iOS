@@ -107,16 +107,24 @@ final class TweetUploadManager {
         enqueue(pending)
     }
 
-    /// Queues an edit that replaces the tweet's text and attachments. New media uploads
-    /// first; the published list is `retainedAttachments` followed by the new media,
-    /// the same order TweetWeb's editor uses.
-    func scheduleTweetEdit(tweet: Tweet, content: String, retainedAttachments: [MediaRecord],
-                           itemData: [PendingTweetUpload.ItemData]) {
-        var record = TweetRecord(tweet: tweet)
-        record.content = content
-        var pending = PendingTweetUpload(record: record, itemData: itemData)
+    /// Uploads new media and waits for the server to acknowledge the edit.
+    func submitTweetEdit(_ record: TweetRecord, retainedAttachments: [MediaRecord],
+                         itemData: [PendingTweetUpload.ItemData], id: UUID) async throws {
+        var pending = PendingTweetUpload(record: record, itemData: itemData, id: id)
         pending.retainedAttachments = retainedAttachments
-        enqueue(pending)
+        try await UploadProgressManager.shared.enqueueUploadAndWait(pending: pending)
+    }
+
+    func saveTweetEdit(_ record: TweetRecord, attachments: [MediaRecord]?) async throws {
+        guard let hproseInstance else { throw uploadError("System error") }
+        try await hproseInstance.updateTweet(tweetId: record.mid, content: record.content ?? "",
+                                            tweetAuthorId: record.authorId, attachments: attachments)
+        let tweet = Tweet.getInstance(for: record.mid) ?? record.makeTweet()
+        tweet.applyRenderAffectingUpdate {
+            tweet.content = record.content
+            if let attachments { tweet.attachments = attachments.map { $0.makeMedia() } }
+        }
+        TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
     }
 
     func enqueue(_ pending: PendingTweetUpload) {
@@ -235,17 +243,7 @@ final class TweetUploadManager {
         defer { heartbeat.cancel() }
 
         if pending.retainedAttachments != nil {
-            let record = pending.record
-            try await hproseInstance.updateTweet(tweetId: record.mid, content: record.content ?? "",
-                                                 tweetAuthorId: record.authorId, attachments: attachments)
-            // applyRenderAffectingUpdate drops the typeset text and every derived height,
-            // so feed and detail both re-render the new content and media.
-            let tweet = Tweet.getInstance(for: record.mid) ?? record.makeTweet()
-            tweet.applyRenderAffectingUpdate {
-                tweet.content = record.content
-                tweet.attachments = attachments.map { $0.makeMedia() }
-            }
-            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+            try await saveTweetEdit(pending.record, attachments: attachments)
         } else if let recipient = pending.recipientId {
             let message = ChatMessage(id: pending.record.mid, authorId: pending.record.authorId,
                 receiptId: recipient, chatSessionId: pending.chatSessionId ?? "",
@@ -292,9 +290,7 @@ final class TweetUploadManager {
         try await removePendingUpload(pending)
     }
 
-    /// Creeps progress toward 0.99 every few seconds. Each step is 10% of the
-    /// remaining gap, so the reported unit count keeps changing for well past
-    /// the publish RPC's 240s timeout.
+    /// Updates progress while the server is committing and publishing the write.
     private func startPublishHeartbeat(from start: Double) -> Task<Void, Never> {
         Task { @MainActor in
             var fraction = start
@@ -384,8 +380,15 @@ final class TweetUploadManager {
     }
 
     func removePendingUpload(_ pending: PendingTweetUpload) async throws {
+        try await removePendingUpload(at: Self.pendingURL(pending))
+    }
+
+    func removePendingUpload(id: UUID) async throws {
+        try await removePendingUpload(at: Self.pendingURL(id: id))
+    }
+
+    private func removePendingUpload(at url: URL) async throws {
         try await Task.detached(priority: .utility) {
-            let url = Self.pendingURL(pending)
             if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
         }.value
     }
@@ -434,8 +437,11 @@ final class TweetUploadManager {
     }
 
     nonisolated private static func pendingURL(_ pending: PendingTweetUpload) -> URL {
-        pending.usesLegacyFile == true ? legacyPendingURL :
-            pendingDirectory.appendingPathComponent(pending.id.uuidString + ".json")
+        pending.usesLegacyFile == true ? legacyPendingURL : pendingURL(id: pending.id)
+    }
+
+    nonisolated private static func pendingURL(id: UUID) -> URL {
+        pendingDirectory.appendingPathComponent(id.uuidString + ".json")
     }
 
     nonisolated private static var pendingDirectory: URL {
@@ -543,8 +549,8 @@ extension TweetUploadManager {
         }
 
         init(record: TweetRecord, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil,
-             parent: TweetRecord? = nil, isQuoting: Bool = false) {
-            id = UUID()
+             parent: TweetRecord? = nil, isQuoting: Bool = false, id: UUID = UUID()) {
+            self.id = id
             self.record = record
             self.itemData = itemData
             timestamp = Date()

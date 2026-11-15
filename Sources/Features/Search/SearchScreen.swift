@@ -32,6 +32,7 @@ struct SearchScreen: View {
                             .foregroundColor(XTheme.secondaryTextColor)
                         
                         TextField("", text: $searchViewModel.searchText)
+                            .textInputAutocapitalization(.never)
                             .accessibilityLabel(Text(LocalizedStringKey("Search")))
                             .textFieldStyle(PlainTextFieldStyle())
                             .focused($isSearchFieldFocused)
