@@ -68,11 +68,7 @@ class TweetCellContentView: UIView {
     private let actionBar = TweetActionBarView()
     /// Construct the quote card only for rows that need it.
     private var embeddedTweetView: EmbeddedTweetUIView?
-    private let separatorView: UIView = {
-        let v = UIView()
-        v.backgroundColor = XTheme.border.withAlphaComponent(0.7)
-        return v
-    }()
+    private let separatorView = UIView()
 
     // Retweet banner ("Forwarded by...") — sits ABOVE the mainStack
     private let retweetBanner: UIView = {
@@ -284,7 +280,7 @@ class TweetCellContentView: UIView {
 
     func applyTheme() {
         backgroundColor = XTheme.background
-        separatorView.backgroundColor = XTheme.border.withAlphaComponent(0.7)
+        separatorView.backgroundColor = XTheme.border
         retweetIcon.tintColor = XTheme.secondaryText
         retweetLabel.textColor = XTheme.secondaryText
     }
@@ -462,6 +458,7 @@ class TweetCellContentView: UIView {
             self?.onContentDidChangeHeightAsync?()
         }
 
+        separatorView.alpha = commentParentTweet == nil ? 0.45 : 0.7
         separatorView.isHidden = isLastItem
         let unavailable = tweet.authorId.isEmpty
         headerView.isHidden = unavailable

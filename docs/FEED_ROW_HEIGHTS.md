@@ -160,16 +160,10 @@ not pay for CoreText. It cannot use `UILabel` (main-thread only, TextKit2), so i
 string out with `NSTextStorage` + `NSLayoutManager` and takes
 `layoutManager.usedRect(for: textContainer).height`.
 
-**Do not go back to `attrStr.boundingRect(with:options:context:)`.** It returns the union of
-the line-fragment rects, which:
-
-- **omits the paragraph style's `lineSpacing` between lines** — a flat `3 × (lines − 1)`
-  short, i.e. exactly **−18pt** at the 7-line cap; and
-- ignores `maximumNumberOfLines` entirely.
-
-That number is what `estimatedHeightForRowAt` banks, so it disagreed with the later UILabel
-measurement by a whole line gap and moved `contentSize` under the scroll every time such a
-row was realized.
+Use the text container to honor the label's seven-line cap and its minimum line height
+of 22pt. `attrStr.boundingRect(with:options:context:)` ignores the cap. The estimate feeds
+`estimatedHeightForRowAt`, so differences from the displayed UILabel height can move
+`contentSize` while rows are realized.
 
 A residual TextKit1-vs-TextKit2 disagreement of up to ~1pt is expected and accepted; it is
 the price of measuring off the main thread.
@@ -177,8 +171,8 @@ the price of measuring off the main thread.
 ### Cold estimate
 
 Before any measurement lands, `TweetBodyUIView.estimatedTextHeight` advances characters by
-script — CJK / fullwidth / emoji at one em, everything else at half — and adds
-`contentLineSpacing`. The previous heuristic assumed a flat 8.5pt per character, which
+script — CJK / fullwidth / emoji at one em, everything else at half — and budgets 22pt per
+line. The previous heuristic assumed a flat 8.5pt per character, which
 counts roughly twice as many characters per line as a Chinese tweet actually fits, so
 estimates came out one to five whole lines short.
 

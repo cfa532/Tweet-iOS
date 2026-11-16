@@ -708,20 +708,25 @@ class TweetBodyUIView: UIView {
     // MARK: - Truncation with "More>>" indicator
 
     // nonisolated: constant values, safe to read from background threads.
-    nonisolated static let contentFont = UIFont.systemFont(ofSize: 16)
+    nonisolated static let contentFont = UIFont.systemFont(ofSize: 16, weight: .regular)
     nonisolated static let maxContentLines = 7
-    /// Paragraph lineSpacing applied to every content string. UILabel adds it BETWEEN
-    /// lines, so an n-line label is `n * lineHeight + (n - 1) * contentLineSpacing`.
-    nonisolated static let contentLineSpacing: CGFloat = 3
+    nonisolated private static let contentLineHeight: CGFloat = 22
+
+    nonisolated private static func makeContentParagraphStyle() -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        // Allow taller fallback glyphs, including emoji, to use their natural height.
+        style.minimumLineHeight = contentLineHeight
+        style.lineBreakMode = .byWordWrapping
+        return style
+    }
 
     /// Sub-millisecond height estimate used before the real (CoreText) measurement lands.
     ///
     /// Advances characters by script instead of assuming one average width for all of
-    /// them: a CJK/fullwidth glyph in this font is a full em (16pt) while Latin averages
+    /// them: a CJK/fullwidth glyph in this font is a full em while Latin averages
     /// about half that, so a flat 8.5pt per character counted roughly twice as many
     /// characters per line as a Chinese tweet actually fits — the estimate came out whole
     /// lines short, and `contentSize` then jumped every time such a row was realized.
-    /// Also adds the lineSpacing that sits between the lines.
     nonisolated static func estimatedTextHeight(for content: String, availableWidth: CGFloat) -> CGFloat {
         let width = max(1, availableWidth)
         let wideAdvance = contentFont.pointSize
@@ -746,8 +751,7 @@ class TweetBodyUIView: UIView {
         }
 
         let capped = max(1, min(maxContentLines, lines))
-        return CGFloat(capped) * contentFont.lineHeight
-            + CGFloat(capped - 1) * contentLineSpacing
+        return CGFloat(capped) * contentLineHeight
     }
 
     /// True for scripts whose glyphs occupy a full em in this font.
@@ -807,9 +811,7 @@ class TweetBodyUIView: UIView {
         let font = contentFont
         let maxLines = maxContentLines
 
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = contentLineSpacing
-        paragraphStyle.lineBreakMode = .byWordWrapping
+        let paragraphStyle = makeContentParagraphStyle()
 
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -861,18 +863,11 @@ class TweetBodyUIView: UIView {
         }
 
         // Build final attributed string
-        let bodyPs = NSMutableParagraphStyle()
-        bodyPs.lineSpacing = contentLineSpacing
-        bodyPs.lineBreakMode = .byWordWrapping
-
-        let result = NSMutableAttributedString(string: bodyText, attributes: [
-            .font: font,
-            .foregroundColor: XTheme.text,
-            .paragraphStyle: bodyPs
-        ])
+        let result = NSMutableAttributedString(string: bodyText, attributes: textAttributes)
         result.append(NSAttributedString(string: moreString, attributes: [
             .font: font,
             .foregroundColor: XTheme.accent,
+            .paragraphStyle: paragraphStyle,
             .moreLinkTap: true,
         ]))
         applyDetectedLinks(to: result, in: NSRange(location: 0, length: bodyText.utf16.count))
@@ -881,14 +876,10 @@ class TweetBodyUIView: UIView {
     }
 
     nonisolated static func makeFullContentAttributedString(content: String) -> NSAttributedString {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = contentLineSpacing
-        paragraphStyle.lineBreakMode = .byWordWrapping
-
         let result = NSMutableAttributedString(string: content, attributes: [
             .font: contentFont,
             .foregroundColor: XTheme.text,
-            .paragraphStyle: paragraphStyle,
+            .paragraphStyle: makeContentParagraphStyle(),
         ])
         applyDetectedLinks(to: result, in: NSRange(location: 0, length: result.length))
         return result
@@ -907,9 +898,7 @@ class TweetBodyUIView: UIView {
         let maxLines = maxContentLines
         let layoutContent = contentForTruncationLayout(content)
 
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = contentLineSpacing
-        paragraphStyle.lineBreakMode = .byWordWrapping
+        let paragraphStyle = makeContentParagraphStyle()
 
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -970,18 +959,11 @@ class TweetBodyUIView: UIView {
             bodyText = String(bodyText.dropLast())
         }
 
-        let bodyPs = NSMutableParagraphStyle()
-        bodyPs.lineSpacing = contentLineSpacing
-        bodyPs.lineBreakMode = .byWordWrapping
-
-        let result = NSMutableAttributedString(string: bodyText, attributes: [
-            .font: font,
-            .foregroundColor: XTheme.text,
-            .paragraphStyle: bodyPs
-        ])
+        let result = NSMutableAttributedString(string: bodyText, attributes: textAttributes)
         result.append(NSAttributedString(string: moreString, attributes: [
             .font: font,
             .foregroundColor: XTheme.accent,
+            .paragraphStyle: paragraphStyle,
             .moreLinkTap: true,
         ]))
         applyDetectedLinks(to: result, in: NSRange(location: 0, length: bodyText.utf16.count))

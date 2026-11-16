@@ -124,16 +124,9 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
             let attrStr = TweetBodyUIView.makeContentAttributedStringBackground(
                 content: content, availableWidth: width
             )
-            // Lay the string out in a real text container instead of calling
-            // boundingRect(with:options:context:). boundingRect returns the union of the
-            // line fragment rects and leaves out the paragraph style's 3pt lineSpacing
-            // BETWEEN lines, so it under-measured every multi-line tweet by
-            // 3 * (lines - 1) — a flat 18pt for the 7-line maximum. That is the number
-            // estimatedHeightForRowAt banks for a row, and it disagreed by a whole line
-            // gap with the UILabel measurement heightForRowAt later produced, so
-            // contentSize moved under the scroll every time such a row was realized.
-            //
-            // Also honours maxContentLines, which boundingRect ignored entirely.
+            // Measure the styled lines in a text container with the same line cap as
+            // UILabel. Measuring uncapped text with boundingRect moved contentSize
+            // when heightForRowAt replaced the estimate during scrolling.
             let textStorage = NSTextStorage(attributedString: attrStr)
             let textContainer = NSTextContainer(
                 size: CGSize(width: width, height: .greatestFiniteMagnitude)
