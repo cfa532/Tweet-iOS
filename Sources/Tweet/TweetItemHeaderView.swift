@@ -47,7 +47,7 @@ struct AdminTweetContentEditSheet: View {
             ScrollView {
                 VStack(spacing: 0) {
                     TextEditor(text: $text)
-                        .frame(minHeight: 150, maxHeight: 292)
+                        .frame(minHeight: 191, maxHeight: 333)
                         .padding()
                         .focused($isEditorFocused)
                     attachmentPreviews
