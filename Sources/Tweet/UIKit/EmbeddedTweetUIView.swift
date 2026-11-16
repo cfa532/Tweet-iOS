@@ -2,98 +2,41 @@
 //  EmbeddedTweetUIView.swift
 //  Tweet
 //
-//  Pure UIKit embedded tweet view for retweets/quoted tweets.
-//  Replaces SwiftUI EmbeddedTweetView within the feed cell.
+//  Compact original-tweet preview in a feed quote.
 //
 import UIKit
-import SwiftUI
 import Combine
 
 class EmbeddedTweetUIView: UIView {
-    static let contentBottomPadding: CGFloat = 4
-    /// Rendered height of the "Loading quoted tweet..." placeholder state.
-    /// TweetTableViewController's deterministic height calculators must use this same
-    /// value for unloaded embedded tweets or quote rows mis-estimate until load lands.
+    static let aspectRatio: CGFloat = 2
     static let placeholderHeight: CGFloat = 36
+    // The card's left edge extends past the feed's content column by this inset.
+    static let leadingExtension: CGFloat = 4
 
     private let avatarView = AvatarUIView()
     private let headerView = TweetHeaderUIView()
-    private let bodyView = TweetBodyUIView()
+    private let previewRow = UIView()
+    private let attachmentView = UIView()
+    private let thumbnailView = UIImageView()
+    private let attachmentIcon = UIImageView()
+    private let textLabel = UILabel()
+    private let contentStack = UIStackView()
+    private let placeholderLabel = UILabel()
 
-    // Placeholder shown while loading, then reworded once the original is known to be
-    // unavailable. Same 36pt single line in both states, so no row relayout on the swap.
-    private let placeholderLabel: UILabel = {
-        let label = UILabel()
-        label.text = NSLocalizedString("Loading quoted tweet...", comment: "")
-        label.textColor = XTheme.secondaryText
-        label.font = .preferredFont(forTextStyle: .subheadline)
-        label.numberOfLines = 1
-        label.translatesAutoresizingMaskIntoConstraints = false
-        return label
-    }()
-
-    private lazy var placeholderView: UIView = {
-        let v = UIView()
-        v.isHidden = true
-
-        v.addSubview(placeholderLabel)
-        NSLayoutConstraint.activate([
-            placeholderLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
-            placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -8),
-            placeholderLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
-            placeholderLabel.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -8),
-        ])
-
-        return v
-    }()
-
-    // Content wrapper (two rows: header row + body row)
-    private let contentStack: UIStackView = {
-        let sv = UIStackView()
-        sv.axis = .vertical
-        sv.alignment = .fill
-        sv.spacing = 4
-        return sv
-    }()
-
-    // Row 1: avatar + header side by side
-    private let headerRow: UIStackView = {
-        let sv = UIStackView()
-        sv.axis = .horizontal
-        sv.alignment = .center
-        sv.spacing = 6
-        return sv
-    }()
-
-    // Mutually exclusive constraint groups — only one set active at a time
-    private var contentStackBottomConstraint: NSLayoutConstraint!
-    private var placeholderBottomConstraint: NSLayoutConstraint!
-    private var placeholderHeightConstraint: NSLayoutConstraint!
-
-    private var cancellables = Set<AnyCancellable>()
+    private var cardHeight: NSLayoutConstraint!
+    private var placeholderHeight: NSLayoutConstraint!
+    private var contentBottom: NSLayoutConstraint!
+    private var attachmentAspect: NSLayoutConstraint!
+    private var emptyAttachmentWidth: NSLayoutConstraint!
+    private var textLeading: NSLayoutConstraint!
+    private var avatarSubscription: AnyCancellable?
+    private var posterSubscription: AnyCancellable?
+    private var imageRequestID: String?
     private var loadTask: Task<Void, Never>?
-    private var currentTweetId: String?
-    private weak var parentViewController: UIViewController?
-
-    /// Per-feed video coordinator (set by TweetCellContentView)
-    weak var videoCoordinator: VideoPlaybackCoordinator?
-    var cellHorizontalPadding: CGFloat = 16 {
-        didSet {
-            bodyView.cellHorizontalPadding = cellHorizontalPadding
-        }
-    }
-    var rowWidth: CGFloat? {
-        didSet {
-            bodyView.rowWidth = rowWidth
-        }
-    }
+    private weak var loadedTweet: Tweet?
 
     var onTap: ((Tweet) -> Void)?
-    /// Opens the embedded tweet's author. The avatar owns its own tap recognizer, so
-    /// without this the tap is swallowed here and never reaches `onTap` either.
     var onAvatarTap: ((User) -> Void)?
-    var onContentExpanded: (() -> Void)?
-    /// Called after async tweet load completes so the parent cell can trigger immediate height check.
     var onAsyncConfigured: (() -> Void)?
 
     override init(frame: CGRect) {
@@ -106,303 +49,233 @@ class EmbeddedTweetUIView: UIView {
     }
 
     private func setupViews() {
-        backgroundColor = XTheme.quotedTweetSurface
-        layer.cornerRadius = 8
+        backgroundColor = XTheme.cardBackground
+        layer.borderWidth = 0.5
+        layer.borderColor = XTheme.border.resolvedColor(with: traitCollection).cgColor
+        layer.cornerRadius = 12
         layer.cornerCurve = .continuous
         clipsToBounds = true
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: EmbeddedTweetUIView, _) in
+            view.layer.borderColor = XTheme.border.resolvedColor(with: view.traitCollection).cgColor
+        }
 
-        // Prevent parent stack from stretching this view
-        setContentHuggingPriority(.required, for: .vertical)
+        let headerRow = UIStackView(arrangedSubviews: [avatarView, headerView])
+        headerRow.alignment = .center
+        headerRow.spacing = 6
+        headerView.useCompactLayout()
 
-        // Row 1: [avatar | header]
-        // Row 2: body (full width)
-        headerRow.addArrangedSubview(avatarView)
-        headerRow.addArrangedSubview(headerView)
-
+        contentStack.axis = .vertical
+        contentStack.spacing = 4
         contentStack.addArrangedSubview(headerRow)
-        contentStack.addArrangedSubview(bodyView)
+        contentStack.addArrangedSubview(previewRow)
+        textLabel.font = .preferredFont(forTextStyle: .subheadline)
+        textLabel.textColor = XTheme.text
+        textLabel.adjustsFontForContentSizeCategory = true
+        textLabel.numberOfLines = 0
+        textLabel.lineBreakMode = .byTruncatingTail
+        textLabel.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        attachmentView.backgroundColor = .tertiarySystemFill
+        attachmentView.layer.cornerRadius = 8
+        attachmentView.clipsToBounds = true
+        thumbnailView.contentMode = .scaleAspectFill
+        attachmentIcon.contentMode = .scaleAspectFit
+        attachmentIcon.tintColor = .secondaryLabel
+        attachmentIcon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 20)
 
+        placeholderLabel.textColor = XTheme.secondaryText
+        placeholderLabel.font = .preferredFont(forTextStyle: .subheadline)
+        addSubview(placeholderLabel)
         addSubview(contentStack)
-        addSubview(placeholderView)
+        previewRow.addSubview(attachmentView)
+        previewRow.addSubview(textLabel)
+        attachmentView.addSubview(thumbnailView)
+        attachmentView.addSubview(attachmentIcon)
+        for view in [placeholderLabel, contentStack, attachmentView, textLabel, thumbnailView, attachmentIcon] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+        }
 
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        placeholderView.translatesAutoresizingMaskIntoConstraints = false
-        avatarView.translatesAutoresizingMaskIntoConstraints = false
-
-        // Content stack constraints (always active except bottom)
+        cardHeight = heightAnchor.constraint(equalTo: widthAnchor, multiplier: 1 / Self.aspectRatio)
+        placeholderHeight = heightAnchor.constraint(equalToConstant: Self.placeholderHeight)
+        cardHeight.priority = UILayoutPriority(999)
+        placeholderHeight.priority = .defaultHigh
+        contentBottom = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        attachmentAspect = attachmentView.widthAnchor.constraint(equalTo: attachmentView.heightAnchor)
+        emptyAttachmentWidth = attachmentView.widthAnchor.constraint(equalToConstant: 0)
+        textLeading = textLabel.leadingAnchor.constraint(equalTo: attachmentView.trailingAnchor)
         NSLayoutConstraint.activate([
+            avatarView.widthAnchor.constraint(equalToConstant: 20),
+            avatarView.heightAnchor.constraint(equalToConstant: 20),
+            headerRow.heightAnchor.constraint(equalToConstant: 22),
             contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-
-            avatarView.widthAnchor.constraint(equalToConstant: 32),
-            avatarView.heightAnchor.constraint(equalToConstant: 32),
-
-            placeholderView.topAnchor.constraint(equalTo: topAnchor),
-            placeholderView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            placeholderView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            placeholderLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            placeholderLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            attachmentView.leadingAnchor.constraint(equalTo: previewRow.leadingAnchor),
+            attachmentView.topAnchor.constraint(equalTo: previewRow.topAnchor),
+            attachmentView.bottomAnchor.constraint(equalTo: previewRow.bottomAnchor),
+            thumbnailView.leadingAnchor.constraint(equalTo: attachmentView.leadingAnchor),
+            thumbnailView.trailingAnchor.constraint(equalTo: attachmentView.trailingAnchor),
+            thumbnailView.topAnchor.constraint(equalTo: attachmentView.topAnchor),
+            thumbnailView.bottomAnchor.constraint(equalTo: attachmentView.bottomAnchor),
+            attachmentIcon.centerXAnchor.constraint(equalTo: attachmentView.centerXAnchor),
+            attachmentIcon.centerYAnchor.constraint(equalTo: attachmentView.centerYAnchor),
+            attachmentIcon.widthAnchor.constraint(equalToConstant: 24),
+            attachmentIcon.heightAnchor.constraint(equalToConstant: 24),
+            textLeading,
+            textLabel.trailingAnchor.constraint(equalTo: previewRow.trailingAnchor),
+            textLabel.topAnchor.constraint(equalTo: previewRow.topAnchor),
+            textLabel.bottomAnchor.constraint(lessThanOrEqualTo: previewRow.bottomAnchor),
+            emptyAttachmentWidth
         ])
-
-        // Mutually exclusive constraints — only one group active at a time
-        contentStackBottomConstraint = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.contentBottomPadding)
-        placeholderBottomConstraint = placeholderView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: Self.placeholderHeight)
-        // Lower priority so parent's height=0 constraint wins when hidden in stack view
-        placeholderHeightConstraint.priority = .defaultHigh
-        placeholderBottomConstraint.priority = .defaultHigh
-
-        // Start with placeholder active (content hidden)
-        contentStack.isHidden = true
-        placeholderView.isHidden = false
-        contentStackBottomConstraint.isActive = false
-        placeholderBottomConstraint.isActive = true
-        placeholderHeightConstraint.isActive = true
-
-        headerView.menuButton(visible: false)
-
-        // Tap gesture for navigation
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        tap.cancelsTouchesInView = false
-        addGestureRecognizer(tap)
-        isUserInteractionEnabled = true
-    }
-
-    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        let bodyLocation = gestureRecognizer.location(in: bodyView)
-        guard bodyView.bounds.contains(bodyLocation) else { return true }
-        return !bodyView.isURLLinkPoint(bodyLocation) && !bodyView.isMoreLinkPoint(bodyLocation)
-    }
-
-    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        guard let tweet = loadedTweet else { return }
-        let bodyLocation = gesture.location(in: bodyView)
-        if bodyView.bounds.contains(bodyLocation),
-           bodyView.isURLLinkPoint(bodyLocation) || bodyView.isMoreLinkPoint(bodyLocation) {
-            return
-        }
-        onTap?(tweet)
-    }
-
-    private weak var loadedTweet: Tweet?
-
-    /// Configure with an already-loaded embedded tweet
-    func configure(tweet: Tweet, quotingTweetId: String?,
-                   parentViewController: UIViewController) {
-        self.parentViewController = parentViewController
-        self.loadedTweet = tweet
-
-        if currentTweetId == tweet.mid { return }
-        currentTweetId = tweet.mid
-
-        // Show content, hide placeholder — swap constraint groups
-        contentStack.isHidden = false
-        placeholderView.isHidden = true
-        placeholderBottomConstraint.isActive = false
-        placeholderHeightConstraint.isActive = false
-        contentStackBottomConstraint.isActive = true
-
-        // Configure subviews
-        if let author = tweet.author {
-            avatarView.configure(user: author, size: 32)
-            avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
-        } else {
-            avatarView.onTap = nil
-            // Author not yet loaded — subscribe to update avatar when it arrives
-            tweet.$author
-                .compactMap { $0 }
-                .first()
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] author in
-                    self?.avatarView.configure(user: author, size: 32)
-                    self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
-                }
-                .store(in: &cancellables)
-        }
-        headerView.configure(tweet: tweet)
-        bodyView.videoCoordinator = videoCoordinator
-        bodyView.configure(tweet: tweet, isEmbedded: true,
-                           cellTweetId: quotingTweetId,
-                           parentViewController: parentViewController)
-        bodyView.onTweetBodyTap = { [weak self] in
-            guard let self, let tweet = self.loadedTweet else { return }
-            self.onTap?(tweet)
-        }
-        bodyView.onContentExpanded = { [weak self] in
-            self?.onContentExpanded?()
-        }
-        bodyView.onContentDidChangeHeightAsync = { [weak self] in
-            self?.onAsyncConfigured?()
-        }
-
-        // Keep a real inset below embedded media so rounded borders do not clip the content.
-        contentStackBottomConstraint.constant = -Self.contentBottomPadding
-
-        // Mark as accessed for cache management
-        TweetCacheManager.shared.markTweetAccessed(tweet.mid)
-
-        // Invalidate layout so parent stack view and table view recalculate height
-        invalidateIntrinsicContentSize()
-        setNeedsLayout()
-    }
-
-    /// Show loading placeholder while embedded tweet is being fetched
-    func showPlaceholder() {
-        placeholderLabel.text = NSLocalizedString("Loading quoted tweet...", comment: "")
-        contentStack.isHidden = true
-        placeholderView.isHidden = false
-        contentStackBottomConstraint.isActive = false
-        placeholderBottomConstraint.isActive = true
-        placeholderHeightConstraint.isActive = true
-        loadedTweet = nil
-        invalidateIntrinsicContentSize()
-        setNeedsLayout()
-    }
-
-    /// Load embedded tweet asynchronously (cache -> server)
-    func loadEmbeddedTweet(originalTweetId: String, originalAuthorId: String,
-                           quotingTweet: Tweet, hproseInstance: HproseInstance,
-                           parentViewController: UIViewController) {
-        self.parentViewController = parentViewController
-        loadTask?.cancel()
-
-        // 1. Check singleton cache synchronously
-        if let cached = Tweet.getInstance(for: originalTweetId), cached.author != nil {
-            configure(tweet: cached, quotingTweetId: quotingTweet.mid,
-                      parentViewController: parentViewController)
-            registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: cached)
-            return
-        }
-
         showPlaceholder()
 
-        // 2. Fetch from cache/server asynchronously so row configuration stays off the hot path.
-        loadTask = Task { [weak self] in
-            if let cached = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self?.configure(tweet: cached, quotingTweetId: quotingTweet.mid,
-                                    parentViewController: parentViewController)
-                    self?.registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: cached)
-                    self?.onAsyncConfigured?()
-                }
-                return
-            }
-
-            if let serverTweet = try? await hproseInstance.getTweet(
-                tweetId: originalTweetId, authorId: originalAuthorId
-            ) {
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self?.configure(tweet: serverTweet, quotingTweetId: quotingTweet.mid,
-                                    parentViewController: parentViewController)
-                    self?.registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: serverTweet)
-                    self?.onAsyncConfigured?()
-                }
-            }
-            // Original tweet fetch failed (deleted/404/network error) — keep the placeholder
-            // (not an empty/hidden card), reworded so it no longer claims to be loading.
-            // It stays non-tappable: handleTap has no loadedTweet to open.
-            guard !Task.isCancelled else { return }
-            await MainActor.run { self?.placeholderLabel.text = NSLocalizedString("Original tweet not found", comment: "") }
-        }
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        tap.cancelsTouchesInView = false
+        addGestureRecognizer(tap)
     }
 
-    private func registerVideoRelationship(quotingTweet: Tweet, originalTweet: Tweet) {
-        let coordinator = videoCoordinator ?? .shared
-        let hasContentText = quotingTweet.content != nil &&
-            !(quotingTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        let hasAttachments = quotingTweet.attachments != nil &&
-            !(quotingTweet.attachments?.isEmpty ?? true)
-        let hasOwnContent = hasContentText || hasAttachments
-
-        if hasOwnContent {
-            coordinator.addEmbeddedTweetVideos(
-                quotingTweetId: quotingTweet.mid,
-                embeddedTweet: originalTweet
-            )
-        } else {
-            coordinator.addRetweetVideos(
-                retweetId: quotingTweet.mid,
-                originalTweet: originalTweet
-            )
-        }
-
+    @objc private func handleTap() {
+        if let loadedTweet { onTap?(loadedTweet) }
     }
 
-    // MARK: - Visibility
-
-    /// Forward media visibility to the embedded tweet's body media grid
-    func setMediaVisible(_ visible: Bool) {
-        bodyView.mediaGridView.isGridVisible = visible
-    }
-
-    func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
-        bodyView.mediaGridView.onScreenVideoIdentifiers(
-            visibleRect: visibleRect, coordinateSpace: coordinateSpace
-        )
-    }
-
-    func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
-        bodyView.mediaGridView.mediaVisibilityIdentifiers(
-            visibleRect: visibleRect,
-            coordinateSpace: coordinateSpace
-        )
-    }
-
-    func refreshVideoLayersAfterForeground() {
-        bodyView.mediaGridView.refreshVideoLayersAfterForeground()
-    }
-
-    func prepareMediaForBackground() {
-        bodyView.mediaGridView.prepareMediaForBackground()
-    }
-
-    // MARK: - Intrinsic Size
-
-    override var intrinsicContentSize: CGSize {
-        // Placeholder needs an explicit height; content relies on constraints
-        if contentStack.isHidden {
-            return CGSize(width: UIView.noIntrinsicMetric, height: Self.placeholderHeight)
-        }
-        // Let auto-layout constraints determine the height (top/bottom pinned to contentStack)
-        return CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
-    }
-
-    // MARK: - Reuse
-
-    func prepareForReuse() {
+    func configure(tweet: Tweet) {
+        if loadedTweet === tweet { return }
         loadTask?.cancel()
         loadTask = nil
-        cancellables.removeAll()
-        currentTweetId = nil
+        clearPreview()
+        loadedTweet = tweet
+
+        placeholderLabel.isHidden = true
+        placeholderHeight.isActive = false
+        contentStack.isHidden = false
+        cardHeight.isActive = true
+        contentBottom.isActive = true
+        headerView.configure(tweet: tweet)
+        textLabel.text = [tweet.title, tweet.content]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+
+        avatarSubscription = tweet.$author
+            .compactMap { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] author in
+                guard let self else { return }
+                self.avatarView.configure(user: author, size: 20)
+                self.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
+            }
+
+        if let attachment = tweet.attachments?.first {
+            emptyAttachmentWidth.isActive = false
+            attachmentAspect.isActive = true
+            attachmentView.isHidden = false
+            textLeading.constant = 8
+            loadPreview(attachment, from: tweet)
+        }
+        TweetCacheManager.shared.markTweetAccessed(tweet.mid)
+    }
+
+    private func loadPreview(_ attachment: MimeiFileType, from tweet: Tweet) {
+        let mediaId = attachment.mid
+        let baseURL = tweet.mediaBaseURL ?? HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
+        guard let url = attachment.getUrl(baseURL) else { return }
+
+        switch attachment.type {
+        case .image:
+            attachmentIcon.image = UIImage(systemName: "photo")
+            let requestId = UUID().uuidString
+            imageRequestID = requestId
+            GlobalImageLoadManager.shared.loadImageNormalPriority(
+                id: requestId, url: url, attachment: attachment, baseUrl: baseURL
+            ) { [weak self] image in
+                guard let self, self.imageRequestID == requestId, let image else { return }
+                self.thumbnailView.image = image
+                self.attachmentIcon.isHidden = true
+            }
+        case .video, .hls_video:
+            attachmentIcon.image = UIImage(systemName: "play.circle.fill")
+            if let poster = SharedAssetCache.shared.cachedThumbnail(for: mediaId) {
+                thumbnailView.image = poster
+            } else {
+                posterSubscription = NotificationCenter.default.publisher(for: .videoThumbnailCached)
+                    .compactMap { $0.userInfo?["mediaID"] as? String }
+                    .filter { $0 == mediaId }
+                    .receive(on: DispatchQueue.main)
+                    .first()
+                    .sink { [weak self] _ in
+                        self?.thumbnailView.image = SharedAssetCache.shared.cachedThumbnail(for: mediaId)
+                    }
+                SharedAssetCache.shared.preloadPoster(for: url, mediaID: mediaId, tweetId: tweet.mid, mediaType: attachment.type)
+            }
+        case .audio:
+            attachmentIcon.image = UIImage(systemName: "waveform")
+        default:
+            attachmentIcon.image = UIImage(systemName: "doc")
+        }
+    }
+
+    func showPlaceholder(message: String = NSLocalizedString("Loading quoted tweet...", comment: "")) {
+        loadTask?.cancel()
+        loadTask = nil
+        clearPreview()
         loadedTweet = nil
-        onTap = nil
-        onAvatarTap = nil
-        onContentExpanded = nil
-        onAsyncConfigured = nil
+        placeholderLabel.text = message
+        placeholderLabel.isHidden = false
+        contentStack.isHidden = true
+        contentBottom.isActive = false
+        cardHeight.isActive = false
+        placeholderHeight.isActive = true
+    }
+
+    func loadEmbeddedTweet(originalTweetId: String, originalAuthorId: String, hproseInstance: HproseInstance) {
+        showPlaceholder()
+        loadTask = Task { [weak self] in
+            let cached = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
+            guard !Task.isCancelled else { return }
+            let original: Tweet?
+            if let cached {
+                original = cached
+            } else {
+                original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.loadTask = nil
+            if let original {
+                self.configure(tweet: original)
+                self.onAsyncConfigured?()
+            } else {
+                self.showPlaceholder(message: NSLocalizedString("Original tweet not found", comment: ""))
+            }
+        }
+    }
+
+    private func clearPreview() {
+        if let imageRequestID { GlobalImageLoadManager.shared.cancelLoad(id: imageRequestID) }
+        imageRequestID = nil
+        posterSubscription = nil
+        avatarSubscription = nil
         avatarView.prepareForReuse()
         headerView.prepareForReuse()
-        bodyView.prepareForReuse()
-        // Reset to placeholder state — swap constraint groups
-        placeholderLabel.text = NSLocalizedString("Loading quoted tweet...", comment: "")
-        contentStack.isHidden = true
-        placeholderView.isHidden = false
-        contentStackBottomConstraint.constant = -Self.contentBottomPadding  // Reset to default
-        contentStackBottomConstraint.isActive = false
-        placeholderBottomConstraint.isActive = true
-        placeholderHeightConstraint.isActive = true
-        invalidateIntrinsicContentSize()
+        attachmentView.isHidden = true
+        attachmentAspect.isActive = false
+        emptyAttachmentWidth.isActive = true
+        textLeading.constant = 0
+        thumbnailView.image = nil
+        attachmentIcon.image = nil
+        attachmentIcon.isHidden = false
+        textLabel.text = nil
+    }
+
+    func prepareForReuse() {
+        showPlaceholder()
+        onTap = nil
+        onAvatarTap = nil
+        onAsyncConfigured = nil
     }
 
     deinit {
         loadTask?.cancel()
-    }
-}
-
-// MARK: - TweetHeaderUIView Extension (hide menu for embedded tweets)
-extension TweetHeaderUIView {
-    func menuButton(visible: Bool) {
-        // Access the menu button to hide it in embedded tweets
-        subviews.compactMap { $0 as? UIButton }.forEach { $0.isHidden = !visible }
     }
 }

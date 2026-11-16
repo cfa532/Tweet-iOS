@@ -130,6 +130,7 @@ struct TweetActionButtonsView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
+    @State private var retweetStartToastID: UUID?
     @State private var attachmentPreviewImage: UIImage? = nil
     @State private var isPreparingShare = false
     @State private var shareSheetItems: ShareSheetData? = nil
@@ -148,73 +149,12 @@ struct TweetActionButtonsView: View {
     // private func preloadAttachmentPreview() { ... }
     
     private func retweet(tweet: Tweet) async throws {
-        // Use the tweet instance directly - user tapped the button, so tweet is available
-        // Since retweets use the same original tweet instance, refreshing it ensures all views are in sync
-        print("🔄 [Retweet] Starting retweet for tweet: \(tweet.mid)")
-        
-        do {
-            // Upload the retweet and update count (matches Android flow)
-            // HproseInstance.retweet() now handles:
-            // 1. Upload retweet
-            // 2. Update retweet count of original tweet
-            // 3. Cache the updated original tweet
-            // Note: Optimistic update already happened in button handler
-            print("🔄 [Retweet] Calling hproseInstance.retweet for tweet: \(tweet.mid)")
-            guard let retweet = try await hproseInstance.retweet(tweet) else {
-                // Retweet upload failed - refresh original tweet from server to restore correct state
-                print("❌ [Retweet] Upload failed for tweet: \(tweet.mid), refreshing from server")
-                if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
-                    await MainActor.run {
-                        try? tweet.update(from: refreshedTweet)
-                    }
-                }
-                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload retweet", comment: "")])
-            }
-            
-            print("✅ [Retweet] Retweet created with ID: \(retweet.mid) for original tweet: \(tweet.mid)")
-            
-            // Verify we got a valid retweet ID from server (not a temporary ID)
-            // Only post notification if server actually created a retweet with valid ID
-            guard !retweet.mid.isEmpty && !retweet.mid.hasPrefix("TEMP_") else {
-                print("❌ [Retweet] Invalid retweet ID from server for tweet: \(tweet.mid), refreshing from server")
-                // Refresh original tweet from server to restore correct state
-                if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
-                    await MainActor.run {
-                        try? tweet.update(from: refreshedTweet)
-                    }
-                }
-                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid retweet ID from server", comment: "")])
-            }
-            
-            // Refresh original tweet from server to ensure all views get the updated count
-            // updateRetweetCount() already updated it, but refresh ensures we have the latest from server
-            // and that all instances in the list see the update
-            if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
-                await MainActor.run {
-                    // refreshTweet() returns the singleton instance, so update from it to sync all properties
-                    if let existingTweet = Tweet.getInstance(for: tweet.mid) {
-                        try? existingTweet.update(from: refreshedTweet)
-                    }
-                    print("✅ [Retweet] Refreshed original tweet from server, retweetCount: \(refreshedTweet.retweetCount ?? 0)")
-                }
-            }
-            
-            // Post notification only after confirmed successful retweet creation with valid ID
-            print("✅ [Retweet] Posting notification for new tweet created: \(retweet.mid)")
-            NotificationCenter.default.post(name: .newTweetCreated,
-                                            object: nil,
-                                            userInfo: ["tweet": retweet])
-        } catch {
-            // Refresh original tweet from server to restore correct state on failure
-            print("❌ [Retweet] Retweet failed for tweet: \(tweet.mid), error: \(error), refreshing from server")
-            if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
-                await MainActor.run {
-                    try? tweet.update(from: refreshedTweet)
-                    print("🔄 [Retweet] Restored original tweet from server, retweetCount: \(tweet.retweetCount ?? 0)")
-                }
-            }
-            throw error
+        guard let retweet = try await hproseInstance.retweet(tweet, commentParent: parentTweet) else {
+            throw NSError(domain: "RetweetError", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload retweet", comment: "")
+            ])
         }
+        NotificationCenter.default.post(name: .newTweetCreated, object: nil, userInfo: ["tweet": retweet])
     }
     
     var body: some View {
@@ -243,40 +183,31 @@ struct TweetActionButtonsView: View {
             Spacer(minLength: 12)
             // Retweet / forward button
             DebounceButton(
-                cooldownDuration: 0.5,
+                cooldownDuration: 2,
                 enableAnimation: true,
                 enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
-                    print("🔵 [Retweet Button] Button pressed for tweet: \(tweet.mid), author: \(tweet.authorId)")
-                    
+                    if isFullScreen {
+                        retweetStartToastID = UUID()
+                    } else {
+                        NotificationCenter.default.post(name: .retweetStarted, object: nil)
+                    }
                     Task {
-                        // Store original count for optimistic update
-                        let originalCount = tweet.retweetCount ?? 0
-                        
-                        // Optimistic UI update - increment retweet count immediately on MainActor
-                        // This ensures instant feedback before any network calls (non-blocking)
-                        await MainActor.run {
-                            tweet.retweetCount = originalCount + 1
-                            print("🔄 [Retweet] Optimistically incremented count to: \(tweet.retweetCount ?? 0) for tweet: \(tweet.mid)")
-                        }
-                        
-                        print("🔄 [Retweet Task] Starting async task for tweet: \(tweet.mid), author: \(tweet.authorId)")
-                        
+
                         do {
                             // Use the tweet instance we already have (user tapped the button, so tweet is there)
-                            // Note: optimistic update already happened above
                             try await retweet(tweet: tweet)
                         } catch {
                             print("❌ [Retweet] Retweet failed for tweet: \(tweet.mid), error: \(error)")
-                            // Note: retweet() function already refreshes from server on failure, so no manual rollback needed
                             
                             // Show error toast only after all retries are exhausted
                             // Note: uploadTweet() uses withRetry() which does 2 retries internally,
                             // so this error is only reached after final retry fails
                             await MainActor.run {
+                                retweetStartToastID = nil
                                 showToast = true
                                 toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                                 toastType = .error
@@ -312,7 +243,6 @@ struct TweetActionButtonsView: View {
                     Task {
                         // Store current state before any changes
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
-                        let originalFavoriteCount = tweet.favoriteCount ?? 0
                         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
                         let originalAppUserFavoriteTweets = hproseInstance.appUser.favoriteTweets
                         let originalFavorites = tweet.favorites // Save original favorites array
@@ -323,7 +253,6 @@ struct TweetActionButtonsView: View {
                         
                         await MainActor.run {
                             tweet.favorites = newFavorites
-                            tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
                             // Update appUser favorite count immediately
                             hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
                             if wasFavorite {
@@ -367,7 +296,6 @@ struct TweetActionButtonsView: View {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
                                 self.tweet.favorites = originalFavorites
-                                self.tweet.favoriteCount = originalFavoriteCount
                                 hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
                                 hproseInstance.appUser.favoriteTweets = originalAppUserFavoriteTweets
                                 NotificationCenter.default.post(
@@ -418,7 +346,6 @@ struct TweetActionButtonsView: View {
                     Task {
                         // Store current state before any changes
                         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
-                        let originalBookmarkCount = tweet.bookmarkCount ?? 0
                         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
                         let originalAppUserBookmarkedTweets = hproseInstance.appUser.bookmarkedTweets
                         let originalFavorites = tweet.favorites // Save original favorites array
@@ -429,7 +356,6 @@ struct TweetActionButtonsView: View {
                         
                         await MainActor.run {
                             self.tweet.favorites = newFavorites
-                            self.tweet.bookmarkCount = (self.tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)
                             // Update appUser bookmark count immediately
                             hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount + (wasBookmarked ? -1 : 1)
                             if wasBookmarked {
@@ -473,7 +399,6 @@ struct TweetActionButtonsView: View {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
                                 self.tweet.favorites = originalFavorites
-                                self.tweet.bookmarkCount = originalBookmarkCount
                                 hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
                                 hproseInstance.appUser.bookmarkedTweets = originalAppUserBookmarkedTweets
                                 NotificationCenter.default.post(
@@ -650,14 +575,24 @@ struct TweetActionButtonsView: View {
             // Toast message overlay
             VStack {
                 Spacer()
-                if showToast {
-                    ToastView(message: toastMessage, type: toastType)
+                if showToast || retweetStartToastID != nil {
+                    ToastView(
+                        message: retweetStartToastID == nil ? toastMessage : ToastView.retweetingMessage,
+                        type: retweetStartToastID == nil ? toastType : .info
+                    )
                         .padding(.bottom, 40)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
+            .animation(.easeInOut(duration: 0.3), value: retweetStartToastID != nil)
         )
+        .task(id: retweetStartToastID) {
+            guard let id = retweetStartToastID else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, retweetStartToastID == id else { return }
+            retweetStartToastID = nil
+        }
         .onAppear {
             // DISABLED: Preload attachment preview causes UI freezing when many video tweets are visible
             // Preview will be generated on-demand when share button is tapped instead

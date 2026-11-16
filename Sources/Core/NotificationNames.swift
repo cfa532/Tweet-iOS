@@ -47,6 +47,9 @@ extension Notification.Name {
     // MARK: - Tweet Related
     /// Posted when a new tweet is created
     static let newTweetCreated = Notification.Name("newTweetCreated")
+
+    /// Posted when a retweet button starts a request.
+    static let retweetStarted = Notification.Name("retweetStarted")
     
     /// Posted when a tweet is successfully submitted (for UI feedback)
     static let tweetSubmitted = Notification.Name("tweetSubmitted")

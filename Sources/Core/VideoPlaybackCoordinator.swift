@@ -580,73 +580,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         self.tableView = tableView
     }
     
-    func addEmbeddedTweetVideos(quotingTweetId: String, embeddedTweet: Tweet) {
-        var videosToAdd: [VideoPlaybackInfo] = []
-
-        if let embeddedAttachments = embeddedTweet.attachments {
-            for (attachmentIndex, attachment) in embeddedAttachments.enumerated() {
-                if attachment.type == .video || attachment.type == .hls_video {
-                    let videoInfo = VideoPlaybackInfo(
-                        cellTweetId: quotingTweetId,          // visible cell in feed
-                        mediaTweetId: embeddedTweet.mid,      // owns attachments
-                        videoMid: attachment.mid,
-                        attachmentIndex: attachmentIndex
-                    )
-
-                    videosToAdd.append(videoInfo)
-                    // Allow duplicates like Android - videos appear as many times as they appear in feed
-                }
-            }
-        }
-
-        if !videosToAdd.isEmpty {
-            // Rebuild the video list to ensure correct feed ordering
-            // This is necessary because embedded videos may be loaded after initial list building.
-            // Do NOT call performPreloadOnScrollStop here — video list rebuilds triggered by
-            // pagination would create preloads for newly-loaded tweets the user hasn't scrolled to.
-            Task {
-                let newVideos = await self.buildVideoListAsync(tweets: self.currentTweets, pinnedTweets: [])
-                await MainActor.run {
-                    self.setVideoList(newVideos)
-                }
-            }
-
-        }
-    }
-
-    /// Add videos for a pure retweet once the original tweet (media owner) is available.
-    ///
-    /// This keeps a single canonical list owned by the coordinator while still allowing fullscreen
-    /// navigation to work for retweets whose attachments arrive later.
-    func addRetweetVideos(retweetId: String, originalTweet: Tweet) {
-        var videosToAdd: [VideoPlaybackInfo] = []
-
-        if let attachments = originalTweet.attachments {
-            for (attachmentIndex, attachment) in attachments.enumerated() {
-                if attachment.type == .video || attachment.type == .hls_video {
-                    let info = VideoPlaybackInfo(
-                        cellTweetId: retweetId,
-                        mediaTweetId: originalTweet.mid,
-                        videoMid: attachment.mid,
-                        attachmentIndex: attachmentIndex
-                    )
-                    videosToAdd.append(info)
-                    // Allow duplicates like Android - videos appear as many times as they appear in feed
-                }
-            }
-        }
-
-        if !videosToAdd.isEmpty {
-            // Rebuild the video list to ensure correct feed ordering.
-            // Do NOT call performPreloadOnScrollStop — same reason as addEmbeddedTweetVideos.
-            Task {
-                let newVideos = await self.buildVideoListAsync(tweets: self.currentTweets, pinnedTweets: [])
-                await MainActor.run {
-                    self.setVideoList(newVideos)
-                }
-            }
-        }
-    }
 
     /// Returns true if the canonical list contains the current fullscreen item.
     /// This is used to distinguish "no next video" from "not a feed-backed fullscreen context".
@@ -772,35 +705,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         var videos: [VideoPlaybackInfo] = []
 
 
-        // Store tweet list for embedded tweet lookup (temporarily, will be set on main actor)
-        // let currentTweets = pinnedTweets + tweets
-
-        // CRITICAL: Build a map of embedded tweet IDs (tweets that are quoted in other tweets)
-        // A tweet is embedded if its ID appears as originalTweetId in another tweet
-        // These should NOT have their videos tracked, even if they appear standalone in the feed
-        let allTweets = pinnedTweets + tweets
-        
-        // First, collect all quoted tweets (tweets with originalTweetId AND own content)
-        // A quoted tweet has originalTweetId AND (has content text OR has attachments)
-        // A pure retweet has originalTweetId AND (no content text AND no attachments)
-        var quotedTweets: [(id: String, originalTweetId: String)] = []
-        for tweet in allTweets {
-            if let originalTweetId = tweet.originalTweetId {
-                // Check if this tweet has its own content (text OR attachments)
-                let hasContentText = tweet.content != nil && !(tweet.content?.isEmpty ?? true)
-                let hasAttachments = tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true)
-                let hasOwnContent = hasContentText || hasAttachments
-                
-                if hasOwnContent {
-                    // This is a quoted tweet (has originalTweetId AND own content)
-                    quotedTweets.append((id: tweet.mid, originalTweetId: originalTweetId))
-                }
-            }
-        }
-        
-        // Process pinned tweets first (they appear at the top)
-        // Allow both embedded and standalone instances of the same video to be tracked
-        // Both should be able to autoplay when visible
+        // Process pinned tweets first (they appear at the top).
         for (_, tweet) in pinnedTweets.enumerated() {
             guard let attachments = tweet.attachments else { continue }
 
@@ -813,23 +718,19 @@ class VideoPlaybackCoordinator: ObservableObject {
                         attachmentIndex: attachmentIndex
                     )
 
-                        videos.append(videoInfo)
+                    videos.append(videoInfo)
                 }
             }
         }
 
         // Then process regular tweets
         for (_, tweet) in tweets.enumerated() {
-            // Include embedded tweets - they should be managed by coordinator
-            // Determine if this is a pure retweet (no own content, just forwarding)
-            // A pure retweet has originalTweetId AND (no content text AND no attachments)
-            // A quoted tweet has originalTweetId AND (has content text OR has attachments)
+            // Only the media displayed in the main body plays inline.
             let hasContentText = tweet.content != nil && !(tweet.content?.isEmpty ?? true)
             let hasAttachments = tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true)
             let hasOwnContent = hasContentText || hasAttachments
             let hasOriginalTweet = tweet.originalTweetId != nil
             let isPureRetweet = hasOriginalTweet && !hasOwnContent // Has original but no own content
-            let isQuotedTweet = hasOriginalTweet && hasOwnContent // Has original AND own content (quoted tweet)
             
             if isPureRetweet {
                 // PURE RETWEET: Get attachments from original tweet, use retweet's ID for positioning
@@ -856,9 +757,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                     }
                 }
             } else {
-                // REGULAR TWEET or QUOTED TWEET
-                // Allow both embedded and standalone instances to be tracked
-                // Both should be able to autoplay when visible
                 if let attachments = tweet.attachments {
                     for (attachmentIndex, attachment) in attachments.enumerated() {
                         if attachment.type == .video || attachment.type == .hls_video {
@@ -869,34 +767,13 @@ class VideoPlaybackCoordinator: ObservableObject {
                                 attachmentIndex: attachmentIndex
                             )
 
-                        videos.append(videoInfo)
-                        }
-                    }
-                }
-                
-                if isQuotedTweet, let originalTweetId = tweet.originalTweetId {
-                    let embeddedTweet = resolveMediaTweet(originalTweetId)
-
-                    if let embeddedTweet = embeddedTweet,
-                       let embeddedAttachments = embeddedTweet.attachments {
-                        for (attachmentIndex, attachment) in embeddedAttachments.enumerated() {
-                            if attachment.type == .video || attachment.type == .hls_video {
-                                let videoInfo = VideoPlaybackInfo(
-                                    cellTweetId: tweet.mid,           // visible cell in feed
-                                    mediaTweetId: embeddedTweet.mid,  // owns attachments
-                                    videoMid: attachment.mid,
-                                    attachmentIndex: attachmentIndex
-                                )
-
-                                videos.append(videoInfo)
-                                // Don't deduplicate - allow videos to appear multiple times like Android
-                            }
+                            videos.append(videoInfo)
                         }
                     }
                 }
             }
         }
-        
+
         // Return the built video list (async function)
         return videos
     }

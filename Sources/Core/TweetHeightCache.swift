@@ -15,11 +15,11 @@ final class TweetHeightCache: NSObject, @unchecked Sendable {
     /// 1.5pt. Without a version bump, an installed user would keep heights produced by the
     /// previous calculator indefinitely and never see the fix.
     ///
-    /// v6: heights now match the cell's Auto Layout exactly (see docs/FEED_ROW_HEIGHTS.md).
-    private let userDefaultsKey = "TweetHeightCache.v6"
+    /// v8: quote rows include the forwarding label and a 2:1 original card.
+    private let userDefaultsKey = "TweetHeightCache.v8"
     private let supersededUserDefaultsKeys = [
         "TweetHeightCache", "TweetHeightCache.v2", "TweetHeightCache.v3",
-        "TweetHeightCache.v4", "TweetHeightCache.v5",
+        "TweetHeightCache.v4", "TweetHeightCache.v5", "TweetHeightCache.v6", "TweetHeightCache.v7",
     ]
     private let maxEntries = 2000
     private var heights: [String: CGFloat] = [:]

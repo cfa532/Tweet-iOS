@@ -27,6 +27,7 @@
 "Are you sure you want to cancel this upload? This action cannot be undone." = "您确定要取消此上传吗？此操作无法撤销。";
 "Continue" = "继续";
 "Posting Tweet" = "正在发布推文";
+"Retweeting…" = "正在转发…";
 "Posting Comment" = "正在发布评论";
 "Updating Tweet" = "正在更新推文";
 "Sending Message" = "正在发送消息";

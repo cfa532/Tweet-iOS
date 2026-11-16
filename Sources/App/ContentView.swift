@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .success
+    @State private var retweetStartToastID: UUID?
     @State private var pendingUpload: TweetUploadManager.PendingTweetUpload? = nil
     @State private var showPendingUploadDialog = false
     @State private var showCloudDriveLimitAlert = false
@@ -275,14 +276,27 @@ struct ContentView: View {
             // Toast message overlay
             VStack {
                 Spacer()
-                if showToast {
-                    ToastView(message: toastMessage, type: toastType)
+                if showToast || retweetStartToastID != nil {
+                    ToastView(
+                        message: retweetStartToastID == nil ? toastMessage : ToastView.retweetingMessage,
+                        type: retweetStartToastID == nil ? toastType : .info
+                    )
                         .padding(.bottom, 60) // Position to overlap tab bar
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
+            .animation(.easeInOut(duration: 0.3), value: retweetStartToastID != nil)
         )
+        .onReceive(NotificationCenter.default.publisher(for: .retweetStarted)) { _ in
+            retweetStartToastID = UUID()
+        }
+        .task(id: retweetStartToastID) {
+            guard let id = retweetStartToastID else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, retweetStartToastID == id else { return }
+            retweetStartToastID = nil
+        }
         .overlay(
             // Pending upload dialog
             Group {
@@ -480,6 +494,7 @@ struct ContentView: View {
                 let hasTweet = notification.userInfo?["tweet"] is Tweet
                 MainActor.assumeIsolated {
                     if hasTweet {
+                    self.retweetStartToastID = nil
                     self.toastMessage = NSLocalizedString("Tweet posted successfully", comment: "Tweet upload success")
                     self.toastType = .success
                     self.showToast = true

@@ -270,7 +270,7 @@ final class TweetUploadManager {
                 content: comment.content, timestamp: comment.timestamp,
                 originalTweetId: parent.mid, originalAuthorId: parent.authorId,
                 parentTweetId: comment.parentTweetId, attachments: attachments) : nil
-            async let quoteResult: Void = publishQuoteIfNeeded(quote, original: parent,
+            async let quoteResult: Void = publishQuoteIfNeeded(quote,
                 requestId: requestId + "-quote")
             var commentError: Error?
             do {
@@ -305,15 +305,11 @@ final class TweetUploadManager {
         }
     }
 
-    private func publishQuoteIfNeeded(_ record: TweetRecord?, original: Tweet, requestId: String? = nil) async throws {
+    private func publishQuoteIfNeeded(_ record: TweetRecord?, requestId: String? = nil) async throws {
         guard let record, let hproseInstance else { return }
         try Task.checkCancellation()
-        guard let posted = try await hproseInstance.uploadTweet(record.makeTweet(), requestId: requestId) else {
+        guard try await hproseInstance.uploadTweet(record.makeTweet(), requestId: requestId) != nil else {
             throw uploadError("Failed to post tweet. Please refresh before retrying.")
-        }
-        // Preserve the existing quote count update; this is a separate write.
-        if let updated = await hproseInstance.updateRetweetCount(tweet: original, retweetId: posted.mid, direction: true) {
-            TweetCacheManager.shared.saveTweet(updated, userId: updated.authorId)
         }
     }
 

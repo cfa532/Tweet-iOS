@@ -158,7 +158,6 @@ class TweetTableViewController: UITableViewController {
     var onTweetTap: ((Tweet) -> Void)?
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)?
-    var onRetweetUnavailable: ((String) -> Void)?
     var allowDeleteAll: Bool = false
     /// True on the main feed: prepended tweets must not move the scroll position.
     /// False elsewhere (profile/list/bookmarks): prepended tweets scroll to the top.
@@ -1591,14 +1590,11 @@ class TweetTableViewController: UITableViewController {
             guard let self else { return }
             self.embeddedTweetPrefetchInFlight.remove(originalTweetId)
 
-            // The original may have arrived after the outer rows were first prewarmed. Warm
-            // every quote that uses it now, before those rows approach the viewport.
+            // Reconcile rows whose original has just become available.
             if loadedTweet != nil {
                 let relatedQuotes = (self.pinnedTweets + self.tweets).filter {
                     $0.originalTweetId == originalTweetId
                 }
-                self.scheduleHeightPrewarm(for: relatedQuotes)
-
                 // The deterministic height of every quote row flips from the placeholder
                 // to the full embedded height the moment the original enters the singleton
                 // cache — including rows far off screen. Reconcile them through the
@@ -2629,12 +2625,6 @@ class TweetTableViewController: UITableViewController {
             )
         }
 
-        cell.onRetweetUnavailable = { [weak self, weak cell] tweetId in
-            guard let self, let cell, cell.tweetId == tweetId else { return }
-            cell.isHidden = true
-            self.onRetweetUnavailable?(tweetId)
-        }
-
         // Content expansion callback — fires when user taps "More..." to expand truncated text.
         // expandedTweetIds makes heightForRowAt return automaticDimension so the table
         // re-measures the cell at expanded height instead of using the cached truncated value.
@@ -2752,25 +2742,10 @@ class TweetTableViewController: UITableViewController {
             displayTweet = tweet
         }
 
-        // Fast path: text height already computed this session — calculateTweetHeight is cheap.
-        // For quote-tweets, calculateTweetHeight ALSO measures the embedded/original tweet's text
-        // (a separate cache keyed on the embedded Tweet instance). If the embedded tweet's instance
-        // was recreated (e.g. evicted by memory trimming/cleanup and re-fetched), its cache is cold
-        // even though the quoting tweet's own cache is warm — so this must gate on BOTH caches or
-        // the "fast path" silently pays full CoreText typesetting cost for the embedded content.
-        var textCacheWarm = displayTweet.cachedMeasuredTextHeight >= 0
-            && displayTweet.cachedMeasuredTextWidth == contentWidth
-        if textCacheWarm, isRetweet, hasOwnContent,
-           let originalId = tweet.originalTweetId,
-           let embeddedTweet = Tweet.getInstance(for: originalId),
-           embeddedTweet.author != nil,
-           let embeddedContent = embeddedTweet.content,
-           !embeddedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let embeddedWidth = contentWidth - 12
-            textCacheWarm = embeddedTweet.cachedMeasuredTextHeight >= 0
-                && embeddedTweet.cachedMeasuredTextWidth == embeddedWidth
-        }
-        if textCacheWarm {
+        // The embedded card is sized from its width, so only the post's own
+        // text layout needs to be warm for the exact calculation.
+        if displayTweet.cachedMeasuredTextHeight >= 0,
+           displayTweet.cachedMeasuredTextWidth == contentWidth {
             return Self.calculateTweetHeight(for: tweet, rowWidth: layoutWidth, cellHorizontalPadding: padding)
                 + dividerHeight
         }
@@ -2781,7 +2756,6 @@ class TweetTableViewController: UITableViewController {
 
         // Cold path: use a sub-millisecond character-count heuristic to avoid CoreText layout.
         return Self.roughHeightEstimate(for: tweet, displayTweet: displayTweet,
-                                        isPureRetweet: isPureRetweet,
                                         isRetweet: isRetweet, hasOwnContent: hasOwnContent,
                                         rowWidth: layoutWidth, contentWidth: contentWidth,
                                         cellHorizontalPadding: padding,
@@ -2865,7 +2839,6 @@ class TweetTableViewController: UITableViewController {
     private static func roughHeightEstimate(
         for tweet: Tweet,
         displayTweet: Tweet,
-        isPureRetweet: Bool,
         isRetweet: Bool,
         hasOwnContent: Bool,
         rowWidth: CGFloat,
@@ -2873,7 +2846,7 @@ class TweetTableViewController: UITableViewController {
         cellHorizontalPadding: CGFloat,
         prewarmTextHeight: CGFloat? = nil
     ) -> CGFloat {
-        var height: CGFloat = isPureRetweet ? 26 : 16
+        var height: CGFloat = isRetweet ? 26 : 16
         // Must stay a constant: this runs for every row of an inserted page. See the
         // note in calculateTweetHeight.
         height += ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
@@ -2908,48 +2881,7 @@ class TweetTableViewController: UITableViewController {
         height += isRetweet && hasOwnContent ? 12 : (hasCaptionLabel ? 4 : 10)
 
         if isRetweet && hasOwnContent {
-            if let originalId = tweet.originalTweetId,
-               let embeddedTweet = Tweet.getInstance(for: originalId),
-               embeddedTweet.author != nil {
-                // Rough embedded estimate: fixed header + approximate text + media.
-                let embeddedContentWidth = contentWidth - 12
-                let hasEmbeddedText = embeddedTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                var embeddedBodyH: CGFloat = 2
-                if hasEmbeddedText {
-                    let embeddedWidth = embeddedContentWidth
-                    if embeddedTweet.cachedMeasuredTextWidth == embeddedWidth,
-                       embeddedTweet.cachedMeasuredTextHeight >= 0 {
-                        embeddedBodyH += embeddedTweet.cachedMeasuredTextHeight
-                    } else if let prewarmHeight = TweetHeightPrewarmer.shared.get(
-                        tweetId: embeddedTweet.mid,
-                        width: embeddedWidth
-                    ) {
-                        embeddedBodyH += prewarmHeight
-                    } else {
-                        embeddedBodyH += TweetBodyUIView.estimatedTextHeight(
-                            for: embeddedTweet.content ?? "", availableWidth: embeddedWidth
-                        )
-                    }
-                }
-                _ = addAttachmentHeights(
-                    for: embeddedTweet,
-                    contentWidth: embeddedContentWidth,
-                    hasTextContent: hasEmbeddedText,
-                    to: &embeddedBodyH
-                )
-                let embeddedHeaderHeight = max(
-                    CGFloat(32),
-                    TweetHeaderUIView.measuredHeaderHeight(
-                        for: embeddedTweet,
-                        availableWidth: embeddedContentWidth - 32 - 6
-                    )
-                )
-                let embeddedHeight: CGFloat = 8 + embeddedHeaderHeight + 4 + embeddedBodyH + EmbeddedTweetUIView.contentBottomPadding
-                height += embeddedHeight
-            } else {
-                height += EmbeddedTweetUIView.placeholderHeight
-            }
-            height += 10
+            height += embeddedQuoteHeight(for: tweet, contentWidth: contentWidth) + 10
         }
 
         height += 30 + 8 + 1
@@ -2990,7 +2922,7 @@ class TweetTableViewController: UITableViewController {
         var height: CGFloat = 0
 
         // Top padding
-        if isPureRetweet {
+        if isRetweet {
             // Banner at topAnchor+6, height 18, mainStack 2pt below banner
             height += 6 + 18 + 2
         } else {
@@ -3093,86 +3025,8 @@ class TweetTableViewController: UITableViewController {
             height += hasCaptionLabel ? 4 : 10
         }
 
-        // Embedded/quoted tweet (only for quoted tweets, not pure retweets)
         if isRetweet && hasOwnContent {
-            if let originalId = tweet.originalTweetId,
-               let embeddedTweet = Tweet.getInstance(for: originalId),
-               embeddedTweet.author != nil {
-                // EmbeddedTweetUIView layout:
-                //   8pt top padding
-                //   contentStack = max(40, textStack)
-                //     textStack = headerView(24) + bodyView
-                //   bottomPadding = EmbeddedTweetUIView.contentBottomPadding
-                //
-                // TweetBodyUIView (embedded) layout:
-                //   2pt contentStack top
-                //   contentLabel (if text) + 8pt spacing (to mediaContainer)
-                //   mediaContainer (mediaH) + 2pt spacing (if caption visible) + caption(17)
-
-                let hasEmbeddedText = embeddedTweet.content != nil &&
-                    !(embeddedTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-
-                // Calculate embedded bodyView height (matches TweetBodyUIView auto layout)
-                var embeddedBodyH: CGFloat = 2 // contentStack top padding
-
-                if hasEmbeddedText {
-                    // bodyView spans full EmbeddedTweetUIView contentStack width (NOT beside avatar).
-                    // Embedded wrapper extends 4pt left, then embedded content adds 8pt side insets.
-                    let embeddedWidth = contentWidth - 12
-                    // Same as above: only typeset when the measured height isn't already known.
-                    let embeddedTextHeight: CGFloat
-                    if embeddedTweet.cachedMeasuredTextWidth == embeddedWidth && embeddedTweet.cachedMeasuredTextHeight >= 0 {
-                        embeddedTextHeight = embeddedTweet.cachedMeasuredTextHeight
-                    } else {
-                        // Build (or retrieve cached) attributed string for embedded tweet
-                        let attrString: NSAttributedString
-                        if let cached = embeddedTweet.cachedContentAttributedString,
-                           embeddedTweet.cachedContentWidth == embeddedWidth {
-                            attrString = cached
-                        } else {
-                            attrString = TweetBodyUIView.makeContentAttributedString(
-                                content: embeddedTweet.content!, availableWidth: embeddedWidth
-                            )
-                            embeddedTweet.cachedContentAttributedString = attrString
-                            embeddedTweet.cachedContentWidth = embeddedWidth
-                        }
-                        Self.measurementLabel.attributedText = attrString
-                        embeddedTextHeight = Self.measurementLabel.sizeThatFits(CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude)).height
-                        embeddedTweet.cachedMeasuredTextHeight = embeddedTextHeight
-                        embeddedTweet.cachedMeasuredTextWidth = embeddedWidth
-                        TweetHeightPrewarmer.shared.set(embeddedTextHeight,
-                                                        tweetId: embeddedTweet.mid, width: embeddedWidth)
-                    }
-                    embeddedBodyH += embeddedTextHeight
-                }
-
-                _ = addAttachmentHeights(
-                    for: embeddedTweet,
-                    contentWidth: contentWidth - 12,
-                    hasTextContent: hasEmbeddedText,
-                    to: &embeddedBodyH
-                )
-
-                // EmbeddedTweetUIView.contentStack (spacing=4):
-                //   headerRow height = max(32pt avatar, measured two-line header)
-                //   bodyView height = embeddedBodyH
-                let embeddedContentWidth = contentWidth - 12
-                let embeddedHeaderWidth = embeddedContentWidth - 32 - 6
-                let embeddedHeaderHeight = max(
-                    CGFloat(32),
-                    TweetHeaderUIView.measuredHeaderHeight(
-                        for: embeddedTweet,
-                        availableWidth: embeddedHeaderWidth
-                    )
-                )
-                let embeddedHeight: CGFloat = 8 + embeddedHeaderHeight + 4 + embeddedBodyH + EmbeddedTweetUIView.contentBottomPadding
-                height += embeddedHeight
-            } else {
-                // Not loaded: "Loading quoted tweet..." placeholder
-                height += EmbeddedTweetUIView.placeholderHeight
-            }
-
-            height += 10 // contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
+            height += embeddedQuoteHeight(for: tweet, contentWidth: contentWidth) + 10
         }
 
         // Action bar (fixed 30pt)
@@ -3185,6 +3039,14 @@ class TweetTableViewController: UITableViewController {
         height += 1
 
         return height
+    }
+
+    private static func embeddedQuoteHeight(for tweet: Tweet, contentWidth: CGFloat) -> CGFloat {
+        guard let originalId = tweet.originalTweetId,
+              Tweet.getInstance(for: originalId) != nil else {
+            return EmbeddedTweetUIView.placeholderHeight
+        }
+        return (contentWidth + EmbeddedTweetUIView.leadingExtension) / EmbeddedTweetUIView.aspectRatio
     }
 
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {

@@ -53,7 +53,6 @@ struct TweetTableView: UIViewControllerRepresentable {
     let onTweetTap: ((Tweet) -> Void)?
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
-    let onRetweetUnavailable: ((String) -> Void)?
     let allowDeleteAll: Bool
 
     func makeCoordinator() -> Coordinator {
@@ -103,7 +102,6 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.onTweetTap = onTweetTap
         controller.onShowLogin = onShowLogin
         controller.onShowToast = onShowToast
-        controller.onRetweetUnavailable = onRetweetUnavailable
         controller.allowDeleteAll = allowDeleteAll
         controller.preservesScrollPositionOnPrepend = preservesScrollPositionOnPrepend
         controller.onTweetsTrimmed = onTweetsTrimmed
@@ -193,7 +191,6 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.onTweetTap = onTweetTap
         uiViewController.onShowLogin = onShowLogin
         uiViewController.onShowToast = onShowToast
-        uiViewController.onRetweetUnavailable = onRetweetUnavailable
         uiViewController.allowDeleteAll = allowDeleteAll
         uiViewController.onTweetsTrimmed = onTweetsTrimmed
 

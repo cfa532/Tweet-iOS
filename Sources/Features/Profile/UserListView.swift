@@ -288,8 +288,11 @@ struct UserListView: View {
     }
 
     private func filteredUniqueUserIds(from userIds: [String], excluding existingUserIds: Set<String> = []) async -> [String] {
-        let sociallyBlockedUserIds = await MainActor.run {
-            Set(hproseInstance.appUser.userBlackList ?? [])
+        let (sociallyBlockedUserIds, followedUserIds) = await MainActor.run {
+            (
+                Set(hproseInstance.appUser.userBlackList ?? []),
+                Set(onFollowToggle == nil ? [] : hproseInstance.appUser.followingList ?? [])
+            )
         }
         var seenUserIds = existingUserIds
         var filteredUserIds: [String] = []
@@ -300,7 +303,7 @@ struct UserListView: View {
                   !sociallyBlockedUserIds.contains(userId),
                   !seenUserIds.contains(userId) else { continue }
 
-            if BlackList.shared.isBlacklisted(userId) {
+            if !followedUserIds.contains(userId), BlackList.shared.isBlacklisted(userId) {
                 if let failureStartedAt = BlackList.shared.permanentFailureStartedAt(userId) {
                     onPermanentlyBlacklisted?(userId, failureStartedAt)
                 }

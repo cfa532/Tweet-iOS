@@ -18,7 +18,6 @@ class TweetTableViewCell: UITableViewCell {
 
     var onContentExpanded: (() -> Void)?
     var onContentDidChangeHeightAsync: (() -> Void)?
-    var onRetweetUnavailable: ((String) -> Void)?
 
     // Padding constraints (updated per-configure to match list-level padding)
     private var leadingConstraint: NSLayoutConstraint!
@@ -119,9 +118,6 @@ class TweetTableViewCell: UITableViewCell {
         tweetContentView.onShowLogin = onShowLogin
         tweetContentView.onShowToast = onShowToast
         tweetContentView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
-        tweetContentView.onRetweetUnavailable = { [weak self] tweetId in
-            self?.onRetweetUnavailable?(tweetId)
-        }
         tweetContentView.onContentDidChangeHeightAsync = { [weak self] in
             guard let self else { return }
             self.onContentDidChangeHeightAsync?()
@@ -143,9 +139,7 @@ class TweetTableViewCell: UITableViewCell {
         super.prepareForReuse()
         onContentExpanded = nil
         onContentDidChangeHeightAsync = nil
-        onRetweetUnavailable = nil
         tweetContentView.onContentDidChangeHeightAsync = nil
-        tweetContentView.onRetweetUnavailable = nil
         currentTweetId = nil
         tweetContentView.prepareForReuse()
         pinnedTweetsDivider.isHidden = true

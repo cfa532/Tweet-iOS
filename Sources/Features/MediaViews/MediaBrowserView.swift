@@ -15,6 +15,7 @@ struct MediaBrowserView: View {
     let tweet: Tweet
     let initialIndex: Int
     let cellTweetId: String? // The visible cell's tweet ID (could be retweet or quoting tweet)
+    private let commentParent: Tweet?
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
     @StateObject private var videoSession = BrowserVideoSession()
@@ -80,7 +81,7 @@ struct MediaBrowserView: View {
             ?? HproseInstance.baseUrl
     }
 
-    init(tweet: Tweet, initialIndex: Int, cellTweetId: String? = nil) {
+    init(tweet: Tweet, initialIndex: Int, cellTweetId: String? = nil, commentParent: Tweet? = nil) {
         let initialAttachment = tweet.attachments?.indices.contains(initialIndex) == true
             ? tweet.attachments?[initialIndex]
             : nil
@@ -93,6 +94,7 @@ struct MediaBrowserView: View {
         self.tweet = tweet
         self.initialIndex = initialIndex
         self.cellTweetId = cellTweetId
+        self.commentParent = commentParent
         self._currentIndex = State(initialValue: browserIndex)
         self._currentTweet = State(initialValue: tweet)
         self._currentCellTweetId = State(initialValue: cellTweetId ?? tweet.mid)
@@ -118,6 +120,7 @@ struct MediaBrowserView: View {
                 transitionOffset: $transitionOffset,
                 suppressPagingAnimation: $suppressPagingAnimation,
                 currentTweet: currentTweet,
+                commentParent: currentTweet.mid == tweet.mid ? commentParent : nil,
                 currentCellTweetId: currentCellTweetId,
                 dismiss: dismissFullScreen,
                 startControlsTimer: startControlsTimer,
@@ -340,6 +343,7 @@ struct MediaBrowserView: View {
         @Binding var transitionOffset: CGFloat
         @Binding var suppressPagingAnimation: Bool
         let currentTweet: Tweet
+        let commentParent: Tweet?
         let currentCellTweetId: String
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
@@ -502,6 +506,7 @@ struct MediaBrowserView: View {
                     HStack {
                         TweetActionButtonsView(
                             tweet: currentTweet,
+                            parentTweet: commentParent,
                             isInDetailView: true,
                             isFullScreen: true,
                             currentMediaIndex: originalAttachmentIndex(forVisualIndex: currentIndex),

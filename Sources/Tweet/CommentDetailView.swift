@@ -182,7 +182,7 @@ struct CommentDetailView: View {
         .navigationTitle(NSLocalizedString("Reply", comment: "Reply screen title"))
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(tweet: comment, initialIndex: selectedMediaIndex)
+            MediaBrowserView(tweet: comment, initialIndex: selectedMediaIndex, commentParent: parentTweet)
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
@@ -523,7 +523,7 @@ struct CommentDetailView: View {
     private func syncComment(isInitialLoad: Bool) async {
         if let refreshed = try? await hproseInstance.getTweet(
             tweetId: comment.mid, authorId: comment.authorId, bypassCache: true,
-            fromDetailView: isInitialLoad
+            fromDetailView: isInitialLoad, storageAuthorId: parentTweet.authorId
         ) {
             try? comment.update(from: refreshed)
         }
@@ -544,7 +544,8 @@ struct CommentDetailView: View {
     private func refreshCommentAndReplies() async {
         if let refreshed = try? await hproseInstance.refreshTweet(
             tweetId: comment.mid,
-            authorId: comment.authorId
+            authorId: comment.authorId,
+            storageAuthorId: parentTweet.authorId
         ) {
             try? comment.update(from: refreshed)
         }

@@ -66,11 +66,7 @@ class TweetCellContentView: UIView {
     private let headerView = TweetHeaderUIView()
     private let bodyView = TweetBodyUIView()
     private let actionBar = TweetActionBarView()
-    /// Built on first use. Only quote tweets ever show one, but every cell used to
-    /// construct it eagerly — and an EmbeddedTweetUIView contains a whole second
-    /// TweetBodyUIView (media grid, labels, hosting containers), so each cell paid for a
-    /// full duplicate body subtree it usually never displays. That showed up as a 141ms
-    /// stall inside cellForRowAt, all of it under TweetTableViewCell.init.
+    /// Construct the quote card only for rows that need it.
     private var embeddedTweetView: EmbeddedTweetUIView?
     private let separatorView: UIView = {
         let v = UIView()
@@ -147,13 +143,11 @@ class TweetCellContentView: UIView {
     var cellHorizontalPadding: CGFloat = 16 {
         didSet {
             bodyView.cellHorizontalPadding = cellHorizontalPadding
-            embeddedTweetView?.cellHorizontalPadding = cellHorizontalPadding
         }
     }
     var rowWidth: CGFloat? {
         didSet {
             bodyView.rowWidth = rowWidth
-            embeddedTweetView?.rowWidth = rowWidth
         }
     }
 
@@ -165,8 +159,6 @@ class TweetCellContentView: UIView {
     var onContentExpanded: (() -> Void)?
     /// Called when async content loads and may have changed cell height (retweet/embedded tweet).
     var onContentDidChangeHeightAsync: (() -> Void)?
-    /// Called only when a pure retweet's original is unavailable from both cache and server.
-    var onRetweetUnavailable: ((String) -> Void)?
 
     // MARK: - Init
 
@@ -269,8 +261,7 @@ class TweetCellContentView: UIView {
         // Don't activate - only activate when hidden
     }
 
-    /// Installs the embedded-tweet view into its wrapper the first time a quote tweet
-    /// needs one, carrying over every setting that was forwarded while it did not exist.
+    /// Install the embedded card into its wrapper on first use.
     @discardableResult
     private func ensureEmbeddedTweetView() -> EmbeddedTweetUIView {
         if let embeddedTweetView { return embeddedTweetView }
@@ -284,15 +275,10 @@ class TweetCellContentView: UIView {
         NSLayoutConstraint.activate([
             view.topAnchor.constraint(equalTo: embeddedTweetWrapper.topAnchor),
             view.bottomAnchor.constraint(equalTo: embeddedTweetWrapper.bottomAnchor),
-            view.leadingAnchor.constraint(equalTo: embeddedTweetWrapper.leadingAnchor, constant: -4),
+            view.leadingAnchor.constraint(equalTo: embeddedTweetWrapper.leadingAnchor, constant: -EmbeddedTweetUIView.leadingExtension),
             view.trailingAnchor.constraint(equalTo: embeddedTweetWrapper.trailingAnchor),
         ])
 
-        // Replay the state the eager instance would already have had.
-        view.cellHorizontalPadding = cellHorizontalPadding
-        view.rowWidth = rowWidth
-        view.videoCoordinator = videoCoordinator
-        view.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
         return view
     }
 
@@ -317,6 +303,34 @@ class TweetCellContentView: UIView {
             mainStackTopAfterBanner.isActive = false
             mainStackTopDefault.isActive = true
         }
+    }
+
+    private func configureRetweetBanner(tweet: Tweet, appUserId: String) {
+        showRetweetBanner(true)
+        if tweet.authorId == appUserId {
+            retweetLabel.text = NSLocalizedString("Forwarded by you", comment: "")
+            return
+        }
+
+        let authorId = tweet.authorId
+        let labelText: (User?) -> String = { author in
+            let name = author?.name.flatMap { $0.isEmpty ? nil : $0 } ?? author?.username ?? authorId
+            return String(format: NSLocalizedString("Forwarded by %@", comment: ""), name)
+        }
+
+        retweetLabel.text = labelText(tweet.author)
+        tweet.$author
+            .compactMap { $0 }
+            .map { author in
+                Publishers.CombineLatest(author.$name, author.$username).map { _ in author }
+            }
+            .switchToLatest()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak tweet] author in
+                guard let self, let tweet, self.currentTweet === tweet else { return }
+                self.retweetLabel.text = labelText(author)
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Tap Handling
@@ -411,8 +425,9 @@ class TweetCellContentView: UIView {
         }
     }
 
-    private func navigateToTweetDetail(_ tweet: Tweet, source: String) {
-        let videoMid = Self.firstVideoAttachmentMid(tweet)
+    private func navigateToTweetDetail(_ tweet: Tweet, source: String, allowsVideoHandoff: Bool = true) {
+        guard !tweet.authorId.isEmpty else { return }
+        let videoMid = allowsVideoHandoff ? Self.firstVideoAttachmentMid(tweet) : nil
         NavigationStateManager.shared.markDetailNavigationPending(
             source: source,
             preserveFeedPlayback: videoMid != nil,
@@ -434,21 +449,23 @@ class TweetCellContentView: UIView {
                    commentParentTweet: Tweet? = nil,
                    savedParentTweetId: String? = nil) {
         self.parentViewController = parentViewController
+        let previousTweet = currentTweet
         self.currentTweet = tweet
         self.commentParentTweet = commentParentTweet
 
         // Propagate per-feed coordinator to subviews
         bodyView.videoCoordinator = videoCoordinator
-        embeddedTweetView?.videoCoordinator = videoCoordinator
 
         // Forward content expansion callback (set before early return so it's always current)
         bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
         bodyView.onContentDidChangeHeightAsync = { [weak self] in
             self?.onContentDidChangeHeightAsync?()
         }
-        embeddedTweetView?.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
         separatorView.isHidden = isLastItem
+        let unavailable = tweet.authorId.isEmpty
+        headerView.isHidden = unavailable
+        avatarView.isHidden = unavailable
         if let commentParentTweet {
             applyCommentMenuIfNeeded(
                 comment: tweet,
@@ -469,8 +486,7 @@ class TweetCellContentView: UIView {
             )
         }
 
-        // Skip if same tweet
-        if currentTweetId == tweet.mid { return }
+        if currentTweetId == tweet.mid, previousTweet === tweet { return }
         retweetLoadTask?.cancel()
         retweetLoadTask = nil
         currentTweetId = tweet.mid
@@ -524,7 +540,7 @@ class TweetCellContentView: UIView {
         }
 
         // Load author if needed (background task)
-        loadAuthorIfNeeded(tweet: tweet, hproseInstance: hproseInstance)
+        if !unavailable { loadAuthorIfNeeded(tweet: tweet, hproseInstance: hproseInstance) }
 
         // Also load original tweet's author for retweets/quoted tweets
         if let embeddedId = tweet.originalTweetId ?? savedParentTweetId,
@@ -606,8 +622,7 @@ class TweetCellContentView: UIView {
                                   parentViewController: parentViewController,
                                   allowDeleteAll: allowDeleteAll)
         } else if !hasOwnContent {
-            // Keep one authoritative loader for pure retweets so success promotes the
-            // original into the cell and failure can remove the retweet entirely.
+            // Keep the retweeter's row and its menu while the original loads.
             configureQuotedTweet(tweet: tweet, embeddedTweet: nil,
                                   originalTweetId: originalTweetId,
                                   originalAuthorId: originalAuthorId,
@@ -621,14 +636,18 @@ class TweetCellContentView: UIView {
                 if loadedTweet == nil, !Task.isCancelled {
                     loadedTweet = try? await hproseInstance.getTweet(
                         tweetId: originalTweetId,
-                        authorId: originalAuthorId
+                        authorId: originalAuthorId,
+                        nodeUrl: tweet.readNodeURL?.absoluteString
                     )
                 }
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self, self.currentTweetId == tweet.mid else { return }
                     guard let loadedTweet else {
-                        self.onRetweetUnavailable?(tweet.mid)
+                        self.ensureEmbeddedTweetView().showPlaceholder(
+                            message: NSLocalizedString("Original tweet not found", comment: "Unavailable retweet original")
+                        )
+                        self.onContentDidChangeHeightAsync?()
                         return
                     }
                     self.configurePureRetweet(
@@ -657,15 +676,7 @@ class TweetCellContentView: UIView {
                                        hproseInstance: HproseInstance, isPinned: Bool,
                                        parentViewController: UIViewController,
                                        allowDeleteAll: Bool = false) {
-        // Show retweet banner above the tweet
-        showRetweetBanner(true)
-
-        if tweet.author?.mid == hproseInstance.appUser.mid {
-            retweetLabel.text = NSLocalizedString("Forwarded by you", comment: "")
-        } else {
-            let name = tweet.author?.name ?? tweet.author?.username ?? ""
-            retweetLabel.text = String(format: NSLocalizedString("Forwarded by %@", comment: ""), name)
-        }
+        configureRetweetBanner(tweet: tweet, appUserId: hproseInstance.appUser.mid)
 
         // Hide embedded tweet wrapper (content shown directly) and suppress its spacing
         embeddedTweetWrapper.isHidden = true
@@ -713,8 +724,11 @@ class TweetCellContentView: UIView {
                                        parentViewController: UIViewController,
                                        allowDeleteAll: Bool = false,
                                        allowNetworkLoad: Bool = true) {
-        // Hide retweet banner
-        showRetweetBanner(false)
+        if tweet.originalTweetId != nil {
+            configureRetweetBanner(tweet: tweet, appUserId: hproseInstance.appUser.mid)
+        } else {
+            showRetweetBanner(false)
+        }
 
         // Show embedded tweet wrapper and restore its spacing
         embeddedTweetWrapper.isHidden = false
@@ -750,20 +764,19 @@ class TweetCellContentView: UIView {
         // Embedded tweet — the one path that actually needs the view, so build it here.
         let embeddedTweetView = ensureEmbeddedTweetView()
         if let embeddedTweet {
-            embeddedTweetView.configure(tweet: embeddedTweet, quotingTweetId: tweet.mid,
-                                         parentViewController: parentViewController)
+            embeddedTweetView.configure(tweet: embeddedTweet)
         } else if allowNetworkLoad {
             embeddedTweetView.loadEmbeddedTweet(
                 originalTweetId: originalTweetId,
                 originalAuthorId: originalAuthorId,
-                quotingTweet: tweet,
-                hproseInstance: hproseInstance,
-                parentViewController: parentViewController
+                hproseInstance: hproseInstance
             )
         } else {
             embeddedTweetView.showPlaceholder()
         }
-        embeddedTweetView.onTap = { [weak self] t in self?.navigateToTweetDetail(t, source: "embeddedTweetTap") }
+        embeddedTweetView.onTap = { [weak self] original in
+            self?.navigateToTweetDetail(original, source: "embeddedTweetTap", allowsVideoHandoff: false)
+        }
         // The quoted tweet's avatar opens its own author, not this cell's.
         embeddedTweetView.onAvatarTap = { [weak self] user in self?.onAvatarTap?(user) }
         embeddedTweetView.onAsyncConfigured = { [weak self] in self?.onContentDidChangeHeightAsync?() }
@@ -1298,63 +1311,22 @@ class TweetCellContentView: UIView {
 
     // MARK: - Visibility
 
-    /// Forward media visibility to the body's media grid and embedded tweet's media grid
     func setMediaVisible(_ visible: Bool) {
         bodyView.mediaGridView.isGridVisible = visible
-
-        // Also forward to embedded tweet's media grid if it's visible
-        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
-            embeddedTweetView.setMediaVisible(visible)
-        }
-    }
-
-    /// Returns video identifiers for on-screen media cells in both the main body and embedded tweet.
-    func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
-        var result = bodyView.mediaGridView.onScreenVideoIdentifiers(
-            visibleRect: visibleRect, coordinateSpace: coordinateSpace
-        )
-        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
-            result += embeddedTweetView.onScreenVideoIdentifiers(
-                visibleRect: visibleRect, coordinateSpace: coordinateSpace
-            )
-        }
-        return result
     }
 
     func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
-        let bodyResult = bodyView.mediaGridView.mediaVisibilityIdentifiers(
-            visibleRect: visibleRect,
-            coordinateSpace: coordinateSpace
+        bodyView.mediaGridView.mediaVisibilityIdentifiers(
+            visibleRect: visibleRect, coordinateSpace: coordinateSpace
         )
-        var loadVisible = bodyResult.loadVisible
-        var continuePlayback = bodyResult.continuePlayback
-        var playable = bodyResult.playable
-
-        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
-            let embeddedResult = embeddedTweetView.mediaVisibilityIdentifiers(
-                visibleRect: visibleRect,
-                coordinateSpace: coordinateSpace
-            )
-            loadVisible += embeddedResult.loadVisible
-            continuePlayback += embeddedResult.continuePlayback
-            playable += embeddedResult.playable
-        }
-
-        return (loadVisible, continuePlayback, playable)
     }
 
     func refreshVideoLayersAfterForeground() {
         bodyView.mediaGridView.refreshVideoLayersAfterForeground()
-        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
-            embeddedTweetView.refreshVideoLayersAfterForeground()
-        }
     }
 
     func prepareMediaForBackground() {
         bodyView.mediaGridView.prepareMediaForBackground()
-        if !embeddedTweetWrapper.isHidden, let embeddedTweetView {
-            embeddedTweetView.prepareMediaForBackground()
-        }
     }
 
     // MARK: - Reuse
@@ -1387,6 +1359,5 @@ class TweetCellContentView: UIView {
         onShowToast = nil
         onContentExpanded = nil
         onContentDidChangeHeightAsync = nil
-        onRetweetUnavailable = nil
     }
 }

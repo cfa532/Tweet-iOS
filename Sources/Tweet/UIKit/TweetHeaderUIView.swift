@@ -156,6 +156,7 @@ class TweetHeaderUIView: UIView {
     private var currentTimestampText = ""
     private var timestampUpdates: AnyCancellable?
     private var timestampTick: AnyCancellable?
+    private var headerMenuSpacing: NSLayoutConstraint!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -172,18 +173,26 @@ class TweetHeaderUIView: UIView {
 
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
         menuButton.translatesAutoresizingMaskIntoConstraints = false
+        headerMenuSpacing = headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4)
 
         NSLayoutConstraint.activate([
             headerLabel.topAnchor.constraint(equalTo: topAnchor),
             headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
             headerLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
-            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4),
+            headerMenuSpacing,
 
             menuButton.topAnchor.constraint(equalTo: topAnchor, constant: -10),
             menuButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             menuButton.widthAnchor.constraint(equalToConstant: 44),
             menuButton.heightAnchor.constraint(equalToConstant: 44),
         ])
+    }
+
+    func useCompactLayout() {
+        menuButton.isHidden = true
+        headerLabel.numberOfLines = 1
+        headerMenuSpacing.isActive = false
+        headerLabel.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
     }
 
     /// Set the UIMenu for the menu button
@@ -235,9 +244,6 @@ class TweetHeaderUIView: UIView {
         let text = Self.timeDifference(from: tweet.timestamp)
         guard text != currentTimestampText else { return }
         currentTimestampText = text
-        // A different age label can change the embedded header's line wrapping.
-        tweet.cachedHeaderHeight = -1
-        tweet.cachedHeaderWidth = 0
         setHeaderText(name: tweet.author?.name, username: tweet.author?.username)
     }
 
@@ -331,53 +337,6 @@ class TweetHeaderUIView: UIView {
         )
 
         return text
-    }
-
-    /// Shared measurement label. Configured exactly like `headerLabel` so the number it
-    /// returns is the height Auto Layout will give the real one — a fresh UILabel per call
-    /// was also an allocation on the scroll critical path.
-    private static let measurementLabel: UILabel = {
-        let label = UILabel()
-        label.numberOfLines = 2
-        label.lineBreakMode = .byTruncatingTail
-        return label
-    }()
-
-    /// Height of the header label for `tweet` at `availableWidth`.
-    ///
-    /// NOT rounded up: the header view's height is the label's fitting height.
-    ///
-    /// ⚠️ This runs a UILabel/CoreText layout pass. It is used only for the EMBEDDED
-    /// (quote) header, which exists on a small minority of rows. Do NOT call it from the
-    /// top-level row height path: `estimatedHeightForRowAt` is invoked for every row when
-    /// a paginated page is inserted, and typesetting 10-20 cold headers there measured as
-    /// an 837ms main-thread stall on device. The cache below does not save you — the rows
-    /// being inserted are exactly the cold ones. Measure headers off the main thread
-    /// (TweetHeightPrewarmer) if the top-level path ever needs a real number.
-    static func measuredHeaderHeight(for tweet: Tweet, availableWidth: CGFloat) -> CGFloat {
-        if tweet.cachedHeaderHeight >= 0, tweet.cachedHeaderWidth == availableWidth {
-            return tweet.cachedHeaderHeight
-        }
-
-        let displayName = tweet.author?.name?.isEmpty == false ? tweet.author!.name! : "No one"
-        let usernameText = tweet.author?.username?.isEmpty == false
-            ? tweet.author!.username!
-            : NSLocalizedString("username", comment: "Default username")
-        let attrText = makeHeaderText(
-            name: displayName,
-            username: usernameText,
-            timestamp: timeDifference(from: tweet.timestamp)
-        )
-        let label = measurementLabel
-        label.attributedText = attrText
-        // TweetHeaderUIView always reserves the hidden menu button's 44pt width
-        // plus the 4pt label-to-menu gap because hiding the button does not remove
-        // its Auto Layout constraints.
-        let labelWidth = max(10, availableWidth - 48)
-        let height = label.sizeThatFits(CGSize(width: labelWidth, height: .greatestFiniteMagnitude)).height
-        tweet.cachedHeaderHeight = height
-        tweet.cachedHeaderWidth = availableWidth
-        return height
     }
 
     func prepareForReuse() {

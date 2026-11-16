@@ -98,7 +98,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     // Debounce tracking
     private var lastCommentTime: Date = .distantPast
-    private var lastRetweetTime: Date = .distantPast
+    private var lastRetweetTap: (tweetId: String, time: Date)?
     private var lastLikeTime: Date = .distantPast
     private var lastBookmarkTime: Date = .distantPast
     private var lastShareTime: Date = .distantPast
@@ -202,12 +202,16 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     func configure(tweet: Tweet, hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
+        let previousTweet = currentTweet
         self.currentTweet = tweet
+        let unavailable = tweet.authorId.isEmpty
+        commentButton.isHidden = unavailable
+        retweetButton.isHidden = unavailable
+        shareButton.isHidden = unavailable
+        likeButton.isHidden = unavailable && !tweet.isFavorite
+        bookmarkButton.isHidden = unavailable && !tweet.isBookmarked
 
-        if currentTweetId == tweet.mid {
-            // Same tweet - just update counts (Combine handles it)
-            return
-        }
+        if currentTweetId == tweet.mid, previousTweet === tweet { return }
         currentTweetId = tweet.mid
         cancellables.removeAll()
 
@@ -331,52 +335,30 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     }
 
     private func handleRetweet() {
-        guard debounce(&lastRetweetTime) else { return }
         guard let hproseInstance, !hproseInstance.appUser.isGuest else {
             onShowLogin?()
             return
         }
         guard let tweet = currentTweet else { return }
-
-        let originalCount = tweet.retweetCount ?? 0
-
-        // Optimistic update
-        tweet.retweetCount = originalCount + 1
+        let now = Date()
+        if let lastRetweetTap, lastRetweetTap.tweetId == tweet.mid,
+           now.timeIntervalSince(lastRetweetTap.time) < 2 {
+            return
+        }
+        lastRetweetTap = (tweet.mid, now)
+        NotificationCenter.default.post(name: .retweetStarted, object: nil)
+        let commentParent = parentTweet ?? commentsVMParentTweet
 
         Task {
             do {
-                guard let retweet = try await hproseInstance.retweet(tweet) else {
-                    if let refreshed = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
-                        await MainActor.run { try? tweet.update(from: refreshed) }
-                    }
+                guard let retweet = try await hproseInstance.retweet(tweet, commentParent: commentParent) else {
                     throw NSError(domain: "RetweetError", code: -1)
                 }
-
-                guard !retweet.mid.isEmpty && !retweet.mid.hasPrefix("TEMP_") else {
-                    if let refreshed = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
-                        await MainActor.run { try? tweet.update(from: refreshed) }
-                    }
-                    throw NSError(domain: "RetweetError", code: -1)
-                }
-
-                // Refresh original tweet counts
-                if let refreshed = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
-                    await MainActor.run {
-                        if let existing = Tweet.getInstance(for: tweet.mid) {
-                            try? existing.update(from: refreshed)
-                        }
-                    }
-                }
-
                 NotificationCenter.default.post(name: .newTweetCreated, object: nil,
                                                  userInfo: ["tweet": retweet])
             } catch {
-                if let refreshed = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
-                    await MainActor.run { try? tweet.update(from: refreshed) }
-                }
-                await MainActor.run {
-                    self.onShowToast?(ErrorMessageHelper.userFriendlyMessage(from: error), true)
-                }
+                let message = ErrorMessageHelper.userFriendlyMessage(from: error)
+                onShowToast?(message, true)
             }
         }
     }
@@ -390,7 +372,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         guard let tweet = currentTweet else { return }
 
         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
-        let originalFavoriteCount = tweet.favoriteCount ?? 0
         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
         let originalAppUserFavoriteTweets = hproseInstance.appUser.favoriteTweets
         let originalFavorites = tweet.favorites
@@ -399,7 +380,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         var newFavorites = tweet.favorites ?? [false, false, false]
         newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
         tweet.favorites = newFavorites
-        tweet.favoriteCount = originalFavoriteCount + (wasFavorite ? -1 : 1)
         hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
         if wasFavorite {
             hproseInstance.appUser.favoriteTweets?.removeAll { $0 == tweet.mid }
@@ -438,7 +418,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                 print("DEBUG: [handleLike] toggleFavorite failed: \(error)")
                 await MainActor.run {
                     tweet.favorites = originalFavorites
-                    tweet.favoriteCount = originalFavoriteCount
                     hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
                     hproseInstance.appUser.favoriteTweets = originalAppUserFavoriteTweets
                     NotificationCenter.default.post(
@@ -465,7 +444,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         guard let tweet = currentTweet else { return }
 
         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
-        let originalBookmarkCount = tweet.bookmarkCount ?? 0
         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
         let originalAppUserBookmarkedTweets = hproseInstance.appUser.bookmarkedTweets
         let originalFavorites = tweet.favorites
@@ -474,7 +452,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         var newFavorites = tweet.favorites ?? [false, false, false]
         newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
         tweet.favorites = newFavorites
-        tweet.bookmarkCount = originalBookmarkCount + (wasBookmarked ? -1 : 1)
         hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount + (wasBookmarked ? -1 : 1)
         if wasBookmarked {
             hproseInstance.appUser.bookmarkedTweets?.removeAll { $0 == tweet.mid }
@@ -513,7 +490,6 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                 print("DEBUG: [handleBookmark] toggleBookmark failed: \(error)")
                 await MainActor.run {
                     tweet.favorites = originalFavorites
-                    tweet.bookmarkCount = originalBookmarkCount
                     hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
                     hproseInstance.appUser.bookmarkedTweets = originalAppUserBookmarkedTweets
                     NotificationCenter.default.post(

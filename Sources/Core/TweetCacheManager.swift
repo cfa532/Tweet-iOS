@@ -55,22 +55,8 @@ final class TweetCacheManager: @unchecked Sendable {
     private var userCacheWriteTimes: [String: Date] = [:]
     private let userCacheWriteTimesLock = NSLock()
 
-    private func isPureRetweet(_ record: TweetRecord, of originalTweetId: String) -> Bool {
-        guard record.originalTweetId == originalTweetId else { return false }
-        let hasContent = !(record.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        let hasTitle = !(record.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        return !hasContent && !hasTitle && (record.attachments?.isEmpty ?? true)
-    }
-
     private func isBlockedByDeletion(_ record: TweetRecord) -> Bool {
-        if TweetDeletionRegistry.shared.isDeleted(record.mid) {
-            return true
-        }
-        guard let originalTweetId = record.originalTweetId,
-              TweetDeletionRegistry.shared.isDeleted(originalTweetId) else {
-            return false
-        }
-        return isPureRetweet(record, of: originalTweetId)
+        TweetDeletionRegistry.shared.isDeleted(record.mid)
     }
 
     @MainActor
@@ -905,44 +891,19 @@ extension TweetCacheManager {
         }
     }
 
-    /// Delete the tweet from every cache bucket and remove pure-retweet wrappers
-    /// that have no content of their own. Quote tweets remain intact.
+    /// Delete only this tweet's cached copies. Retweets have their own IDs.
     @discardableResult
     func deleteTweet(mid: String) -> [String] {
-        let deletedTweetIds: Set<String> = context.performAndWait {
-            var deletedTweetIds: Set<String> = [mid]
+        context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            guard let cdTweets = try? context.fetch(request) else {
-                return deletedTweetIds
-            }
-
-            for cdTweet in cdTweets {
-                let shouldDelete: Bool
-                if cdTweet.tid == mid {
-                    shouldDelete = true
-                } else if let record = try? decodeTweetRecord(from: cdTweet) {
-                    shouldDelete = isPureRetweet(record, of: mid)
-                } else {
-                    shouldDelete = false
-                }
-
-                guard shouldDelete else { continue }
-                if let tweetId = cdTweet.tid {
-                    deletedTweetIds.insert(tweetId)
-                    Task { @MainActor in
-                        self.clearHeightCache(for: tweetId)
-                    }
-                }
-                context.delete(cdTweet)
-            }
-
-            if !deletedTweetIds.isEmpty {
-                print("DEBUG: [TweetCacheManager] Deleted cache entries for tweet IDs: \(deletedTweetIds)")
+            request.predicate = NSPredicate(format: "tid == %@", mid)
+            if let matches = try? context.fetch(request), !matches.isEmpty {
+                for tweet in matches { context.delete(tweet) }
                 try? context.save()
             }
-            return deletedTweetIds
         }
-        return Array(deletedTweetIds)
+        Task { @MainActor in self.clearHeightCache(for: mid) }
+        return [mid]
     }
 
     /// Remove one tweet's membership from one cached list while preserving copies

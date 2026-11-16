@@ -2,6 +2,8 @@ import SwiftUI
 
 @available(iOS 16.0, *)
 struct ToastView: View {
+    static let retweetingMessage = NSLocalizedString("Retweeting…", comment: "Retweet started toast")
+
     let message: String
     let type: ToastType
     

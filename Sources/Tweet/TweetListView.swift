@@ -718,9 +718,6 @@ struct TweetListView: View {
             onTweetTap: onTweetTap,
             onShowLogin: onShowLogin,
             onShowToast: onShowToast,
-            onRetweetUnavailable: { tweetId in
-                tweets.removeAll { $0.mid == tweetId }
-            },
             allowDeleteAll: allowDeleteAll
         )
     }

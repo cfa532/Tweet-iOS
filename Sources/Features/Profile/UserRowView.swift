@@ -166,13 +166,15 @@ struct UserRowView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     identityText
                                         .fixedSize(horizontal: false, vertical: true)
-                                    Text(formatRegistrationDate(user.timestamp))
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
+                                    if hasRenderableUser {
+                                        Text(formatRegistrationDate(user.timestamp))
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                                if let onFollowToggle = onFollowToggle, userId != hproseInstance.appUser.mid {
+                                if onFollowToggle != nil, userId != hproseInstance.appUser.mid {
                                     DebounceButton(
                                         cooldownDuration: 0.5,
                                         enableHaptic: false
@@ -183,9 +185,10 @@ struct UserRowView: View {
                                         }
                                         guard !isToggling else { return }
                                         isToggling = true
-                                        isFollowing.toggle()
+                                        let wanted = !isFollowing
+                                        isFollowing = wanted
                                         Task {
-                                            await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
+                                            await handleToggleFollowing(for: user, wanted: wanted)
                                             await MainActor.run { isToggling = false }
                                         }
                                     } label: {
@@ -242,7 +245,7 @@ struct UserRowView: View {
                     .padding(.vertical, 8)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        onTap?(user)
+                        if hasRenderableUser { onTap?(user) }
                     }
                 }
 
@@ -282,8 +285,8 @@ struct UserRowView: View {
         }
     }
     
-    private func handleToggleFollowing(for user: User, onFollowToggle: ((User) async -> Void)?) async {
-        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
+    private func handleToggleFollowing(for user: User, wanted: Bool) async {
+        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid, isFollowing: wanted) {
             // Update the isFollowing state based on the result
             await MainActor.run {
                 isFollowing = ret
@@ -338,11 +341,14 @@ struct UserRowView: View {
                     // User is no longer following - decrement app user's following count
                     hproseInstance.appUser.followingCount = max(0, (hproseInstance.appUser.followingCount ?? 0) - 1)
                 }
+                if !ret, !hasRenderableUser {
+                    onLoadFailed?(userId)
+                }
             }
         } else {
             // Revert the isFollowing state on failure
             await MainActor.run {
-                isFollowing.toggle()
+                isFollowing = !wanted
             }
             showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"))
         }
@@ -456,15 +462,18 @@ struct UserRowView: View {
     }
 
     private func hideAndBlacklistUser(taskCancellationToken: UUID, reason: String) async {
-        userRowLogger.error("Dismissing user row \(userId, privacy: .public): \(reason, privacy: .public)")
-        let permanentFailureStartedAt =
-            BlackList.shared.recordFailure(userId) ??
-            BlackList.shared.permanentFailureStartedAt(userId)
-
         await MainActor.run {
             guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-            self.loadFailed = true
             self.isLoading = false
+            if onFollowToggle != nil, hproseInstance.appUser.followingList?.contains(userId) == true {
+                self.isFollowing = true
+                return
+            }
+            userRowLogger.error("Dismissing user row \(userId, privacy: .public): \(reason, privacy: .public)")
+            let permanentFailureStartedAt =
+                BlackList.shared.recordFailure(userId) ??
+                BlackList.shared.permanentFailureStartedAt(userId)
+            self.loadFailed = true
             self.onLoadFailed?(userId)
             if let permanentFailureStartedAt {
                 self.onPermanentlyBlacklisted?(userId, permanentFailureStartedAt)

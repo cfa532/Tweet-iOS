@@ -428,7 +428,8 @@ struct UserListDestinationView: View {
     }
     
     private func handleToggleFollowing(for user: User) async {
-        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
+        let wanted = hproseInstance.appUser.followingList?.contains(user.mid) != true
+        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid, isFollowing: wanted) {
             // Update app user's followingList based on the result
             if ret {
                 // User is now following - add to followingList

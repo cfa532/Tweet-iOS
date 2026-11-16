@@ -869,7 +869,7 @@ struct ProfileView: View {
     }
     
     private func handleToggleFollowing(for user: User, optimisticFollowing: Bool) async {
-        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
+        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid, isFollowing: optimisticFollowing) {
             await MainActor.run {
                 setFollowingState(ret)
             }

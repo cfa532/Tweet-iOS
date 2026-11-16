@@ -62,18 +62,6 @@ final class TweetHeightPrewarmer: @unchecked Sendable {
         guard contentWidth > 1 else { return }
         for tweet in tweets {
             prewarm(tweet, width: contentWidth, priority: .utility)
-
-            // A quote renders its original below the quoting body at a narrower width. Warm
-            // that exact width too; otherwise the outer row has an authoritative estimate
-            // while the embedded card changes from a rough guess as it enters the viewport.
-            let hasOwnContent = (tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                || (tweet.attachments?.isEmpty == false)
-            if hasOwnContent,
-               let originalTweetId = tweet.originalTweetId,
-               let embeddedTweet = Tweet.getInstance(for: originalTweetId),
-               embeddedTweet.author != nil {
-                prewarm(embeddedTweet, width: contentWidth - 12, priority: .utility)
-            }
         }
     }
 

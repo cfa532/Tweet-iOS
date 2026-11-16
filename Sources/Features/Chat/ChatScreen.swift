@@ -534,12 +534,14 @@ struct ChatScreen: View {
         messages.removeAll { $0.id == failedMessage.id }
         allCachedMessages.removeAll { $0.id == failedMessage.id }
         
-        // Create a new message with the same content
+        // Keep the send ID so the server can resume a partial delivery.
         let newMessage = ChatMessage(
+            id: failedMessage.id,
             authorId: HproseInstance.shared.appUser.mid,
             receiptId: receiptId,
             chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
             content: content,
+            timestamp: failedMessage.timestamp,
             attachments: nil
         )
         
@@ -571,10 +573,10 @@ struct ChatScreen: View {
                     if let index = messages.firstIndex(where: { $0.id == newMessage.id }) {
                         messages[index] = resultMessage
                     }
+                    if let index = allCachedMessages.firstIndex(where: { $0.id == newMessage.id }) {
+                        allCachedMessages[index] = resultMessage
+                    }
                     chatRepository.addMessagesToCoreData([resultMessage])
-
-                    // Delete the failed message from Core Data
-                    chatRepository.deleteMessage(failedMessage)
 
                     // Scroll to bottom for resent messages (since it's a user action)
                     shouldAnimateScroll = true
@@ -608,6 +610,9 @@ struct ChatScreen: View {
                     // Replace the message with the failed message
                     if let index = messages.firstIndex(where: { $0.id == newMessage.id }) {
                         messages[index] = failedResendMessage
+                    }
+                    if let index = allCachedMessages.firstIndex(where: { $0.id == newMessage.id }) {
+                        allCachedMessages[index] = failedResendMessage
                     }
                     
                     // Save failed message to Core Data
