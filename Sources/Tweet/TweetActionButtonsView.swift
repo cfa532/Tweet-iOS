@@ -172,8 +172,7 @@ struct TweetActionButtonsView: View {
                 }
             } label: {
                 HStack(spacing: 2) {
-                    Image(systemName: "bubble.left")
-                        .frame(width: 20)
+                    TweetActionIcon.reply.label("Reply")
                     Text((tweet.commentCount ?? 0) > 0 ? formatCount(tweet.commentCount!) : "")
                         .font(.system(.subheadline, design: .monospaced))
                         .frame(width: 28, alignment: .leading)
@@ -222,8 +221,7 @@ struct TweetActionButtonsView: View {
                 }
                 } label: {
                     HStack(spacing: 2) {
-                        Image(systemName: "arrow.2.squarepath")
-                            .frame(width: 24)
+                        TweetActionIcon.repost.label("Repost")
                         Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
                             .frame(width: 28, alignment: .leading)
@@ -323,9 +321,9 @@ struct TweetActionButtonsView: View {
                     let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] == true
                     let favoriteColor: Color = isFavorite ? .red : .themeSecondaryText
                     HStack(spacing: 2) {
-                        Image(systemName: isFavorite ? "heart.fill" : "heart")
+                        (isFavorite ? TweetActionIcon.liked : .like)
+                            .label(isFavorite ? "Unlike" : "Like")
                             .foregroundColor(favoriteColor)
-                            .frame(width: 20)
                         Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
                             .foregroundColor(favoriteColor)
@@ -426,9 +424,9 @@ struct TweetActionButtonsView: View {
                     let isBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] == true
                     let bookmarkColor: Color = isBookmarked ? XTheme.accentColor : .themeSecondaryText
                     HStack(spacing: 2) {
-                        Image(systemName: isBookmarked ? "bookmark.fill" : "bookmark")
+                        (isBookmarked ? TweetActionIcon.bookmarked : .bookmark)
+                            .label(isBookmarked ? "Remove Bookmark" : "Bookmark")
                             .foregroundColor(bookmarkColor)
-                            .frame(width: 20)
                         Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
                             .foregroundColor(bookmarkColor)
@@ -507,8 +505,7 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .frame(width: 20)
+                    TweetActionIcon.share.label("Share")
                         .frame(maxWidth: .infinity, alignment: .trailing)
                         .opacity(isPreparingShare ? 0.3 : 1.0)
                 }

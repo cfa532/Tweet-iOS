@@ -67,18 +67,46 @@ enum TweetShareLinkStyle {
     case providerIP
 }
 
+@MainActor
+enum TweetActionIcon: String, CaseIterable {
+    case reply = "TweetActionReply"
+    case repost = "TweetActionRepost"
+    case like = "TweetActionLike"
+    case liked = "TweetActionLiked"
+    case bookmark = "TweetActionBookmark"
+    case bookmarked = "TweetActionBookmarked"
+    case share = "TweetActionShare"
+
+    static let size: CGFloat = 19
+
+    // Keep asset lookups out of the feed's cell configuration path.
+    private static let images: [Self: UIImage] = Dictionary(uniqueKeysWithValues: allCases.compactMap { icon in
+        UIImage(named: icon.rawValue).map { (icon, $0.withRenderingMode(.alwaysTemplate)) }
+    })
+
+    var uiImage: UIImage? { Self.images[self] }
+
+    func label(_ title: LocalizedStringKey) -> some View {
+        Image(rawValue, label: Text(title))
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: Self.size, height: Self.size)
+            .frame(width: 20)
+    }
+}
+
 class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     // MARK: - Action Buttons
 
-    private let commentButton = ActionButtonView(icon: "bubble.left", pointSize: 16)
-    private let retweetButton = ActionButtonView(icon: "arrow.2.squarepath", pointSize: 18)
-    private let likeButton = ActionButtonView(icon: "heart", pointSize: 18)
-    private let bookmarkButton = ActionButtonView(icon: "bookmark", pointSize: 18)
+    private let commentButton = ActionButtonView(icon: .reply)
+    private let retweetButton = ActionButtonView(icon: .repost)
+    private let likeButton = ActionButtonView(icon: .like)
+    private let bookmarkButton = ActionButtonView(icon: .bookmark)
     private let shareButton: UIButton = {
         let btn = UIButton(type: .system)
-        let config = UIImage.SymbolConfiguration(pointSize: 14)
-        btn.setImage(UIImage(systemName: "square.and.arrow.up", withConfiguration: config), for: .normal)
+        btn.setImage(TweetActionIcon.share.uiImage, for: .normal)
         btn.tintColor = XTheme.secondaryText
         btn.contentHorizontalAlignment = .trailing
         return btn
@@ -271,7 +299,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
     private func updateIcons(tweet: Tweet) {
         let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
-        likeButton.setIcon(isFavorite ? "heart.fill" : "heart")
+        likeButton.setIcon(isFavorite ? .liked : .like)
         if isFavorite {
             likeButton.tintColor = UIColor.systemRed
         } else {
@@ -279,7 +307,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         }
 
         let isBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
-        bookmarkButton.setIcon(isBookmarked ? "bookmark.fill" : "bookmark")
+        bookmarkButton.setIcon(isBookmarked ? .bookmarked : .bookmark)
         if isBookmarked {
             bookmarkButton.tintColor = XTheme.accent
         } else {
@@ -1321,14 +1349,9 @@ private class ActionButtonView: UIView {
         }
     }
 
-    private var iconPointSize: CGFloat = 16
-
-    init(icon: String, pointSize: CGFloat = 16) {
+    init(icon: TweetActionIcon) {
         super.init(frame: .zero)
-        iconPointSize = pointSize
-        let config = UIImage.SymbolConfiguration(pointSize: pointSize)
-        iconView.preferredSymbolConfiguration = config
-        iconView.image = MenuSymbol.image(icon)
+        iconView.image = icon.uiImage
         setupViews()
     }
 
@@ -1350,6 +1373,7 @@ private class ActionButtonView: UIView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             iconView.widthAnchor.constraint(equalToConstant: 22),
+            iconView.heightAnchor.constraint(equalToConstant: TweetActionIcon.size),
             countLabel.widthAnchor.constraint(equalToConstant: 32),
         ])
 
@@ -1382,11 +1406,8 @@ private class ActionButtonView: UIView {
         countLabel.text = count > 0 ? formatCount(count) : ""
     }
 
-    /// Called on every configure — heart, bookmark and retweet all swap between filled
-    /// and unfilled states — so this must not hit CoreUI's asset catalog each time.
-    /// A device trace showed those lookups as a 136ms main-thread block.
-    func setIcon(_ systemName: String) {
-        iconView.image = MenuSymbol.image(systemName, pointSize: iconPointSize)
+    func setIcon(_ icon: TweetActionIcon) {
+        iconView.image = icon.uiImage
     }
 }
 
