@@ -166,7 +166,8 @@ final class TweetStore {
             attachments: attachments,
             isPrivate: record.isPrivate,
             downloadable: record.downloadable,
-            storageFormat: record.storageFormat
+            storageFormat: record.storageFormat,
+            quotedCommentAuthorId: record.quotedCommentAuthorId
         )
         if let readNodeURL = record.readNodeURL { instance.readNodeURL = readNodeURL }
         if prewarmHeight {
