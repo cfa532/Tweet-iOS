@@ -2846,7 +2846,8 @@ class TweetTableViewController: UITableViewController {
         cellHorizontalPadding: CGFloat,
         prewarmTextHeight: CGFloat? = nil
     ) -> CGFloat {
-        var height: CGFloat = isRetweet ? 26 : 16
+        let quotedTweet = isRetweet && hasOwnContent ? tweet : (displayTweet.quotedCommentAuthorId != nil ? displayTweet : nil)
+        var height: CGFloat = isRetweet && !hasOwnContent ? 26 : 16
         // Must stay a constant: this runs for every row of an inserted page. See the
         // note in calculateTweetHeight.
         height += ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
@@ -2878,10 +2879,10 @@ class TweetTableViewController: UITableViewController {
         )
 
         height += bodyHeight
-        height += isRetweet && hasOwnContent ? 12 : (hasCaptionLabel ? 4 : 10)
+        height += quotedTweet != nil ? 12 : (hasCaptionLabel ? 4 : 10)
 
-        if isRetweet && hasOwnContent {
-            height += embeddedQuoteHeight(for: tweet, contentWidth: contentWidth) + 10
+        if let quotedTweet {
+            height += embeddedQuoteHeight(for: quotedTweet, contentWidth: contentWidth) + 10
         }
 
         height += 30 + 8 + 1
@@ -2922,7 +2923,7 @@ class TweetTableViewController: UITableViewController {
         var height: CGFloat = 0
 
         // Top padding
-        if isRetweet {
+        if isPureRetweet {
             // Banner at topAnchor+6, height 18, mainStack 2pt below banner
             height += 6 + 18 + 2
         } else {
@@ -3019,14 +3020,15 @@ class TweetTableViewController: UITableViewController {
 
         // Spacing after body (matches updateBodyToActionSpacing)
         // Quoted tweets: 12pt body→embedded; Regular: caption ? 4 : 10 body→action
-        if isRetweet && hasOwnContent {
+        let quotedTweet = isRetweet && hasOwnContent ? tweet : (displayTweet.quotedCommentAuthorId != nil ? displayTweet : nil)
+        if quotedTweet != nil {
             height += 12
         } else {
             height += hasCaptionLabel ? 4 : 10
         }
 
-        if isRetweet && hasOwnContent {
-            height += embeddedQuoteHeight(for: tweet, contentWidth: contentWidth) + 10
+        if let quotedTweet {
+            height += embeddedQuoteHeight(for: quotedTweet, contentWidth: contentWidth) + 10
         }
 
         // Action bar (fixed 30pt)

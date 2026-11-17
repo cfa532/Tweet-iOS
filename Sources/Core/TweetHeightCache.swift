@@ -15,12 +15,13 @@ final class TweetHeightCache: NSObject, @unchecked Sendable {
     /// 1.5pt. Without a version bump, an installed user would keep heights produced by the
     /// previous calculator indefinitely and never see the fix.
     ///
-    /// v11: use 16pt post text with a 22pt minimum line height.
-    private let userDefaultsKey = "TweetHeightCache.v11"
+    /// v13: account for the parent quote card in forwarded comments.
+    private let userDefaultsKey = "TweetHeightCache.v13"
     private let supersededUserDefaultsKeys = [
         "TweetHeightCache", "TweetHeightCache.v2", "TweetHeightCache.v3",
         "TweetHeightCache.v4", "TweetHeightCache.v5", "TweetHeightCache.v6", "TweetHeightCache.v7",
         "TweetHeightCache.v8", "TweetHeightCache.v9", "TweetHeightCache.v10",
+        "TweetHeightCache.v11",
     ]
     private let maxEntries = 2000
     private var heights: [String: CGFloat] = [:]

@@ -64,14 +64,14 @@ Top to bottom, matching `TweetCellContentView`:
 
 | Component | Height | Notes |
 | --- | --- | --- |
-| Top padding | `16`, or `6 + 18 + 2 = 26` | the larger form is the "Forwarded by" banner |
+| Top padding | `16`, or `6 + 18 + 2 = 26` | pure retweets reserve space for the "Forwarded by" banner |
 | Header | `TweetHeaderUIView.measuredHeaderHeight(for:availableWidth: contentWidth)` | **measured, not assumed** — see §4 |
 | Header gap | `2` | `contentColumn.setCustomSpacing(2, after: headerView)` |
 | Body | `2` + visible items + gaps | see §5 |
 | Body gap | `12` (quote) / `4` (caption visible) / `10` | `updateBodyToActionSpacing` |
-| Embedded card | `8 + max(32, measuredHeader) + 4 + embeddedBody + contentBottomPadding` | quote tweets only |
+| Embedded card | `8 + max(32, measuredHeader) + 4 + embeddedBody + contentBottomPadding` | quote tweets and forwarded comment quotes |
 | — not loaded | `EmbeddedTweetUIView.placeholderHeight` (36) | |
-| Embed gap | `10` | quote tweets only |
+| Embed gap | `10` | quote tweets and forwarded comment quotes |
 | Action bar | `30` | fixed |
 | Bottom padding | `8` | `mainStack.bottom == separator.top − 8` |
 | Separator | `1` | |

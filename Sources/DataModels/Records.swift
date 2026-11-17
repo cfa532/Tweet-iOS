@@ -370,6 +370,7 @@ struct TweetRecord: Codable, Sendable {
     var title: String?
     var originalTweetId: MimeiId?
     var originalAuthorId: MimeiId?
+    var quotedCommentAuthorId: MimeiId?
     var parentTweetId: MimeiId?
     var readNodeURL: URL?
     var favorites: [Bool]?
@@ -390,6 +391,7 @@ struct TweetRecord: Codable, Sendable {
         case title
         case originalTweetId
         case originalAuthorId
+        case quotedCommentAuthorId
         case parentTweetId
         case readNodeURL
         case favorites
@@ -411,6 +413,7 @@ struct TweetRecord: Codable, Sendable {
         title: String? = nil,
         originalTweetId: MimeiId? = nil,
         originalAuthorId: MimeiId? = nil,
+        quotedCommentAuthorId: MimeiId? = nil,
         parentTweetId: MimeiId? = nil,
         favorites: [Bool]? = [false, false, false],
         favoriteCount: Int? = 0,
@@ -429,6 +432,7 @@ struct TweetRecord: Codable, Sendable {
         self.title = title
         self.originalTweetId = originalTweetId
         self.originalAuthorId = originalAuthorId
+        self.quotedCommentAuthorId = quotedCommentAuthorId
         self.parentTweetId = parentTweetId
         self.favorites = favorites
         self.favoriteCount = favoriteCount
@@ -451,6 +455,7 @@ struct TweetRecord: Codable, Sendable {
             title: tweet.title,
             originalTweetId: tweet.originalTweetId,
             originalAuthorId: tweet.originalAuthorId,
+            quotedCommentAuthorId: tweet.quotedCommentAuthorId,
             parentTweetId: tweet.parentTweetId,
             favorites: tweet.favorites,
             favoriteCount: tweet.favoriteCount,
@@ -519,7 +524,8 @@ extension TweetRecord {
             attachments: attachments?.map { $0.makeMedia(author: author) },
             isPrivate: isPrivate,
             downloadable: downloadable,
-            storageFormat: storageFormat
+            storageFormat: storageFormat,
+            quotedCommentAuthorId: quotedCommentAuthorId
         )
         tweet.readNodeURL = readNodeURL
         return tweet

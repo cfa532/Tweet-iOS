@@ -1378,6 +1378,7 @@ struct TweetDetailView: View {
     @State private var toastIsError = false
     @State private var pinnedTweets: [[String: Any]] = []
     @State private var originalTweet: Tweet?
+    @State private var forwardedCommentParent: Tweet?
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
     // Flipped to true on the first real user pan, detected via the
@@ -1492,6 +1493,12 @@ struct TweetDetailView: View {
         return tweet.originalTweetId != nil && tweet.originalAuthorId != nil
     }
     
+    private var forwardedCommentQuote: Tweet? {
+        guard let originalTweet, originalTweet.mid == displayTweet.mid,
+              originalTweet.quotedCommentAuthorId != nil else { return nil }
+        return originalTweet
+    }
+
     private var displayTweet: Tweet {
         // Check if we need to update the cached value
         let isRetweet = (tweet.content == nil || tweet.content?.isEmpty == true) &&
@@ -1724,6 +1731,18 @@ struct TweetDetailView: View {
         // Cache restore only. The server read of the original belongs to
         // doReadTweet(isInitialLoad:), which sends fromDetailView so the node syncs and
         // provides it; fetching it here as well was a second round trip without the flag.
+        .task(id: displayTweet.quotedCommentAuthorId) {
+            await displayTweet.loadQuotedCommentAuthor()
+        }
+        .task(id: forwardedCommentQuote?.mid) {
+            forwardedCommentParent = nil
+            guard let quote = forwardedCommentQuote,
+                  let parentId = quote.originalTweetId,
+                  let parentAuthorId = quote.originalAuthorId else { return }
+            let parent = try? await hproseInstance.getTweet(tweetId: parentId, authorId: parentAuthorId)
+            guard !Task.isCancelled else { return }
+            forwardedCommentParent = parent
+        }
         .task(id: tweet.originalTweetId) {
             // Load original tweet if this is a retweet/quoted tweet
             guard let originalTweetId = tweet.originalTweetId,
@@ -1969,7 +1988,7 @@ struct TweetDetailView: View {
     
     private var tweetHeader: some View {
         HStack(alignment: .top, spacing: 0) {
-            if let user = displayTweet.author {
+            if let user = displayTweet.displayedAuthor {
                 NavigationLink(value: user) {
                     Avatar(user: user)
                 }
@@ -2047,7 +2066,7 @@ struct TweetDetailView: View {
             
             // Show quoted tweet if this is a quote tweet (regardless of content)
             if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {
-                if let orig = originalTweet {
+                if let orig = forwardedCommentQuote == nil ? originalTweet : forwardedCommentParent {
                     VStack {
                         // Use embedded rendering: prevents quoted tweet videos from loading/autoplaying
                         // (avoids conflicts with feed/shared MediaCell players).

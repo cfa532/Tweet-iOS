@@ -7715,7 +7715,8 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
 
         hproseDebug("DEBUG: [uploadTweet] Tweet authorId: \(tweetAuthorId), content: \(logContent), attachments count: \(logAttachCount)")
         
-        let rawResponse = await invokeRunMApp(using: client, entry: "add_tweet", params: params)
+        let entry = quotedCommentId == nil ? "add_tweet" : "retweet_comment"
+        let rawResponse = await invokeRunMApp(using: client, entry: entry, params: params)
             
         
         guard rawResponse != nil else {
@@ -7737,6 +7738,13 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
         guard let newTweetId = responseDict["mid"] as? String else {
             hproseError("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
+        }
+        let commentQuoteId = responseDict["commentQuoteId"] as? String
+        if quotedCommentId != nil,
+           commentQuoteId?.isEmpty != false || commentQuoteId == newTweetId {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Comment retweet returned no generated quote",
+            ])
         }
 
         if let originalTweetId, let count = Self.intField(responseDict, key: "originalRetweetCount") {
@@ -7769,14 +7777,22 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             return completeTweet
         } else {
             hproseWarning("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
-            // Fallback: return partial tweet if fetch fails
-            let uploadedTweet = tweet
             let author = try? await self.fetchUser(tweetAuthorId)
-            await MainActor.run {
-                uploadedTweet.mid = newTweetId
-                uploadedTweet.author = author
+            return await MainActor.run {
+                if let commentQuoteId {
+                    return Tweet.getInstance(
+                        mid: newTweetId,
+                        authorId: tweetAuthorId,
+                        originalTweetId: commentQuoteId,
+                        originalAuthorId: tweetAuthorId,
+                        author: author,
+                        isPrivate: tweet.isPrivate
+                    )
+                }
+                tweet.mid = newTweetId
+                tweet.author = author
+                return tweet
             }
-            return uploadedTweet
         }
     }
     

@@ -273,7 +273,7 @@ struct TweetItemHeaderView: View {
     @State private var now = Date()
 
     var body: some View {
-        AuthorNameView(author: tweet.author, timeDifference: TweetRelativeTime.text(from: tweet.timestamp, at: now))
+        AuthorNameView(author: tweet.displayedAuthor, timeDifference: TweetRelativeTime.text(from: tweet.timestamp, at: now))
             .lineLimit(2)
             .truncationMode(.tail)
             .multilineTextAlignment(.leading)

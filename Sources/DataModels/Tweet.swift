@@ -15,14 +15,15 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
                           originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, parentTweetId: MimeiId? = nil, author: User? = nil,
                           favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
-                          downloadable: Bool? = nil, storageFormat: String? = nil) -> Tweet {
+                          downloadable: Bool? = nil, storageFormat: String? = nil, quotedCommentAuthorId: MimeiId? = nil) -> Tweet {
         instanceLock.lock()
         guard let existingInstance = instances[mid] else {
             let newInstance = Tweet(mid: mid, authorId: authorId, content: content, timestamp: timestamp, title: title,
                                   originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, parentTweetId: parentTweetId, author: author,
                                   favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
                                   retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
-                                  isPrivate: isPrivate, downloadable: downloadable, storageFormat: storageFormat)
+                                  isPrivate: isPrivate, downloadable: downloadable, storageFormat: storageFormat,
+                                  quotedCommentAuthorId: quotedCommentAuthorId)
             instances[mid] = newInstance
             instanceLock.unlock()
             return newInstance
@@ -42,6 +43,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             if let title = title { existingInstance.title = title }
             if let originalTweetId = originalTweetId { existingInstance.originalTweetId = originalTweetId }
             if let originalAuthorId = originalAuthorId { existingInstance.originalAuthorId = originalAuthorId }
+            if let quotedCommentAuthorId { existingInstance.quotedCommentAuthorId = quotedCommentAuthorId }
             if let parentTweetId = parentTweetId { existingInstance.parentTweetId = parentTweetId }
             if let author = author { existingInstance.author = author }
             if let favorites = favorites { existingInstance.favorites = favorites }
@@ -117,6 +119,18 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
     
     var originalTweetId: MimeiId? // retweet id of the original tweet
     var originalAuthorId: MimeiId? // authorId of the forwarded tweet
+    /// The source comment author on a server-generated quote.
+    var quotedCommentAuthorId: MimeiId?
+    var displayedAuthor: User? {
+        if let quotedCommentAuthorId { return User.getInstance(mid: quotedCommentAuthorId) }
+        return author
+    }
+
+    func loadQuotedCommentAuthor() async {
+        guard let quotedCommentAuthorId, displayedAuthor?.username == nil else { return }
+        _ = try? await HproseInstance.shared.fetchUser(quotedCommentAuthorId)
+    }
+
     var parentTweetId: MimeiId? // immediate parent for comments and replies
 
     /// True once an ID-only navigation placeholder has enough data to render its body.
@@ -199,6 +213,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         let title: String?
         let originalTweetId: String?
         let originalAuthorId: String?
+        let quotedCommentAuthorId: String?
         let attachments: [Attachment]?
 
         @MainActor
@@ -207,6 +222,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             title = tweet.title
             originalTweetId = tweet.originalTweetId
             originalAuthorId = tweet.originalAuthorId
+            quotedCommentAuthorId = tweet.quotedCommentAuthorId
             attachments = tweet.attachments?.map(Attachment.init)
         }
     }
@@ -316,6 +332,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         case title
         case originalTweetId
         case originalAuthorId
+        case quotedCommentAuthorId
         case parentTweetId
         // author is NOT saved - always reconstructed from singleton
         case favorites
@@ -338,6 +355,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         title = try container.decodeIfPresent(String.self, forKey: .title)
         originalTweetId = try container.decodeIfPresent(String.self, forKey: .originalTweetId)
         originalAuthorId = try container.decodeIfPresent(String.self, forKey: .originalAuthorId)
+        quotedCommentAuthorId = try container.decodeIfPresent(String.self, forKey: .quotedCommentAuthorId)
         parentTweetId = try container.decodeIfPresent(String.self, forKey: .parentTweetId)
         // author is NOT decoded - always reconstructed from singleton using authorId
         author = nil
@@ -355,7 +373,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
          originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, parentTweetId: MimeiId? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
-         downloadable: Bool? = nil, storageFormat: String? = nil) {
+         downloadable: Bool? = nil, storageFormat: String? = nil, quotedCommentAuthorId: MimeiId? = nil) {
         self.mid = mid
         self.storageFormat = storageFormat
         self.authorId = authorId
@@ -364,6 +382,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         self.title = title
         self.originalTweetId = originalTweetId
         self.originalAuthorId = originalAuthorId
+        self.quotedCommentAuthorId = quotedCommentAuthorId
         self.parentTweetId = parentTweetId
         self.author = author
         self.favorites = favorites
@@ -391,6 +410,7 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         try container.encodeIfPresent(title, forKey: .title)
         try container.encodeIfPresent(originalTweetId, forKey: .originalTweetId)
         try container.encodeIfPresent(originalAuthorId, forKey: .originalAuthorId)
+        try container.encodeIfPresent(quotedCommentAuthorId, forKey: .quotedCommentAuthorId)
         try container.encodeIfPresent(parentTweetId, forKey: .parentTweetId)
         // author is NOT encoded - always reconstructed from singleton using authorId
         try container.encodeIfPresent(favorites, forKey: .favorites)
@@ -427,6 +447,9 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             }
             if let originalAuthorId = other.originalAuthorId, originalAuthorId != self.originalAuthorId {
                 self.originalAuthorId = originalAuthorId
+            }
+            if let quotedCommentAuthorId = other.quotedCommentAuthorId {
+                self.quotedCommentAuthorId = quotedCommentAuthorId
             }
             if let parentTweetId = other.parentTweetId, parentTweetId != self.parentTweetId {
                 self.parentTweetId = parentTweetId
@@ -527,6 +550,9 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
                 }
                 if let originalAuthorId = tempTweet.originalAuthorId {
                     self.originalAuthorId = originalAuthorId
+                }
+                if let quotedCommentAuthorId = tempTweet.quotedCommentAuthorId {
+                    self.quotedCommentAuthorId = quotedCommentAuthorId
                 }
                 if let parentTweetId = tempTweet.parentTweetId { self.parentTweetId = parentTweetId }
                 if let author = tempTweet.author { self.author = author }
@@ -642,7 +668,8 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
                              commentCount: tweet.commentCount ?? 0,
                              attachments: tweet.attachments,
                              isPrivate: tweet.isPrivate,
-                             downloadable: tweet.downloadable)
+                             downloadable: tweet.downloadable,
+                             quotedCommentAuthorId: tweet.quotedCommentAuthorId)
             TweetHeightPrewarmer.shared.prewarm(instance)
             return instance
         } catch {
@@ -710,7 +737,8 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
             attachments: attachments ?? self.attachments,
             isPrivate: isPrivate ?? self.isPrivate,
             downloadable: downloadable ?? self.downloadable,
-            storageFormat: self.storageFormat
+            storageFormat: self.storageFormat,
+            quotedCommentAuthorId: self.quotedCommentAuthorId
         )
     }
     

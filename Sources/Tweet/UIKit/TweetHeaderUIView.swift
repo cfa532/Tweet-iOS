@@ -244,14 +244,14 @@ class TweetHeaderUIView: UIView {
         let text = Self.timeDifference(from: tweet.timestamp)
         guard text != currentTimestampText else { return }
         currentTimestampText = text
-        setHeaderText(name: tweet.author?.name, username: tweet.author?.username)
+        setHeaderText(name: tweet.displayedAuthor?.name, username: tweet.displayedAuthor?.username)
     }
 
     func configure(tweet: Tweet) {
         currentTweet = tweet
 
         // Refresh the age even when the rest of the header can be reused.
-        if currentTweetId == tweet.mid {
+        if currentTweetId == tweet.mid, currentAuthorId == tweet.displayedAuthor?.mid {
             refreshTimestamp()
             updateTimestampClock()
             return
@@ -265,8 +265,12 @@ class TweetHeaderUIView: UIView {
         currentTimestampText = Self.timeDifference(from: tweet.timestamp)
 
         // Set author info
-        updateAuthorLabels(user: tweet.author)
+        updateAuthorLabels(user: tweet.displayedAuthor)
         updateTimestampClock()
+        if tweet.quotedCommentAuthorId != nil {
+            Task { await tweet.loadQuotedCommentAuthor() }
+            return
+        }
 
         // Track author attachment/replacement without duplicating per-user subscriptions.
         tweet.$author

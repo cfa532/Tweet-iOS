@@ -498,6 +498,7 @@ class TweetCellContentView: UIView {
                                isPinned: isPinned, parentViewController: parentViewController,
                                allowDeleteAll: allowDeleteAll)
         } else if let savedParentTweetId {
+            showRetweetBanner(false)
             configureQuotedTweet(
                 tweet: tweet,
                 embeddedTweet: savedParentTweet,
@@ -612,13 +613,26 @@ class TweetCellContentView: UIView {
         // Keep quoted-tweet configuration on the fast path by using only the in-memory singleton.
         let embeddedTweet = Tweet.getInstance(for: originalTweetId)
 
-        if !hasOwnContent, let embeddedTweet {
+        if hasOwnContent {
+            // Quoted tweet: show own content + embedded original tweet below.
+            showRetweetBanner(false)
+            configureQuotedTweet(tweet: tweet, embeddedTweet: embeddedTweet,
+                                  originalTweetId: originalTweetId,
+                                  originalAuthorId: originalAuthorId,
+                                  hproseInstance: hproseInstance, isPinned: isPinned,
+                                  parentViewController: parentViewController,
+                                  allowDeleteAll: allowDeleteAll)
+            return
+        }
+
+        configureRetweetBanner(tweet: tweet, appUserId: hproseInstance.appUser.mid)
+        if let embeddedTweet {
             // Pure retweet: show original tweet's content directly, with retweet banner
             configurePureRetweet(tweet: tweet, originalTweet: embeddedTweet,
                                   hproseInstance: hproseInstance, isPinned: isPinned,
                                   parentViewController: parentViewController,
                                   allowDeleteAll: allowDeleteAll)
-        } else if !hasOwnContent {
+        } else {
             // Keep the retweeter's row and its menu while the original loads.
             configureQuotedTweet(tweet: tweet, embeddedTweet: nil,
                                   originalTweetId: originalTweetId,
@@ -658,14 +672,6 @@ class TweetCellContentView: UIView {
                     self.onContentDidChangeHeightAsync?()
                 }
             }
-        } else {
-            // Quoted tweet: show own content + embedded original tweet below
-            configureQuotedTweet(tweet: tweet, embeddedTweet: embeddedTweet,
-                                  originalTweetId: originalTweetId,
-                                  originalAuthorId: originalAuthorId,
-                                  hproseInstance: hproseInstance, isPinned: isPinned,
-                                  parentViewController: parentViewController,
-                                  allowDeleteAll: allowDeleteAll)
         }
     }
 
@@ -673,29 +679,18 @@ class TweetCellContentView: UIView {
                                        hproseInstance: HproseInstance, isPinned: Bool,
                                        parentViewController: UIViewController,
                                        allowDeleteAll: Bool = false) {
-        configureRetweetBanner(tweet: tweet, appUserId: hproseInstance.appUser.mid)
-
-        // Hide embedded tweet wrapper (content shown directly) and suppress its spacing
-        embeddedTweetWrapper.isHidden = true
-        embeddedWrapperHeightConstraint?.isActive = true
-        contentColumn.setCustomSpacing(0, after: embeddedTweetWrapper)
-
-        // Avatar from original tweet's author
-        if let author = originalTweet.author {
-            avatarView.configure(user: author, size: 46)
-            avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
+        if originalTweet.quotedCommentAuthorId != nil,
+           let parentId = originalTweet.originalTweetId,
+           let parentAuthorId = originalTweet.originalAuthorId {
+            configureEmbeddedTweet(nil, originalTweetId: parentId, originalAuthorId: parentAuthorId,
+                                   hproseInstance: hproseInstance, allowNetworkLoad: true)
+        } else {
+            embeddedTweetWrapper.isHidden = true
+            embeddedWrapperHeightConstraint?.isActive = true
+            contentColumn.setCustomSpacing(0, after: embeddedTweetWrapper)
         }
 
-        // Subscribe to original tweet's author appearing (may load async)
-        originalTweet.$author
-            .compactMap { $0 }
-            .first()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] author in
-                self?.avatarView.configure(user: author, size: 46)
-                self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
-            }
-            .store(in: &cancellables)
+        configureDisplayedAvatar(for: originalTweet)
 
         // Header from original tweet
         headerView.configure(tweet: originalTweet)
@@ -721,24 +716,36 @@ class TweetCellContentView: UIView {
                                        parentViewController: UIViewController,
                                        allowDeleteAll: Bool = false,
                                        allowNetworkLoad: Bool = true) {
-        if tweet.originalTweetId != nil {
-            configureRetweetBanner(tweet: tweet, appUserId: hproseInstance.appUser.mid)
-        } else {
-            showRetweetBanner(false)
-        }
+        configureDisplayedAvatar(for: tweet)
 
-        // Show embedded tweet wrapper and restore its spacing
-        embeddedTweetWrapper.isHidden = false
-        embeddedWrapperHeightConstraint?.isActive = false
-        contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
+        // Header from quoting tweet
+        headerView.configure(tweet: tweet)
 
-        // Avatar from quoting tweet's author
-        if let author = tweet.author {
+        // Body from quoting tweet
+        bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
+                           parentViewController: parentViewController)
+        bodyView.onTweetBodyTap = { [weak self] in self?.navigateToTweetDetail(tweet, source: "quotedBodyMoreTap") }
+        configureEmbeddedTweet(embeddedTweet, originalTweetId: originalTweetId, originalAuthorId: originalAuthorId,
+                               hproseInstance: hproseInstance, allowNetworkLoad: allowNetworkLoad)
+        updateBodyToActionSpacing()
+
+        // Action bar on quoting tweet
+        actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
+        actionBar.parentViewController = parentViewController
+        actionBar.parentTweet = commentParentTweet
+        // Don't set onCommentTap - let action bar present comment composer directly
+        actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
+        actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
+    }
+
+    private func configureDisplayedAvatar(for tweet: Tweet) {
+        if let author = tweet.displayedAuthor {
             avatarView.configure(user: author, size: 46)
             avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
         }
 
-        // Subscribe to author appearing
+        // Subscribe to original tweet's author appearing (may load async)
+        guard tweet.quotedCommentAuthorId == nil else { return }
         tweet.$author
             .compactMap { $0 }
             .first()
@@ -748,17 +755,14 @@ class TweetCellContentView: UIView {
                 self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
             }
             .store(in: &cancellables)
+    }
 
-        // Header from quoting tweet
-        headerView.configure(tweet: tweet)
-
-        // Body from quoting tweet
-        bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
-                           parentViewController: parentViewController)
-        bodyView.onTweetBodyTap = { [weak self] in self?.navigateToTweetDetail(tweet, source: "quotedBodyMoreTap") }
-        updateBodyToActionSpacing()
-
-        // Embedded tweet — the one path that actually needs the view, so build it here.
+    private func configureEmbeddedTweet(_ embeddedTweet: Tweet?, originalTweetId: String, originalAuthorId: String,
+                                        hproseInstance: HproseInstance, allowNetworkLoad: Bool) {
+        // Show embedded tweet wrapper and restore its spacing
+        embeddedTweetWrapper.isHidden = false
+        embeddedWrapperHeightConstraint?.isActive = false
+        contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
         let embeddedTweetView = ensureEmbeddedTweetView()
         if let embeddedTweet {
             embeddedTweetView.configure(tweet: embeddedTweet)
@@ -777,14 +781,6 @@ class TweetCellContentView: UIView {
         // The quoted tweet's avatar opens its own author, not this cell's.
         embeddedTweetView.onAvatarTap = { [weak self] user in self?.onAvatarTap?(user) }
         embeddedTweetView.onAsyncConfigured = { [weak self] in self?.onContentDidChangeHeightAsync?() }
-
-        // Action bar on quoting tweet
-        actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
-        actionBar.parentViewController = parentViewController
-        actionBar.parentTweet = commentParentTweet
-        // Don't set onCommentTap - let action bar present comment composer directly
-        actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
-        actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
     }
 
     /// Adjust body→action spacing (or body→embedded spacing for quoted tweets)
