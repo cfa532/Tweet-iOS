@@ -16,6 +16,52 @@ private enum ChatAttachmentLayout {
     @MainActor static var width: CGFloat { UIScreen.main.bounds.width * 0.6 }
 }
 
+/// Marks URLs inside a chat bubble as tappable links (Text renders `.link` runs as
+/// links that open in Safari, matching the tweet-detail tap behavior).
+/// Same detector pattern as TweetDetailView/TweetBodyUIView: a static NSDataDetector
+/// plus a cheap dot/colon pre-check so CJK-only messages skip the expensive scan
+/// while rows are built inside the lazy stack. Safe on the main actor because chat
+/// bubbles are short; the pre-check skips pure-CJK prose entirely.
+private enum ChatMessageLinks {
+    private static let detector = try? NSDataDetector(
+        types: NSTextCheckingResult.CheckingType.link.rawValue
+    )
+
+    /// True if `text` contains a character every URL form NSDataDetector recognises must
+    /// have: a dot (domain) or a colon (scheme). Cheap byte scan, no allocation.
+    private static func mayContainLink(_ text: String) -> Bool {
+        for byte in text.utf8 where byte == UInt8(ascii: ".") || byte == UInt8(ascii: ":") {
+            return true
+        }
+        return false
+    }
+
+    static func attributed(_ content: String, isFromCurrentUser: Bool) -> AttributedString {
+        var attributed = AttributedString(content)
+        attributed.foregroundColor = isFromCurrentUser ? .white : .primary
+        guard mayContainLink(content), let detector else { return attributed }
+
+        let nsContent = content as NSString
+        detector.enumerateMatches(in: content, options: [], range: NSRange(location: 0, length: nsContent.length)) { match, _, _ in
+            guard let match, let url = match.url else { return }
+
+            // Exclude trailing sentence punctuation from the link, same as tweet bodies.
+            let matchedText = nsContent.substring(with: match.range)
+            let trimmedLength = matchedText.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;:)］】》」'\"")).utf16.count
+            guard trimmedLength > 0,
+                  let range = Range(NSRange(location: match.range.location, length: trimmedLength), in: content),
+                  let start = AttributedString.Index(range.lowerBound, within: attributed),
+                  let end = AttributedString.Index(range.upperBound, within: attributed) else { return }
+
+            attributed[start..<end].link = url
+            // White on the blue sent bubble; theme accent on the gray received bubble.
+            attributed[start..<end].foregroundColor = isFromCurrentUser ? .white : XTheme.accentColor
+            attributed[start..<end].underlineStyle = .single
+        }
+        return attributed
+    }
+}
+
 // MARK: - Chat Message View
 
 struct ChatMessageView: View {
@@ -84,6 +130,11 @@ struct ChatMessageView: View {
                                 .foregroundColor(.gray)
                         )
                 }
+            } else {
+                // Reserve the other party's avatar column so long bubbles fill the
+                // middle area and stop exactly where their bubble would start.
+                Color.clear
+                    .frame(width: 36, height: 36)
             }
             
             // Message content
@@ -91,17 +142,16 @@ struct ChatMessageView: View {
                 // Row 1: Message text (if any)
                 if let content = message.content, !content.isEmpty {
                     HStack(spacing: 4) {
-                        Text(content)
+                        // Text colors (white/primary) are baked in by ChatMessageLinks
+                        // so detected URL runs can carry their own link color.
+                        Text(ChatMessageLinks.attributed(content, isFromCurrentUser: isFromCurrentUser))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(
                                 isFromCurrentUser ? Color.blue : Color(.systemGray5)
                             )
-                            .foregroundColor(
-                                isFromCurrentUser ? .white : .primary
-                            )
                             .clipShape(isLastFromSender ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
-                        
+
                         // Show failure icon for sent messages that failed
                         if isFromCurrentUser && message.success == false {
                             Button(action: {
@@ -115,7 +165,7 @@ struct ChatMessageView: View {
                         }
                     }
                 }
-                
+
                 // Row 2: Attachments
                 if let pendingAttachment {
                     PendingChatAttachmentView(attachment: pendingAttachment)
@@ -188,6 +238,10 @@ struct ChatMessageView: View {
             if isFromCurrentUser {
                 // Avatar for sent messages (RIGHT)
                 Avatar(user: HproseInstance.shared.appUser, size: 36)
+            } else {
+                // Reserve the current user's avatar column (see comment on the left side).
+                Color.clear
+                    .frame(width: 36, height: 36)
             }
         }
         .task {
