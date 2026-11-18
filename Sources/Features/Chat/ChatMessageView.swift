@@ -88,10 +88,6 @@ struct ChatMessageView: View {
         isLastMessageFromSender(index: currentIndex, messages: allMessages)
     }
 
-    private var showTimestamp: Bool {
-        isLastFromSender
-    }
-
     private var messageSenderUser: User? {
         isFromCurrentUser ? HproseInstance.shared.appUser : (chatUser ?? receiptUser)
     }
@@ -228,13 +224,8 @@ struct ChatMessageView: View {
                     }
                 }
                 
-                // Timestamp - show for last message from each party
-                if showTimestamp {
-                    Text(formatTime(message.timestamp))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 2)
-                }
+                // Timestamps only appear as the centered ChatScreen divider when
+                // two consecutive messages are more than an hour apart.
             }
             .frame(maxWidth: .infinity, alignment: isFromCurrentUser ? .trailing : .leading)
             
@@ -253,13 +244,6 @@ struct ChatMessageView: View {
                 receiptUser = try? await HproseInstance.shared.fetchUser(message.authorId, baseUrl: "")
             }
         }
-    }
-    
-    private func formatTime(_ timestamp: TimeInterval) -> String {
-        let date = Date(timeIntervalSince1970: timestamp)
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
     }
 }
 
