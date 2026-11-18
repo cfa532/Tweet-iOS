@@ -594,6 +594,24 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         true
     }
 
+    /// Bounds re-acquisition after cancellation-while-visible; reset per configure.
+    private var playerAcquireCancelRekicks = 0
+
+    /// Image request identity, matching videoIdentifier's model: the top-level
+    /// row tweet plus the attachment. The same image appearing in both a tweet
+    /// and its retweet then holds separate requests, so one copy scrolling away
+    /// can never cancel or consume the other's. The mid-keyed fetch dedup in
+    /// ImageCacheManager still shares the actual download.
+    private var currentImageRequestId: String?
+
+    /// The image request id for the current cell context, whether or not a
+    /// load is in flight.
+    private var imageRequestId: String? {
+        guard let attachment else { return nil }
+        let outerTweetId = cellTweetId ?? parentTweet?.mid ?? ""
+        return "img_\(outerTweetId)_\(attachment.mid)"
+    }
+
     private var imageLoadTask: Task<Void, Never>?
     private var foregroundObserver: NSObjectProtocol?
     private var imageCacheObserver: NSObjectProtocol?
@@ -1277,9 +1295,14 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     self.loadingSpinner.stopAnimating()
                     self.imageLoadTask = nil
                 } else {
-                    // Use critical priority for ALL visible images (single or grid)
+                    // Use critical priority for ALL visible images (single or grid).
+                    // The id names the cell context (top-level tweet + attachment),
+                    // so a duplicate copy of this image leaving the screen cancels
+                    // only its own request, never this one.
+                    let requestId = self.imageRequestId ?? attachmentCopy.mid
+                    self.currentImageRequestId = requestId
                     GlobalImageLoadManager.shared.loadImageCriticalPriority(
-                        id: attachmentCopy.mid,
+                        id: requestId,
                         url: url,
                         attachment: attachmentCopy,
                         baseUrl: baseUrlCopy
@@ -1289,6 +1312,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                               self.attachment?.mid == attachmentCopy.mid,
                               self.isVisible else { return }
                         self.imageLoadTask = nil
+                        self.currentImageRequestId = nil
                         if let loadedImage = loadedImage {
                             self.imageView.image = loadedImage
                             self.loadingSpinner.stopAnimating()
@@ -1316,6 +1340,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             && self.attachment?.mid == attachment.mid
             && imageView.image != nil
         pendingRecoverySeekTime = nil
+        playerAcquireCancelRekicks = 0
         cleanupVideoPlayer(
             reason: "setupVideoCell",
             preserveBackgroundCover: hasSameVideoRecoveryCover
@@ -1913,6 +1938,20 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                     if isCancellation {
                         print("\(self.logPrefix) ⚠️ Independent player creation cancelled")
                         self.setupPlayerTask = nil
+                        // A cancellation that arrives while this cell is still the
+                        // visible, wanted primary (a tweet-keyed cancel from a
+                        // duplicate copy, a surface cleanup) must not strand the
+                        // spinner: re-acquire, bounded so a pathological cancel
+                        // loop cannot spin. Our own teardown paths have already
+                        // cleared isVisible or coordinatorWantsToPlay by now.
+                        if self.isVisible,
+                           self.coordinatorWantsToPlay,
+                           self.attachment?.mid == expectedMid,
+                           self.playerAcquireCancelRekicks < 3 {
+                            self.playerAcquireCancelRekicks += 1
+                            print("\(self.logPrefix) 🔄 Re-acquiring player after cancellation (\(self.playerAcquireCancelRekicks)/3)")
+                            self.schedulePlayerAcquireIfNeeded()
+                        }
                         return
                     }
                     if isBlacklisted {
@@ -5100,7 +5139,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         imageLoadTask = nil
         retryButton.isHidden = true
         // Clear permanently-failed status so GlobalImageLoadManager will retry
-        GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
+        GlobalImageLoadManager.shared.retryLoad(id: imageRequestId ?? attachment.mid)
         // loadImage checks the blacklist before anything else, so clearing only the
         // load manager's state leaves the tap silently refused for the rest of the
         // 30s session block.
@@ -5419,17 +5458,18 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // Boost priority for pending image loads or load if needed
             if attachment.type == .image {
                 setupImageCacheObserver()
+                let requestId = imageRequestId ?? attachment.mid
                 if applyCachedImageIfAvailable(for: attachment) {
-                    GlobalImageLoadManager.shared.boostPriority(id: attachment.mid, to: .critical)
+                    GlobalImageLoadManager.shared.boostPriority(id: requestId, to: .critical)
                 } else if imageView.image == nil {
                     if let url = attachment.getUrl(effectiveBaseUrl) {
                         // Boost priority if already in queue - use critical for all visible images
-                        GlobalImageLoadManager.shared.boostPriority(id: attachment.mid, to: .critical)
+                        GlobalImageLoadManager.shared.boostPriority(id: requestId, to: .critical)
                         loadImage(attachment: attachment, url: url)
                     }
                 } else {
                     // Image already loaded, but boost priority in case it's in retry queue
-                    GlobalImageLoadManager.shared.boostPriority(id: attachment.mid, to: .critical)
+                    GlobalImageLoadManager.shared.boostPriority(id: requestId, to: .critical)
                 }
             }
 
@@ -5538,7 +5578,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
             // Cancel image loads
             imageLoadTask?.cancel()
             imageLoadTask = nil
-            GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
+            GlobalImageLoadManager.shared.cancelLoad(id: currentImageRequestId ?? attachment.mid)
 
             // Clean up foreground observer
             if let observer = foregroundObserver {
@@ -5934,7 +5974,7 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
         imageLoadTask?.cancel()
         imageLoadTask = nil
-        GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
+        GlobalImageLoadManager.shared.cancelLoad(id: currentImageRequestId ?? attachment.mid)
         loadingSpinner.stopAnimating()
         retryButton.isHidden = true
     }
@@ -6124,8 +6164,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         if attachment.type == .image {
             imageLoadTask?.cancel()
             imageLoadTask = nil
-            GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
-            GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
+            GlobalImageLoadManager.shared.cancelLoad(id: currentImageRequestId ?? attachment.mid)
+            GlobalImageLoadManager.shared.retryLoad(id: imageRequestId ?? attachment.mid)
             retryButton.isHidden = true
             if let url = attachment.getUrl(effectiveBaseUrl) {
                 loadImage(attachment: attachment, url: url)
@@ -6381,7 +6421,8 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
         cancellables.removeAll()
 
         if let att = attachment {
-            GlobalImageLoadManager.shared.cancelLoad(id: att.mid)
+            GlobalImageLoadManager.shared.cancelLoad(id: currentImageRequestId ?? att.mid)
+            currentImageRequestId = nil
             if let id = videoIdentifier {
                 (videoCoordinator ?? .shared).unregisterDelegate(forIdentifier: id)
             }
@@ -6441,10 +6482,9 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                 (coordinator ?? .shared).unregisterDelegate(forIdentifier: id)
             }
         }
-        if let att = attachment {
-            let mid = att.mid
+        if let requestId = currentImageRequestId ?? attachment?.mid {
             Task { @MainActor in
-                GlobalImageLoadManager.shared.cancelLoad(id: mid)
+                GlobalImageLoadManager.shared.cancelLoad(id: requestId)
             }
         }
         imageLoadTask?.cancel()

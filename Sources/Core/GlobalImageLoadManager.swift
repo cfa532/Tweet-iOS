@@ -516,10 +516,15 @@ final class GlobalImageLoadManager: ObservableObject {
 
     /// True when an image is already active, queued, or waiting for retry in the global loader.
     /// Directional prewarm uses this to avoid starting a second request for visible-cell work.
+    ///
+    /// Request ids are per cell context (top-level tweet + attachment), so a mid
+    /// lookup must resolve through the coalescing map. Scheduled retries keep
+    /// their original request id and cannot be matched by mid — the preloader
+    /// may start one redundant fetch in that window.
     func hasLoad(id: String) -> Bool {
-        activeLoads[id] != nil
-            || pendingRequests.contains { $0.id == id }
-            || scheduledRetries[id] != nil
+        if activeLoads[id] != nil { return true }
+        if let activeId = activeLoadIdByKey[id], activeLoads[activeId] != nil { return true }
+        return pendingRequests.contains { $0.attachment.mid == id }
     }
 
     /// Let the fullscreen image own image-download starts until it has a usable result.
