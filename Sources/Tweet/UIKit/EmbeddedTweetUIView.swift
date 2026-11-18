@@ -19,6 +19,7 @@ class EmbeddedTweetUIView: UIView {
     private let attachmentView = UIView()
     private let thumbnailView = UIImageView()
     private let attachmentIcon = UIImageView()
+    private let playBadge = UIImageView()
     private let textLabel = UILabel()
     private let contentStack = UIStackView()
     private let placeholderLabel = UILabel()
@@ -81,6 +82,16 @@ class EmbeddedTweetUIView: UIView {
         attachmentIcon.contentMode = .scaleAspectFit
         attachmentIcon.tintColor = .secondaryLabel
         attachmentIcon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 20)
+        // High-contrast play badge for embedded videos; the small secondaryLabel
+        // attachmentIcon is hard to read over an arbitrary poster frame.
+        playBadge.image = UIImage(systemName: "play.fill")
+        playBadge.tintColor = .white
+        playBadge.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 16)
+        playBadge.contentMode = .center
+        playBadge.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        playBadge.layer.cornerRadius = 16
+        playBadge.layer.cornerCurve = .continuous
+        playBadge.isHidden = true
 
         placeholderLabel.textColor = XTheme.secondaryText
         placeholderLabel.font = .preferredFont(forTextStyle: .subheadline)
@@ -90,7 +101,8 @@ class EmbeddedTweetUIView: UIView {
         previewRow.addSubview(textLabel)
         attachmentView.addSubview(thumbnailView)
         attachmentView.addSubview(attachmentIcon)
-        for view in [placeholderLabel, contentStack, attachmentView, textLabel, thumbnailView, attachmentIcon] {
+        attachmentView.addSubview(playBadge)
+        for view in [placeholderLabel, contentStack, attachmentView, textLabel, thumbnailView, attachmentIcon, playBadge] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
 
@@ -123,6 +135,10 @@ class EmbeddedTweetUIView: UIView {
             attachmentIcon.centerYAnchor.constraint(equalTo: attachmentView.centerYAnchor),
             attachmentIcon.widthAnchor.constraint(equalToConstant: 24),
             attachmentIcon.heightAnchor.constraint(equalToConstant: 24),
+            playBadge.centerXAnchor.constraint(equalTo: attachmentView.centerXAnchor),
+            playBadge.centerYAnchor.constraint(equalTo: attachmentView.centerYAnchor),
+            playBadge.widthAnchor.constraint(equalToConstant: 32),
+            playBadge.heightAnchor.constraint(equalToConstant: 32),
             textLeading,
             textLabel.trailingAnchor.constraint(equalTo: previewRow.trailingAnchor),
             textLabel.topAnchor.constraint(equalTo: previewRow.topAnchor),
@@ -195,7 +211,10 @@ class EmbeddedTweetUIView: UIView {
                 self.attachmentIcon.isHidden = true
             }
         case .video, .hls_video:
-            attachmentIcon.image = UIImage(systemName: "play.circle.fill")
+            // Replace the low-contrast icon glyph with the play badge; the badge
+            // stays visible over the poster frame once it loads.
+            attachmentIcon.isHidden = true
+            playBadge.isHidden = false
             if let poster = SharedAssetCache.shared.cachedThumbnail(for: mediaId) {
                 thumbnailView.image = poster
             } else {
@@ -265,6 +284,7 @@ class EmbeddedTweetUIView: UIView {
         thumbnailView.image = nil
         attachmentIcon.image = nil
         attachmentIcon.isHidden = false
+        playBadge.isHidden = true
         textLabel.text = nil
     }
 
