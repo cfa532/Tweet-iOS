@@ -144,7 +144,10 @@ struct ChatMessageView: View {
                     HStack(spacing: 4) {
                         // Text colors (white/primary) are baked in by ChatMessageLinks
                         // so detected URL runs can carry their own link color.
+                        // textSelection gives the native long-press menu
+                        // (Select / Copy / Copy All) instead of a custom one.
                         Text(ChatMessageLinks.attributed(content, isFromCurrentUser: isFromCurrentUser))
+                            .textSelection(.enabled)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(
