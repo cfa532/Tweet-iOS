@@ -89,6 +89,16 @@ final class GlobalImageLoadManager: ObservableObject {
     private var scheduledRetries: [String: DispatchWorkItem] = [:] // Track scheduled retries for cancellation
     private var permanentlyFailedRequests: Set<String> = [] // Track requests that have exhausted all retries
     private var focusedImageMID: String?
+
+    // How many UI requests are attached to a load by id. Every feed cell uses
+    // the attachment mid as its request id, so a retweet and its original (or
+    // a pinned tweet and its timeline copy) share ONE load; cancelLoad
+    // decrements, and the task dies only when the last requester leaves.
+    private var loadInterest: [String: Int] = [:]
+    // The request that started each active task. The task closure holds its
+    // completion, so cleanup paths that cancel tasks on purpose need this to
+    // notify the requesters they would otherwise strand.
+    private var activeLoadRequests: [String: ImageLoadRequest] = [:]
     
     // MARK: - Memory Management
     // Sampled off-main every ~2s by startMemorySampler(). isMemoryPressureHigh() reads these
@@ -130,6 +140,10 @@ final class GlobalImageLoadManager: ObservableObject {
         activeLoadWaiters.removeAll()
         activeLoadKeyById.removeAll()
         activeLoadIdByKey.removeAll()
+        // No completions are fired here by design: the UI is going away, and
+        // the cells' foreground recovery re-issues any load whose image is nil.
+        loadInterest.removeAll()
+        activeLoadRequests.removeAll()
 
         pendingRequests.removeAll()
 
@@ -204,6 +218,12 @@ final class GlobalImageLoadManager: ObservableObject {
             return
         }
         
+        // Every path below attaches this caller to shared load state — an
+        // active task, its waiter list, or the pending queue — so it counts
+        // as interested in the load. cancelLoad decrements; the task is
+        // cancelled only when the last interested caller leaves.
+        loadInterest[request.id, default: 0] += 1
+
         // Check if already loading
         if activeLoads[request.id] != nil {
             // PERFORMANCE FIX: Only check memory cache on main thread (no disk I/O)
@@ -285,8 +305,11 @@ final class GlobalImageLoadManager: ObservableObject {
             }
             scheduledRetries.removeAll()
 
-            // Only drop low/normal priority pending requests; keep high/critical
+            // Only drop low/normal priority pending requests; keep high/critical.
+            // Notify the dropped ones so their cells do not wait forever.
             let beforeCount = pendingRequests.count
+            let droppedPending = pendingRequests.filter { $0.priority.rawValue < ImageLoadingPriority.high.rawValue }
+            droppedPending.forEach { $0.completion(nil) }
             pendingRequests.removeAll { $0.priority.rawValue < ImageLoadingPriority.high.rawValue }
             let droppedCount = beforeCount - pendingRequests.count
             if droppedCount > 0 {
@@ -320,6 +343,20 @@ final class GlobalImageLoadManager: ObservableObject {
     
     /// Cancel a specific image load request
     func cancelLoad(id: String) {
+        // A retweet and its original share one load (every feed cell uses the
+        // attachment mid as its request id), so one cell going away must not
+        // cancel the load another still-visible cell is waiting on. Interest
+        // counts attached requesters; with any left, leave the task, its
+        // waiters and its pending entry alone — a late completion reaches the
+        // departing cell's guards harmlessly.
+        let remainingInterest = max((loadInterest[id] ?? 0) - 1, 0)
+        loadInterest[id] = remainingInterest
+        if remainingInterest > 0 {
+            updateStatistics()
+            return
+        }
+        loadInterest.removeValue(forKey: id)
+
         let removedWaiters = removeWaitingRequests(id: id)
         if removedWaiters > 0 {
             print("DEBUG: [GlobalImageLoadManager] Removed \(removedWaiters) waiting image request(s) for: \(id)")
@@ -456,6 +493,8 @@ final class GlobalImageLoadManager: ObservableObject {
         activeLoadWaiters.removeAll()
         activeLoadKeyById.removeAll()
         activeLoadIdByKey.removeAll()
+        loadInterest.removeAll()
+        activeLoadRequests.removeAll()
         print("DEBUG: [GlobalImageLoadManager] Cancelled \(activeLoads.count) active loads")
 
         // Clear all pending requests
@@ -550,10 +589,8 @@ final class GlobalImageLoadManager: ObservableObject {
             let mediaID = activeLoadKeyById[id] ?? id
             guard mediaID != focusedImageMID else { continue }
 
-            activeLoads[id]?.cancel()
             ImageCacheManager.shared.cancelImageLoad(forMid: mediaID)
-            activeLoadWaiters.removeValue(forKey: id)
-            clearActiveLoadState(for: id)
+            abandonActiveLoad(id)
             cancelled += 1
         }
 
@@ -563,9 +600,28 @@ final class GlobalImageLoadManager: ObservableObject {
         }
     }
 
+    /// End an active load and notify every attached requester with `image`
+    /// (nil unless a cache hit is already in hand). A dropped completion
+    /// strands a visible cell on a spinner forever — nothing re-issues its
+    /// load — so every deliberate cancellation goes through here.
+    private func abandonActiveLoad(_ id: String, image: UIImage? = nil) {
+        if let request = activeLoadRequests[id] {
+            completeRequest(request, with: image)
+        } else {
+            activeLoadWaiters.removeValue(forKey: id)?.forEach { $0.completion(image) }
+        }
+        activeLoads[id]?.cancel()
+        if let workItem = scheduledRetries.removeValue(forKey: id) {
+            workItem.cancel()
+        }
+        clearActiveLoadState(for: id)
+    }
+
     private func clearActiveLoadState(for id: String) {
         activeLoads.removeValue(forKey: id)
         activeLoadPriorities.removeValue(forKey: id)
+        loadInterest.removeValue(forKey: id)
+        activeLoadRequests.removeValue(forKey: id)
         if let key = activeLoadKeyById.removeValue(forKey: id),
            activeLoadIdByKey[key] == id {
             activeLoadIdByKey.removeValue(forKey: key)
@@ -710,8 +766,9 @@ final class GlobalImageLoadManager: ObservableObject {
             if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                 await MainActor.run {
                     guard !Task.isCancelled else {
-                        self.activeLoadWaiters.removeValue(forKey: request.id)
-                        self.clearActiveLoadState(for: request.id)
+                        // Even cancelled, hand the cached image to whoever is
+                        // still attached; the departing caller's guards ignore it.
+                        self.abandonActiveLoad(request.id, image: cachedImage)
                         self.updateStatistics()
                         self.processNextPendingRequest()
                         return
@@ -727,14 +784,13 @@ final class GlobalImageLoadManager: ObservableObject {
 
             // Load from network
             let image = await self.loadImageFromNetwork(request)
-            
+
             await MainActor.run {
                 let mediaID = MimeiId(request.attachment.mid)
 
                 guard !Task.isCancelled else {
-                    print("DEBUG: [GlobalImageLoadManager] Task cancelled for \(request.id) - skipping completion/retry")
-                    self.activeLoadWaiters.removeValue(forKey: request.id)
-                    self.clearActiveLoadState(for: request.id)
+                    print("DEBUG: [GlobalImageLoadManager] Task cancelled for \(request.id) - notifying requesters")
+                    self.abandonActiveLoad(request.id)
                     self.updateStatistics()
                     self.processNextPendingRequest()
                     return
@@ -770,6 +826,7 @@ final class GlobalImageLoadManager: ObservableObject {
         
         activeLoads[request.id] = task
         activeLoadPriorities[request.id] = request.priority
+        activeLoadRequests[request.id] = request
         if let key = imageCoalescingKey(for: request) {
             activeLoadKeyById[request.id] = key
             activeLoadIdByKey[key] = request.id
@@ -967,10 +1024,11 @@ final class GlobalImageLoadManager: ObservableObject {
     func handleNetworkFailureCleanup(excluding exemptRequestId: String? = nil) {
         print("DEBUG: [GlobalImageLoadManager] Network failure detected, performing emergency cleanup")
 
-        // Cancel all active loads
-        for (requestId, task) in activeLoads where requestId != exemptRequestId {
+        // Cancel and notify every non-exempt active load: dropping the
+        // completion would strand a visible cell on a spinner forever.
+        for requestId in Array(activeLoads.keys) where requestId != exemptRequestId {
             print("DEBUG: [GlobalImageLoadManager] Cancelling active load due to network failure: \(requestId)")
-            task.cancel()
+            abandonActiveLoad(requestId)
         }
 
         // Carry the exempt load's bookkeeping across the reset. Its waiters are other
@@ -1002,9 +1060,12 @@ final class GlobalImageLoadManager: ObservableObject {
         }
         scheduledRetries.removeAll()
 
-        // Clear most pending requests (keep only high priority ones)
+        // Clear most pending requests (keep only critical ones), notifying the
+        // dropped requesters so their cells can offer retry instead of spinning.
         let originalCount = pendingRequests.count
-        pendingRequests = pendingRequests.filter { $0.priority == .critical }
+        let droppedPending = pendingRequests.filter { $0.priority != .critical }
+        droppedPending.forEach { $0.completion(nil) }
+        pendingRequests.removeAll { $0.priority != .critical }
         let removedCount = originalCount - pendingRequests.count
         print("DEBUG: [GlobalImageLoadManager] Cleared \(removedCount) pending requests due to network failure")
 

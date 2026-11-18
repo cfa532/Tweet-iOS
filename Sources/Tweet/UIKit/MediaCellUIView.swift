@@ -1294,11 +1294,13 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
                             self.loadingSpinner.stopAnimating()
                             self.retryButton.isHidden = true
                         } else {
-                            // Image failed/cancelled - show retry button if not cancelled
+                            // The load ended without an image (failure, or a
+                            // deliberate cancellation by cleanup). A visible
+                            // cell must never keep spinning — stop and offer
+                            // retry. The isVisible guard above already kept
+                            // cells that scrolled away out of here.
                             self.loadingSpinner.stopAnimating()
-                            if !Task.isCancelled {
-                                self.retryButton.isHidden = false
-                            }
+                            self.retryButton.isHidden = false
                         }
                     }
                 }
