@@ -1329,56 +1329,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
-    /// Get videos to preload based on visible tweets and scroll direction
-    private func getVideosToPreload(visibleTweetIds: Set<String>, preloadCount: Int) -> [VideoPlaybackInfo] {
-        // Find visible videos first
-        let visibleVideoSet = Set(visibleTweetIds)
-        let visibleVideoInfos = allVideos.filter { visibleVideoSet.contains($0.cellTweetId) && $0.isInVisibleMediaRange }
-
-        guard !visibleVideoInfos.isEmpty else { return [] }
-
-        // Find the indices of visible videos in allVideos
-        let visibleIndices = visibleVideoInfos.compactMap { video in
-            allVideos.firstIndex(where: { $0.identifier == video.identifier })
-        }.sorted()
-
-        guard !visibleIndices.isEmpty else { return [] }
-
-        var videosToPreload: [VideoPlaybackInfo] = []
-
-        // Add visible videos first
-        videosToPreload.append(contentsOf: visibleVideoInfos)
-
-        // Based on scroll direction, preload additional videos
-        if scrollDirection {
-            // Scrolling DOWN: preload videos AFTER the visible ones
-            let lastVisibleIndex = visibleIndices.max() ?? 0
-            for i in 1...preloadCount {
-                let nextIndex = lastVisibleIndex + i
-                if nextIndex < allVideos.count {
-                    let video = allVideos[nextIndex]
-                    if video.isInVisibleMediaRange && !videosToPreload.contains(where: { $0.identifier == video.identifier }) {
-                        videosToPreload.append(video)
-                    }
-                }
-            }
-        } else {
-            // Scrolling UP: preload videos BEFORE the visible ones
-            let firstVisibleIndex = visibleIndices.min() ?? 0
-            for i in 1...preloadCount {
-                let prevIndex = firstVisibleIndex - i
-                if prevIndex >= 0 {
-                    let video = allVideos[prevIndex]
-                    if video.isInVisibleMediaRange && !videosToPreload.contains(where: { $0.identifier == video.identifier }) {
-                        videosToPreload.append(video)
-                    }
-                }
-            }
-        }
-
-        return videosToPreload
-    }
-
     /// Resolve the video URL, media ID, and tweet ID for a VideoPlaybackInfo entry.
     private func resolveVideoURL(_ video: VideoPlaybackInfo) -> (url: URL, mediaID: String, tweetId: String, mediaType: MediaType)? {
         guard let tweet = resolveMediaTweet(video.mediaTweetId),
@@ -1404,12 +1354,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func resolveMediaTweet(_ tweetId: String) -> Tweet? {
         currentTweets.first(where: { $0.mid == tweetId })
             ?? Tweet.getInstance(for: tweetId)
-    }
-
-    /// Preload video asset without starting playback
-    private func preloadVideoAsset(_ video: VideoPlaybackInfo) {
-        guard let resolved = resolveVideoURL(video) else { return }
-        SharedAssetCache.shared.preloadAsset(for: resolved.url, mediaID: resolved.mediaID, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
     /// Preload a poster for upcoming video in scroll direction without creating an AVPlayer.

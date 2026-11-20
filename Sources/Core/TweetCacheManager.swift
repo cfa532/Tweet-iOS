@@ -282,8 +282,41 @@ final class TweetCacheManager: @unchecked Sendable {
         }
     }
 
-    private func deleteMediaForTweetRecord(_ tweet: TweetRecord) {
-        let mediaIds = tweet.attachments?.map(\.mid) ?? []
+    // MARK: - Permanent media
+
+    /// Media that automatic cleanup must never delete: attachments of private posts and
+    /// of posts on any bookmark or favorite list. Only a manual "Clear Media Cache"
+    /// (manualClearAllCache) removes them; logout keeps them.
+    ///
+    /// Read from the saved post cache, whose bookmark/favorite/private rows survive
+    /// relaunches and logouts. The previous in-memory list was filled only when those
+    /// lists were loaded during the session, so cleanups that ran at launch saw it
+    /// empty and could delete bookmarked media.
+    func permanentMediaIDs() async -> Set<String> {
+        await context.perform { [self] in permanentMediaIDsOnContextQueue() }
+    }
+
+    /// Call only on `context`'s queue.
+    private func permanentMediaIDsOnContextQueue() -> Set<String> {
+        let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+        guard let rows = try? context.fetch(request) else { return [] }
+        var ids = Set<String>()
+        for cdTweet in rows {
+            guard let record = try? decodeTweetRecord(from: cdTweet) else { continue }
+            let isBookmarkOrFavorite = cdTweet.uid?.hasPrefix("bookmark_list_") == true
+                || cdTweet.uid?.hasPrefix("favorite_list_") == true
+            guard record.isPrivate == true || isBookmarkOrFavorite else { continue }
+            for attachment in record.attachments ?? [] where !attachment.mid.isEmpty {
+                ids.insert(attachment.mid)
+            }
+        }
+        return ids
+    }
+
+    /// Deletes the cached media of an expired post, except media a permanent post also
+    /// uses: the same post is often cached both in a feed row and on a bookmark list.
+    private func deleteMediaForTweetRecord(_ tweet: TweetRecord, keeping permanent: Set<String> = []) {
+        let mediaIds = (tweet.attachments?.map(\.mid) ?? []).filter { !permanent.contains($0) }
         guard !mediaIds.isEmpty else { return }
 
         print("DEBUG: [TweetCacheManager] Deleting \(mediaIds.count) media files for tweet \(tweet.mid)")
@@ -724,8 +757,6 @@ extension TweetCacheManager {
 
         let tweetId = record.mid
         let timestamp = record.timestamp
-        let attachments = record.attachments ?? []
-        let isPrivate = record.isPrivate == true
 
         // Validate timestamp before caching
         if timestamp.timeIntervalSince1970 <= 0 {
@@ -779,25 +810,6 @@ extension TweetCacheManager {
             
             try? self.context.save()
         }
-        
-        // Mark media as permanent for: private tweets OR bookmarks/favorites
-        let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
-        
-        if isPrivate || isBookmarkOrFavorite {
-            // Mark videos as permanent
-            let videoIDs = attachments.filter { $0.type == .video || $0.type == .hls_video }.compactMap { $0.mid }
-            if !videoIDs.isEmpty {
-                DiskCacheCleanupManager.shared.markMediaIDsAsPermanent(videoIDs)
-                // Reduced logging to prevent buffer overflow
-            }
-            
-            // Mark images as permanent
-            let imageIDs = attachments.filter { $0.type == .image }.compactMap { $0.mid }
-            if !imageIDs.isEmpty {
-                ImageCacheManager.shared.markImageIDsAsPermanent(imageIDs)
-                // Reduced logging to prevent buffer overflow
-            }
-        }
     }
 
     /// Update a tweet in cache for main feed.
@@ -819,6 +831,7 @@ extension TweetCacheManager {
             if let allCachedTweets = try? context.fetch(request) {
                 var deletedCount = 0
                 var preservedPrivateCount = 0
+                let permanentMedia = permanentMediaIDsOnContextQueue()
                 
                 for cdTweet in allCachedTweets {
                     guard let tweetId = cdTweet.tid else { continue }
@@ -847,7 +860,7 @@ extension TweetCacheManager {
                         print("DEBUG: [TweetCacheManager] Deleting expired tweet: \(tweetId) (last access: \(lastAccess))")
                         
                         // Delete associated media files
-                        deleteMediaForTweetRecord(tweet)
+                        deleteMediaForTweetRecord(tweet, keeping: permanentMedia)
                         
                         // Remove from access times
                         lockedRemoveAccessTime(for: tweetId)

@@ -78,6 +78,7 @@ final class ProgressiveResourceLoader: NSObject, AVAssetResourceLoaderDelegate, 
         cache = ProgressiveRangeCache(mediaID: mediaID)
         contentType = UTType(filenameExtension: remoteURL.pathExtension)?.identifier ?? UTType.mpeg4Movie.identifier
         super.init()
+        DiskCacheCleanupManager.shared.noteVideoUsed(mediaID: mediaID)
         Self.queue.async { [weak self] in
             Self.loaders.removeAll { $0.value == nil }
             if let self { Self.loaders.append(WeakLoader(self)) }

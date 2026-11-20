@@ -1,256 +1,145 @@
 import Foundation
 
-/// Manages automatic cleanup of disk-based video caches with privacy-aware retention policies
+/// Automatic cleanup of the on-disk video cache: one `Caches/<mediaID>/` folder per video
+/// (progressive `video.mp4` + range index, or HLS playlists and segments).
+///
+/// Policy:
+/// - A video not used for 7 days is deleted. "Used" means a player or preload opened it
+///   (`noteVideoUsed`), not merely that bytes were downloaded.
+/// - The whole video cache is capped at 10 GB; above that, least recently used videos go first.
+/// - Media of private, bookmarked or favorited posts is never deleted here, by age or by
+///   size, and survives logout. Only a manual "Clear Media Cache" removes it.
 final class DiskCacheCleanupManager: @unchecked Sendable {
     static let shared = DiskCacheCleanupManager()
-    
+
     private init() {
         setupCleanupTimer()
     }
-    
+
     // MARK: - Configuration
-    private let publicTweetRetentionInterval: TimeInterval = 7 * 24 * 60 * 60 // 1 week
+    private let retentionInterval: TimeInterval = 7 * 24 * 60 * 60 // 1 week since last use
+    private let maxCacheBytes: Int64 = 10 * 1024 * 1024 * 1024 // 10 GB for all videos
     private let cleanupCheckInterval: TimeInterval = 24 * 60 * 60 // Check daily
     private nonisolated(unsafe) var cleanupTimer: Timer?
-    
-    // Set of media IDs from bookmarked/favorited tweets (never expire)
-    private var permanentMediaIDs: Set<String> = []
-    private let permanentMediaIDsQueue = DispatchQueue(label: "com.tweet.permanentMediaIDs")
-    
+    private let ioQueue = DispatchQueue(label: "com.tweet.videoDiskCache", qos: .utility)
+
     // MARK: - Cache Directory
     private var cacheDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
     }
-    
+
     // MARK: - Setup
-    
+
     private func setupCleanupTimer() {
         // Run cleanup daily
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: cleanupCheckInterval, repeats: true) { [weak self] _ in
             self?.performScheduledCleanup()
         }
-        
+
         // Perform initial cleanup after a short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
             self.performScheduledCleanup()
         }
-        
-        print("DEBUG: [DiskCacheCleanupManager] Setup cleanup timer - will check daily")
     }
-    
+
     // MARK: - Public Methods
-    
-    /// Mark media IDs from bookmarks/favorites as permanent (never expire)
-    func markMediaIDsAsPermanent(_ mediaIDs: [String]) {
-        permanentMediaIDsQueue.async {
-            self.permanentMediaIDs.formUnion(mediaIDs)
-            // Only log if marking 5+ items to reduce log spam
-            if mediaIDs.count >= 5 {
-                print("💾 [PERMANENT CACHE] Marked \(mediaIDs.count) media IDs as permanent (total: \(self.permanentMediaIDs.count))")
-            }
+
+    /// Record that a video was opened for playback or preload. Its folder's modification
+    /// date is the last-use time that age and size cleanup sort by; downloads alone only
+    /// move it when a file is added to the folder.
+    func noteVideoUsed(mediaID: String) {
+        let folder = cacheDirectory.appendingPathComponent(mediaID)
+        ioQueue.async {
+            guard FileManager.default.fileExists(atPath: folder.path) else { return }
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: folder.path)
         }
     }
-    
-    /// Remove media IDs from permanent set (when unbookmarked/unfavorited)
-    func unmarkMediaIDsAsPermanent(_ mediaIDs: [String]) {
-        permanentMediaIDsQueue.async {
-            self.permanentMediaIDs.subtract(mediaIDs)
-            print("🗑️ [PERMANENT CACHE] Unmarked \(mediaIDs.count) media IDs (remaining: \(self.permanentMediaIDs.count))")
-        }
-    }
-    
-    /// Check if media ID is marked as permanent
-    private func isPermanentMediaID(_ mediaID: String) -> Bool {
-        var result = false
-        permanentMediaIDsQueue.sync {
-            result = permanentMediaIDs.contains(mediaID)
-        }
-        return result
-    }
-    
+
     /// Perform scheduled cleanup of old cache files
     func performScheduledCleanup() {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.cleanupOldCacheFiles()
+        Task.detached(priority: .utility) { [weak self] in
+            let permanent = await TweetCacheManager.shared.permanentMediaIDs()
+            self?.ioQueue.async { self?.cleanupCacheFolders(keeping: permanent) }
         }
     }
-    
+
     /// Manually clear all cache (for settings)
     func clearAllCache() {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        ioQueue.async { [weak self] in
             self?.clearAllCacheFiles()
         }
     }
-    
-    /// Manually clear cache for specific media IDs
-    func clearCacheForMediaIDs(_ mediaIDs: [String]) {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.performClearCacheForMediaIDs(mediaIDs)
-        }
-    }
-    
+
     // MARK: - Private Methods
-    
-    private func cleanupOldCacheFiles() {
-        
-        do {
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: cacheDirectory,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )
-            
-            let now = Date()
-            var cleanedCount = 0
-            var privateTweetCount = 0
-            
-            for cacheDir in contents {
-                // Only process directories that look like media IDs (IPFS hashes)
-                guard cacheDir.hasDirectoryPath,
-                      let mediaID = cacheDir.lastPathComponent as String?,
-                      isValidMediaID(mediaID) else {
-                    continue
-                }
-                
-                // NEVER delete: private tweets OR bookmarks/favorites
-                let isPrivate = isPrivateTweet(mediaID: mediaID)
-                let isPermanent = isPermanentMediaID(mediaID)
-                
-                if isPrivate || isPermanent {
-                    if isPrivate {
-                        privateTweetCount += 1
-                    }
-                    continue
-                }
-                
-                // Check last access time for public tweets
-                if let attributes = try? FileManager.default.attributesOfItem(atPath: cacheDir.path),
-                   let modificationDate = attributes[.modificationDate] as? Date {
-                    
-                    let timeSinceAccess = now.timeIntervalSince(modificationDate)
-                    
-                    if timeSinceAccess > publicTweetRetentionInterval {
-                        // Remove old public tweet cache
-                        try FileManager.default.removeItem(at: cacheDir)
-                        cleanedCount += 1
-                    }
-                    // Removed repetitive "Keeping cache" log
-                }
-            }
-            
-            
-        } catch {
-            print("DEBUG: [DiskCacheCleanupManager] Error during cleanup: \(error.localizedDescription)")
+
+    private struct VideoFolder {
+        let url: URL
+        let mediaID: String
+        let lastUsed: Date
+        let bytes: Int64
+    }
+
+    private func videoFolders() -> [VideoFolder] {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: cacheDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return contents.compactMap { url in
+            let mediaID = url.lastPathComponent
+            guard url.hasDirectoryPath, isValidMediaID(mediaID) else { return nil }
+            let lastUsed = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            return VideoFolder(url: url, mediaID: mediaID, lastUsed: lastUsed,
+                               bytes: FileManager.default.allocatedSizeOfDirectory(at: url))
         }
     }
-    
+
+    private func cleanupCacheFolders(keeping permanent: Set<String>) {
+        let now = Date()
+        var expired = 0
+        var evicted = 0
+        var remaining: [VideoFolder] = []
+
+        for folder in videoFolders() {
+            if !permanent.contains(folder.mediaID),
+               now.timeIntervalSince(folder.lastUsed) > retentionInterval,
+               (try? FileManager.default.removeItem(at: folder.url)) != nil {
+                expired += 1
+            } else {
+                remaining.append(folder)
+            }
+        }
+
+        // Permanent media counts toward the cap but is never evicted for it.
+        var total = remaining.reduce(Int64(0)) { $0 + $1.bytes }
+        if total > maxCacheBytes {
+            let evictable = remaining
+                .filter { !permanent.contains($0.mediaID) }
+                .sorted { $0.lastUsed < $1.lastUsed }
+            for folder in evictable where total > maxCacheBytes {
+                if (try? FileManager.default.removeItem(at: folder.url)) != nil {
+                    total -= folder.bytes
+                    evicted += 1
+                }
+            }
+        }
+
+        print("DEBUG: [DiskCacheCleanupManager] Video cache: removed \(expired) unused for 7 days, \(evicted) over the 10 GB cap; \(total / 1_048_576) MB kept, \(permanent.count) permanent media IDs protected")
+    }
+
     private func clearAllCacheFiles() {
-        print("DEBUG: [DiskCacheCleanupManager] Clearing ALL cache files...")
-        
-        do {
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: cacheDirectory,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )
-            
-            var clearedCount = 0
-            
-            for cacheDir in contents {
-                guard cacheDir.hasDirectoryPath,
-                      let mediaID = cacheDir.lastPathComponent as String?,
-                      isValidMediaID(mediaID) else {
-                    continue
-                }
-                
-                // Remove all cache directories (both public and private)
-                try FileManager.default.removeItem(at: cacheDir)
-                clearedCount += 1
-                print("DEBUG: [DiskCacheCleanupManager] Cleared cache for: \(mediaID)")
-            }
-            
-            print("DEBUG: [DiskCacheCleanupManager] Cleared \(clearedCount) cache directories")
-            
-        } catch {
-            print("DEBUG: [DiskCacheCleanupManager] Error clearing all cache: \(error.localizedDescription)")
+        for folder in videoFolders() {
+            try? FileManager.default.removeItem(at: folder.url)
         }
+        print("DEBUG: [DiskCacheCleanupManager] Cleared all video cache folders")
     }
-    
-    private func performClearCacheForMediaIDs(_ mediaIDs: [String]) {
-        print("DEBUG: [DiskCacheCleanupManager] Clearing cache for specific media IDs: \(mediaIDs)")
-        
-        for mediaID in mediaIDs {
-            let cacheDir = cacheDirectory.appendingPathComponent(mediaID)
-            
-            if FileManager.default.fileExists(atPath: cacheDir.path) {
-                do {
-                    try FileManager.default.removeItem(at: cacheDir)
-                    print("DEBUG: [DiskCacheCleanupManager] Cleared cache for media ID: \(mediaID)")
-                } catch {
-                    print("DEBUG: [DiskCacheCleanupManager] Error clearing cache for \(mediaID): \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-    
-    // MARK: - Helper Methods
-    
-    /// Check if a string looks like a valid media ID (IPFS hash)
+
+    /// Video folders are named by IPFS CID (Qm..., 46 characters).
     private func isValidMediaID(_ mediaID: String) -> Bool {
-        // IPFS hashes typically start with "Qm" and are 46 characters long
         return mediaID.hasPrefix("Qm") && mediaID.count == 46
     }
-    
-    /// Check if a media ID belongs to a private tweet
-    private func isPrivateTweet(mediaID: String) -> Bool {
-        // Private/bookmarked/favorited media is retained by markMediaIDsAsPermanent(_:)
-        // when tweets are saved. Disk cleanup must not read live Tweet UI models from
-        // its background queue.
-        return false
-    }
-    
-    /// Get cache statistics
-    func getCacheStatistics() -> (totalCaches: Int, publicCaches: Int, privateCaches: Int, totalSize: Int64) {
-        var totalCaches = 0
-        var publicCaches = 0
-        var privateCaches = 0
-        var totalSize: Int64 = 0
-        
-        do {
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: cacheDirectory,
-                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-            )
-            
-            for cacheDir in contents {
-                guard cacheDir.hasDirectoryPath,
-                      let mediaID = cacheDir.lastPathComponent as String?,
-                      isValidMediaID(mediaID) else {
-                    continue
-                }
-                
-                totalCaches += 1
-                
-                if isPrivateTweet(mediaID: mediaID) {
-                    privateCaches += 1
-                } else {
-                    publicCaches += 1
-                }
-                
-                // Calculate directory size
-                if let size = try? FileManager.default.sizeOfDirectory(at: cacheDir) {
-                    totalSize += size
-                }
-            }
-            
-        } catch {
-            print("DEBUG: [DiskCacheCleanupManager] Error getting cache statistics: \(error.localizedDescription)")
-        }
-        
-        return (totalCaches, publicCaches, privateCaches, totalSize)
-    }
-    
+
     deinit {
         cleanupTimer?.invalidate()
     }
@@ -258,24 +147,18 @@ final class DiskCacheCleanupManager: @unchecked Sendable {
 
 // MARK: - FileManager Extension for Directory Size
 extension FileManager {
-    func sizeOfDirectory(at url: URL) throws -> Int64 {
-        let contents = try contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: [.totalFileAllocatedSizeKey],
-            options: [.skipsHiddenFiles]
-        )
-        
-        var totalSize: Int64 = 0
-        
-        for fileURL in contents {
-            // Sparse progressive caches can have a large logical length after
-            // seeking. Report occupied disk space, including filesystem overhead.
-            let values = try fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
-            if let allocated = values.totalFileAllocatedSize {
-                totalSize += Int64(allocated)
+    /// Disk space occupied by everything under `url`, including subfolders (HLS keeps
+    /// segments in per-resolution folders). Allocated size, because sparse progressive
+    /// caches have a large logical length after seeking.
+    func allocatedSizeOfDirectory(at url: URL) -> Int64 {
+        guard let enumerator = enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey],
+                                          options: [.skipsHiddenFiles]) else { return 0 }
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            if let allocated = (try? fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize {
+                total += Int64(allocated)
             }
         }
-        
-        return totalSize
+        return total
     }
 }

@@ -262,7 +262,6 @@ class SharedAssetCache: ObservableObject {
     private var playerTimestamps: [String: Date] = [:] // mediaID -> last access
     private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // mediaID -> Delegate
     private var cachingPlayerItems: [String: CachingPlayerItem] = [:] // mediaID -> CachingPlayerItem
-    private var resourceLoaderDelegates: [String: ResourceLoaderDelegate] = [:] // mediaID -> ResourceLoaderDelegate
     private var loadingTasks: [String: Task<Void, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var preloadedThumbnailMids: Set<String> = []
@@ -438,7 +437,6 @@ class SharedAssetCache: ObservableObject {
         }
         for key in Set(expiredPlayerKeys).union(expiredAssetKeys) {
             cachingPlayerItems.removeValue(forKey: key)
-            resourceLoaderDelegates.removeValue(forKey: key)
 
             // PERFORMANCE FIX: Clean up tweet URL mappings for evicted assets
             cleanupTweetMappings(for: key)
@@ -1043,7 +1041,6 @@ class SharedAssetCache: ObservableObject {
         preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
         cachingPlayerDelegates.removeValue(forKey: mediaID)
-        resourceLoaderDelegates.removeValue(forKey: mediaID)
 
         releasePlayer(player)
         if isHLS {
@@ -1067,7 +1064,6 @@ class SharedAssetCache: ObservableObject {
         preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
         cachingPlayerDelegates.removeValue(forKey: mediaID)
-        resourceLoaderDelegates.removeValue(forKey: mediaID)
         releasePlayer(player)
 
         NotificationCenter.default.post(
@@ -1194,12 +1190,6 @@ class SharedAssetCache: ObservableObject {
         prepareUncachedFocusedLoad(for: mediaID, owner: "fullscreen")
     }
 
-    /// MEMORY FIX: Immediately release player and all video data when video goes out of sight
-    /// This is called when MediaCell disappears to free memory immediately (not wait for 30-60s timer)
-    @MainActor func releasePlayerImmediately(for mediaID: String) {
-        releaseCachedPlayer(for: mediaID, force: false)
-    }
-
     /// Release one cached inline player by media ID. Feed and chat inline videos share
     /// this cache; callers should force only for explicit recovery or URL changes.
     @MainActor func releaseCachedPlayer(for mediaID: String, force: Bool = false) {
@@ -1245,7 +1235,6 @@ class SharedAssetCache: ObservableObject {
         assetTimestamps.removeValue(forKey: mediaID)
         cachingPlayerDelegates.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
-        resourceLoaderDelegates.removeValue(forKey: mediaID)
         cleanupTweetMappings(for: mediaID)
 
         // 3. KEEP DISK CACHE - only release memory
@@ -1272,7 +1261,6 @@ class SharedAssetCache: ObservableObject {
         assetCache.removeValue(forKey: mediaID)
         assetTimestamps.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
-        resourceLoaderDelegates.removeValue(forKey: mediaID)
         
         // CRITICAL: Also delete disk cache files (playlists and segments)
         // Without this, retry uses stale cached playlists leading to "no available resources" errors
@@ -1306,7 +1294,7 @@ class SharedAssetCache: ObservableObject {
             playerTimestamps.removeValue(forKey: mediaID)
         }
         // Keep: assetCache, cachingPlayerItems, cachingPlayerDelegates,
-        //        resourceLoaderDelegates, diskCacheStatus, active downloads
+        //        diskCacheStatus, active downloads
         print("🔄 [SOFT RESET] Player removed for \(mediaID) — asset/downloads preserved")
     }
 
@@ -1346,7 +1334,6 @@ class SharedAssetCache: ObservableObject {
         assetTimestamps.removeValue(forKey: mediaID)
         cachingPlayerDelegates.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
-        resourceLoaderDelegates.removeValue(forKey: mediaID)
 
         if deleteDiskCache {
             // CRITICAL: Clear disk cache status so retry doesn't think there's cached content
@@ -2043,7 +2030,6 @@ class SharedAssetCache: ObservableObject {
         playerCache.removeAll()
         cachingPlayerDelegates.removeAll()
         cachingPlayerItems.removeAll()
-        resourceLoaderDelegates.removeAll()
         
         // Clear asset cache
         assetCache.removeAll()
@@ -2150,32 +2136,6 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Enhanced Preloading Methods
     
-    /// Preload video for immediate display (high priority)
-    func preloadVideo(for url: URL, mediaID explicitMediaID: String? = nil, tweetId: String? = nil) {
-        // Use mediaID as cache key (stable identifier), not URL which can change
-        guard let mediaID = explicitMediaID ?? extractMediaID(from: url) else { return }
-        let cacheKey = mediaID
-
-        // Cancel existing preload task if any
-        preloadTasks[cacheKey]?.cancel()
-        preloadTasks.removeValue(forKey: cacheKey)
-
-        let task = Task {
-            defer {
-                // ✅ CRITICAL MEMORY FIX: Remove completed preload task
-                preloadTasks.removeValue(forKey: cacheKey)
-            }
-            do {
-                let player = try await getOrCreatePlayer(for: url, mediaID: mediaID)
-                _ = player
-            } catch {
-                // Handle error silently
-            }
-        }
-
-        preloadTasks[cacheKey] = task
-    }
-
     /// Preload asset only (for background loading - lower priority)
     func preloadAsset(for url: URL, mediaID explicitMediaID: String? = nil, tweetId: String? = nil, mediaType: MediaType? = nil) {
         // Use mediaID as cache key (stable identifier), not URL which can change
@@ -2637,30 +2597,6 @@ class SharedAssetCache: ObservableObject {
         }
     }
 
-    /// Wait briefly for a preloaded player to decode enough metadata for a poster frame.
-    /// The task is cancellable, so stale scroll-direction preloads still stop promptly.
-    private func waitForPreloadReadyAsset(_ player: AVPlayer, mediaID: String) async -> AVAsset? {
-        for _ in 0..<80 {
-            if Task.isCancelled { return nil }
-
-            guard let item = player.currentItem else { return nil }
-            let state: (asset: AVAsset?, failed: Bool)
-            if item.status == .readyToPlay {
-                state = (item.asset, false)
-            } else if item.status == .failed {
-                state = (nil, true)
-            } else {
-                state = (nil, false)
-            }
-
-            if let asset = state.asset { return asset }
-            if state.failed { return nil }
-
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-        return nil
-    }
-
     /// Generate and cache a first-frame thumbnail from a video asset.
     private func generateThumbnail(from asset: AVAsset, for mediaID: String) {
         let generator = AVAssetImageGenerator(asset: asset)
@@ -2813,49 +2749,6 @@ class SharedAssetCache: ObservableObject {
         }
     }
 
-    /// Backward-compatible wrapper for callers that only track player preloads.
-    func updatePreloadedPlayerMids(_ mids: Set<String>) {
-        updateProtectedPreloadMids(mids)
-    }
-
-    /// Cancel preload for specific URL
-    func cancelPreload(for url: URL, mediaID explicitMediaID: String? = nil) {
-        // Use mediaID as cache key (stable identifier), not URL which can change
-        guard let mediaID = explicitMediaID ?? extractMediaID(from: url) else { return }
-        cancelPreloadTask(for: mediaID)
-    }
-    
-    /// Preload multiple videos with priority management
-    func preloadVideos(_ urls: [URL], priority: PreloadPriority = .normal) {
-        for (index, url) in urls.enumerated() {
-            let delay = priority.delay(for: index)
-            
-            Task {
-                // Preload immediately if delay is 0, otherwise use async timing
-                if delay > 0 {
-                    do {
-                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    } catch {
-                        return
-                    }
-                }
-                
-                guard !Task.isCancelled else { return }
-                
-                switch priority {
-                case .high:
-                    await MainActor.run {
-                        preloadVideo(for: url)
-                    }
-                case .normal, .low:
-                    await MainActor.run {
-                        preloadAsset(for: url)
-                    }
-                }
-            }
-        }
-    }
-    
     // MARK: - Cache Management
     
     /// Keys ordered oldest access first. A key missing from `timestamps` sorts first.
@@ -2873,7 +2766,6 @@ class SharedAssetCache: ObservableObject {
             assetCache.removeValue(forKey: key)
             assetTimestamps.removeValue(forKey: key)
             cachingPlayerItems.removeValue(forKey: key)
-            resourceLoaderDelegates.removeValue(forKey: key)
             // PERFORMANCE FIX: Clean up tweet URL mappings
             cleanupTweetMappings(for: key)
         }
@@ -2958,7 +2850,6 @@ class SharedAssetCache: ObservableObject {
         playerCache.removeAll()
         playerTimestamps.removeAll()
         cachingPlayerItems.removeAll()
-        resourceLoaderDelegates.removeAll()
 
         // Keep asset cache (and its timestamps) for faster recovery
 
@@ -3001,7 +2892,6 @@ class SharedAssetCache: ObservableObject {
         }
         for key in Set(oldPlayerKeys).union(oldAssetKeys) {
             cachingPlayerItems.removeValue(forKey: key)
-            resourceLoaderDelegates.removeValue(forKey: key)
             cleanupTweetMappings(for: key)
         }
     }
@@ -3027,7 +2917,6 @@ class SharedAssetCache: ObservableObject {
         // Assets are kept, so only the player timestamps go.
         playerTimestamps.removeAll()
         cachingPlayerItems.removeAll()
-        resourceLoaderDelegates.removeAll()
         tweetUrlMapping.removeAll()
 
         // 2. Cancel all active creation tasks
@@ -3060,7 +2949,6 @@ class SharedAssetCache: ObservableObject {
                 }
                 playerTimestamps.removeValue(forKey: key)
                 cachingPlayerItems.removeValue(forKey: key)
-                resourceLoaderDelegates.removeValue(forKey: key)
                 // PERFORMANCE FIX: Clean up tweet URL mappings
                 cleanupTweetMappings(for: key)
             }
@@ -3324,9 +3212,6 @@ class SharedAssetCache: ObservableObject {
         // Cancel loading tasks to prevent memory usage during background
         cancelAllLoadingTasks()
 
-        // Clear resource loader delegates — they can retain URLSession/loading state
-        resourceLoaderDelegates.removeAll()
-
         // Keep playerCache, playerTimestamps for fast recovery
     }
 
@@ -3386,7 +3271,6 @@ class SharedAssetCache: ObservableObject {
         assetTimestamps.removeAll()
         cachingPlayerDelegates.removeAll()
         cachingPlayerItems.removeAll()
-        resourceLoaderDelegates.removeAll()
         tweetUrlMapping.removeAll()
         diskCacheStatus.removeAll()
 
@@ -3427,7 +3311,6 @@ class SharedAssetCache: ObservableObject {
         // disk check. This should still reuse playlists/segments that remain on disk.
         diskCacheStatus.removeAll()
 
-        // Keep resourceLoaderDelegates - they're needed for HLS playback
         // Keep HLS disk cache - playlists now use relative paths (port-independent!)
     }
 
@@ -3530,20 +3413,3 @@ class SharedAssetCache: ObservableObject {
 }
 
 // MARK: - Preload Priority
-
-enum PreloadPriority {
-    case high
-    case normal
-    case low
-    
-    func delay(for index: Int) -> TimeInterval {
-        switch self {
-        case .high:
-            return 0 // No delay for high priority
-        case .normal:
-            return Double(index) * 0.1 // 0.1 second delay per item
-        case .low:
-            return Double(index) * 0.3 // 0.3 second delay per item
-        }
-    }
-}

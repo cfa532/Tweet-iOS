@@ -7,7 +7,6 @@
 
 import Foundation
 import AVFoundation
-import Network
 
 /// Convenient delegate methods for `CachingPlayerItem` status updates.
 @objc public protocol CachingPlayerItemDelegate {
@@ -34,174 +33,18 @@ import Network
     @objc optional func playerItemPlaybackStalled(_ playerItem: CachingPlayerItem)
 }
 
-/// AVPlayerItem subclass that supports caching while playing.
+/// AVPlayerItem for HLS videos played through the local caching proxy.
+///
+/// The asset points at LocalHTTPServer, which serves cached playlists and segments and
+/// fetches missing ones upstream. Progressive videos use ProgressiveVideoAsset instead;
+/// the original library's progressive resource-loader path and its unused initializers
+/// were removed once nothing created them.
 public final class CachingPlayerItem: AVPlayerItem {
-    private let cachingPlayerItemScheme = "cachingPlayerItemScheme"
-
-    private nonisolated(unsafe) var resourceLoaderDelegate: ResourceLoaderDelegate?
-    private nonisolated(unsafe) var resourceLoader: AVAssetResourceLoader?
-    private let url: URL
-    private let initialScheme: String?
-    private let saveFilePath: String
-    private var customFileExtension: String?
-    private let isHLS: Bool
-    private let mediaID: String?
-    /// HTTPHeaderFields set in avUrlAssetOptions using AVURLAssetHTTPHeaderFieldsKey
-    internal var urlRequestHeaders: [String: String]?
-    
-    // Task management for proper cleanup
-    private nonisolated(unsafe) var activeTasks: Set<Task<Void, Never>> = []
-
-    /// Useful for keeping relevant model associated with CachingPlayerItem instance. This is a **strong** reference, be mindful not to create a **retain cycle**.
-    public var passOnObject: Any?
     /// `delegate` for status updates.
     public weak var delegate: CachingPlayerItemDelegate?
-    
+
     deinit {
-        // Cancel all active tasks to prevent weak reference crashes
-        for task in activeTasks {
-            task.cancel()
-        }
-        activeTasks.removeAll()
-        
         removeObservers()
-        
-        // Clean up resource loader delegate to prevent weak reference issues
-        resourceLoader?.setDelegate(nil, queue: nil)
-
-        // Cancel download only for caching inits
-        guard initialScheme != nil else { return }
-
-        // Otherwise the ResourceLoaderDelegate wont deallocate and will keep downloading.
-        resourceLoaderDelegate?.invalidateAndCancelSession(shouldResetData: false)
-    }
-    
-    /// Helper method to remove completed task from tracking
-    private func removeTask(_ task: Task<Void, Never>) {
-        activeTasks.remove(task)
-    }
-
-    // MARK: Public init
-
-    /**
-     Play and cache remote media on a local file. `saveFilePath` is **randomly** generated. Requires `url.pathExtension` to not be empty otherwise the player will fail playing.
-
-     - parameter url: URL referencing the media file.
-     */
-    public convenience init(url: URL) {
-        self.init(nonCachingPlayerURL: url)
-    }
-
-    private nonisolated init(nonCachingPlayerURL url: URL) {
-        self.url = url
-        self.saveFilePath = ""
-        self.initialScheme = nil
-        self.isHLS = false
-        self.mediaID = nil
-        super.init(url: url)
-        addObservers()
-    }
-
-    /**
-     Play and cache remote media on a local file. `saveFilePath` is **randomly** generated. Requires `url.pathExtension` to not be empty otherwise the player will fail playing.
-
-     - parameter url: URL referencing the media file.
-
-     - parameter avUrlAssetOptions: A dictionary that contains options used to customize the initialization of the asset. For supported keys and values,
-     see [Initialization Options.](https://developer.apple.com/documentation/avfoundation/avurlasset/initialization_options)
-     */
-    public convenience init(url: URL, avUrlAssetOptions: [String: Any]? = nil) {
-        self.init(url: url, saveFilePath: Self.randomFilePath(withExtension: url.pathExtension), customFileExtension: nil, avUrlAssetOptions: avUrlAssetOptions)
-    }
-
-    /**
-     Play and cache remote media on a local file. `saveFilePath` is **randomly** generated.
-
-     - parameter url: URL referencing the media file.
-
-     - parameter customFileExtension: Media file extension. E.g. mp4, mp3. This is required for the player to work correctly with the intended file type.
-
-     - parameter avUrlAssetOptions: A dictionary that contains options used to customize the initialization of the asset. For supported keys and values,
-     see [Initialization Options.](https://developer.apple.com/documentation/avfoundation/avurlasset/initialization_options)
-     */
-    public convenience init(url: URL, customFileExtension: String, avUrlAssetOptions: [String: Any]? = nil) {
-        self.init(url: url, saveFilePath: Self.randomFilePath(withExtension: customFileExtension), customFileExtension: customFileExtension, avUrlAssetOptions: avUrlAssetOptions)
-    }
-
-    /**
-     Play and cache remote media.
-
-     - parameter url: URL referencing the media file.
-
-     - parameter saveFilePath: The desired local save location. E.g. "video.mp4". **Must** be a unique file path that doesn't already exist. If a file exists at the path than it's **required** to be empty (contain no data).
-
-     - parameter customFileExtension: Media file extension. E.g. mp4, mp3. This is required for the player to work correctly with the intended file type.
-
-     - parameter avUrlAssetOptions: A dictionary that contains options used to customize the initialization of the asset. For supported keys and values,
-     see [Initialization Options.](https://developer.apple.com/documentation/avfoundation/avurlasset/initialization_options)
-     
-     - parameter isHLS: Whether this is an HLS video that needs special handling.
-     - parameter mediaID: Unique identifier for the media (used for HLS segment caching).
-     */
-    public init(url: URL, saveFilePath: String, customFileExtension: String?, avUrlAssetOptions: [String: Any]? = nil, isHLS: Bool = false, mediaID: String? = nil) {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let scheme = components.scheme else {
-            fatalError("CachingPlayerItem error: Urls without a scheme are not supported")
-        }
-
-        self.url = url
-        self.saveFilePath = saveFilePath
-        self.initialScheme = scheme
-        self.isHLS = isHLS
-        self.mediaID = mediaID
-
-        // For HLS videos, use LocalHTTPServer directly (no ResourceLoaderDelegate!)
-        let finalURL: URL
-        let useResourceLoaderDelegate: Bool
-        if isHLS, let mediaID = mediaID {
-            // CRITICAL: Give AVPlayer localhost URL - LocalHTTPServer is the server!
-            // No custom scheme, no ResourceLoaderDelegate intercept, no redirects!
-            let localhostURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: url)
-            finalURL = localhostURL
-            useResourceLoaderDelegate = false  // LocalHTTPServer handles everything
-            // Removed repetitive log - logged only on errors
-        } else {
-            // For progressive videos, use custom scheme
-            guard var urlWithCustomScheme = url.withScheme(cachingPlayerItemScheme) else {
-                fatalError("CachingPlayerItem error: Failed to create custom scheme URL")
-            }
-
-        if let ext = customFileExtension {
-            urlWithCustomScheme.deletePathExtension()
-            urlWithCustomScheme.appendPathExtension(ext)
-            self.customFileExtension = ext
-            } else {
-            assert(url.pathExtension.isEmpty == false, "CachingPlayerItem error: url pathExtension empty, pass the extension in `customFileExtension` parameter")
-            }
-            
-            finalURL = urlWithCustomScheme
-            useResourceLoaderDelegate = true  // Progressive needs ResourceLoaderDelegate
-        }
-
-        if let headers = avUrlAssetOptions?["AVURLAssetHTTPHeaderFieldsKey"] as? [String: String] {
-            self.urlRequestHeaders = headers
-        }
-
-        let asset = AVURLAsset(url: finalURL, options: avUrlAssetOptions)
-        super.init(asset: asset, automaticallyLoadedAssetKeys: nil)
-
-        // Only use ResourceLoaderDelegate for progressive videos
-        // HLS uses LocalHTTPServer directly (no intercept needed!)
-        if useResourceLoaderDelegate {
-            resourceLoaderDelegate = ResourceLoaderDelegate(url: url, mediaID: mediaID, saveFilePath: saveFilePath, owner: self)
-            resourceLoader = asset.resourceLoader
-            asset.resourceLoader.setDelegate(resourceLoaderDelegate, queue: DispatchQueue.main)
-            // Removed repetitive logs - logged only on errors
-        } else {
-            // No ResourceLoaderDelegate - LocalHTTPServer handles everything
-        }
-
-        addObservers()
     }
 
     /**
@@ -211,128 +54,14 @@ public final class CachingPlayerItem: AVPlayerItem {
      - parameter mediaID: Unique identifier for the media (used for cache key).
      - parameter avUrlAssetOptions: A dictionary that contains options used to customize the initialization of the asset.
      */
-    public convenience init(hlsURL: URL, mediaID: String, avUrlAssetOptions: [String: Any]? = nil) {
-        // Create a unique save path for the HLS playlist
-        let savePath = Self.hlsPlaylistPath(for: mediaID)
-        
-        self.init(url: hlsURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: avUrlAssetOptions, isHLS: true, mediaID: mediaID)
-    }
-
-    /**
-     Play remote media **without** caching.
-
-     - parameter nonCachingURL: URL referencing the media file.
-
-     - parameter avUrlAssetOptions: A dictionary that contains options used to customize the initialization of the asset. For supported keys and values,
-     see [Initialization Options.](https://developer.apple.com/documentation/avfoundation/avurlasset/initialization_options)
-     */
-    public init(nonCachingURL url: URL, avUrlAssetOptions: [String: Any]? = nil) {
-        self.url = url
-        self.saveFilePath = ""
-        self.initialScheme = nil
-        self.isHLS = false
-        self.mediaID = nil
-
-        let asset = AVURLAsset(url: url, options: avUrlAssetOptions)
+    public init(hlsURL: URL, mediaID: String, avUrlAssetOptions: [String: Any]? = nil) {
+        // AVPlayer requests the localhost URL; LocalHTTPServer maps it back to hlsURL.
+        let localhostURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: hlsURL)
+        let asset = AVURLAsset(url: localhostURL, options: avUrlAssetOptions)
         super.init(asset: asset, automaticallyLoadedAssetKeys: nil)
-
         addObservers()
+        DiskCacheCleanupManager.shared.noteVideoUsed(mediaID: mediaID)
     }
-
-    /**
-     Play from data.
-
-     - parameter data: Media file represented in data.
-
-     - parameter customFileExtension: Media file extension. E.g. mp4, mp3. This is required for the player to work correctly with the intended file type.
-
-     - throws: An error in the Cocoa domain, if there is an error writing to the `URL`.
-     */
-    public convenience init(data: Data, customFileExtension: String) throws {
-        let filePathURL = URL(fileURLWithPath: Self.randomFilePath(withExtension: customFileExtension))
-        FileManager.default.createFile(atPath: filePathURL.path, contents: nil, attributes: nil)
-        try data.write(to: filePathURL)
-        self.init(filePathURL: filePathURL)
-    }
-
-    /**
-     Play from file.
-
-     - parameter filePathURL: The local file path of a media file.
-
-     - parameter fileExtension: Media file extension. E.g. mp4, mp3. **Required**  if `filePathURL.pathExtension` is empty.
-     */
-    public init(filePathURL: URL, fileExtension: String? = nil) {
-        if let fileExtension = fileExtension {
-            let url = filePathURL.deletingPathExtension()
-            self.url = url.appendingPathExtension(fileExtension)
-
-            // Removes old SymLinks which cause issues
-            try? FileManager.default.removeItem(at: self.url)
-
-            try? FileManager.default.createSymbolicLink(at: self.url, withDestinationURL: filePathURL)
-        } else {
-            assert(filePathURL.pathExtension.isEmpty == false,
-                   "CachingPlayerItem error: filePathURL pathExtension empty, pass the extension in `fileExtension` parameter")
-            self.url = filePathURL
-        }
-
-        // Not needed properties when playing media from a local file.
-        self.saveFilePath = ""
-        self.initialScheme = nil
-        self.isHLS = false
-        self.mediaID = nil
-
-        super.init(asset: AVURLAsset(url: url), automaticallyLoadedAssetKeys: nil)
-
-        addObservers()
-    }
-
-    /**
-     Play media using an AVAsset. Caching is **not** supported for this method.
-
-     - parameter asset: An instance of AVAsset.
-     - parameter automaticallyLoadedAssetKeys: An NSArray of NSStrings, each representing a property key defined by AVAsset.
-     */
-    override public init(asset: AVAsset, automaticallyLoadedAssetKeys: [String]?) {
-        self.url = URL(fileURLWithPath: "")
-        self.initialScheme = nil
-        self.saveFilePath = ""
-        self.isHLS = false
-        self.mediaID = nil
-        super.init(asset: asset, automaticallyLoadedAssetKeys: automaticallyLoadedAssetKeys)
-
-        addObservers()
-    }
-    // MARK: Public methods
-
-    /// Downloads the media file. Works only with the initializers intended for play and cache.
-    public func download() {
-        // Make sure we are not initilalized with a filePath or non-caching init.
-        guard initialScheme != nil else {
-            assertionFailure("CachingPlayerItem error: `download` method used on a non caching instance")
-            return
-        }
-
-        resourceLoaderDelegate?.startFileDownload(with: url)
-    }
-
-    /// Cancels the download of the media file and deletes the incomplete cached file. Works only with the initializers intended for play and cache.
-    public func cancelDownload() {
-        // Make sure we are not initilalized with a filePath or non-caching init.
-        guard initialScheme != nil else {
-            assertionFailure("CachingPlayerItem error: `cancelDownload` method used on a non caching instance")
-            return
-        }
-
-        resourceLoaderDelegate?.invalidateAndCancelSession()
-    }
-    
-    /// Get the resource loader delegate for memory management
-    public func getResourceLoaderDelegate() -> ResourceLoaderDelegate? {
-        return resourceLoaderDelegate
-    }
-    
 
     // MARK: KVO
 
@@ -396,22 +125,6 @@ public final class CachingPlayerItem: AVPlayerItem {
         DispatchQueue.main.async { self.delegate?.playerItemPlaybackStalled?(self) }
     }
 
-    /// Generates a random file path in caches directory with the provided `fileExtension`.
-    private nonisolated static func randomFilePath(withExtension fileExtension: String) -> String {
-        guard var cachesDirectory = try? FileManager.default.url(for: .cachesDirectory,
-                                                                 in: .userDomainMask,
-                                                                 appropriateFor: nil,
-                                                                 create: true)
-        else {
-            fatalError("CachingPlayerItem error: Can't access default cache directory")
-        }
-
-        cachesDirectory.appendPathComponent(UUID().uuidString)
-        cachesDirectory.appendPathExtension(fileExtension)
-
-        return cachesDirectory.path
-    }
-    
     /// Generates a file path for HLS playlist in caches directory.
     public nonisolated static func hlsPlaylistPath(for mediaID: String) -> String {
         guard var cachesDirectory = try? FileManager.default.url(for: .cachesDirectory,

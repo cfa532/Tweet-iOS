@@ -62,8 +62,9 @@ class ImageCacheManager: @unchecked Sendable {
     private let cache = NSCache<NSString, UIImage>()
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
-    private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days in seconds
-    // Disk cache: no size limit — only 7-day age expiry via cleanupOldCache()
+    private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days since last use
+    private let maxDiskCacheBytes: Int64 = 1024 * 1024 * 1024 // 1 GB for all disk-cached images
+    private let diskCleanupQueue = DispatchQueue(label: "com.tweet.imageDiskCache", qos: .utility)
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
     private let maxDownsampleDimension: CGFloat = 1024
     // Avatars are cached as thumbnails: the largest one shown is 80pt, so 240px
@@ -82,10 +83,6 @@ class ImageCacheManager: @unchecked Sendable {
     // (raise-only, and `sync` still runs at the caller's QoS), which is exactly
     // what is wanted: no enqueued block is ever below a waiting reader.
 
-    // Permanent image IDs (from bookmarks/favorites - never expire)
-    private var permanentImageIDs: Set<String> = []
-    private let permanentImageIDsQueue = DispatchQueue(label: "com.tweet.permanentImageIDs", qos: .userInitiated)
-    
     // Avatar cache key tracking (for memory protection)
     private var avatarCacheKeys: Set<String> = []
     private var memoryCachedKeys: Set<String> = []
@@ -276,83 +273,74 @@ class ImageCacheManager: @unchecked Sendable {
         }
     }
     
-    // MARK: - Permanent Image Management
-    
-    /// Mark image IDs from bookmarks/favorites as permanent (never expire)
-    func markImageIDsAsPermanent(_ imageIDs: [String]) {
-        permanentImageIDsQueue.async {
-            self.permanentImageIDs.formUnion(imageIDs)
-            // Only log if marking 5+ items to reduce log spam
-            if imageIDs.count >= 5 {
-                print("💾 [ImageCacheManager] Marked \(imageIDs.count) image IDs as permanent (total: \(self.permanentImageIDs.count))")
-            }
-        }
-    }
-    
-    /// Remove image IDs from permanent set (when unbookmarked/unfavorited)
-    func unmarkImageIDsAsPermanent(_ imageIDs: [String]) {
-        permanentImageIDsQueue.async {
-            self.permanentImageIDs.subtract(imageIDs)
-            print("🗑️ [ImageCacheManager] Unmarked \(imageIDs.count) image IDs (remaining: \(self.permanentImageIDs.count))")
-        }
-    }
-    
-    /// Check if image ID is marked as permanent
-    private func isPermanentImageID(_ imageID: String) -> Bool {
-        var result = false
-        permanentImageIDsQueue.sync {
-            result = permanentImageIDs.contains(imageID)
-        }
-        return result
-    }
-    
-    /// Check if an image ID belongs to a private tweet
-    private func isPrivateTweet(imageID: String) -> Bool {
-        // Private/bookmarked/favorited images are retained by markImageIDsAsPermanent(_:)
-        // when tweets are saved. Cache cleanup runs off the main actor and must not
-        // inspect live Tweet UI models.
-        return false
-    }
-    
+    // MARK: - Disk Cache Cleanup
+
+    /// Removes disk-cached images unused for 7 days, then the least recently used ones
+    /// until the image cache is under 1 GB. Never removes avatars, or images of private,
+    /// bookmarked or favorited posts (by age or size, and not at logout); only a manual
+    /// "Clear Media Cache" does. Runs off the caller's thread.
     func cleanupOldCache() {
-        do {
-            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
-            let now = Date()
-            var filesToDelete: [URL] = []
+        Task.detached(priority: .utility) { [self] in
+            let permanent = await TweetCacheManager.shared.permanentMediaIDs()
+            diskCleanupQueue.async { self.cleanupDiskCache(keeping: permanent) }
+        }
+    }
 
-            // Delete files older than 7 days (skip protected content)
-            for fileURL in contents {
-                if let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
-                   let modificationDate = attributes[.modificationDate] as? Date {
+    /// Cache files are `<key>_compressed.jpg` / `<key>_original.jpg`; the key is the
+    /// attachment mid, or `avatar_<mid>` for avatars.
+    private func cacheKey(forFileNamed name: String) -> String {
+        var key = (name as NSString).deletingPathExtension
+        for suffix in ["_compressed", "_original"] where key.hasSuffix(suffix) {
+            key.removeLast(suffix.count)
+        }
+        return key
+    }
 
-                    // Extract image ID from filename (format: imageID or imageID-thumb)
-                    let filename = fileURL.deletingPathExtension().lastPathComponent
-                    let imageID = filename.components(separatedBy: "-").first ?? filename
+    private func cleanupDiskCache(keeping permanent: Set<String>) {
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .totalFileAllocatedSizeKey]
+        guard let contents = try? fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: keys) else { return }
+        let now = Date()
+        var expired = 0
+        var evicted = 0
+        var total: Int64 = 0
+        var evictable: [(url: URL, lastUsed: Date, bytes: Int64)] = []
 
-                    // NEVER delete: private tweets OR bookmarks/favorites OR avatars
-                    let isPrivate = isPrivateTweet(imageID: imageID)
-                    let isPermanent = isPermanentImageID(imageID)
-                    let isAvatar = filename.contains("avatar_")
+        for fileURL in contents {
+            let values = try? fileURL.resourceValues(forKeys: Set(keys))
+            let lastUsed = values?.contentModificationDate ?? .distantPast
+            let bytes = Int64(values?.totalFileAllocatedSize ?? 0)
+            let key = cacheKey(forFileNamed: fileURL.lastPathComponent)
+            let isKept = key.hasPrefix("avatar_") || permanent.contains(key)
 
-                    if isPrivate || isPermanent || isAvatar {
-                        continue
-                    }
+            if !isKept, now.timeIntervalSince(lastUsed) > maxCacheAge,
+               (try? fileManager.removeItem(at: fileURL)) != nil {
+                expired += 1
+                continue
+            }
+            total += bytes
+            if !isKept { evictable.append((fileURL, lastUsed, bytes)) }
+        }
 
-                    if now.timeIntervalSince(modificationDate) > maxCacheAge {
-                        filesToDelete.append(fileURL)
-                    }
+        // Kept files count toward the cap but are never evicted for it.
+        if total > maxDiskCacheBytes {
+            for file in evictable.sorted(by: { $0.lastUsed < $1.lastUsed }) where total > maxDiskCacheBytes {
+                if (try? fileManager.removeItem(at: file.url)) != nil {
+                    total -= file.bytes
+                    evicted += 1
                 }
             }
+        }
+        print("DEBUG: [ImageCacheManager] Image disk cache: removed \(expired) unused for 7 days, \(evicted) over the 1 GB cap; \(total / 1_048_576) MB kept")
+    }
 
-            // Delete identified files
-            for fileURL in filesToDelete {
-                try? fileManager.removeItem(at: fileURL)
-            }
-        } catch {
-            print("Error cleaning up cache: \(error)")
+    /// A disk-cache hit counts as use: the file's modification date is what the age and
+    /// size cleanup sort by.
+    private func noteDiskCacheHit(_ fileURL: URL) {
+        diskCleanupQueue.async { [fileManager] in
+            try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
         }
     }
-    
+
     func clearAllCache() {
         print("DEBUG: [ImageCacheManager] Clearing all cache - memory and disk")
 
@@ -480,7 +468,7 @@ class ImageCacheManager: @unchecked Sendable {
         }
         
         // Disk cache files don't consume RAM — skip disk deletion during memory pressure.
-        // Disk cleanup is handled separately by cleanupOldCache() (7-day expiry / 500MB limit).
+        // Disk cleanup is handled separately by cleanupOldCache() (7 days unused / 1 GB cap).
     }
 
     /// Clear memory cache only (keep disk cache intact)
@@ -601,6 +589,7 @@ class ImageCacheManager: @unchecked Sendable {
            let image = UIImage(data: data).map(decodedForDisplay) {
             // Cache in memory for next time (NSCache is thread-safe)
             cacheImageInMemory(image, forKey: cacheKey)
+            noteDiskCacheHit(fileURL)
             return image
         }
         
@@ -649,6 +638,7 @@ class ImageCacheManager: @unchecked Sendable {
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data).map(decodedForDisplay) {
             cacheImageInMemory(image, forKey: cacheKey)
+            noteDiskCacheHit(fileURL)
             return image
         }
         
@@ -986,6 +976,7 @@ class ImageCacheManager: @unchecked Sendable {
         let fileURL = getOriginalCacheFileURL(for: key)
         if let image = UIImage(contentsOfFile: fileURL.path).map(decodedForDisplay) {
             cacheImageInMemory(image, forKey: cacheKey)
+            noteDiskCacheHit(fileURL)
             return image
         }
 
