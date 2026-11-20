@@ -100,6 +100,14 @@ class ImageCacheManager: @unchecked Sendable {
     
     // Request deduplication: Track ongoing requests to prevent duplicate downloads
     private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
+    /// Callers still waiting on each original-image request in `ongoingRequests`.
+    /// An original is a full-resolution download and decode wanted only by the page
+    /// on screen. Cancelling a caller's own Task never reached the shared download
+    /// Task, so swiping through a gallery kept every abandoned original downloading,
+    /// decoding and replacing its preview. When the last waiter cancels, the shared
+    /// Task is cancelled. Thumbnails are not counted: an abandoned thumbnail still
+    /// fills the cache for scroll-back, and their callers rely on that.
+    private var originalRequestWaiters: [String: Int] = [:]
     private let requestsQueue = DispatchQueue(label: "com.zz.imagecache.requests", qos: .userInitiated, attributes: .concurrent)
     
     // Avatar loading throttling
@@ -499,6 +507,7 @@ class ImageCacheManager: @unchecked Sendable {
                 task.cancel()
             }
             self.ongoingRequests.removeAll()
+            self.originalRequestWaiters.removeAll()
         }
         avatarQueue.async(flags: .barrier) {
             for req in self.pendingAvatarRequests {
@@ -522,6 +531,7 @@ class ImageCacheManager: @unchecked Sendable {
                     task.cancel()
                     cancelled += 1
                 }
+                self.originalRequestWaiters.removeValue(forKey: cacheKey)
             }
             if cancelled > 0 {
                 print("🛑 [ImageCacheManager] Cancelled \(cancelled) in-flight image request(s) for focused fullscreen load: \(mid)")
@@ -829,13 +839,35 @@ class ImageCacheManager: @unchecked Sendable {
 
         // Wait for result
         let result = await registration.task.value
-        
-        // Remove completed task
-        requestsQueue.async(flags: .barrier) {
-            self.ongoingRequests.removeValue(forKey: cacheKey)
-        }
-        
+        removeFinishedRequest(registration.task, forKey: cacheKey)
         return result
+    }
+
+    /// Drop a finished request from the dedup map. Only the same Task is removed: a
+    /// newer request registered under the key after this one finished must stay, or
+    /// the next caller would start a duplicate download.
+    private func removeFinishedRequest(_ task: Task<UIImage?, Never>, forKey key: String) {
+        requestsQueue.async(flags: .barrier) {
+            guard self.ongoingRequests[key] == task else { return }
+            self.ongoingRequests.removeValue(forKey: key)
+            self.originalRequestWaiters.removeValue(forKey: key)
+        }
+    }
+
+    /// A waiter on an original-image request left (cancelled or rejected). Cancel the
+    /// shared download when nobody is left waiting for it.
+    private func leaveOriginalRequest(_ task: Task<UIImage?, Never>, forKey key: String) {
+        requestsQueue.async(flags: .barrier) {
+            guard self.ongoingRequests[key] == task else { return }
+            let remaining = (self.originalRequestWaiters[key] ?? 1) - 1
+            if remaining > 0 {
+                self.originalRequestWaiters[key] = remaining
+                return
+            }
+            self.originalRequestWaiters.removeValue(forKey: key)
+            self.ongoingRequests.removeValue(forKey: key)
+            task.cancel()
+        }
     }
     
     /// Load original image and optionally replace compressed cache with it
@@ -860,6 +892,8 @@ class ImageCacheManager: @unchecked Sendable {
         }
 
         let registration = requestsQueue.sync(flags: .barrier) { () -> (task: Task<UIImage?, Never>, created: Bool) in
+            // This caller now waits on the request; see originalRequestWaiters.
+            originalRequestWaiters[cacheKey, default: 0] += 1
             if let existingTask = ongoingRequests[cacheKey] {
                 return (existingTask, false)
             }
@@ -891,6 +925,9 @@ class ImageCacheManager: @unchecked Sendable {
                     print("Error: Invalid response for original image at \(url)")
                     return nil
                 }
+                // Every waiter may have left while the download finished; skip the
+                // full-resolution decode and preview replacement nobody will show.
+                try Task.checkCancellation()
                 
                 let image = UIImage(contentsOfFile: downloadResult.0.path).map(decodedForDisplay)
                 if image == nil {
@@ -912,23 +949,24 @@ class ImageCacheManager: @unchecked Sendable {
             ongoingRequests[cacheKey] = task
             return (task, true)
         }
-
         if !registration.created && priority != .critical {
             let state = memoryDuplicateBlockState()
             if state.blocked {
                 print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate original image request for \(cacheKey)")
+                leaveOriginalRequest(registration.task, forKey: cacheKey)
                 return nil
             }
         }
 
-        // Wait for result
-        let result = await registration.task.value
-        
-        // Remove completed task
-        requestsQueue.async(flags: .barrier) {
-            self.ongoingRequests.removeValue(forKey: cacheKey)
+        // Wait for result. Cancelling the caller's Task leaves the shared request;
+        // the last waiter to leave cancels the download itself.
+        let task = registration.task
+        let result = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            self.leaveOriginalRequest(task, forKey: cacheKey)
         }
-        
+        removeFinishedRequest(task, forKey: cacheKey)
         return result
     }
     

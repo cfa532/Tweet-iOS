@@ -1267,6 +1267,7 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
+        vc.allowsPictureInPicturePlayback = false
         // Inline autoplay pauses frequently and does not expose frame-analysis actions.
         // Avoid starting Visual Look Up work that would immediately be cancelled by the
         // next cell handoff on platforms where the native controller remains in use.
@@ -1715,7 +1716,7 @@ struct TweetDetailView: View {
             do { try await Task.sleep(for: .seconds(15)) } catch { return }
             await refreshComments()
         }
-        // AVPlayerViewController creates its complete controls/KVO/PiP hierarchy synchronously.
+        // AVPlayerViewController creates its controls and KVO hierarchy synchronously.
         // Keep that work out of the navigation transaction while player borrowing and loading
         // continue immediately behind the cached handoff thumbnail.
         .task(id: tweet.mid) {

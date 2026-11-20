@@ -216,6 +216,17 @@ class TweetBodyUIView: UIView {
               attrText.length > 0,
               contentLabel.bounds.contains(pointInContentLabel) else { return false }
 
+        // The "More..." suffix is one contiguous attributed range at the end of the text.
+        var moreRange = NSRange(location: NSNotFound, length: 0)
+        attrText.enumerateAttribute(
+            .moreLinkTap, in: NSRange(location: 0, length: attrText.length)
+        ) { value, range, _ in
+            if value != nil, moreRange.location == NSNotFound {
+                moreRange = range
+            }
+        }
+        guard moreRange.location != NSNotFound else { return false }
+
         let textStorage = NSTextStorage(attributedString: attrText)
         let layoutManager = NSLayoutManager()
         let textContainer = NSTextContainer(size: contentLabel.bounds.size)
@@ -226,12 +237,34 @@ class TweetBodyUIView: UIView {
         textStorage.addLayoutManager(layoutManager)
         layoutManager.ensureLayout(for: textContainer)
 
-        let charIndex = layoutManager.characterIndex(
-            for: pointInContentLabel, in: textContainer,
-            fractionOfDistanceBetweenInsertionPoints: nil
+        // Hit-test the rect of the suffix, not the character under the point. The label
+        // draws this string with TextKit2 while this reconstruction is TextKit1, and the
+        // two can break lines differently (see truncationCheckLabel). With a
+        // character-index lookup, one disagreed line break maps the tap to a body
+        // character, the attribute lookup misses, and both tap handlers fall through to
+        // detail navigation. The suffix rect tolerates that drift: everything to the
+        // right of "More..." on its line and below it is blank, so extending the rect
+        // there costs nothing; the half-line slacks overlap only the descender zone of
+        // the line above and one character at the seam.
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: moreRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return false }
+        let moreRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+        guard moreRect.width > 0, lineRect.height > 0 else { return false }
+
+        // Half a line of vertical slack: the label height comes from the (TextKit1)
+        // prewarmer measurement, and UILabel vertically centers its TextKit2 rendering
+        // when that needs fewer lines, shifting every drawn line by up to half a line
+        // against this top-anchored reconstruction. The horizontal slack covers about
+        // one character of line-break drift at the seam before the link.
+        let hitX = max(0, moreRect.minX - lineRect.height / 2)
+        let hitY = max(0, lineRect.minY - lineRect.height / 2)
+        let hitRect = CGRect(
+            x: hitX, y: hitY,
+            width: textContainer.size.width - hitX,
+            height: textContainer.size.height - hitY
         )
-        guard charIndex < attrText.length else { return false }
-        return attrText.attribute(.moreLinkTap, at: charIndex, effectiveRange: nil) != nil
+        return hitRect.contains(pointInContentLabel)
     }
 
     private func expandContent() {

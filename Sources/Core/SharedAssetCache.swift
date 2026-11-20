@@ -10,14 +10,9 @@ import AVFoundation
 import UIKit
 
 // MARK: - Cache Metadata Structure
+/// Older builds also stored `cachedMediaIDs` (access timestamps); decoding ignores it.
 private struct CacheMetadata: Codable {
-    let cachedMediaIDs: [String: Date] // mediaID -> timestamp
     var hlsExtensions: [String: String] // mediaID -> "master.m3u8" or "playlist.m3u8"
-
-    init(cachedMediaIDs: [String: Date], hlsExtensions: [String: String] = [:]) {
-        self.cachedMediaIDs = cachedMediaIDs
-        self.hlsExtensions = hlsExtensions
-    }
 }
 // CachingPlayerItem is now integrated directly
 
@@ -257,7 +252,14 @@ class SharedAssetCache: ObservableObject {
     // MARK: - Cache Storage
     private var assetCache: [String: AVAsset] = [:] // mediaID -> AVAsset
     private var playerCache: [String: AVPlayer] = [:] // mediaID -> AVPlayer
-    private var cacheTimestamps: [String: Date] = [:] // mediaID -> timestamp
+    // Last-access times, one table per cache. Eviction and expiry walk the cache's own
+    // keys and look up its own table. A single table shared by both caches let the
+    // player LRU pick asset-only keys (deleting their timestamps and leaving those
+    // assets unevictable) and spend its quota on them, so the player cache stayed
+    // over its cap. Neither table is persisted: nothing in either cache survives a
+    // relaunch, and restored timestamps were exactly such phantom keys.
+    private var assetTimestamps: [String: Date] = [:] // mediaID -> last access
+    private var playerTimestamps: [String: Date] = [:] // mediaID -> last access
     private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // mediaID -> Delegate
     private var cachingPlayerItems: [String: CachingPlayerItem] = [:] // mediaID -> CachingPlayerItem
     private var resourceLoaderDelegates: [String: ResourceLoaderDelegate] = [:] // mediaID -> ResourceLoaderDelegate
@@ -415,21 +417,29 @@ class SharedAssetCache: ObservableObject {
         let now = Date()
         // CRITICAL: Never evict visible or near-visible videos while app is in foreground
         let protected = foregroundProtectedMids
-        let expiredKeys = cacheTimestamps.filter { !protected.contains($0.key) && now.timeIntervalSince($0.value) > cacheExpirationInterval }.map { $0.key }
-        
-        for key in expiredKeys {
+        func isExpired(_ key: String, in timestamps: [String: Date]) -> Bool {
+            !protected.contains(key) &&
+                now.timeIntervalSince(timestamps[key] ?? .distantPast) > cacheExpirationInterval
+        }
+        let expiredPlayerKeys = playerCache.keys.filter { isExpired($0, in: playerTimestamps) }
+        let expiredAssetKeys = assetCache.keys.filter { isExpired($0, in: assetTimestamps) }
+
+        for key in expiredPlayerKeys {
             // CRITICAL: Properly release player using releasePlayer() method
             // This does complete cleanup: stops buffering, cancels loading, removes observers
-            if let player = playerCache[key] {
+            if let player = playerCache.removeValue(forKey: key) {
                 releasePlayer(player)
             }
-            
+            playerTimestamps.removeValue(forKey: key)
+        }
+        for key in expiredAssetKeys {
             assetCache.removeValue(forKey: key)
-            playerCache.removeValue(forKey: key)
-            cacheTimestamps.removeValue(forKey: key)
+            assetTimestamps.removeValue(forKey: key)
+        }
+        for key in Set(expiredPlayerKeys).union(expiredAssetKeys) {
             cachingPlayerItems.removeValue(forKey: key)
             resourceLoaderDelegates.removeValue(forKey: key)
-            
+
             // PERFORMANCE FIX: Clean up tweet URL mappings for evicted assets
             cleanupTweetMappings(for: key)
         }
@@ -720,7 +730,7 @@ class SharedAssetCache: ObservableObject {
         
         // Check if we have a cached asset
         if let cachedAsset = assetCache[cacheKey] {
-            cacheTimestamps[cacheKey] = Date() // Update access time
+            assetTimestamps[cacheKey] = Date() // Update access time
             return cachedAsset
         }
         
@@ -728,7 +738,7 @@ class SharedAssetCache: ObservableObject {
         if let existingTask = loadingTasks[cacheKey] {
             do {
                 try await existingTask.value
-                cacheTimestamps[cacheKey] = Date() // Update access time
+                assetTimestamps[cacheKey] = Date() // Update access time
                 if let asset = assetCache[cacheKey] {
                     return asset
                 }
@@ -817,7 +827,7 @@ class SharedAssetCache: ObservableObject {
             }
 
             self.assetCache[cacheKey] = asset
-            self.cacheTimestamps[cacheKey] = Date()
+            self.assetTimestamps[cacheKey] = Date()
             self.loadingTasks.removeValue(forKey: cacheKey)
 
             // Reset network failure counter on successful load
@@ -866,7 +876,7 @@ class SharedAssetCache: ObservableObject {
         }
         
         playerCache[mediaID] = player
-        cacheTimestamps[mediaID] = Date()
+        playerTimestamps[mediaID] = Date()
         
         // Save cache metadata to persist across app restarts
         saveCacheMetadata()
@@ -925,7 +935,7 @@ class SharedAssetCache: ObservableObject {
             // Cache lookup must stay side-effect free. Playback/preload callers
             // decide when to enable network and play; doing preroll here can fight
             // coordinator decisions and can crash if AVPlayer.status is not ready.
-            cacheTimestamps[mediaID] = Date() // Update access time
+            playerTimestamps[mediaID] = Date() // Update access time
             return player
         }
         return nil
@@ -1027,7 +1037,7 @@ class SharedAssetCache: ObservableObject {
         let hasCompleteProgressiveCache = !isHLS && LocalHTTPServer.shared.hasCompleteProgressiveCache(for: mediaID)
 
         playerCache.removeValue(forKey: mediaID)
-        cacheTimestamps.removeValue(forKey: mediaID)
+        playerTimestamps.removeValue(forKey: mediaID)
         preloadedPlayerMids.remove(mediaID)
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
@@ -1051,7 +1061,7 @@ class SharedAssetCache: ObservableObject {
               !visibleVideoMids.contains(mediaID) else { return }
 
         playerCache.removeValue(forKey: mediaID)
-        cacheTimestamps.removeValue(forKey: mediaID)
+        playerTimestamps.removeValue(forKey: mediaID)
         preloadedPlayerMids.remove(mediaID)
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
@@ -1135,7 +1145,7 @@ class SharedAssetCache: ObservableObject {
                 player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                 releasedPlayers += 1
             }
-            cacheTimestamps.removeValue(forKey: mediaID)
+            playerTimestamps.removeValue(forKey: mediaID)
         }
 
         for (mediaID, player) in playerCache where !protected.contains(mediaID) {
@@ -1237,7 +1247,8 @@ class SharedAssetCache: ObservableObject {
         // 2. Remove from all caches
         playerCache.removeValue(forKey: mediaID)
         assetCache.removeValue(forKey: mediaID)
-        cacheTimestamps.removeValue(forKey: mediaID)
+        playerTimestamps.removeValue(forKey: mediaID)
+        assetTimestamps.removeValue(forKey: mediaID)
         cachingPlayerDelegates.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
@@ -1256,6 +1267,7 @@ class SharedAssetCache: ObservableObject {
             return
         }
         playerCache.removeValue(forKey: mediaID)
+        playerTimestamps.removeValue(forKey: mediaID)
         preloadedPlayerMids.remove(mediaID)
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerGraceExpirations.removeValue(forKey: mediaID)
@@ -1264,7 +1276,7 @@ class SharedAssetCache: ObservableObject {
     /// Clear asset cache for a specific mediaID
     @MainActor func clearAssetCache(for mediaID: String) {
         assetCache.removeValue(forKey: mediaID)
-        cacheTimestamps.removeValue(forKey: mediaID)
+        assetTimestamps.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
         
@@ -1297,6 +1309,7 @@ class SharedAssetCache: ObservableObject {
                 return
             }
             releasePlayer(player)
+            playerTimestamps.removeValue(forKey: mediaID)
         }
         // Keep: assetCache, cachingPlayerItems, cachingPlayerDelegates,
         //        resourceLoaderDelegates, diskCacheStatus, active downloads
@@ -1335,7 +1348,8 @@ class SharedAssetCache: ObservableObject {
 
         // Clear associated data
         assetCache.removeValue(forKey: mediaID)
-        cacheTimestamps.removeValue(forKey: mediaID)
+        playerTimestamps.removeValue(forKey: mediaID)
+        assetTimestamps.removeValue(forKey: mediaID)
         cachingPlayerDelegates.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
@@ -1419,7 +1433,8 @@ class SharedAssetCache: ObservableObject {
                         }
                         return cachedPlayer
                     } catch {
-                        await MainActor.run { _ = playerCache.removeValue(forKey: cacheKey) }
+                        playerCache.removeValue(forKey: cacheKey)
+                        playerTimestamps.removeValue(forKey: cacheKey)
                     }
                 } else {
                     return cachedPlayer
@@ -2049,7 +2064,8 @@ class SharedAssetCache: ObservableObject {
         videoRetryCount.removeAll()
         
         // Clear timestamps
-        cacheTimestamps.removeAll()
+        assetTimestamps.removeAll()
+        playerTimestamps.removeAll()
         
         // Clear URL tracking
         tweetUrlMapping.removeAll()
@@ -2118,23 +2134,23 @@ class SharedAssetCache: ObservableObject {
         let playerCountToRemove = max(1, (playerCache.count * percentageToRemove) / 100)
         
         // Remove oldest assets first (LRU strategy)
-        let sortedAssetKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
-        let assetsToRemove = sortedAssetKeys.prefix(assetCountToRemove)
+        let assetsToRemove = Self.leastRecentlyUsed(Array(assetCache.keys), by: assetTimestamps)
+            .prefix(assetCountToRemove)
         
         for key in assetsToRemove {
             assetCache.removeValue(forKey: key)
-            cacheTimestamps.removeValue(forKey: key)
+            assetTimestamps.removeValue(forKey: key)
         }
         
         // Remove oldest players first (LRU strategy)
-        let sortedPlayerKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
-        let playersToRemove = sortedPlayerKeys.prefix(playerCountToRemove)
+        let playersToRemove = Self.leastRecentlyUsed(Array(playerCache.keys), by: playerTimestamps)
+            .prefix(playerCountToRemove)
         
         for key in playersToRemove {
-            if let player = playerCache[key] {
+            if let player = playerCache.removeValue(forKey: key) {
                 player.pause()
-                playerCache.removeValue(forKey: key)
             }
+            playerTimestamps.removeValue(forKey: key)
         }
     }
     
@@ -2836,26 +2852,24 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Cache Management
     
+    /// Keys ordered oldest access first. A key missing from `timestamps` sorts first.
+    private static func leastRecentlyUsed(_ keys: [String], by timestamps: [String: Date]) -> [String] {
+        keys.sorted { (timestamps[$0] ?? .distantPast) < (timestamps[$1] ?? .distantPast) }
+    }
+
     private func manageCacheSize() {
-        if assetCache.count > maxCacheSize {
-            // Remove least recently used assets - do sorting on background thread
-            Task.detached {
-                let sortedKeys = await MainActor.run {
-                    self.cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
-                }
-                let keysToRemove = sortedKeys.prefix(await MainActor.run { self.assetCache.count - self.maxCacheSize })
-                
-                await MainActor.run {
-                    for key in keysToRemove {
-                        self.assetCache.removeValue(forKey: key)
-                        self.cacheTimestamps.removeValue(forKey: key)
-                        self.cachingPlayerItems.removeValue(forKey: key)
-                        self.resourceLoaderDelegates.removeValue(forKey: key)
-                        // PERFORMANCE FIX: Clean up tweet URL mappings
-                        self.cleanupTweetMappings(for: key)
-                    }
-                }
-            }
+        guard assetCache.count > maxCacheSize else { return }
+        // Remove least recently used assets. The cache holds tens of entries, so this
+        // runs inline; the old detached version read the cache in two separate hops.
+        let keysToRemove = Self.leastRecentlyUsed(Array(assetCache.keys), by: assetTimestamps)
+            .prefix(assetCache.count - maxCacheSize)
+        for key in keysToRemove {
+            assetCache.removeValue(forKey: key)
+            assetTimestamps.removeValue(forKey: key)
+            cachingPlayerItems.removeValue(forKey: key)
+            resourceLoaderDelegates.removeValue(forKey: key)
+            // PERFORMANCE FIX: Clean up tweet URL mappings
+            cleanupTweetMappings(for: key)
         }
     }
     
@@ -2936,10 +2950,11 @@ class SharedAssetCache: ObservableObject {
 
         // Clear all caches
         playerCache.removeAll()
+        playerTimestamps.removeAll()
         cachingPlayerItems.removeAll()
         resourceLoaderDelegates.removeAll()
 
-        // Keep timestamps and asset cache for faster recovery
+        // Keep asset cache (and its timestamps) for faster recovery
 
     }
 
@@ -2961,24 +2976,27 @@ class SharedAssetCache: ObservableObject {
 
         // CRITICAL: Never evict visible or near-visible videos while app is in foreground
         let protected = foregroundProtectedMids
-        let oldKeys = cacheTimestamps
-            .filter { !protected.contains($0.key) && now.timeIntervalSince($0.value) > ageThreshold }
-            .map { $0.key }
+        func isOld(_ key: String, in timestamps: [String: Date]) -> Bool {
+            !protected.contains(key) &&
+                now.timeIntervalSince(timestamps[key] ?? .distantPast) > ageThreshold
+        }
+        let oldPlayerKeys = playerCache.keys.filter { isOld($0, in: playerTimestamps) }
+        let oldAssetKeys = assetCache.keys.filter { isOld($0, in: assetTimestamps) }
 
-
-        if !oldKeys.isEmpty {
-
-            for key in oldKeys {
-                if let player = playerCache[key] {
-                    releasePlayer(player)
-                }
-                playerCache.removeValue(forKey: key)
-                assetCache.removeValue(forKey: key)
-                cacheTimestamps.removeValue(forKey: key)
-                cachingPlayerItems.removeValue(forKey: key)
-                resourceLoaderDelegates.removeValue(forKey: key)
-                cleanupTweetMappings(for: key)
+        for key in oldPlayerKeys {
+            if let player = playerCache.removeValue(forKey: key) {
+                releasePlayer(player)
             }
+            playerTimestamps.removeValue(forKey: key)
+        }
+        for key in oldAssetKeys {
+            assetCache.removeValue(forKey: key)
+            assetTimestamps.removeValue(forKey: key)
+        }
+        for key in Set(oldPlayerKeys).union(oldAssetKeys) {
+            cachingPlayerItems.removeValue(forKey: key)
+            resourceLoaderDelegates.removeValue(forKey: key)
+            cleanupTweetMappings(for: key)
         }
     }
     
@@ -3000,7 +3018,8 @@ class SharedAssetCache: ObservableObject {
             releasedCount += 1
         }
         playerCache.removeAll()
-        cacheTimestamps.removeAll()
+        // Assets are kept, so only the player timestamps go.
+        playerTimestamps.removeAll()
         cachingPlayerItems.removeAll()
         resourceLoaderDelegates.removeAll()
         tweetUrlMapping.removeAll()
@@ -3024,19 +3043,16 @@ class SharedAssetCache: ObservableObject {
 
             // CRITICAL: Never evict visible or near-visible videos while app is in foreground
             let protected = foregroundProtectedMids
-            let sortedKeys = cacheTimestamps
-                .filter { !protected.contains($0.key) } // Skip protected videos
-                .sorted { $0.value < $1.value }
-                .map { $0.key }
-            let keysToRemove = sortedKeys.prefix(playerCache.count - targetSize)
+            let candidates = playerCache.keys.filter { !protected.contains($0) } // Skip protected videos
+            let keysToRemove = Self.leastRecentlyUsed(candidates, by: playerTimestamps)
+                .prefix(playerCache.count - targetSize)
 
             for key in keysToRemove {
-                if let player = playerCache[key] {
+                if let player = playerCache.removeValue(forKey: key) {
                     // CRITICAL: Properly release player to prevent memory leaks
                     releasePlayer(player)
                 }
-                playerCache.removeValue(forKey: key)
-                cacheTimestamps.removeValue(forKey: key)
+                playerTimestamps.removeValue(forKey: key)
                 cachingPlayerItems.removeValue(forKey: key)
                 resourceLoaderDelegates.removeValue(forKey: key)
                 // PERFORMANCE FIX: Clean up tweet URL mappings
@@ -3052,7 +3068,7 @@ class SharedAssetCache: ObservableObject {
     /// Update access time for a player to prevent premature cleanup (called when video becomes visible)
     @MainActor func updatePlayerAccessTime(mediaID: String) {
         guard playerCache[mediaID] != nil else { return }
-        cacheTimestamps[mediaID] = Date()
+        playerTimestamps[mediaID] = Date()
     }
 
     /// Get formatted memory usage string for logging (when actually needed)
@@ -3297,6 +3313,7 @@ class SharedAssetCache: ObservableObject {
 
         // Clear assets - they contain the heavy video data
         assetCache.removeAll()
+        assetTimestamps.removeAll()
 
         // Cancel loading tasks to prevent memory usage during background
         cancelAllLoadingTasks()
@@ -3304,7 +3321,7 @@ class SharedAssetCache: ObservableObject {
         // Clear resource loader delegates — they can retain URLSession/loading state
         resourceLoaderDelegates.removeAll()
 
-        // Keep playerCache, cacheTimestamps for fast recovery
+        // Keep playerCache, playerTimestamps for fast recovery
     }
 
     /// Release foreground media memory when the app enters background.
@@ -3359,7 +3376,8 @@ class SharedAssetCache: ObservableObject {
 
         playerCache.removeAll()
         assetCache.removeAll()
-        cacheTimestamps.removeAll()
+        playerTimestamps.removeAll()
+        assetTimestamps.removeAll()
         cachingPlayerDelegates.removeAll()
         cachingPlayerItems.removeAll()
         resourceLoaderDelegates.removeAll()
@@ -3387,12 +3405,14 @@ class SharedAssetCache: ObservableObject {
             player.replaceCurrentItem(with: nil) // CRITICAL: Detach the item to invalidate layer
         }
         playerCache.removeAll()
+        playerTimestamps.removeAll()
 
         // Clear CachingPlayerItem instances - they hold references to old players
         cachingPlayerItems.removeAll()
 
         // CRITICAL: Also clear assets - they can have stale video layers after backgrounding
         assetCache.removeAll()
+        assetTimestamps.removeAll()
 
         // Clear loading tasks to force fresh loads
         cancelAllLoadingTasks()
@@ -3402,7 +3422,6 @@ class SharedAssetCache: ObservableObject {
         diskCacheStatus.removeAll()
 
         // Keep resourceLoaderDelegates - they're needed for HLS playback
-        // Keep cacheTimestamps - they track cache expiration
         // Keep HLS disk cache - playlists now use relative paths (port-independent!)
     }
 
@@ -3434,7 +3453,8 @@ class SharedAssetCache: ObservableObject {
         assetCache.removeAll()
         
         // Clear timestamps
-        cacheTimestamps.removeAll()
+        playerTimestamps.removeAll()
+        assetTimestamps.removeAll()
         
         print("🧹 [NAVIGATION CLEANUP] Cleanup complete - all players and assets released")
     }
@@ -3449,17 +3469,14 @@ class SharedAssetCache: ObservableObject {
         }
         
         
-        // Since we're using on-demand caching, we don't need to validate existing cache files
-        // Just restore the metadata for reference
-        let validMediaIDs = metadata.cachedMediaIDs
-        
-        cacheTimestamps = validMediaIDs
+        // Only the resolved playlist names are worth restoring; access times belong to
+        // in-memory objects that a relaunch does not bring back.
         hlsExtensions = metadata.hlsExtensions
     }
 
     /// Save cache metadata to UserDefaults
     private func saveCacheMetadata() {
-        let metadata = CacheMetadata(cachedMediaIDs: cacheTimestamps, hlsExtensions: hlsExtensions)
+        let metadata = CacheMetadata(hlsExtensions: hlsExtensions)
         if let data = try? JSONEncoder().encode(metadata) {
             UserDefaults.standard.set(data, forKey: cacheMetadataKey)
         }

@@ -2,36 +2,18 @@ import SwiftUI
 import AVKit
 import Combine
 
-/// One surface and PiP controller per browser. Keeping the layer alive across
-/// page/item changes lets autoplay continue without replacing the PiP session.
+/// Keep one playback surface alive across browser page and item changes.
 @MainActor
-final class BrowserVideoSession: NSObject, ObservableObject, @preconcurrency AVPictureInPictureControllerDelegate {
+final class BrowserVideoSession: ObservableObject {
     let surface = BrowserVideoSurface()
     @Published private(set) var isReady = false
-    @Published private(set) var canStartPictureInPicture = false
-    @Published private(set) var isPictureInPictureActive = false
-    @Published var pictureInPictureError: String?
-    private var pictureInPicture: AVPictureInPictureController?
     private var readyObserver: NSKeyValueObservation?
-    private var possibleObserver: NSKeyValueObservation?
-    private var externalPlaybackObserver: NSKeyValueObservation?
     private var itemObserver: NSKeyValueObservation?
     private weak var player: AVPlayer?
     private var item: AVPlayerItem?
     private var mid: String?
 
-    override init() {
-        super.init()
-        if AVPictureInPictureController.isPictureInPictureSupported() {
-            pictureInPicture = AVPictureInPictureController(playerLayer: surface.playerLayer)
-            pictureInPicture?.delegate = self
-            // Explicit activation avoids racing the app's normal background cleanup.
-            pictureInPicture?.canStartPictureInPictureAutomaticallyFromInline = false
-            possibleObserver = pictureInPicture?.observe(\.isPictureInPicturePossible, options: [.initial, .new]) { [weak self] _, change in
-                let possible = change.newValue ?? false
-                Task { @MainActor [weak self] in self?.canStartPictureInPicture = possible }
-            }
-        }
+    init() {
         readyObserver = surface.playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in self?.refreshReadyState() }
         }
@@ -40,8 +22,7 @@ final class BrowserVideoSession: NSObject, ObservableObject, @preconcurrency AVP
     func attach(player: AVPlayer, mid: String) {
         guard self.player !== player || item !== player.currentItem || self.mid != mid else { return }
         if self.player !== player {
-            // PiP can advance while SwiftUI is suspended. The existing layer follows
-            // the player's new item, so authorize it without waiting for a page render.
+            // Item swaps must authorize the new foreground playback surface too.
             itemObserver = player.observe(\.currentItem, options: [.new]) { [weak self, weak player] _, _ in
                 Task { @MainActor [weak self, weak player] in
                     guard let self, let player, self.player === player,
@@ -53,15 +34,7 @@ final class BrowserVideoSession: NSObject, ObservableObject, @preconcurrency AVP
         self.player = player
         item = player.currentItem
         self.mid = mid
-        pictureInPicture?.delegate = self
         surface.playerLayer.player = player
-        externalPlaybackObserver = player.observe(\.isExternalPlaybackActive, options: [.new]) { [weak self, weak player] _, change in
-            guard change.newValue == false else { return }
-            Task { @MainActor [weak self, weak player] in
-                guard let self, let player, self.player === player else { return }
-                FullScreenVideoManager.shared.externalPlaybackDidEnd()
-            }
-        }
         // Mounting authorizes startup; first-frame readiness separately removes the poster.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.player === player, self.mid == mid else { return }
@@ -78,54 +51,13 @@ final class BrowserVideoSession: NSObject, ObservableObject, @preconcurrency AVP
         self.player === player && self.mid == mid && item === player.currentItem && isReady
     }
 
-    func togglePictureInPicture() {
-        guard let pictureInPicture else { return }
-        if pictureInPicture.isPictureInPictureActive {
-            pictureInPicture.stopPictureInPicture()
-        } else if pictureInPicture.isPictureInPicturePossible {
-            AudioSessionManager.shared.activateForVideoPlayback()
-            FullScreenVideoManager.shared.isPictureInPictureActive = true
-            pictureInPicture.startPictureInPicture()
-        }
-    }
-
-    func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
-        FullScreenVideoManager.shared.isPictureInPictureActive = true
-        isPictureInPictureActive = true
-    }
-
-    func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        pictureInPictureError = error.localizedDescription
-        endPictureInPicture()
-    }
-
-    func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
-        endPictureInPicture()
-    }
-
-    func pictureInPictureController(_ controller: AVPictureInPictureController,
-                                   restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
-        // The fullscreen browser stays presented beneath PiP, ready for restoration.
-        completionHandler(surface.window != nil)
-    }
-
-    private func endPictureInPicture() {
-        isPictureInPictureActive = false
-        FullScreenVideoManager.shared.isPictureInPictureActive = false
-        FullScreenVideoManager.shared.externalPlaybackDidEnd()
-    }
-
     func close() {
-        pictureInPicture?.stopPictureInPicture()
-        pictureInPicture?.delegate = nil
         surface.playerLayer.player = nil
-        externalPlaybackObserver = nil
         itemObserver = nil
         item = nil
         player = nil
         mid = nil
         isReady = false
-        endPictureInPicture()
     }
 }
 
@@ -312,14 +244,6 @@ struct BrowserVideoPlayer: View {
                             Spacer()
                             BrowserAirPlayButton().frame(width: 44, height: 44)
                                 .accessibilityLabel("AirPlay")
-                            if AVPictureInPictureController.isPictureInPictureSupported() {
-                                Button { session.togglePictureInPicture(); onUserInteraction() } label: {
-                                    Image(systemName: session.isPictureInPictureActive ? "pip.exit" : "pip.enter")
-                                        .frame(width: 44, height: 44)
-                                }
-                                .disabled(!session.canStartPictureInPicture && !session.isPictureInPictureActive)
-                                .accessibilityLabel("Picture in Picture")
-                            }
                         }
                         .buttonStyle(.plain)
                         .frame(height: 44)
@@ -342,11 +266,6 @@ struct BrowserVideoPlayer: View {
         }
         .onAppear { refreshTime() }
         .onReceive(clock) { _ in refreshTime() }
-        .alert("Picture in Picture unavailable", isPresented: Binding(
-            get: { session.pictureInPictureError != nil },
-            set: { if !$0 { session.pictureInPictureError = nil } }
-        )) { Button("OK", role: .cancel) { session.pictureInPictureError = nil } }
-        message: { Text(session.pictureInPictureError ?? "") }
     }
 
     private func refreshTime() {

@@ -30,9 +30,6 @@ final class TweetDeletionRegistry: @unchecked Sendable {
 }
 
 extension Notification.Name {
-    /// Posted on main when fullscreen PiP/AirPlay ends while the app is backgrounded.
-    static let fullscreenExternalPlaybackDidEnd = Notification.Name("fullscreenExternalPlaybackDidEnd")
-
     // MARK: - User Related
     /// Posted when a user's avatar changes
     static let avatarDidChange = Notification.Name("avatarDidChange")

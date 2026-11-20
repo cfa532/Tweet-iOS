@@ -34,7 +34,6 @@
 	<string>We need to send you notifications about new messages, replies, and interactions.</string>
 	<key>UIBackgroundModes</key>
 	<array>
-		<string>audio</string>
 		<string>fetch</string>
 		<string>processing</string>
 	</array>

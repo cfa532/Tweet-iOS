@@ -2942,10 +2942,28 @@ class MediaCellUIView: UIView, MediaCellDelegate, UIGestureRecognizerDelegate {
 
     private func publishMediaBufferHealthIfNeeded(for player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
+        // A buffer that reaches the end of the video needs nothing more from the network.
+        // Reporting the seconds left instead made every video shorter than the 30s primary
+        // gate, and every video near its end (or finished and still on screen) read as
+        // starving, which held off-screen preloads off indefinitely.
         LocalHTTPServer.shared.updateMediaBufferHealth(
             mediaID: mid,
-            bufferedAhead: bufferedTimeAhead(for: player)
+            bufferedAhead: isBufferedThroughEnd(player) ? .infinity : bufferedTimeAhead(for: player)
         )
+    }
+
+    private func isBufferedThroughEnd(_ player: AVPlayer) -> Bool {
+        guard let item = player.currentItem else { return false }
+        let duration = seconds(from: item.duration)
+        guard duration > 0 else { return false }
+        let current = seconds(from: player.currentTime())
+        return item.loadedTimeRanges.contains { value in
+            let range = value.timeRangeValue
+            let start = seconds(from: range.start)
+            let end = start + seconds(from: range.duration)
+            // Loaded ranges are reported at frame granularity; allow a frame's slack.
+            return start <= current && end >= duration - 0.1
+        }
     }
 
     private func applyAVPlayerBufferDefaults(to player: AVPlayer) {

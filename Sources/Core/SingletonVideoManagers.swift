@@ -223,8 +223,6 @@ extension VideoPlayerLifecycleManager {
     }
     
     func handleAppWillResignActive() {
-        // PiP/AirPlay is still visible playback, not a suspended inline player.
-        if let fullscreen = self as? FullScreenVideoManager, fullscreen.keepsPlayingOutsideApp { return }
         guard let player = getPlayer() else { return }
         
         let managerName = String(describing: type(of: self))
@@ -273,8 +271,6 @@ extension VideoPlayerLifecycleManager {
     }
     
     func handleAppDidEnterBackground() {
-        // PiP/AirPlay is still visible playback, not a suspended inline player.
-        if let fullscreen = self as? FullScreenVideoManager, fullscreen.keepsPlayingOutsideApp { return }
         guard let player = getPlayer() else { return }
         
         let managerName = String(describing: type(of: self))
@@ -302,15 +298,11 @@ extension VideoPlayerLifecycleManager {
     }
     
     func handleAppWillEnterForeground() {
-        // PiP/AirPlay is still visible playback, not a suspended inline player.
-        if let fullscreen = self as? FullScreenVideoManager, fullscreen.keepsPlayingOutsideApp { return }
         print("DEBUG: [\(String(describing: type(of: self)))] App entering foreground, recovering from background")
         recoverFromBackground()
     }
     
     func handleAppDidBecomeActive() {
-        // PiP/AirPlay is still visible playback, not a suspended inline player.
-        if let fullscreen = self as? FullScreenVideoManager, fullscreen.keepsPlayingOutsideApp { return }
         let managerName = String(describing: type(of: self))
         print("DEBUG: [\(managerName)] App became active")
         // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
@@ -442,18 +434,6 @@ final class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManage
     @Published var isUserMuted = false {
         didSet { singletonPlayer?.isMuted = isUserMuted }
     }
-    var isPictureInPictureActive = false
-    var keepsPlayingOutsideApp: Bool {
-        isPictureInPictureActive || singletonPlayer?.isExternalPlaybackActive == true
-    }
-
-    func externalPlaybackDidEnd() {
-        guard !keepsPlayingOutsideApp, UIApplication.shared.applicationState == .background else { return }
-        handleAppWillResignActive()
-        handleAppDidEnterBackground()
-        NotificationCenter.default.post(name: .fullscreenExternalPlaybackDidEnd, object: nil)
-    }
-
     private init() {
         // Pre-create player so it's ready when fullscreen opens (no creation delay)
         singletonPlayer = AVPlayer()

@@ -39,11 +39,13 @@ final class ProgressiveResourceLoader: NSObject, AVAssetResourceLoaderDelegate, 
         let loading: AVAssetResourceLoadingRequest
         var waiting: Task<Void, Never>?
         var task: URLSessionDataTask?
-        var priority: NodeDownloadPriority?
+        var lease: NodeSlotLease?
         var offset: Int64
         var responseEnd: Int64 = 0
         var total: Int64?
         var finished = false
+        /// Disk writer for the running transfer; its bytes join the index in batches.
+        var batch: ProgressiveRangeCache.Batch?
 
         init(_ loading: AVAssetResourceLoadingRequest) {
             self.loading = loading
@@ -182,13 +184,13 @@ final class ProgressiveResourceLoader: NSObject, AVAssetResourceLoaderDelegate, 
                 while true {
                     try Task.checkCancellation()
                     let priority = LocalHTTPServer.shared.downloadPriority(for: mediaID)
-                    if await pool.acquireSlot(mediaID: mediaID, priority: priority, primarySlotCap: 2) {
+                    if let lease = await pool.acquireSlot(mediaID: mediaID, priority: priority, primarySlotCap: 2) {
                         Self.queue.async { [weak self] in
                             guard let self, !request.finished else {
-                                Task { await pool.releaseSlot(mediaID: mediaID, priority: priority) }
+                                Task { await pool.releaseSlot(lease) }
                                 return
                             }
-                            request.priority = priority
+                            request.lease = lease
                             self.start(request)
                         }
                         return
@@ -297,7 +299,12 @@ final class ProgressiveResourceLoader: NSObject, AVAssetResourceLoaderDelegate, 
             return
         }
         let bytes = Data(data.prefix(Int(min(Int64(data.count), end - request.offset))))
-        cache.write(bytes, at: request.offset)
+        if request.batch == nil {
+            request.batch = cache.beginBatch(at: request.offset)
+        }
+        if let batch = request.batch {
+            cache.append(bytes, at: request.offset, to: batch)
+        }
         request.loading.dataRequest?.respond(with: bytes)
         request.offset += Int64(bytes.count)
         if request.offset == end { finish(request) }
@@ -307,6 +314,9 @@ final class ProgressiveResourceLoader: NSObject, AVAssetResourceLoaderDelegate, 
         guard let request = transfers.removeValue(forKey: task.taskIdentifier) else { return }
         releaseSlot(request)
         request.task = nil
+        // Publish before serveCache, which reads coverage from the index. A later
+        // transfer for this request starts a new batch at its own offset.
+        closeBatch(request)
         guard !request.finished else { return }
         if let error {
             finish(request, error: error)
@@ -319,17 +329,23 @@ final class ProgressiveResourceLoader: NSObject, AVAssetResourceLoaderDelegate, 
     }
 
     private func releaseSlot(_ request: Request) {
-        if let priority = request.priority {
-            request.priority = nil
+        if let lease = request.lease {
+            request.lease = nil
             let pool = pool
-            let mediaID = mediaID
-            Task { await pool.releaseSlot(mediaID: mediaID, priority: priority) }
+            Task { await pool.releaseSlot(lease) }
         }
+    }
+
+    private func closeBatch(_ request: Request) {
+        guard let batch = request.batch else { return }
+        request.batch = nil
+        cache.close(batch)
     }
 
     private func finish(_ request: Request, error: Error? = nil) {
         guard !request.finished else { return }
         request.finished = true
+        closeBatch(request)
         request.waiting?.cancel()
         request.waiting = nil
         request.task?.cancel()
@@ -435,33 +451,101 @@ struct ProgressiveRangeCache {
         return data
     }
 
-    func write(_ data: Data, at offset: Int64) {
+    // MARK: Batched sequential writes
+    //
+    // A transfer writes one contiguous run of bytes. Writing it chunk by chunk used to
+    // decode the index, fsync the file and atomically rewrite the index for every
+    // URLSession callback (16-64 KB), hundreds of times per video, all on the one
+    // queue every progressive video shares. A batch keeps one handle open for the
+    // transfer and publishes its coverage every `publishInterval` bytes and when the
+    // transfer ends. The disk index stays the only shared truth, and it still lists
+    // only bytes that were synchronized before it was written; it just lags the
+    // network by at most one interval, which other readers see as a gap.
+
+    /// Bytes of one sequential transfer. Used only on ProgressiveResourceLoader.queue.
+    final class Batch {
+        fileprivate let handle: FileHandle
+        /// Written but not yet published to the index.
+        fileprivate var pending: Range<Int64>
+        fileprivate var allowance: Int64
+
+        fileprivate init(handle: FileHandle, offset: Int64, allowance: Int64) {
+            self.handle = handle
+            pending = offset..<offset
+            self.allowance = allowance
+        }
+    }
+
+    private let publishInterval: Int64 = 1024 * 1024
+
+    func beginBatch(at offset: Int64) -> Batch? {
         do {
-            var state = try snapshot()
-            var allowance = limit - state.cachedBytes
-            guard allowance > 0, !data.isEmpty else { return }
-            let gaps = state.gaps(in: offset..<(offset + Int64(data.count)))
-            guard !gaps.isEmpty else { return }
+            let state = try snapshot()
+            // At the cap the batch still exists with no allowance, so the transfer
+            // does not re-check the index on every chunk.
+            let allowance = max(0, limit - state.cachedBytes)
             // Publish legacy coverage before the first sparse write, so existing
             // prefix readers cannot infer coverage from the newly extended file.
             if !hasIndex { try save(state) }
             if !FileManager.default.fileExists(atPath: file.path) {
                 FileManager.default.createFile(atPath: file.path, contents: nil)
             }
-            let handle = try FileHandle(forWritingTo: file)
-            defer { try? handle.close() }
-            for gap in gaps where allowance > 0 {
-                let count = min(gap.count64, allowance)
-                let start = Int(gap.lowerBound - offset)
-                try handle.seek(toOffset: UInt64(gap.lowerBound))
-                try handle.write(contentsOf: data.subdata(in: start..<(start + Int(count))))
-                state.insert(gap.lowerBound..<(gap.lowerBound + count))
-                allowance -= count
-            }
+            return Batch(handle: try FileHandle(forWritingTo: file), offset: offset, allowance: allowance)
+        } catch {
+            print("[Progressive cache] Batch open failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Append the transfer's next bytes. `offset` must continue the batch; transfers
+    /// are sequential, so anything else is a caller bug and is not indexed.
+    func append(_ data: Data, at offset: Int64, to batch: Batch) {
+        guard offset == batch.pending.upperBound, batch.allowance > 0, !data.isEmpty else { return }
+        let count = min(Int64(data.count), batch.allowance)
+        do {
+            try batch.handle.seek(toOffset: UInt64(offset))
+            try batch.handle.write(contentsOf: data.prefix(Int(count)))
+        } catch {
+            print("[Progressive cache] Range write failed: \(error)")
+            batch.allowance = 0
+            return
+        }
+        batch.pending = batch.pending.lowerBound..<(offset + count)
+        batch.allowance -= count
+        if batch.pending.count64 >= publishInterval { publish(batch) }
+    }
+
+    func close(_ batch: Batch) {
+        publish(batch)
+        try? batch.handle.close()
+    }
+
+    private func publish(_ batch: Batch) {
+        let range = batch.pending
+        guard !range.isEmpty else { return }
+        batch.pending = range.upperBound..<range.upperBound
+        do {
             // Publish coverage after the bytes, including across process restarts.
-            try handle.synchronize()
+            try batch.handle.synchronize()
+            // clearPlayerForMediaID deletes this directory while loader cancellation is
+            // still in flight. The open handle then writes into an unlinked file, and
+            // those bytes must not be indexed into whatever directory exists now.
+            guard handleBacksFile(batch.handle) else {
+                batch.allowance = 0
+                return
+            }
+            var state = try snapshot()
+            state.insert(range)
             try save(state)
-        } catch { print("[Progressive cache] Range write failed: \(error)") }
+        } catch { print("[Progressive cache] Coverage publish failed: \(error)") }
+    }
+
+    private func handleBacksFile(_ handle: FileHandle) -> Bool {
+        var open = stat()
+        var current = stat()
+        guard fstat(handle.fileDescriptor, &open) == 0,
+              stat(file.path, &current) == 0 else { return false }
+        return open.st_dev == current.st_dev && open.st_ino == current.st_ino
     }
 }
 

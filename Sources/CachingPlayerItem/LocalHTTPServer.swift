@@ -1855,22 +1855,18 @@ public class LocalHTTPServer: @unchecked Sendable {
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         requestPriority = downloadPriority(for: mediaID)
-        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 3)
-        var acquiredPriority: NodeDownloadPriority? = slotAcquired ? requestPriority : nil
+        var lease = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 3)
         // Poll when the cap is full. Primary bypasses the preload cap, but still honors
         // its own HLS segment cap so startup cannot launch parallel segment downloads.
         // Visible non-primary video gets more patience than off-screen preload so
         // AVPlayer does not treat normal backpressure as a corrupt HLS segment.
-        if !slotAcquired {
+        if lease == nil {
             for attempt in 0..<240 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 switch connection.state { case .cancelled, .failed: return; default: break }
                 requestPriority = downloadPriority(for: mediaID)
-                slotAcquired = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 3)
-                if slotAcquired {
-                    acquiredPriority = requestPriority
-                    break
-                }
+                lease = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 3)
+                if lease != nil { break }
                 let shouldStopWaiting: Bool
                 switch requestPriority {
                 case .primary:
@@ -1883,12 +1879,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                 if shouldStopWaiting { break }
             }
         }
-        guard slotAcquired else {
+        guard let lease else {
             print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) rejected \(logPath) because no download slot was available")
-            connection.cancel()
-            return
-        }
-        guard let acquiredPriority else {
             connection.cancel()
             return
         }
@@ -1896,7 +1888,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Another independent primary request may have populated the cache while
         // this request waited for the segment slot. Re-check before going upstream.
         if isUsableCachedFile(atPath: cachePath) {
-            await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+            await pool.releaseSlot(lease)
             print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) served cached \(logPath) after waiting for segment slot")
             autoreleasepool {
                 serveFile(path: cachePath, connection: connection, method: method)
@@ -1916,11 +1908,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                 reason: "segment slot wait"
             )
             if waitResult.served {
-                await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+                await pool.releaseSlot(lease)
                 return
             }
             if waitResult.stillActive {
-                await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+                await pool.releaseSlot(lease)
                 print("🎞️ [HLS SEGMENT] \(shortMID(mediaID)) closed duplicate \(logPath) after segment slot wait")
                 connection.cancel()
                 return
@@ -1937,7 +1929,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let releaseSegmentSlot: @Sendable () -> Void = {
             Task {
                 if await slotGuard.tryRelease() {
-                    await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+                    await pool.releaseSlot(lease)
                 }
             }
         }
@@ -2051,25 +2043,17 @@ public class LocalHTTPServer: @unchecked Sendable {
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         // Progressive video can use 2 parallel range requests; HLS segments are sequential (cap=1).
         var requestPriority = downloadPriority(for: mediaID)
-        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 2)
-        var acquiredPriority: NodeDownloadPriority? = slotAcquired ? requestPriority : nil
-        if !slotAcquired {
+        var lease = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 2)
+        if lease == nil {
             for _ in 0..<20 {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 switch connection.state { case .cancelled, .failed: return; default: break }
                 requestPriority = downloadPriority(for: mediaID)
-                slotAcquired = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 2)
-                if slotAcquired {
-                    acquiredPriority = requestPriority
-                    break
-                }
+                lease = await pool.acquireSlot(mediaID: mediaID, priority: requestPriority, primarySlotCap: 2)
+                if lease != nil { break }
             }
         }
-        guard slotAcquired else {
-            connection.cancel()
-            return
-        }
-        guard let acquiredPriority else {
+        guard let lease else {
             connection.cancel()
             return
         }
@@ -2078,7 +2062,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
-            await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority)
+            await pool.releaseSlot(lease)
             return
         }
         
@@ -2138,7 +2122,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 self.progressiveCacheWritersLock.unlock()
             }
             // Release node connection pool slot so the next preload (or primary) can proceed.
-            Task { await pool.releaseSlot(mediaID: mediaID, priority: acquiredPriority) }
+            Task { await pool.releaseSlot(lease) }
         }
 
         let delegate = StreamingDownloadDelegate(

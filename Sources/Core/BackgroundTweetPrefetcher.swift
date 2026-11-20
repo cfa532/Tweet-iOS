@@ -149,6 +149,6 @@ final class BackgroundTweetPrefetcher {
         // Video is the app's real bandwidth consumer. Defer to the judgement it already
         // makes about its own preloads: bandwidth is spare once the primary and every
         // visible player has the buffer it wants.
-        return await NodePoolRegistry.shared.hasSpareBandwidth()
+        return NodePoolRegistry.shared.hasSpareBandwidth()
     }
 }
