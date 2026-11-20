@@ -112,6 +112,13 @@
 "Not connected" = "Not connected";
 "App Settings" = "App Settings";
 "Clear Media Cache" = "Clear Media Cache";
+"Cache Usage" = "Cache Usage";
+"Disk Cache" = "Disk Cache";
+"Total" = "Total";
+"Image Cache" = "Image Cache";
+"Video Cache" = "Video Cache";
+"Other Cache" = "Other Cache";
+"Unable to load cache usage." = "Unable to load cache usage.";
 "About" = "About";
 "Version" = "Version";
 "All caches, users, and tweets have been cleared successfully." = "All caches, users, and tweets have been cleared successfully.";

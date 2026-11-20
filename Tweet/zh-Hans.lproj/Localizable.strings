@@ -112,6 +112,13 @@
 "Not connected" = "未连接";
 "App Settings" = "应用设置";
 "Clear Media Cache" = "清除媒体缓存";
+"Cache Usage" = "缓存用量";
+"Disk Cache" = "磁盘缓存";
+"Total" = "总计";
+"Image Cache" = "图片缓存";
+"Video Cache" = "视频缓存";
+"Other Cache" = "其他缓存";
+"Unable to load cache usage." = "无法加载缓存用量。";
 "About" = "关于";
 "Version" = "版本";
 "All caches, users, and tweets have been cleared successfully." = "所有缓存、用户和推文已成功清除。";

@@ -13,6 +13,7 @@ struct SettingsView: View {
     @ObservedObject private var muteState = MuteState.shared
     @State private var isCleaningCache = false
     @State private var showCacheCleanedAlert = false
+    @State private var showCacheUsage = false
     
     // Account action states
     @State private var showLoginSheet = false
@@ -52,6 +53,11 @@ struct SettingsView: View {
                             print("DEBUG: [SETTINGS] Mute setting changed to: \(newValue)")
                         }
                     
+                    Button(LocalizedStringKey("Cache Usage")) {
+                        showCacheUsage = true
+                    }
+                    .disabled(isCleaningCache)
+
                     DebounceButton(
                         cooldownDuration: 0.5,
                         enableAnimation: true,
@@ -72,15 +78,8 @@ struct SettingsView: View {
                     .disabled(isCleaningCache)
                 }
                 
-                Section(header: Text(LocalizedStringKey("About"))) {
-                    HStack {
-                        Text(LocalizedStringKey("Version"))
-                        Spacer()
-                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? NSLocalizedString("Unknown", comment: ""))
-                            .foregroundColor(.gray)
-                    }
-
-                    if hproseInstance.appUser.isGuest {
+                if hproseInstance.appUser.isGuest {
+                    Section(header: Text(LocalizedStringKey("About"))) {
                         HStack {
                             Text(LocalizedStringKey("Server IP"))
                             Spacer()
@@ -119,6 +118,20 @@ struct SettingsView: View {
                         .disabled(isDeletingAccount)
                     }
                 }
+            }
+            .safeAreaInset(edge: .bottom) {
+                HStack(spacing: 4) {
+                    Text(LocalizedStringKey("Version"))
+                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? NSLocalizedString("Unknown", comment: ""))
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color(.systemGroupedBackground))
+            }
+            .sheet(isPresented: $showCacheUsage) {
+                CacheUsageView()
             }
             .sheet(isPresented: $showLoginSheet) {
                 LoginView()
@@ -235,6 +248,97 @@ struct SettingsView: View {
                 print("DEBUG: [Settings] Cache cleanup complete")
             }
         }
+    }
+}
+
+private struct CacheUsageView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var usage: CacheDiskUsage?
+    @State private var failedToLoad = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let usage {
+                    Section(header: Text(LocalizedStringKey("Disk Cache"))) {
+                        usageRow("Total", bytes: usage.total)
+                        usageRow("Image Cache", bytes: usage.images)
+                        usageRow("Video Cache", bytes: usage.videos)
+                        usageRow("Other Cache", bytes: usage.other)
+                    }
+                } else if failedToLoad {
+                    Text(LocalizedStringKey("Unable to load cache usage."))
+                        .foregroundStyle(.secondary)
+                } else {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                }
+            }
+            .navigationTitle(LocalizedStringKey("Cache Usage"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(LocalizedStringKey("Done")) {
+                        dismiss()
+                    }
+                }
+            }
+            .task {
+                do {
+                    // Directory traversal must stay off the main actor, even for a large cache.
+                    usage = try await Task.detached(priority: .utility) {
+                        try CacheDiskUsage.load()
+                    }.value
+                } catch {
+                    failedToLoad = true
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func usageRow(_ title: LocalizedStringKey, bytes: Int64) -> some View {
+        LabeledContent(title) {
+            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+        }
+    }
+}
+
+private struct CacheDiskUsage: Sendable {
+    var images: Int64 = 0
+    var videos: Int64 = 0
+    var other: Int64 = 0
+
+    var total: Int64 { images + videos + other }
+
+    nonisolated static func load() throws -> CacheDiskUsage {
+        let fileManager = FileManager.default
+        let directory = try fileManager.url(for: .cachesDirectory, in: .userDomainMask,
+                                           appropriateFor: nil, create: false)
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .totalFileAllocatedSizeKey]
+        let contents = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: Array(keys),
+                                                          options: [.skipsHiddenFiles])
+        var usage = CacheDiskUsage()
+        for url in contents {
+            let values = try url.resourceValues(forKeys: keys)
+            // Allocated bytes reflect the space used by sparse progressive video files.
+            let bytes = values.isDirectory == true
+                ? fileManager.allocatedSizeOfDirectory(at: url)
+                : Int64(values.totalFileAllocatedSize ?? 0)
+            let name = url.lastPathComponent
+            if name == "ImageCache" {
+                usage.images += bytes
+            } else if name.hasSuffix(".m3u8") || name.hasSuffix("_segments") || name.contains("Qm") {
+                // Match the video cache entries removed by CachingPlayerItem.clearAllCache().
+                usage.videos += bytes
+            } else {
+                usage.other += bytes
+            }
+        }
+        return usage
     }
 }
 

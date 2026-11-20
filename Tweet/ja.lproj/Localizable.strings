@@ -109,6 +109,13 @@
 "Not connected" = "未接続";
 "App Settings" = "アプリ設定";
 "Clear Media Cache" = "メディアキャッシュをクリア";
+"Cache Usage" = "キャッシュ使用量";
+"Disk Cache" = "ディスクキャッシュ";
+"Total" = "合計";
+"Image Cache" = "画像キャッシュ";
+"Video Cache" = "動画キャッシュ";
+"Other Cache" = "その他のキャッシュ";
+"Unable to load cache usage." = "キャッシュ使用量を読み込めませんでした。";
 "About" = "アプリについて";
 "Version" = "バージョン";
 "All caches, users, and tweets have been cleared successfully." = "すべてのキャッシュ、ユーザー、ツイートが正常にクリアされました。";
