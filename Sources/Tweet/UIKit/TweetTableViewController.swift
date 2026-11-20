@@ -1627,6 +1627,8 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
+        applyPendingDetachedTableReloadIfNeeded(reason: "pinnedTweetsUpdate")
+
         let oldCount = pinnedTweets.count
         let oldPinnedTweets = pinnedTweets
         let oldOriginalTweetIds = Set(oldPinnedTweets.compactMap(\.originalTweetId))
@@ -1741,6 +1743,10 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
+        // SwiftUI can update the returning feed before viewDidAppear. Commit the
+        // reload owed for detached changes before diffing against those arrays.
+        applyPendingDetachedTableReloadIfNeeded(reason: "tweetsUpdate")
+
         // Note: stale Tweet instance cleanup is handled by TweetListView's throttled
         // scheduleMemoryMaintenance (runs at most once per cleanupInterval), not here —
         // this function fires on every structural update and doing an unthrottled
@@ -1748,14 +1754,12 @@ class TweetTableViewController: UITableViewController {
 
         let newOriginalTweetIds = Set(newTweets.compactMap(\.originalTweetId))
 
-        tweets = newTweets
-        
-        
         // Handle initial load
         if oldCount == 0 && newTweets.count > 0 {
             prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds)
             scheduleHeightPrewarm(for: newTweets)
             isTableViewUpdating = true
+            tweets = newTweets
             tableView.reloadData()
             isTableViewUpdating = false
             scheduleInitialSavedScrollPositionRestoreIfNeeded(reason: "initialTweets")
@@ -1781,6 +1785,7 @@ class TweetTableViewController: UITableViewController {
             }
 
             if sameOrder {
+                tweets = newTweets
                 if reloadSameOrderRows {
                     isTableViewUpdating = true
                     let indexPaths = (0..<oldCount).map { regularTweetIndexPath($0) }
@@ -1818,6 +1823,7 @@ class TweetTableViewController: UITableViewController {
             if afterNewOnes == getOldIds() {
                 scheduleHeightPrewarm(for: Array(newTweets.prefix(potentialPrependCount)))
                 isTableViewUpdating = true
+                tweets = newTweets
                 let indexPaths = (0..<potentialPrependCount).map { regularTweetIndexPath($0) }
                 if preservesScrollPositionOnPrepend {
                     // Main feed. At idle top (e.g. app open), let fresh top tweets surface.
@@ -1886,6 +1892,7 @@ class TweetTableViewController: UITableViewController {
 
             if newIdsPrefix == getOldIds() {
                 guard tableView.window != nil else {
+                    tweets = newTweets
                     needsFullReloadAfterAttach = true
                     return
                 }
@@ -1898,6 +1905,7 @@ class TweetTableViewController: UITableViewController {
                 }
                 scheduleHeightPrewarm(for: Array(newTweets.dropFirst(oldCount)))
                 isTableViewUpdating = true
+                tweets = newTweets
                 let indexPaths = (oldCount..<newTweets.count).map { regularTweetIndexPath($0) }
                 tableView.insertRows(at: indexPaths, with: .none)
                 isTableViewUpdating = false
@@ -1914,6 +1922,7 @@ class TweetTableViewController: UITableViewController {
             let newIdsSet = Set(getNewIds())
             if let removedIndex = getOldIds().firstIndex(where: { !newIdsSet.contains($0) }) {
                 isTableViewUpdating = true
+                tweets = newTweets
                 tableView.deleteRows(at: [regularTweetIndexPath(removedIndex)], with: .automatic)
                 isTableViewUpdating = false
                 rebuildVideoListAndRefreshVisibility(reason: "tweetDeletedVideoList")
@@ -1929,6 +1938,7 @@ class TweetTableViewController: UITableViewController {
 
         if diff.isEmpty {
             // No structural changes - content-only updates handled by ObservableObject
+            tweets = newTweets
             rebuildVideoListAndRefreshVisibility(reason: "emptyDiffVideoList")
             scheduleVideoVisibilityRefresh(reason: "emptyDiff")
             return
@@ -1938,13 +1948,15 @@ class TweetTableViewController: UITableViewController {
         // visible rows shift content, and unlike the prepend/trim paths this one had no
         // offset compensation — a deferred server merge applied at scroll stop produced
         // a visible jump. Anchor by tweet ID (row indices change across the diff);
-        // `tweets` already holds the new array here, so read ids from the visible cells.
+        // Keep the old data source in place while querying UIKit's current layout;
+        // publish the new array inside the batch that applies its row changes.
+        let newIdsSet = Set(getNewIds())
         var anchorTweetId: String?
         var anchorOffset: CGFloat = 0
         for cell in tableView.visibleCells.sorted(by: { $0.frame.origin.y < $1.frame.origin.y }) {
             guard let tweetCell = cell as? TweetTableViewCell,
                   let tid = tweetCell.tweetId,
-                  rowForTweetId(tid) != nil else { continue }
+                  newIdsSet.contains(tid) else { continue }
             anchorTweetId = tid
             anchorOffset = tableView.contentOffset.y - cell.frame.origin.y
             break
@@ -1952,6 +1964,7 @@ class TweetTableViewController: UITableViewController {
 
         isTableViewUpdating = true
         tableView.performBatchUpdates {
+            tweets = newTweets
             for change in diff {
                 switch change {
                 case .remove(let offset, _, _):
@@ -1992,6 +2005,7 @@ class TweetTableViewController: UITableViewController {
             let removed = tweets.dropFirst(targetCount)
             for tweet in removed { Tweet.clearInstance(mid: tweet.mid) }
             tweets = trimmed
+            needsFullReloadAfterAttach = true
             onTweetsTrimmed?(trimmed)
             return
         }
@@ -2000,6 +2014,8 @@ class TweetTableViewController: UITableViewController {
             pendingTrimRequest = (maxCount, targetCount)
             return
         }
+
+        applyPendingDetachedTableReloadIfNeeded(reason: "tweetsTrim")
 
         let oldCount = tweets.count
         let visibleRegularIndices = (tableView.indexPathsForVisibleRows ?? [])

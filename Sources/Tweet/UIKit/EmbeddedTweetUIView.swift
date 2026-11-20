@@ -72,7 +72,10 @@ class EmbeddedTweetUIView: UIView {
         textLabel.font = .preferredFont(forTextStyle: .subheadline)
         textLabel.textColor = XTheme.text
         textLabel.adjustsFontForContentSizeCategory = true
-        textLabel.numberOfLines = 0
+        // This fixed-size card is a feed preview. An unlimited label typesets the
+        // entire quoted document during setText and intrinsic-size calculation,
+        // even though the card clips it. Use the feed's existing preview line cap.
+        textLabel.numberOfLines = TweetBodyUIView.maxContentLines
         textLabel.lineBreakMode = .byTruncatingTail
         textLabel.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         attachmentView.backgroundColor = .tertiarySystemFill
@@ -169,10 +172,23 @@ class EmbeddedTweetUIView: UIView {
         cardHeight.isActive = true
         contentBottom.isActive = true
         headerView.configure(tweet: tweet)
-        textLabel.text = [tweet.title, tweet.content]
+        let previewText = [tweet.title, tweet.content]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
+        // Specify the strategy on the paragraph itself: UILabel's plain-text
+        // layout still ran paragraph optimization during setText with a line cap.
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakStrategy = []
+        paragraphStyle.lineBreakMode = .byTruncatingTail
+        textLabel.attributedText = NSAttributedString(
+            string: previewText,
+            attributes: [
+                .font: UIFont.preferredFont(forTextStyle: .subheadline),
+                .foregroundColor: XTheme.text,
+                .paragraphStyle: paragraphStyle
+            ]
+        )
 
         avatarSubscription = tweet.$author
             .compactMap { $0 }
