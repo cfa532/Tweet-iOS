@@ -837,3 +837,16 @@
 /* Admin profile node selection */
 "Select Node" = "Select Node";
 "No provider nodes found" = "No provider nodes found";
+
+/* Pairing this device with the owner's node (login screen) */
+"Pair with my node" = "Pair with my node";
+"On your node, run tweet-owner.sh with a username. Then scan the code it shows." = "On your node, run tweet-owner.sh with a username. Then scan the code it shows.";
+"Import identity file" = "Import identity file";
+"Paste" = "Paste";
+"Nothing to paste." = "Nothing to paste.";
+"That file could not be read." = "That file could not be read.";
+"That is not a valid node identity." = "That is not a valid node identity.";
+"The Keychain refused the identity (%d)." = "The Keychain refused the identity (%d).";
+"Camera access is needed to scan the pairing code." = "Camera access is needed to scan the pairing code.";
+"Camera unavailable" = "Camera unavailable";
+"Allow camera access" = "Allow camera access";

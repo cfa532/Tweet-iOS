@@ -835,3 +835,16 @@
 /* Admin profile node selection */
 "Select Node" = "ノードを選択";
 "No provider nodes found" = "プロバイダーノードが見つかりません";
+
+/* Pairing this device with the owner's node (login screen) */
+"Pair with my node" = "自分のノードとペアリング";
+"On your node, run tweet-owner.sh with a username. Then scan the code it shows." = "ノード上でユーザー名を指定して tweet-owner.sh を実行し、表示されたコードをスキャンしてください。";
+"Import identity file" = "IDファイルを読み込む";
+"Paste" = "ペースト";
+"Nothing to paste." = "ペーストする内容がありません。";
+"That file could not be read." = "このファイルを読み込めませんでした。";
+"That is not a valid node identity." = "有効なノードIDではありません。";
+"The Keychain refused the identity (%d)." = "キーチェーンがIDを保存できませんでした（%d）。";
+"Camera access is needed to scan the pairing code." = "ペアリングコードをスキャンするにはカメラへのアクセスが必要です。";
+"Camera unavailable" = "カメラを使用できません";
+"Allow camera access" = "カメラへのアクセスを許可";

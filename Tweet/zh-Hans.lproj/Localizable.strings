@@ -842,3 +842,16 @@
 /* Admin profile node selection */
 "Select Node" = "选择节点";
 "No provider nodes found" = "未找到提供节点";
+
+/* Pairing this device with the owner's node (login screen) */
+"Pair with my node" = "与我的节点配对";
+"On your node, run tweet-owner.sh with a username. Then scan the code it shows." = "在您的节点上，使用一个用户名运行 tweet-owner.sh，然后扫描它显示的二维码。";
+"Import identity file" = "导入身份文件";
+"Paste" = "粘贴";
+"Nothing to paste." = "没有可粘贴的内容。";
+"That file could not be read." = "无法读取该文件。";
+"That is not a valid node identity." = "这不是有效的节点身份。";
+"The Keychain refused the identity (%d)." = "钥匙串拒绝保存该身份（%d）。";
+"Camera access is needed to scan the pairing code." = "需要相机权限才能扫描配对码。";
+"Camera unavailable" = "相机不可用";
+"Allow camera access" = "允许访问相机";
