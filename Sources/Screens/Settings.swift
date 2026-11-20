@@ -192,7 +192,7 @@ private struct CacheUsageView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section(header: Text(LocalizedStringKey("Disk Cache"))) {
+                Section {
                     if let usage {
                         usageRow("Total", bytes: usage.total)
                         usageRow("Image Cache", bytes: usage.images)
