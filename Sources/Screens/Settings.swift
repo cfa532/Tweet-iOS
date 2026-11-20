@@ -11,8 +11,6 @@ struct SettingsView: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
     @EnvironmentObject private var themeManager: ThemeManager
     @ObservedObject private var muteState = MuteState.shared
-    @State private var isCleaningCache = false
-    @State private var showCacheCleanedAlert = false
     @State private var showCacheUsage = false
     
     // Account action states
@@ -56,26 +54,6 @@ struct SettingsView: View {
                     Button(LocalizedStringKey("Cache Usage")) {
                         showCacheUsage = true
                     }
-                    .disabled(isCleaningCache)
-
-                    DebounceButton(
-                        cooldownDuration: 0.5,
-                        enableAnimation: true,
-                        enableHaptic: false
-                    ) {
-                        cleanupCache()
-                    } label: {
-                        HStack {
-                            Text(LocalizedStringKey("Clear Media Cache"))
-                            Spacer()
-                            if isCleaningCache {
-                                ProgressView()
-                                    .scaleEffect(1.2)
-                                    .frame(width: 20, height: 20)
-                            }
-                        }
-                    }
-                    .disabled(isCleaningCache)
                 }
                 
                 if hproseInstance.appUser.isGuest {
@@ -101,6 +79,7 @@ struct SettingsView: View {
                             showLogoutConfirmation = true
                         } label: {
                             Text(LocalizedStringKey("Logout"))
+                                .foregroundStyle(.red)
                         }
 
                         Button {
@@ -141,11 +120,6 @@ struct SettingsView: View {
             .navigationBarItems(trailing: Button(NSLocalizedString("Done", comment: "Done button")) {
                 dismiss()
             })
-            .alert(LocalizedStringKey("Cache Cleared"), isPresented: $showCacheCleanedAlert) {
-                Button(LocalizedStringKey("OK")) { }
-            } message: {
-                Text(LocalizedStringKey("All caches, users, and tweets have been cleared successfully."))
-            }
             .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
                 Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
                 Button(NSLocalizedString("Logout", comment: "Logout button"), role: .destructive) {
@@ -205,6 +179,98 @@ struct SettingsView: View {
             }
         }
     }
+}
+
+private struct CacheUsageView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var usage: CacheDiskUsage?
+    @State private var failedToLoad = false
+    @State private var isCleaningCache = false
+    @State private var showCacheCleanedAlert = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section(header: Text(LocalizedStringKey("Disk Cache"))) {
+                    if let usage {
+                        usageRow("Total", bytes: usage.total)
+                        usageRow("Image Cache", bytes: usage.images)
+                        usageRow("Video Cache", bytes: usage.videos)
+                        usageRow("Other Cache", bytes: usage.other)
+                    } else if failedToLoad {
+                        Text(LocalizedStringKey("Unable to load cache usage."))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                            Spacer()
+                        }
+                    }
+
+                    DebounceButton(
+                        cooldownDuration: 0.5,
+                        enableAnimation: true,
+                        enableHaptic: false
+                    ) {
+                        cleanupCache()
+                    } label: {
+                        HStack {
+                            Text(LocalizedStringKey("Clear Media Cache"))
+                            Spacer()
+                            if isCleaningCache {
+                                ProgressView()
+                                    .scaleEffect(1.2)
+                                    .frame(width: 20, height: 20)
+                            }
+                        }
+                    }
+                    .disabled(isCleaningCache || (usage == nil && !failedToLoad))
+                }
+            }
+            .navigationTitle(LocalizedStringKey("Cache Usage"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(LocalizedStringKey("Done")) {
+                        dismiss()
+                    }
+                    .disabled(isCleaningCache)
+                }
+            }
+            .task {
+                await loadCacheUsage()
+            }
+            .alert(LocalizedStringKey("Cache Cleared"), isPresented: $showCacheCleanedAlert) {
+                Button(LocalizedStringKey("OK")) { }
+            } message: {
+                Text(LocalizedStringKey("All caches, users, and tweets have been cleared successfully."))
+            }
+        }
+        // Keep cleanup progress visible until clearing and the usage refresh finish.
+        .interactiveDismissDisabled(isCleaningCache)
+        .presentationDetents([.medium, .large])
+    }
+
+    private func usageRow(_ title: LocalizedStringKey, bytes: Int64) -> some View {
+        LabeledContent(title) {
+            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+        }
+    }
+
+    private func loadCacheUsage() async {
+        usage = nil
+        failedToLoad = false
+        do {
+            // Directory traversal must stay off the main actor, even for a large cache.
+            usage = try await Task.detached(priority: .utility) {
+                try CacheDiskUsage.load()
+            }.value
+        } catch {
+            failedToLoad = true
+        }
+    }
 
     private func cleanupCache() {
         print("DEBUG: [Settings] Starting cache cleanup with spinner")
@@ -239,6 +305,8 @@ struct SettingsView: View {
                 print("Failed to reinitialize app entry: \(error)")
             }
 
+            await loadCacheUsage()
+
             // Force UI refresh by posting notification
             await MainActor.run {
                 NotificationCenter.default.post(name: NSNotification.Name("CacheCleared"), object: nil)
@@ -247,62 +315,6 @@ struct SettingsView: View {
                 showCacheCleanedAlert = true
                 print("DEBUG: [Settings] Cache cleanup complete")
             }
-        }
-    }
-}
-
-private struct CacheUsageView: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var usage: CacheDiskUsage?
-    @State private var failedToLoad = false
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if let usage {
-                    Section(header: Text(LocalizedStringKey("Disk Cache"))) {
-                        usageRow("Total", bytes: usage.total)
-                        usageRow("Image Cache", bytes: usage.images)
-                        usageRow("Video Cache", bytes: usage.videos)
-                        usageRow("Other Cache", bytes: usage.other)
-                    }
-                } else if failedToLoad {
-                    Text(LocalizedStringKey("Unable to load cache usage."))
-                        .foregroundStyle(.secondary)
-                } else {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                        Spacer()
-                    }
-                }
-            }
-            .navigationTitle(LocalizedStringKey("Cache Usage"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringKey("Done")) {
-                        dismiss()
-                    }
-                }
-            }
-            .task {
-                do {
-                    // Directory traversal must stay off the main actor, even for a large cache.
-                    usage = try await Task.detached(priority: .utility) {
-                        try CacheDiskUsage.load()
-                    }.value
-                } catch {
-                    failedToLoad = true
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private func usageRow(_ title: LocalizedStringKey, bytes: Int64) -> some View {
-        LabeledContent(title) {
-            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
         }
     }
 }
