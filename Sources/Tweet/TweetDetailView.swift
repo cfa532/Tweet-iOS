@@ -1312,6 +1312,10 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         AudioSessionManager.shared.activateForVideoPlayback()
         player.isMuted = false
         player.volume = 1
+        // The app offers no AirPlay: without the audio background mode, external
+        // playback stops whenever the phone locks. This keeps the native controls
+        // from offering video AirPlay on the detail screen.
+        player.allowsExternalPlayback = false
     }
 
     static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {

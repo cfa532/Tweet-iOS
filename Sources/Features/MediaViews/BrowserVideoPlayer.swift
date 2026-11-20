@@ -197,17 +197,6 @@ private struct BrowserVideoCanvas: UIViewRepresentable {
     }
 }
 
-private struct BrowserAirPlayButton: UIViewRepresentable {
-    func makeUIView(context: Context) -> AVRoutePickerView {
-        let view = AVRoutePickerView()
-        view.tintColor = .white
-        view.activeTintColor = .systemBlue
-        view.prioritizesVideoDevices = true
-        return view
-    }
-    func updateUIView(_ view: AVRoutePickerView, context: Context) {}
-}
-
 struct BrowserVideoPlayer: View {
     let player: AVPlayer
     let mid: String
@@ -242,8 +231,6 @@ struct BrowserVideoPlayer: View {
                             } label: { Image(systemName: manager.isUserMuted ? "speaker.slash.fill" : "speaker.wave.2.fill").frame(width: 44, height: 44) }
                                 .accessibilityLabel(manager.isUserMuted ? NSLocalizedString("Unmute video", comment: "") : NSLocalizedString("Mute video", comment: ""))
                             Spacer()
-                            BrowserAirPlayButton().frame(width: 44, height: 44)
-                                .accessibilityLabel("AirPlay")
                         }
                         .buttonStyle(.plain)
                         .frame(height: 44)

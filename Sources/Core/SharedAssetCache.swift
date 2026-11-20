@@ -1078,12 +1078,6 @@ class SharedAssetCache: ObservableObject {
         print("🔮 [PLAYER PRELOAD] Discarded warmed feed player for \(shortMID(mediaID)); disk/proxy cache preserved")
     }
 
-    @MainActor
-    private func discardCachedPreloadPlayerIfUnused(for mediaID: String, player: AVPlayer) {
-        guard !visibleVideoMids.contains(mediaID) else { return }
-        discardCachedPreloadPlayerAfterWarm(for: mediaID, player: player)
-    }
-
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
     /// Called by VideoPlaybackCoordinator when the directional preload set changes and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
@@ -2221,6 +2215,14 @@ class SharedAssetCache: ObservableObject {
         guard let mediaID = explicitMediaID ?? extractMediaID(from: url) else { return }
         let cacheKey = mediaID
 
+        // AVAssetImageGenerator does not support HTTP Live Streaming assets: it fails
+        // immediately (AVFoundationErrorDomain -11838), after this path had already
+        // raced playlist HEAD requests and registered the video with the local proxy.
+        // HLS covers come from a decoded player frame instead (preloadPlayer and the
+        // cell's own player).
+        let isHLSVideo = mediaType.map { $0 == .hls_video } ?? url.absoluteString.hasSuffix(".m3u8")
+        guard !isHLSVideo else { return }
+
         guard cachedThumbnail(for: mediaID) == nil else { return }
         guard preloadTasks[cacheKey] == nil else { return }
 
@@ -2295,7 +2297,11 @@ class SharedAssetCache: ObservableObject {
                 )
                 if playerCache[mediaID] != nil { return }
             } else {
-                discardCachedPreloadPlayerIfUnused(for: mediaID, player: player)
+                // This player was not created by this preload: it is one the 8-player LRU
+                // kept (typically a video just scrolled past). Keep it. Only players a
+                // preload creates and warms are discarded after warming (see below);
+                // discarding a retained one here destroyed it whenever the user scrolled
+                // back toward it, forcing a rebuild of the video they were returning to.
                 NotificationCenter.default.post(
                     name: .videoPlayerPreloaded,
                     object: self,
@@ -2456,8 +2462,8 @@ class SharedAssetCache: ObservableObject {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         // HLS can stay .unknown during preload even when the proxy/player is valid.
-        // Keep the player around so promotion to primary can continue from the same
-        // AVPlayerItem instead of restarting playlist and segment requests.
+        // Count it as warmed: the playlist and first segments it fetched stay in the
+        // local proxy cache after preloadPlayer discards this player.
         return isHLSVideo && item.status != .failed
     }
 
