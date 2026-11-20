@@ -122,7 +122,10 @@ private final class ScannerController: UIViewController, AVCaptureVideoDataOutpu
         case .authorized:
             configure()
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+            // @Sendable: the handler runs on an arbitrary queue. Without it the closure
+            // inherits this controller's main-actor isolation and the runtime isolation
+            // check traps before the hop below can run.
+            AVCaptureDevice.requestAccess(for: .video) { @Sendable [weak self] granted in
                 Task { @MainActor in granted ? self?.configure() : self?.showNotice(denied: true) }
             }
         default:

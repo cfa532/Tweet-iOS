@@ -792,7 +792,14 @@ class ImageCacheManager: @unchecked Sendable {
                 }
                 try Task.checkCancellation()
                 
-                var request = URLRequest(url: url)
+                // Feed-size loads fetch the image's preview when it has one (at most
+                // ~200 KB instead of the full original). The result is cached under the
+                // same key as before, so opening the original still replaces it.
+                let fetchURL = attachment.previewOrOriginalURL(url)
+                if fetchURL != url {
+                    print("🖼️ [IMAGE LOAD] \(cacheKey.prefix(8)) fetching preview \(fetchURL.lastPathComponent.prefix(8))")
+                }
+                var request = URLRequest(url: fetchURL)
                 request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
@@ -801,7 +808,7 @@ class ImageCacheManager: @unchecked Sendable {
                 
                 guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
                       (200...299).contains(httpResponse.statusCode) else {
-                    print("Error: Invalid response for image at \(url)")
+                    print("Error: Invalid response for image at \(fetchURL)")
                     return nil
                 }
                 

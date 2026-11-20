@@ -202,7 +202,8 @@ final class TweetUploadManager {
                 identifier: item.identifier, typeIdentifier: item.typeIdentifier, data: item.data,
                 fileName: item.fileName, noResample: item.noResample, videoJobId: jobId,
                 cid: attachment.mid, aspectRatio: attachment.aspectRatio,
-                fileSize: attachment.size, mediaType: attachment.type.rawValue)
+                fileSize: attachment.size, mediaType: attachment.type.rawValue,
+                previewMid: attachment.previewMid)
             if attachment.type == .image {
                 let cacheKey = attachment.mid
                 Task.detached(priority: .utility) {
@@ -225,7 +226,8 @@ final class TweetUploadManager {
         let uploaded = pending.itemData.compactMap { item -> MediaRecord? in
             guard let cid = item.cid else { return nil }
             return MediaRecord(mid: cid, type: MediaType.fromString(item.mediaType ?? "Image"),
-                               size: item.fileSize, fileName: item.fileName, aspectRatio: item.aspectRatio)
+                               size: item.fileSize, fileName: item.fileName, aspectRatio: item.aspectRatio,
+                               previewMid: item.previewMid)
         }
         guard uploaded.count == pending.itemData.count else { throw uploadError("Failed to upload attachment") }
         let attachments = (pending.retainedAttachments ?? []) + uploaded
@@ -570,8 +572,9 @@ extension TweetUploadManager {
             let aspectRatio: Float? // Aspect ratio
             let fileSize: Int64? // File size
             let mediaType: String? // MediaType (Image, Video, hls_video, etc.)
+            let previewMid: String? // Uploaded preview of a large image, if any
             
-            init(identifier: String, typeIdentifier: String, data: Data, fileName: String, noResample: Bool = false, videoJobId: String? = nil, cid: String? = nil, aspectRatio: Float? = nil, fileSize: Int64? = nil, mediaType: String? = nil) {
+            init(identifier: String, typeIdentifier: String, data: Data, fileName: String, noResample: Bool = false, videoJobId: String? = nil, cid: String? = nil, aspectRatio: Float? = nil, fileSize: Int64? = nil, mediaType: String? = nil, previewMid: String? = nil) {
                 self.identifier = identifier
                 self.typeIdentifier = typeIdentifier
                 self.data = data
@@ -582,6 +585,7 @@ extension TweetUploadManager {
                 self.aspectRatio = aspectRatio
                 self.fileSize = fileSize
                 self.mediaType = mediaType
+                self.previewMid = previewMid
             }
         }
         

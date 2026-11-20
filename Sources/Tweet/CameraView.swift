@@ -87,7 +87,7 @@ struct CameraView: UIViewControllerRepresentable {
                 }
                 
                 // Save image to system album
-                saveImageToAlbum(image)
+                Self.saveImageToAlbum(image)
                 
                 parent.onMediaCaptured(image, nil)
             }
@@ -96,7 +96,7 @@ struct CameraView: UIViewControllerRepresentable {
                 print("DEBUG: Video captured successfully: \(videoURL)")
                 
                 // Save video to system album
-                saveVideoToAlbum(videoURL)
+                Self.saveVideoToAlbum(videoURL)
                 
                 parent.onMediaCaptured(nil, videoURL)
             }
@@ -115,8 +115,12 @@ struct CameraView: UIViewControllerRepresentable {
         }
         
         // MARK: - Save to System Album
-        
-        private func saveImageToAlbum(_ image: UIImage) {
+
+        // nonisolated: Photos calls these handlers on its own background queue. Formed
+        // inside this main-actor delegate, the closures inherited main-actor isolation
+        // and Swift 6's runtime isolation check trapped (EXC_BREAKPOINT) on every photo
+        // taken. Nothing here touches the coordinator or UI.
+        private nonisolated static func saveImageToAlbum(_ image: UIImage) {
             PHPhotoLibrary.requestAuthorization { status in
                 guard status == .authorized else {
                     print("DEBUG: Photo library access not authorized")
@@ -137,7 +141,7 @@ struct CameraView: UIViewControllerRepresentable {
             }
         }
         
-        private func saveVideoToAlbum(_ videoURL: URL) {
+        private nonisolated static func saveVideoToAlbum(_ videoURL: URL) {
             PHPhotoLibrary.requestAuthorization { status in
                 guard status == .authorized else {
                     print("DEBUG: Photo library access not authorized")

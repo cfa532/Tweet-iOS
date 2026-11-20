@@ -9,6 +9,10 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
     var fileName: String?
     let timestamp: Date
     let aspectRatio: Float?
+    /// A smaller copy of a large image (at most ~200 KB), uploaded alongside it. Feeds load
+    /// it instead of the original; detail and fullscreen views load the original. Nil for
+    /// small images, non-images, and anything posted before previews existed.
+    let previewMid: MimeiId?
     
     /// Returns the effective aspect ratio - defaults to 1.0 for images if aspectRatio is null
     var effectiveAspectRatio: Float {
@@ -58,15 +62,17 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         case timestamp
         case aspectRatio
         case url
+        case previewMid
     }
     
-    init(mid: MimeiId, mediaType: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), aspectRatio: Float? = nil, url: String? = nil) {
+    init(mid: MimeiId, mediaType: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), aspectRatio: Float? = nil, url: String? = nil, previewMid: MimeiId? = nil) {
         self.mid = mid
         self.type = mediaType
         self.size = size
         self.fileName = fileName
         self.timestamp = timestamp
         self.aspectRatio = aspectRatio
+        self.previewMid = previewMid
         self._cachedUrl = url
     }
     
@@ -78,6 +84,7 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         self.fileName = fileName
         self.timestamp = timestamp
         self.aspectRatio = aspectRatio
+        self.previewMid = nil
         self._cachedUrl = url
     }
     
@@ -97,6 +104,7 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         size = try container.decodeIfPresent(Int64.self, forKey: .size)
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
         aspectRatio = try container.decodeIfPresent(Float.self, forKey: .aspectRatio)
+        previewMid = try container.decodeIfPresent(String.self, forKey: .previewMid)
         _cachedUrl = try container.decodeIfPresent(String.self, forKey: .url)
 
         // Robust timestamp decoding
@@ -119,6 +127,7 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
         try container.encodeIfPresent(size, forKey: .size)
         try container.encodeIfPresent(fileName, forKey: .fileName)
         try container.encodeIfPresent(aspectRatio, forKey: .aspectRatio)
+        try container.encodeIfPresent(previewMid, forKey: .previewMid)
         try container.encodeIfPresent(_cachedUrl, forKey: .url)
         
         // Encode timestamp as Unix timestamp in milliseconds
@@ -127,6 +136,19 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
     }
     
     func getUrl(_ baseUrl: URL) -> URL? {
+        Self.url(for: mid, baseUrl: baseUrl)
+    }
+
+    /// What a feed-size image load fetches: the preview when this image has one, else
+    /// `originalURL` itself. `originalURL` is this attachment's `getUrl(baseUrl)`; the
+    /// preview lives on the same node, so only the final path component changes.
+    func previewOrOriginalURL(_ originalURL: URL) -> URL {
+        guard let previewMid, originalURL.lastPathComponent == mid else { return originalURL }
+        let baseUrl = originalURL.deletingLastPathComponent().deletingLastPathComponent()
+        return Self.url(for: previewMid, baseUrl: baseUrl) ?? originalURL
+    }
+
+    private static func url(for mid: MimeiId, baseUrl: URL) -> URL? {
         let path = mid.count > Constants.MIMEI_ID_LENGTH ? "ipfs/\(mid)" : "mm/\(mid)"
         return baseUrl.appendingPathComponent(path)
     }

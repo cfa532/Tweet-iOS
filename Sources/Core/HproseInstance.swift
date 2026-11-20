@@ -3,6 +3,8 @@ import OSLog
 @preconcurrency import hprose
 import PhotosUI
 import AVFoundation
+import ImageIO
+import UniformTypeIdentifiers
 
 private let hproseLogger = Logger(subsystem: "com.zz", category: "HproseInstance")
 
@@ -7229,7 +7231,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     }
                     
                     // Try to upload with current writableUrl
-                    return try await performUpload(
+                    let media = try await performUpload(
                         data: data,
                         fileName: fileName,
                         referenceId: referenceId,
@@ -7237,6 +7239,11 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                         uploadClient: uploadClient,
                         appId: appId,
                         progressCallback: progressCallback
+                    )
+                    guard mediaType == .image else { return media }
+                    return await attachingPreview(
+                        to: media, imageData: data, fileName: fileName, referenceId: referenceId,
+                        uploadClient: uploadClient, appId: appId
                     )
                     
                 } catch let error as NSError {
@@ -7433,6 +7440,94 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
         }
         
+        // MARK: Image previews
+
+        /// Images over this size get a preview that feeds load instead of the original.
+        static let imagePreviewByteLimit = 200 * 1024
+        /// Pixel budget rather than a longest-side cap, so tall screenshots stay legible.
+        private static let imagePreviewMaxPixels: CGFloat = 1_500_000
+
+        /// Uploads a preview for a large still image and returns the attachment with its
+        /// `previewMid`. The preview is optional by design: readers without one load the
+        /// original, so a failed preview upload leaves a valid post rather than failing it.
+        private static func attachingPreview(
+            to media: MimeiFileType,
+            imageData: Data,
+            fileName: String?,
+            referenceId: String?,
+            uploadClient: HproseClient,
+            appId: String
+        ) async -> MimeiFileType {
+            guard let previewData = makeImagePreview(from: imageData) else { return media }
+            do {
+                let base = ((fileName ?? "image") as NSString).deletingPathExtension
+                let preview = try await performUpload(
+                    data: previewData,
+                    fileName: "\(base)_preview.jpg",
+                    referenceId: referenceId,
+                    mediaType: .image,
+                    uploadClient: uploadClient,
+                    appId: appId
+                )
+                hproseDebug("🖼️ [IMAGE PREVIEW] \(imageData.count / 1024)KB original -> \(previewData.count / 1024)KB preview \(preview.mid)")
+                return MimeiFileType(
+                    mid: media.mid, mediaType: media.type, size: media.size, fileName: media.fileName,
+                    timestamp: media.timestamp, aspectRatio: media.aspectRatio, url: nil,
+                    previewMid: preview.mid
+                )
+            } catch {
+                hproseWarning("⚠️ [IMAGE PREVIEW] Preview upload failed for \(media.mid); posting without preview: \(error)")
+                return media
+            }
+        }
+
+        /// A copy of `data` no larger than `imagePreviewByteLimit`: at most
+        /// `imagePreviewMaxPixels`, orientation applied, metadata (including location)
+        /// dropped. JPEG for opaque images, PNG when the image has transparency. Nil when
+        /// no preview is needed or possible: small images, animated images, undecodable data.
+        static func makeImagePreview(from data: Data) -> Data? {
+            guard data.count > imagePreviewByteLimit,
+                  let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+                  CGImageSourceGetCount(source) == 1,
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+                  let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+                  width > 0, height > 0 else { return nil }
+
+            var scale = min(1, (imagePreviewMaxPixels / CGFloat(width * height)).squareRoot())
+            for _ in 0..<6 {
+                let maxSide = max(1, Int((CGFloat(max(width, height)) * scale).rounded()))
+                let options: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceShouldCacheImmediately: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maxSide
+                ]
+                guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+                let hasAlpha = ![.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
+                let qualities: [CGFloat?] = hasAlpha ? [nil] : [0.75, 0.6, 0.45]
+                for quality in qualities {
+                    if let encoded = encodePreview(image, asPNG: hasAlpha, quality: quality),
+                       encoded.count <= imagePreviewByteLimit {
+                        return encoded
+                    }
+                }
+                scale *= 0.75
+            }
+            return nil
+        }
+
+        private static func encodePreview(_ image: CGImage, asPNG: Bool, quality: CGFloat?) -> Data? {
+            let output = NSMutableData()
+            let type = (asPNG ? UTType.png : UTType.jpeg).identifier as CFString
+            guard let destination = CGImageDestinationCreateWithData(output, type, 1, nil) else { return nil }
+            var options: [CFString: Any] = [:]
+            if let quality { options[kCGImageDestinationLossyCompressionQuality] = quality }
+            CGImageDestinationAddImage(destination, image, options as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else { return nil }
+            return output as Data
+        }
+
         /// Get image aspect ratio from data
         private static func getImageAspectRatio(from data: Data) async throws -> Float? {
             guard let image = UIImage(data: data) else {

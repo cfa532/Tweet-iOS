@@ -8,6 +8,7 @@ struct MediaRecord: Codable, Hashable, Sendable {
     var timestamp: Date
     var aspectRatio: Float?
     var url: String?
+    var previewMid: MimeiId?
 
     enum CodingKeys: String, CodingKey {
         case mid
@@ -17,6 +18,7 @@ struct MediaRecord: Codable, Hashable, Sendable {
         case timestamp
         case aspectRatio
         case url
+        case previewMid
     }
 
     init(
@@ -26,7 +28,8 @@ struct MediaRecord: Codable, Hashable, Sendable {
         fileName: String? = nil,
         timestamp: Date = Date(),
         aspectRatio: Float? = nil,
-        url: String? = nil
+        url: String? = nil,
+        previewMid: MimeiId? = nil
     ) {
         self.mid = mid
         self.type = type
@@ -35,6 +38,7 @@ struct MediaRecord: Codable, Hashable, Sendable {
         self.timestamp = timestamp
         self.aspectRatio = aspectRatio
         self.url = url
+        self.previewMid = previewMid
     }
 
     init(media: MimeiFileType) {
@@ -45,7 +49,8 @@ struct MediaRecord: Codable, Hashable, Sendable {
             fileName: media.fileName,
             timestamp: media.timestamp,
             aspectRatio: media.aspectRatio,
-            url: media.url
+            url: media.url,
+            previewMid: media.previewMid
         )
     }
 
@@ -65,6 +70,7 @@ struct MediaRecord: Codable, Hashable, Sendable {
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
         aspectRatio = try container.decodeIfPresent(Float.self, forKey: .aspectRatio)
         url = try container.decodeIfPresent(String.self, forKey: .url)
+        previewMid = try container.decodeIfPresent(String.self, forKey: .previewMid)
 
         if let doubleValue = try? container.decode(Double.self, forKey: .timestamp) {
             timestamp = Date(timeIntervalSince1970: doubleValue / 1000)
@@ -85,7 +91,8 @@ struct MediaRecord: Codable, Hashable, Sendable {
             fileName: fileName,
             timestamp: timestamp,
             aspectRatio: aspectRatio,
-            url: url
+            url: url,
+            previewMid: previewMid
         )
         if let author {
             media.setAuthor(author)
@@ -104,6 +111,7 @@ struct MediaRecord: Codable, Hashable, Sendable {
         if let size { payload["size"] = size }
         if let fileName { payload["fileName"] = fileName }
         if let aspectRatio { payload["aspectRatio"] = aspectRatio }
+        if let previewMid { payload["previewMid"] = previewMid }
         return payload
     }
 }
