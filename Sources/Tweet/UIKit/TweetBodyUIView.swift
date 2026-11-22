@@ -817,7 +817,8 @@ class TweetBodyUIView: UIView {
     /// Bounds work by UTF-16 code units rather than grapheme count so a single adversarially large
     /// composed character cannot bypass the limit. A split encoding sequence is repaired with the
     /// Unicode replacement character; the eventual seven-line cutoff is far before this boundary.
-    nonisolated private static func contentForTruncationLayout(_ content: String) -> (text: String, wasCapped: Bool) {
+    /// Also used by `EmbeddedTweetUIView`, whose quoted-text preview is shorter still.
+    nonisolated static func contentForTruncationLayout(_ content: String) -> (text: String, wasCapped: Bool) {
         let utf16 = content.utf16
         guard let limit = utf16.index(
             utf16.startIndex,

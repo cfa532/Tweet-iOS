@@ -176,19 +176,11 @@ class EmbeddedTweetUIView: UIView {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
-        // Specify the strategy on the paragraph itself: UILabel's plain-text
-        // layout still ran paragraph optimization during setText with a line cap.
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineBreakStrategy = []
-        paragraphStyle.lineBreakMode = .byTruncatingTail
-        textLabel.attributedText = NSAttributedString(
-            string: previewText,
-            attributes: [
-                .font: UIFont.preferredFont(forTextStyle: .subheadline),
-                .foregroundColor: XTheme.text,
-                .paragraphStyle: paragraphStyle
-            ]
-        )
+        // A line cap does not stop CoreText from shaping the whole string it is given,
+        // so a long quoted document still stalled the cell. Hand the label only a
+        // bounded prefix — the same bound the feed body uses — which is far more than
+        // this clipped card can show.
+        textLabel.text = TweetBodyUIView.contentForTruncationLayout(previewText).text
 
         avatarSubscription = tweet.$author
             .compactMap { $0 }
