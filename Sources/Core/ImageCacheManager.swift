@@ -336,8 +336,10 @@ class ImageCacheManager: @unchecked Sendable {
     /// A disk-cache hit counts as use: the file's modification date is what the age and
     /// size cleanup sort by.
     private func noteDiskCacheHit(_ fileURL: URL) {
-        diskCleanupQueue.async { [fileManager] in
-            try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
+        diskCleanupQueue.async {
+            // FileManager isn't Sendable; use the shared instance inside the closure
+            // instead of capturing one.
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
         }
     }
 

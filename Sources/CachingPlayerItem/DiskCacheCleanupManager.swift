@@ -59,7 +59,9 @@ final class DiskCacheCleanupManager: @unchecked Sendable {
     func performScheduledCleanup() {
         Task.detached(priority: .utility) { [weak self] in
             let permanent = await TweetCacheManager.shared.permanentMediaIDs()
-            self?.ioQueue.async { self?.cleanupCacheFolders(keeping: permanent) }
+            // Bind once: the queue closure must capture a constant, not the weak var.
+            guard let self else { return }
+            self.ioQueue.async { self.cleanupCacheFolders(keeping: permanent) }
         }
     }
 
