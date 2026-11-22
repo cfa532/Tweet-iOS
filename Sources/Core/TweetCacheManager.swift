@@ -1014,8 +1014,9 @@ extension TweetCacheManager {
     /// Clear only memory cache (for memory management)
     @MainActor
     func clearMemoryCache() {
-        // Clear in-memory tweet instances
-        Tweet.clearAllInstances()
+        // Drop only tweets no screen still holds; clearing the whole registry freed
+        // nothing more and split displayed tweets into two unsynced objects.
+        Tweet.releaseUnusedInstances()
         print("DEBUG: [TweetCacheManager] Cleared memory cache")
     }
     

@@ -2001,9 +2001,9 @@ class TweetTableViewController: UITableViewController {
 
         guard isTableAttachedForDataMutation else {
             // Not laid out — no viewport to protect, safe to keep the newest window.
+            // Trimmed tweets stay registered while another screen still shows them;
+            // Tweet.releaseUnusedInstances drops them once nothing does.
             let trimmed = Array(tweets.prefix(targetCount))
-            let removed = tweets.dropFirst(targetCount)
-            for tweet in removed { Tweet.clearInstance(mid: tweet.mid) }
             tweets = trimmed
             needsFullReloadAfterAttach = true
             onTweetsTrimmed?(trimmed)
@@ -2068,9 +2068,11 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
+        // Trimmed tweets stay registered while another screen still shows them (a
+        // retweet card, a profile, a detail view); Tweet.releaseUnusedInstances drops
+        // them once nothing does.
         for tweet in headTweets + tailTweets {
             clearCachedHeight(for: tweet)
-            Tweet.clearInstance(mid: tweet.mid)
         }
 
         print("⚠️ [MEMORY] Trimmed feed '\(feedIdentifier)' from \(oldCount) to \(trimmedTweets.count) (removed \(headTweets.count) head, \(tailTweets.count) tail)")

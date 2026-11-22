@@ -2312,17 +2312,10 @@ struct TweetDetailView: View {
         }
     }
 
-    /// Adopts a freshly fetched original tweet.
-    ///
-    /// `Tweet.getInstance` is a singleton registry, but instances get evicted
-    /// (`clearInstance` on a feed trim, `cleanupOldInstances` over the cap), so a refresh
-    /// can hand back a *different* object than the one a feed cell is already bound to.
-    /// Copying onto the incumbent first keeps that cell live; the detail view then points
-    /// at the registered instance so both sides converge.
+    /// Adopts a freshly fetched original tweet. The registry keeps a tweet registered
+    /// while any screen holds it (see `Tweet.releaseUnusedInstances`), so the refresh is
+    /// the same object the feed cells already show.
     private func adoptRefreshedOriginal(_ refreshed: Tweet) {
-        if let incumbent = originalTweet, incumbent !== refreshed {
-            try? incumbent.update(from: refreshed)
-        }
         originalTweet = refreshed
         // The detail-view read is now the only server load of the original, so it is
         // what marks the load attempt complete for the "Original tweet not found" gate.

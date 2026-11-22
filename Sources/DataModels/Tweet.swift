@@ -70,30 +70,20 @@ class Tweet: @MainActor Identifiable, @MainActor Codable, ObservableObject {
         instances.removeAll()
     }
 
-    /// Clean up old tweet instances to prevent memory growth
-    /// - Parameter activeTweetIds: Set of tweet IDs that are currently active/visible
-    /// - Parameter maxInstances: Maximum number of instances to keep (default: 1000)
-    static func cleanupOldInstances(activeTweetIds: Set<String>, maxInstances: Int = 1000) {
+    /// Releases memory by dropping registered tweets that nothing outside the registry
+    /// still holds, once the registry holds more than `limit` tweets.
+    ///
+    /// A tweet that any screen still shows (a feed, profile or saved list, a detail view,
+    /// a retweet's embedded original) stays registered. Dropping it frees no memory, since
+    /// the screen keeps it alive, and the next read would create a second object for the
+    /// same tweet: an edit, like or refresh applied to one would then never reach the other.
+    /// This replaces clearing the whole registry, or keeping only the current list's tweets.
+    static func releaseUnusedInstances(whenOver limit: Int = 0) {
         instanceLock.lock()
         defer { instanceLock.unlock() }
-
-        // Don't cleanup if we're below the limit
-        guard instances.count > maxInstances else { return }
-
-        // Keep tweets that are currently active
-        let tweetsToKeep = instances.filter { activeTweetIds.contains($0.key) }
-
-        // If we still have too many, remove oldest ones
-        if tweetsToKeep.count > maxInstances {
-            // Sort by timestamp (most recent first) and keep only the most recent ones
-            let sortedTweets = tweetsToKeep.sorted { $0.value.timestamp > $1.value.timestamp }
-            let tweetsToRemove = sortedTweets.dropFirst(maxInstances)
-            for tweet in tweetsToRemove {
-                instances.removeValue(forKey: tweet.key)
-            }
-        } else {
-            // Remove all inactive tweets
-            instances = tweetsToKeep
+        guard instances.count > limit else { return }
+        for mid in Array(instances.keys) where isKnownUniquelyReferenced(&instances[mid]!) {
+            instances.removeValue(forKey: mid)
         }
     }
     

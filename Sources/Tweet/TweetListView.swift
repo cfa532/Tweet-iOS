@@ -275,9 +275,8 @@ struct TweetListView: View {
                 // newest rows) so it doesn't delete what the user is looking at.
                 await MainActor.run { self.trimRequestToken += 1 }
 
-                // Also cleanup old tweet instances to prevent memory growth
-                let activeTweetIds = await MainActor.run { Set(self.tweets.map { $0.mid }) }
-                await Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
+                // Also release registered tweets no screen holds any more
+                await Tweet.releaseUnusedInstances(whenOver: 1000)
             }
         }
     }
