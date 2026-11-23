@@ -14,13 +14,13 @@ enum BuildConfiguration {
 }
 
 struct AppConfig {
-    /// Fixed public domain for fragment-form share URLs (feed share button):
+    /// Fixed public domain for app links and server-rendered tweet previews:
     /// iOS Universal Links / Android App Links open the app directly; browsers
     /// are redirected to the http-only web app by the Cloudflare Worker in
-    /// cloudflare/dtweet-worker/. http scheme: the web stack (Leither) is
-    /// http-only; the OS intercepts http links for associated domains anyway.
+    /// cloudflare/dtweet-worker/. The Worker serves HTTPS independently of the
+    /// HTTP-only Leither web app. Existing HTTP and fragment links stay valid.
     /// See DEEPLINKING.md for the full share-URL policy.
-    static let shareDomain = "http://dtweet.com"
+    static let shareDomain = "https://dtweet.com"
 
     static let baseUrl: String = {
         switch BuildConfiguration.current {

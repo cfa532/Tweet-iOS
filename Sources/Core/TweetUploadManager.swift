@@ -213,6 +213,28 @@ final class TweetUploadManager {
             // Keep the server receipt even if cancellation arrived during the transfer.
             try await savePendingUpload(pending)
             try Task.checkCancellation()
+            if pending.recipientId == nil && (attachment.type == .video || attachment.type == .hls_video) {
+                // Save the accepted video/HLS job before optional poster work, so
+                // interruption here never loses the resumable video receipt.
+                do {
+                    let posterData = try await HproseInstance.MediaProcessor.makeVideoPoster(from: item.data, fileName: item.fileName)
+                    try Task.checkCancellation()
+                    let base = (item.fileName as NSString).deletingPathExtension
+                    let poster = try await HproseInstance.MediaProcessor.uploadRegularFile(
+                        data: posterData, typeIdentifier: "public.jpeg", fileName: "\(base)_poster.jpg",
+                        referenceId: nil, mediaType: .image, appUser: uploadUser,
+                        appId: hproseInstance.appId
+                    )
+                    pending.itemData[index].previewMid = poster.mid
+                } catch {
+                    try Task.checkCancellation()
+                    print("[Upload] Video poster could not be uploaded; keeping the video receipt: \(error)")
+                }
+                if pending.itemData[index].previewMid != nil {
+                    try await savePendingUpload(pending)
+                }
+            }
+            try Task.checkCancellation()
             UploadProgressManager.shared.updateProgress(
                 stage: .uploadingAttachments,
                 message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
@@ -346,7 +368,8 @@ final class TweetUploadManager {
                     pending.itemData[index] = PendingTweetUpload.ItemData(
                         identifier: item.identifier, typeIdentifier: item.typeIdentifier, data: item.data,
                         fileName: item.fileName, noResample: item.noResample, cid: cid,
-                        aspectRatio: item.aspectRatio, fileSize: item.fileSize, mediaType: item.mediaType)
+                        aspectRatio: item.aspectRatio, fileSize: item.fileSize, mediaType: item.mediaType,
+                        previewMid: item.previewMid)
                     fractions[index] = 1
                     try await savePendingUpload(pending)
                 }
@@ -575,7 +598,7 @@ extension TweetUploadManager {
             let aspectRatio: Float? // Aspect ratio
             let fileSize: Int64? // File size
             let mediaType: String? // MediaType (Image, Video, hls_video, etc.)
-            let previewMid: String? // Uploaded preview of a large image, if any
+            var previewMid: String? // Uploaded image preview or video poster, if any
             
             init(identifier: String, typeIdentifier: String, data: Data, fileName: String, noResample: Bool = false, videoJobId: String? = nil, cid: String? = nil, aspectRatio: Float? = nil, fileSize: Int64? = nil, mediaType: String? = nil, previewMid: String? = nil) {
                 self.identifier = identifier

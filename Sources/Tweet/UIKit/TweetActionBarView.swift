@@ -57,7 +57,7 @@ private final class SharePreviewDeadlineClaim: @unchecked Sendable {
 
 /// Which URL a share action embeds — see DEEPLINKING.md for the policy.
 enum TweetShareLinkStyle {
-    /// `http://dtweet.com/#tweet/{mid}/{authorId}` — public fragment-form share URL;
+    /// `https://dtweet.com/tweet/{mid}/{authorId}` — public preview-capable share URL;
     /// the OS opens the app when installed (all tweet action-bar share buttons)
     case deeplink
     /// Domain delivered by the backend's `check_upgrade`, using TweetWeb's
@@ -635,7 +635,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         // own explicit styles through shareLinkStyleOverride (DEEPLINKING.md).
         let style = shareLinkStyleOverride ?? .deeplink
         let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, style: style, parentTweet: effectiveParentTweet)
-        let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
+        let customItem = CustomShareItem(
+            shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage,
+            lineShareText: Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, style: .deeplink, parentTweet: effectiveParentTweet)
+        )
 
         var items: [Any] = [customItem]
 
@@ -686,7 +689,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
     /// Build share text for a tweet.
     ///
     /// Share-URL policy (see DEEPLINKING.md):
-    /// - `.deeplink`   action-bar share button — `http://dtweet.com/#tweet/{mid}/{authorId}`;
+    /// - `.deeplink`   action-bar share button — `https://dtweet.com/tweet/{mid}/{authorId}`;
     ///                 the OS opens the app when installed, browsers land on the web app.
     /// - `.webDomain`  dropdown-menu share, feed and detail view alike — domain
     ///                 delivered by the backend's `check_upgrade`
@@ -719,8 +722,8 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
 
         switch style {
         case .deeplink:
-            // Standard deep-link format: OS opens the app when installed
-            urlText = "\(AppConfig.shareDomain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+            // Keep IDs in the HTTP path so link-preview crawlers can request this tweet.
+            urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         case .webDomain:
             // Domain delivered by the backend's check_upgrade
             var domain = hproseInstance.backendDomainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -730,7 +733,14 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
             if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
                 domain = "http://" + domain
             }
-            urlText = "\(domain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+            // Only the dtweet Worker serves path-based preview pages. Other
+            // Leither hosts retain their existing external fragment route.
+            if let host = URL(string: domain)?.host?.lowercased(),
+               ["dtweet.com", "www.dtweet.com", "dl.dtweet.com"].contains(host) {
+                urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+            } else {
+                urlText = "\(domain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+            }
         case .providerIP:
             // No share action selects this style today. The guard stays so any
             // future caller can only produce a validated public-IPv4 URL.

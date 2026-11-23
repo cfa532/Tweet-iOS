@@ -23,6 +23,12 @@ struct SharePreviewMetadata {
     let attachmentCount: Int
 }
 
+private extension UIActivity.ActivityType {
+    var isLineShare: Bool {
+        rawValue == "jp.naver.line" || rawValue.hasPrefix("jp.naver.line.")
+    }
+}
+
 // Global function to format count with abbreviations
 func formatCount(_ count: Int) -> String {
     if count < 1000 {
@@ -1591,7 +1597,7 @@ struct TweetActionButtonsView: View {
         // Every tweet action-bar share uses the dtweet.com app-link format.
         let effectiveParentTweet = parentTweet ?? commentsVM?.parentTweet
         let commentParams = effectiveParentTweet.map { "?fromComment=true&parentTweetId=\($0.mid)&parentAuthorId=\($0.authorId)" } ?? ""
-        let urlText = "\(AppConfig.shareDomain)/#tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
+        let urlText = "\(AppConfig.shareDomain)/tweet/\(tweet.mid)/\(tweet.authorId)\(commentParams)"
         
         // Only add space if there's content before the URL
         if !shareText.isEmpty {
@@ -1623,18 +1629,20 @@ struct ShareSheetView: UIViewControllerRepresentable {
 
 final class CustomShareItem: NSObject, UIActivityItemSource {
     let shareText: String
+    let lineShareText: String?
     let metadata: SharePreviewMetadata
     let previewImage: UIImage?
     
-    init(shareText: String, metadata: SharePreviewMetadata, previewImage: UIImage?) {
+    init(shareText: String, metadata: SharePreviewMetadata, previewImage: UIImage?, lineShareText: String? = nil) {
         self.shareText = shareText
+        self.lineShareText = lineShareText
         self.metadata = metadata
         self.previewImage = previewImage
         super.init()
     }
 
     @MainActor
-    convenience init(shareText: String, tweet: Tweet, previewImage: UIImage?) {
+    convenience init(shareText: String, tweet: Tweet, previewImage: UIImage?, lineShareText: String? = nil) {
         var attachmentCount = tweet.attachments?.count ?? 0
         if attachmentCount == 0,
            let originalTweetId = tweet.originalTweetId,
@@ -1651,7 +1659,8 @@ final class CustomShareItem: NSObject, UIActivityItemSource {
                 attachmentText: composeAttachmentTypeText(for: tweet),
                 attachmentCount: attachmentCount
             ),
-            previewImage: previewImage
+            previewImage: previewImage,
+            lineShareText: lineShareText
         )
     }
     
@@ -1660,6 +1669,11 @@ final class CustomShareItem: NSObject, UIActivityItemSource {
     }
     
     func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        // Menu shares can retain the backend URL for other apps. LINE needs
+        // the explicit preview-page text prepared by the share producer.
+        if activityType?.isLineShare == true {
+            return lineShareText ?? shareText
+        }
         return shareText
     }
     
@@ -1771,6 +1785,11 @@ class CustomShareImage: NSObject, UIActivityItemSource {
     }
     
     func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        // LINE builds its card from the URL. A separate image changes the
+        // message into a photo share; retain that image for other destinations.
+        if activityType?.isLineShare == true {
+            return nil
+        }
         return image
     }
 }

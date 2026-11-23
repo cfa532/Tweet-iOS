@@ -6,12 +6,14 @@ keep it compatible with existing Leither web URLs such as `t1.fireshare.us` and
 
 The goal is:
 
-- `http://dtweet.com/#tweet/{mid}/{authorId}` opens the native app when the app
+- `https://dtweet.com/tweet/{mid}/{authorId}` opens the native app when the app
   is installed.
 - The same URL opens a real web page when the app is not installed or when the
   user opens it in a desktop browser.
 - Existing Leither-hosted web domains keep their original routing behavior.
 - Public web access does not require Tailscale or any private network route.
+- Shared tweet path URLs return Open Graph cards to LINE and other preview
+  crawlers. Previously shared HTTP and fragment URLs keep opening as before.
 
 ## Mutable browser fallback
 
@@ -19,10 +21,10 @@ The browser application domain is operational configuration, not a permanent
 part of the deep-link contract. The source of truth is
 `BROWSER_FALLBACK_ORIGIN` in
 `cloudflare/dtweet-worker/src/index.js`. Its current value is
-`http://t1.w333w.site`, but the owner may replace it at any time.
+`http://t1.www33.shop`, but the owner may replace it at any time.
 
 In routing requirements below, “the HTTP fallback” means the value of that
-constant. Concrete `w333w.site` URLs document the current deployment or a
+constant. Concrete browser-fallback URLs document the current deployment or a
 historical migration; they must not be copied into new routing logic as a
 second source of truth. When the domain changes, update the Worker constant,
 the corresponding nginx/DNS configuration, and the current-value examples in
@@ -33,10 +35,10 @@ the same operation. Follow TweetWeb's
 
 | URL | Role | Expected behavior |
 |---|---|---|
-| `dtweet.com` | Public deep-link wrapper | iOS/Android verify it as an app-link domain. Browser navigations are redirected by the Worker to `http://t1.w333w.site`; the browser retains the fragment locally. |
+| `dtweet.com` | Public deep-link wrapper | iOS/Android verify it as an app-link domain. Browser navigations are redirected by the Worker to `http://t1.www33.shop`; the browser retains the fragment locally. |
 | `www.dtweet.com` | Alias | Redirects permanently to `dtweet.com`. |
-| `dl.dtweet.com` | Public gateway alias | Served by the same Cloudflare Worker. Browser navigations redirect to `http://t1.w333w.site`; static assets, association files, and non-navigation origin requests keep their dedicated Worker branches. Kept only for compatibility; new shared links should not need it. |
-| `t1.fireshare.us`, `t1.w333w.site`, other Leither domains | Web app hosts | `t1.w333w.site` is the current browser fallback target. These hosts keep normal Leither route discovery and must not be forced through dtweet gateway behavior. |
+| `dl.dtweet.com` | Public gateway alias | Served by the same Cloudflare Worker. Browser navigations redirect to `http://t1.www33.shop`; static assets, association files, and non-navigation origin requests keep their dedicated Worker branches. Kept only for compatibility; new shared links should not need it. |
+| `t1.fireshare.us`, `t1.w333w.site`, `t1.www33.shop`, other Leither domains | Web app hosts | `t1.www33.shop` is the current browser fallback target. These hosts keep normal Leither route discovery and must not be forced through dtweet gateway behavior. |
 | check_upgrade domain | Backend-controlled share domain | Used by some existing share paths and user settings. Independent of `dtweet.com`. |
 | provider IP entry URL | Direct node fallback | `http://{providerIP}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}`. Works without DNS. |
 
@@ -68,9 +70,9 @@ case. The Worker only needs to serve valid association files over HTTPS.
 
 1. The browser opens `dtweet.com`.
 2. For `/#tweet/...`, the fragment is not sent in the HTTP request; the Worker
-   redirects to `http://t1.w333w.site` and the browser retains the fragment.
-   For a legacy `/tweet/...` path, the Worker explicitly redirects to
-   `http://t1.w333w.site/#tweet/...`, moving its query into the fragment route.
+   redirects to `http://t1.www33.shop` and the browser retains the fragment.
+   For a `/tweet/...` path, the Worker explicitly redirects to
+   `http://t1.www33.shop/#tweet/...`, moving its query into the fragment route.
 3. Chrome may try HTTPS first; because that host does not provide a valid HTTPS
    page, normal browser fallback settles on HTTP. Safari opens the HTTP target
    directly.
@@ -106,16 +108,18 @@ Worker location:
 cloudflare/dtweet-worker/
 ```
 
-The Worker has three jobs:
+The Worker has four jobs:
 
 1. Serve iOS Universal Links association:
    `/.well-known/apple-app-site-association`
 2. Serve Android App Links association:
    `/.well-known/assetlinks.json`
 3. Redirect browser navigations on both `dtweet.com` and `dl.dtweet.com` to
-   `http://t1.w333w.site`, while keeping `dl.dtweet.com` static assets,
+   `http://t1.www33.shop`, while keeping `dl.dtweet.com` static assets,
    association files, and non-navigation origin requests on their existing
    Worker branches.
+4. Serve tweet-specific Open Graph HTML to preview crawlers for path-based
+   share URLs, using anonymous backend reads.
 
 The Worker routes are configured in:
 
@@ -294,8 +298,8 @@ JavaScript asset and the app will render an empty/error page.
 
 | Share action | URL format | Rationale |
 |---|---|---|
-| Tweet action-bar share buttons | `http://dtweet.com/#tweet/{mid}/{authorId}` | Standard app-link URL with browser fallback, in feed, detail, comment, media, and fullscreen contexts. |
-| Dropdown menu to share, feed and detail view alike | `http://{check_upgrade domain}/#tweet/{mid}/{authorId}` | Uses the backend-controlled domain and TweetWeb's external share-link format, with `dtweet.com` as fallback. |
+| Tweet action-bar share buttons | `https://dtweet.com/tweet/{mid}/{authorId}` | App-link URL with browser fallback and server-readable IDs for preview cards, in feed, detail, comment, media, and fullscreen contexts. |
+| Dropdown menu to share, feed and detail view alike | `http://{check_upgrade domain}/#tweet/{mid}/{authorId}` | Retains the backend-controlled domain for other destinations. Selecting LINE uses the canonical HTTPS dtweet path URL above. When the domain is a dtweet gateway alias (or missing), all destinations use that canonical path URL. |
 
 The provider-IP format —
 `http://{author public IPv4}/entry?aid={appIdHash}&ver=last#/tweet/{mid}/{authorId}`
@@ -309,8 +313,163 @@ Comment shares append:
 ?fromComment=true&parentTweetId={mid}&parentAuthorId={mid}
 ```
 
-For provider-IP URLs, the comment parameters live inside the IP-entry hash
-route. For domain URLs, they are part of the external fragment-form share link.
+For provider-IP and other Leither domain URLs, comment parameters remain inside
+the fragment route. For new dtweet path URLs, they are normal query parameters;
+the Worker moves them into the fragment when redirecting to TweetWeb.
+
+### Preview cards
+
+`cloudflare/dtweet-worker/src/tweet-preview.js` recognizes LINE's `Linespider`
+and common social preview crawlers before browser routing, without requiring
+an HTML `Accept` header. A `GET /tweet/{mid}/{authorId}` from those crawlers
+returns HTML with `og:title`, `og:description`, `og:image`, and a canonical URL.
+Ordinary browsers retain the existing HTTP TweetWeb redirect; both variants
+use `no-store` and vary on `User-Agent` and `Accept` to avoid mixing responses.
+
+The Worker reads the release backend through the existing
+`BROWSER_FALLBACK_ORIGIN`. `PREVIEW_APP_ID` in `wrangler.toml` must match the
+deployed release backend manifest. It discovers providers with
+`/getvar?name=mmprovs&arg0={mid}` at that origin. Ordinary JSON `/entry` reads
+then go directly to the announced public provider through `cloudflare:sockets`.
+Worker `fetch()` cannot address bare provider IPs, and anonymous
+`/entry?nid=...` forwarding is rejected by Leither's system-session requirement.
+The bounded HTTP/1.0 reads close their sockets on completion or timeout, and
+cancel losing provider races before the next read. Discovery uses manual
+redirect handling, since Workers do not support `redirect: "error"`.
+
+Reads first find a provider serving the storage owner's User, then read the
+Tweet there; a miss discovers the Tweet's own providers once. Comment shares
+use `parentAuthorId` as storage owner. No explicit synchronization or provider
+mutation is requested.
+
+Private tweets return `403` without preview metadata. Unavailable data returns
+`503` without invented metadata. Text is escaped before insertion into HTML.
+Only the first attachment supplies the card thumbnail. An image uses
+`previewMid` when present, otherwise its original `mid`; a video or HLS video
+uses its uploaded JPEG `previewMid`. The Worker never scans later files for a
+thumbnail, or substitutes the video file for a missing poster. `og:image`
+points to the HTTPS dtweet URL
+`/tweet/{mid}/{authorId}/preview-image`, preserving comment query parameters.
+That endpoint accepts GET/HEAD from any image loader, resolves the public Tweet
+and its selected attachment, and serves the unchanged raster image bytes from
+the provider through the Worker. It accepts no arbitrary upstream URL or media
+ID. Images are bounded to 8 MiB and use `no-store`; JSON reads retain their
+1 MiB limit. HTTP headers and JSON are decoded as text, while image bodies stay
+binary. This avoids exposing raw HTTP provider IPs and nonstandard ports to
+LINE's image loader. A quote without attachments can use its public original's
+first attachment. Text-only posts and first attachments without a supported
+image/poster use the app icon.
+
+For new iOS video uploads, `makeVideoPoster` extracts an orientation-correct
+frame from the original local file off the main actor and encodes a JPEG of at
+most 200 KiB and 1200 × 1200 pixels. The upload queue persists the accepted
+video/HLS job receipt first, then uploads the poster to the same author's root
+and saves its MID as `previewMid`. HLS completion preserves that field when
+replacing the temporary job MID with the playback CID. Poster failure does
+not discard a successful video upload; cancellation still stops the queue.
+Video playback, normalization, HLS conversion and chat video uploads retain
+their existing behavior. The shared backend already references `mid` and
+`previewMid` for every attachment type, so no new backend field or API is needed.
+Previously uploaded videos are not backfilled with posters.
+
+The iOS share sheet omits the separate photo attachment when sharing to LINE,
+so LINE receives the tweet text and URL and can create a link card. Other
+destinations keep the separate photo behavior.
+`CustomShareItem` also selects producer-supplied canonical dtweet text for LINE
+when the menu's normal text uses a backend-domain fragment URL. Both variants
+are prepared on the main actor, including comment context; the activity callback
+never parses or repairs a legacy link and never reads a Tweet model. SwiftUI
+action-bar items already use canonical dtweet text for every destination.
+
+Old `/#tweet/...` links still open the app and website, but cannot gain a
+tweet-specific server preview because their IDs are never sent over HTTP.
+Share again from the updated app to obtain a preview-capable path URL. Backend
+domains outside the dtweet gateway retain their existing sharing behavior.
+
+## 2026-11-23: LINE rollout and WeChat investigation
+
+### LINE changes delivered
+
+- Updated iOS sharing to produce preview-capable HTTPS dtweet path URLs while
+  retaining existing link parsing and native app opening. LINE menu shares use
+  that URL even when other destinations receive the backend-domain URL.
+- Deployed tweet-specific Open Graph HTML and the HTTPS raster-image endpoint
+  in the dtweet Worker. The observed LINE crawler user agent was
+  `facebookexternalhit/1.1;line-poker/1.0`. The user confirmed that an image
+  appeared after the image was served through the HTTPS endpoint.
+- Added optional JPEG poster uploads for new iOS tweet/comment/edit videos,
+  preserving the video upload receipt, HLS completion and playback MID. The
+  Worker selects only the first attachment. The updated Release app was built,
+  installed and opened on cPhone17; the user subsequently confirmed that a new
+  iOS video upload showed its thumbnail in LINE.
+- A video published through another client or import tool had no `previewMid`
+  on the three providers inspected, so its card used the app icon. Sharing an
+  existing video does not create a poster. Other writers and old posts were
+  not changed or backfilled.
+
+### WeChat report and evidence
+
+The user reported intermittent blank screens, with no confirmation dialog,
+when opening this URL inside WeChat:
+
+```text
+http://t1.www33.shop/#tweet/NyO_IJ_5Os-KYbqTufs4mM0ALbv/iRor--GsfYguUgzVWDNyv8v6AAl
+```
+
+This URL goes directly to TweetWeb and bypasses the dtweet Worker. Static
+review also showed that the LINE activity-specific branches retain the normal
+shared text and separate image for WeChat. These findings do not establish
+why the web page sometimes fails to open.
+
+During read-only diagnostics, the tweet was publicly readable on three
+providers. The web loader and application JavaScript requests inspected
+returned HTTP 200, with permissive CORS headers on the provider responses.
+Requests using a WeChat browser user agent followed the same dtweet browser
+redirect as Safari. Successful HTTP responses and user-agent emulation do not
+prove that startup completed in the user's WeChat browser.
+
+TweetWeb's existing `TweetDetail.vue` startup gate checks `sessionStorage.isBot`
+and `isWeChatBrowser()`. In a new WeChat session it calls
+`confirm(t('download.openInDefaultBrowser'))`; confirmation records `isBot = No`
+and starts loading, while a false result calls `history.go(-1)`. The gate's
+intended purpose was not established during this investigation. Suppressed
+dialogs were considered a possible explanation, but no failing WeChat runtime
+capture confirmed that explanation.
+
+### Changes made and reverted
+
+The assistant removed the WeChat startup gate and added a loading shell with
+a reload Retry button in TweetWeb's `index.html`. Both changes were built and
+published before the cause was proven. The gate removal was not requested;
+the user's Retry comment was a suggestion, not authorization to implement it.
+
+After the user's correction, the original gate was restored exactly, and the
+added startup shell and Retry button were removed. The corrected build was
+uploaded and published to `/home/pi/demo/tweet1/` on gen8, including the current
+production Go backend sources required by the release procedure. The same web
+build was deployed to Cloudflare. Existing unrelated local TweetWeb edits were
+preserved; this restored the two changed behaviors rather than rolling the
+entire project back to an older source revision.
+
+The final restoration deployment of `dtweet-deeplink` was
+`e3a799f7-fb61-423f-9099-5dc38478e9fd`. Publication commands and the web build,
+including TypeScript compilation, succeeded. The final required site-root
+availability GET returned HTTP 200. No tests were run. That availability check
+does not verify WeChat rendering or establish that the intermittent failure is
+fixed.
+
+### Remaining issue
+
+The intermittent WeChat blank screen remains unresolved. The original gate and
+entry markup are in place, and the pre-existing tweet-fetch error Retry UI
+remains. No new startup Retry behavior remains from this investigation.
+
+An attempt to capture WeChat log lines for `t1.www33.shop` on cPhone17 could not
+start because the device was unavailable; the waiting logger was stopped. No
+failing-load device capture was obtained. Further work needs evidence from an
+actual failed load to distinguish loader, script startup, routing and tweet
+fetch failures. Preserve the gate while investigating; understand its purpose
+and obtain an explicit instruction before changing it.
 
 ## iOS implementation map
 
@@ -324,7 +483,7 @@ Contains `applinks:dtweet.com`.
 Sources/App/AppConfig.swift
 ```
 
-Contains `shareDomain = "http://dtweet.com"`.
+Contains `shareDomain = "https://dtweet.com"`.
 
 ```text
 Sources/Tweet/UIKit/TweetActionBarView.swift
@@ -332,7 +491,8 @@ Sources/Tweet/UIKit/TweetActionBarView.swift
 
 Defines `TweetShareLinkStyle` and `buildShareText`. Every action bar uses the
 dtweet deep-link style, and dropdown sharing — feed and detail view alike — uses
-the `check_upgrade` domain via `buildFeedMenuShareItems`. The provider-IP style
+the `check_upgrade` domain via `buildFeedMenuShareItems`, with canonical dtweet
+text supplied separately for LINE. The provider-IP style
 remains defined as the DNS-free fallback format but no share action selects it.
 
 ```text
@@ -372,23 +532,28 @@ Sources/Core/HproseInstance.swift
 8. Publish/deploy the Worker and Leither app using the owner's normal release
    process.
 9. Verify these cases after publishing:
+   - A `Linespider` request to a public
+     `https://dtweet.com/tweet/{mid}/{authorId}` returns tweet-specific Open
+     Graph HTML, and the announced image URL is publicly reachable.
+   - The same path URL opens the installed app, or redirects a browser to the
+     HTTP TweetWeb route with comment context preserved.
    - `https://dtweet.com/.well-known/apple-app-site-association` returns JSON.
    - `https://dtweet.com/.well-known/assetlinks.json` returns JSON.
    - `http://dtweet.com/#tweet/{mid}/{authorId}` opens the app on a device with
      the app installed.
    - `http://dtweet.com/tweet/{mid}/{authorId}` remains accepted by installed
      native apps and redirects browsers to
-     `http://t1.w333w.site/#tweet/{mid}/{authorId}`.
+     `http://t1.www33.shop/#tweet/{mid}/{authorId}`.
    - `https://dtweet.com/#tweet/{mid}/{authorId}` redirects a desktop browser to
-     the fragment-form route on `http://t1.w333w.site` and renders TweetWeb.
+     the fragment-form route on `http://t1.www33.shop` and renders TweetWeb.
    - `https://dl.dtweet.com/#author/{authorId}` redirects a desktop browser to
-     `http://t1.w333w.site/#author/{authorId}` and loads profile and tweet data.
+     `http://t1.www33.shop/#author/{authorId}` and loads profile and tweet data.
    - An HTML `GET` to `https://dl.dtweet.com/author/{authorId}` returns `302` to
-     `http://t1.w333w.site/#author/{authorId}`.
+     `http://t1.www33.shop/#author/{authorId}`.
    - `https://dl.dtweet.com/index_entry.js` and both association files still
      return directly from the Worker without following the browser redirect.
    - `http://t1.fireshare.us/` still renders the legacy Leither web app.
-   - `http://t1.w333w.site/` renders the Leither web app.
+   - `http://t1.www33.shop/` renders the Leither web app.
 
 ## Common failure modes
 
@@ -425,7 +590,7 @@ curl -fsS -o /dev/null -w '%{http_code} %{content_type}\n' \
 ```
 
 Expected results are `302` redirects to the current
-`BROWSER_FALLBACK_ORIGIN`—presently `http://t1.w333w.site`—for the two HTML
+`BROWSER_FALLBACK_ORIGIN`—presently `http://t1.www33.shop`—for the two HTML
 navigations and `200` responses for the asset and association file. Complete
 the check in a real browser with a fragment-form author or tweet URL; fragments
 are not sent to the Worker, so command-line HTTP checks alone cannot prove that

@@ -9,9 +9,9 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
     var fileName: String?
     let timestamp: Date
     let aspectRatio: Float?
-    /// A smaller copy of a large image (at most ~200 KB), uploaded alongside it. Feeds load
-    /// it instead of the original; detail and fullscreen views load the original. Nil for
-    /// small images, non-images, and anything posted before previews existed.
+    /// A smaller image copy or a video's JPEG poster (at most ~200 KB), uploaded alongside
+    /// the media. Image feeds may load it; video playback always uses `mid`. Nil for
+    /// small images and older media without an uploaded preview/poster.
     let previewMid: MimeiId?
     
     /// Returns the effective aspect ratio - defaults to 1.0 for images if aspectRatio is null

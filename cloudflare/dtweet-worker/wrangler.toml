@@ -19,3 +19,8 @@ directory = "../../../TweetWeb/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = true
+
+[vars]
+# Release Tweet backend manifest, matching AppConfig.appId and TweetWeb/.env.
+# BROWSER_FALLBACK_ORIGIN supplies discovery; ordinary reads use public providers.
+PREVIEW_APP_ID = "heWgeGkeBX2gaENbIBS_Iy1mdTS"

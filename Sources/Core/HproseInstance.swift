@@ -7444,7 +7444,41 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             }
         }
         
-        // MARK: Image previews
+        // MARK: Image previews and video posters
+
+        /// A bounded JPEG from the original local video, before any HLS job can
+        /// replace its MID. Decode/encode and temporary-file I/O stay off main.
+        static func makeVideoPoster(from data: Data, fileName: String?) async throws -> Data {
+            let task = Task.detached(priority: .utility) { () async throws -> Data in
+                try Task.checkCancellation()
+                let ext = ((fileName ?? "video.mp4") as NSString).pathExtension
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(ext.isEmpty ? "mp4" : ext)
+                defer { try? FileManager.default.removeItem(at: url) }
+                try data.write(to: url)
+                try Task.checkCancellation()
+
+                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 1200, height: 1200)
+                let image = try await generator.image(at: .zero).image
+                try Task.checkCancellation()
+                guard let jpeg = encodePreview(image, asPNG: false, quality: 0.75) else {
+                    throw NSError(domain: "VideoPoster", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not encode video poster"])
+                }
+                if jpeg.count <= imagePreviewByteLimit { return jpeg }
+                guard let preview = makeImagePreview(from: jpeg) else {
+                    throw NSError(domain: "VideoPoster", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not reduce video poster size"])
+                }
+                return preview
+            }
+            return try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        }
 
         /// Images over this size get a preview that feeds load instead of the original.
         static let imagePreviewByteLimit = 200 * 1024

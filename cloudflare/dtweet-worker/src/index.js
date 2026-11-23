@@ -5,13 +5,15 @@
  * - /.well-known/assetlinks.json             -> Android App Links
  * - browser navigations                      -> redirected to the HTTP
  *   TweetWeb host, so users without the app see the real web page.
- *   Legacy /tweet/* and author paths are canonicalized to /#tweet/* and
- *   /#author/* respectively.
+ *   /tweet/* and author paths are canonicalized to /#tweet/* and /#author/*.
+ * - tweet preview crawlers                   -> server-rendered Open Graph HTML
  * - non-navigation requests                  -> reverse-proxied to Leither
  *
- * Users WITH the app never reach this worker for supported fragment-form links: the OS
+ * Users WITH the app never reach this worker for supported links: the OS
  * verifies the well-known files and opens the app directly.
  */
+
+import { tweetPreview } from "./tweet-preview.js";
 
 const IOS_TEAM_ID = "96LBXG78A7";
 const IOS_BUNDLE_IDS = ["com.example.Tweet", "com.example.Tweet.debug"];
@@ -52,6 +54,15 @@ export default {
     }
 
     const path = url.pathname;
+
+    if (request.method === "GET" && path === "/robots.txt") {
+      return new Response("User-agent: *\nAllow: /\n", {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+
+    const preview = await tweetPreview(request, url, env, BROWSER_FALLBACK_ORIGIN);
+    if (preview) return preview;
 
     if (request.method === "GET" && STATIC_ASSETS.has(path)) {
       const asset = await env.ASSETS.fetch(request);
@@ -145,10 +156,14 @@ async function proxyToTweetWeb(request, url) {
   if (isHtmlNavigation(request)) {
     const externalRoute = path.match(/^\/(tweet|author)(\/.*)$/);
     if (externalRoute) {
-      return Response.redirect(
-        `${BROWSER_FALLBACK_ORIGIN}/#${externalRoute[1]}${externalRoute[2]}${url.search}`,
-        302,
-      );
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: `${BROWSER_FALLBACK_ORIGIN}/#${externalRoute[1]}${externalRoute[2]}${url.search}`,
+          "cache-control": "no-store",
+          vary: "User-Agent, Accept",
+        },
+      });
     }
     return Response.redirect(BROWSER_FALLBACK_ORIGIN + path + url.search, 302);
   }
