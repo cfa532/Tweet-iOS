@@ -131,6 +131,19 @@ struct UserListView: View {
             await refreshUsers()
         }
         .navigationTitle(title)
+        .toolbar {
+            // Another user's list: a small avatar with the title beside it, as on Android.
+            if userId != hproseInstance.appUser.mid {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        Avatar(user: User.getInstance(mid: userId), size: 36)
+                        Text(title)
+                            .font(.headline)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .popToRoot)) { _ in
             dismiss()
         }
