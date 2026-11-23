@@ -220,10 +220,15 @@ struct TweetActionButtonsView: View {
                     }
                 }
                 } label: {
+                    // Lit while the signed-in user holds at least one retweet of it.
+                    let hasRetweeted = tweet.favorites?[UserActions.RETWEET.rawValue] == true
+                    let retweetColor: Color = hasRetweeted ? XTheme.accentColor : .themeSecondaryText
                     HStack(spacing: 2) {
                         TweetActionIcon.repost.label("Repost")
+                            .foregroundColor(retweetColor)
                         Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
+                            .foregroundColor(retweetColor)
                             .frame(width: 28, alignment: .leading)
                     }
                     .frame(width: 52, alignment: .leading)
@@ -244,13 +249,17 @@ struct TweetActionButtonsView: View {
                         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
                         let originalAppUserFavoriteTweets = hproseInstance.appUser.favoriteTweets
                         let originalFavorites = tweet.favorites // Save original favorites array
-                        
+                        let originalFavoriteCount = tweet.favoriteCount ?? 0
+
                         // Optimistic UI update - only after debounce check passes
                         var newFavorites = tweet.favorites ?? [false, false, false]
                         newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
-                        
+
                         await MainActor.run {
                             tweet.favorites = newFavorites
+                            // The server's reply carries no tweet (the tweet-side like
+                            // list is written after it answers), so the count moves here.
+                            tweet.favoriteCount = max(0, originalFavoriteCount + (wasFavorite ? -1 : 1))
                             // Update appUser favorite count immediately
                             hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
                             if wasFavorite {
@@ -294,6 +303,7 @@ struct TweetActionButtonsView: View {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
                                 self.tweet.favorites = originalFavorites
+                                self.tweet.favoriteCount = originalFavoriteCount
                                 hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
                                 hproseInstance.appUser.favoriteTweets = originalAppUserFavoriteTweets
                                 NotificationCenter.default.post(
@@ -347,13 +357,16 @@ struct TweetActionButtonsView: View {
                         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
                         let originalAppUserBookmarkedTweets = hproseInstance.appUser.bookmarkedTweets
                         let originalFavorites = tweet.favorites // Save original favorites array
-                        
+                        let originalBookmarkCount = tweet.bookmarkCount ?? 0
+
                         // Optimistic UI update - only after debounce check passes
                         var newFavorites = tweet.favorites ?? [false, false, false]
                         newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
-                        
+
                         await MainActor.run {
                             self.tweet.favorites = newFavorites
+                            // The server's reply carries no tweet, so the count moves here.
+                            self.tweet.bookmarkCount = max(0, originalBookmarkCount + (wasBookmarked ? -1 : 1))
                             // Update appUser bookmark count immediately
                             hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount + (wasBookmarked ? -1 : 1)
                             if wasBookmarked {
@@ -397,6 +410,7 @@ struct TweetActionButtonsView: View {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
                                 self.tweet.favorites = originalFavorites
+                                self.tweet.bookmarkCount = originalBookmarkCount
                                 hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
                                 hproseInstance.appUser.bookmarkedTweets = originalAppUserBookmarkedTweets
                                 NotificationCenter.default.post(

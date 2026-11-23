@@ -313,6 +313,10 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         } else {
             bookmarkButton.tintColor = XTheme.secondaryText
         }
+
+        // Lit while the signed-in user holds at least one retweet of it.
+        let hasRetweeted = tweet.favorites?[UserActions.RETWEET.rawValue] ?? false
+        retweetButton.tintColor = hasRetweeted ? XTheme.accent : XTheme.secondaryText
     }
 
     // MARK: - Action Handlers
@@ -403,11 +407,14 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
         let originalAppUserFavoriteTweets = hproseInstance.appUser.favoriteTweets
         let originalFavorites = tweet.favorites
+        let originalFavoriteCount = tweet.favoriteCount ?? 0
 
-        // Optimistic update
+        // Optimistic update. The server's reply carries no tweet (the tweet-side
+        // like list is written after it answers), so the count moves here.
         var newFavorites = tweet.favorites ?? [false, false, false]
         newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
         tweet.favorites = newFavorites
+        tweet.favoriteCount = max(0, originalFavoriteCount + (wasFavorite ? -1 : 1))
         hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
         if wasFavorite {
             hproseInstance.appUser.favoriteTweets?.removeAll { $0 == tweet.mid }
@@ -446,6 +453,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                 print("DEBUG: [handleLike] toggleFavorite failed: \(error)")
                 await MainActor.run {
                     tweet.favorites = originalFavorites
+                    tweet.favoriteCount = originalFavoriteCount
                     hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
                     hproseInstance.appUser.favoriteTweets = originalAppUserFavoriteTweets
                     NotificationCenter.default.post(
@@ -475,11 +483,13 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
         let originalAppUserBookmarkedTweets = hproseInstance.appUser.bookmarkedTweets
         let originalFavorites = tweet.favorites
+        let originalBookmarkCount = tweet.bookmarkCount ?? 0
 
-        // Optimistic update
+        // Optimistic update. The server's reply carries no tweet, so the count moves here.
         var newFavorites = tweet.favorites ?? [false, false, false]
         newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
         tweet.favorites = newFavorites
+        tweet.bookmarkCount = max(0, originalBookmarkCount + (wasBookmarked ? -1 : 1))
         hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount + (wasBookmarked ? -1 : 1)
         if wasBookmarked {
             hproseInstance.appUser.bookmarkedTweets?.removeAll { $0 == tweet.mid }
@@ -518,6 +528,7 @@ class TweetActionBarView: UIView, UIAdaptivePresentationControllerDelegate {
                 print("DEBUG: [handleBookmark] toggleBookmark failed: \(error)")
                 await MainActor.run {
                     tweet.favorites = originalFavorites
+                    tweet.bookmarkCount = originalBookmarkCount
                     hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
                     hproseInstance.appUser.bookmarkedTweets = originalAppUserBookmarkedTweets
                     NotificationCenter.default.post(

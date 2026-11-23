@@ -5496,11 +5496,15 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
                     )
                 }
                 
-                if let count = Self.intField(response, key: "originalRetweetCount") {
-                    await MainActor.run {
-                        tweet.retweetCount = count
-                        TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
-                    }
+                // As in uploadTweet: a current server records the quote after answering
+                // and sends no confirmed total, so count this quote on the tweet then.
+                let count = Self.intField(response, key: "originalRetweetCount")
+                await MainActor.run {
+                    tweet.retweetCount = count ?? (tweet.retweetCount ?? 0) + 1
+                    var flags = tweet.favorites ?? [false, false, false]
+                    flags[UserActions.RETWEET.rawValue] = true
+                    tweet.favorites = flags
+                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                 }
 
                 // For comments, we should NOT post newTweetCreated notification
@@ -7842,10 +7846,17 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             ])
         }
 
-        if let originalTweetId, let count = Self.intField(responseDict, key: "originalRetweetCount") {
+        // The original's root records the retweet after add_tweet answers, so a current
+        // server sends no confirmed total; count this retweet on the original then.
+        if let originalTweetId {
+            let count = Self.intField(responseDict, key: "originalRetweetCount")
             await MainActor.run {
                 if let original = Tweet.getInstance(for: originalTweetId) {
-                    original.retweetCount = count
+                    original.retweetCount = count ?? (original.retweetCount ?? 0) + 1
+                    // The signed-in user now holds a retweet of it, which lights its retweet button.
+                    var flags = original.favorites ?? [false, false, false]
+                    flags[UserActions.RETWEET.rawValue] = true
+                    original.favorites = flags
                     TweetCacheManager.shared.saveTweet(original, userId: original.authorId)
                 }
             }
