@@ -258,7 +258,10 @@ final class TweetUploadManager {
             NotificationCenter.default.post(name: .chatMessageSent, object: nil, userInfo: ["message": sent])
         } else if let parentRecord = pending.parent {
             let comment = pending.record.makeTweet()
-            let parent = parentRecord.makeTweet()
+            // addComment writes the new comment count onto the parent it is given, so
+            // pass the shared instance the screens observe. A rebuilt copy is used
+            // only when none is registered, as after resuming a pending upload.
+            let parent = Tweet.getInstance(for: parentRecord.mid) ?? parentRecord.makeTweet()
             // The pending operation's id names this submission: a retry after a
             // lost response resolves the same comment and the same quote tweet
             // on the node instead of creating duplicates ("-quote" keeps the
