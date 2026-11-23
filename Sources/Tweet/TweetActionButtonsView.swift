@@ -177,9 +177,8 @@ struct TweetActionButtonsView: View {
                         .font(.system(.subheadline, design: .monospaced))
                         .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 52, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer(minLength: 12)
             // Retweet / forward button
             DebounceButton(
                 cooldownDuration: 2,
@@ -231,9 +230,8 @@ struct TweetActionButtonsView: View {
                             .foregroundColor(retweetColor)
                             .frame(width: 28, alignment: .leading)
                     }
-                    .frame(width: 52, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            Spacer(minLength: 12)
             // Like button
             DebounceButton(
                 cooldownDuration: 0.3,
@@ -339,9 +337,8 @@ struct TweetActionButtonsView: View {
                             .foregroundColor(favoriteColor)
                             .frame(width: 28, alignment: .leading)
                     }
-                    .frame(width: 52, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            Spacer(minLength: 12)
             // Bookmark button
             DebounceButton(
                 cooldownDuration: 0.3,
@@ -446,10 +443,9 @@ struct TweetActionButtonsView: View {
                             .foregroundColor(bookmarkColor)
                             .frame(width: 28, alignment: .leading)
                     }
-                    .frame(width: 52, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             // Share button
-            Spacer(minLength: 16)
 
             ZStack {
                 DebounceButton(
