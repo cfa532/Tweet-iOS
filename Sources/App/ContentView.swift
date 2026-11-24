@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// One toast occurrence. The id tells two toasts with the same text apart, so a
+/// repeated message restarts its timer or is dismissed on its own.
+private struct ToastItem: Equatable, Identifiable {
+    let id = UUID()
+    let message: String
+}
+
 // Main ContentView
 @available(iOS 17.0, *)
 struct ContentView: View {
@@ -20,7 +27,10 @@ struct ContentView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .success
-    @State private var retweetStartToastID: UUID?
+    /// "Retweeting…", "Posting tweet…": shown briefly when work starts in the background.
+    @State private var startToast: ToastItem?
+    /// Tweet and comment publication failures, shown one at a time until dismissed.
+    @State private var publishErrors: [ToastItem] = []
     @State private var pendingUpload: TweetUploadManager.PendingTweetUpload? = nil
     @State private var showPendingUploadDialog = false
     @State private var showCloudDriveLimitAlert = false
@@ -274,28 +284,49 @@ struct ContentView: View {
         }
         .overlay(
             // Toast message overlay
-            VStack {
+            VStack(spacing: 8) {
                 Spacer()
-                if showToast || retweetStartToastID != nil {
+                // A publication error stays until the user closes it.
+                if let error = publishErrors.first {
+                    ToastView(message: error.message, type: .error, onDismiss: {
+                        publishErrors.removeAll { $0.id == error.id }
+                    })
+                        .padding(.horizontal, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                if showToast || startToast != nil {
                     ToastView(
-                        message: retweetStartToastID == nil ? toastMessage : ToastView.retweetingMessage,
-                        type: retweetStartToastID == nil ? toastType : .info
+                        message: startToast?.message ?? toastMessage,
+                        type: startToast == nil ? toastType : .info
                     )
-                        .padding(.bottom, 60) // Position to overlap tab bar
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .padding(.bottom, 60) // Position to overlap tab bar
             .animation(.easeInOut(duration: 0.3), value: showToast)
-            .animation(.easeInOut(duration: 0.3), value: retweetStartToastID != nil)
+            .animation(.easeInOut(duration: 0.3), value: startToast)
+            .animation(.easeInOut(duration: 0.3), value: publishErrors)
         )
         .onReceive(NotificationCenter.default.publisher(for: .retweetStarted)) { _ in
-            retweetStartToastID = UUID()
+            startToast = ToastItem(message: ToastView.retweetingMessage)
         }
-        .task(id: retweetStartToastID) {
-            guard let id = retweetStartToastID else { return }
+        .onReceive(NotificationCenter.default.publisher(for: .backgroundPostStarted)) { notification in
+            guard let message = notification.userInfo?["message"] as? String else { return }
+            startToast = ToastItem(message: message)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .tweetPublishFailed)) { notification in
+            publishErrors.append(ToastItem(message: notification.userInfo?["error"] as? String
+                ?? NSLocalizedString("Failed to publish tweet.", comment: "Tweet publish error")))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .commentPublishFailed)) { notification in
+            publishErrors.append(ToastItem(message: notification.userInfo?["error"] as? String
+                ?? NSLocalizedString("Failed to publish comment.", comment: "Comment publish error")))
+        }
+        .task(id: startToast) {
+            guard let toast = startToast else { return }
             try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, retweetStartToastID == id else { return }
-            retweetStartToastID = nil
+            guard !Task.isCancelled, startToast == toast else { return }
+            startToast = nil
         }
         .overlay(
             // Pending upload dialog
@@ -494,7 +525,7 @@ struct ContentView: View {
                 let hasTweet = notification.userInfo?["tweet"] is Tweet
                 MainActor.assumeIsolated {
                     if hasTweet {
-                    self.retweetStartToastID = nil
+                    self.startToast = nil
                     self.toastMessage = NSLocalizedString("Tweet posted successfully", comment: "Tweet upload success")
                     self.toastType = .success
                     self.showToast = true
@@ -791,6 +822,11 @@ struct ContentView: View {
         // A background grant must follow a user action. Never automatically
         // retry an upload whose publication may already have reached the node.
         hproseInstance.uploadManager.enqueue(upload)
+        switch upload.type {
+        case "tweet": startToast = ToastItem(message: ToastView.postingTweetMessage)
+        case "comment": startToast = ToastItem(message: ToastView.postingCommentMessage)
+        default: break
+        }
     }
 
     private func cancelPendingUpload() {

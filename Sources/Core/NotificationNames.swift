@@ -99,6 +99,11 @@ extension Notification.Name {
     /// Posted when a deeplink URL is received
     static let deeplinkReceived = Notification.Name("DeeplinkReceived")
     
+    /// Posted on the main actor when a tweet or comment is handed to background
+    /// publication, so the user is told before the work starts.
+    /// userInfo: ["message": String]
+    static let backgroundPostStarted = Notification.Name("BackgroundPostStarted")
+
     // MARK: - System Errors
     static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")
     static let backgroundUploadRetrying = Notification.Name("backgroundUploadRetrying")

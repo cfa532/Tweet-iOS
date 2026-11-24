@@ -440,7 +440,8 @@ struct ReplyEditorView: View {
             print("DEBUG: Reply validation failed - empty content and no attachments")
             return
         }
-        
+        ToastView.announceBackgroundPost(ToastView.postingCommentMessage)
+
         // Create comment tweet using singleton.
         // Quoting is expressed through scheduleCommentUpload(isQuoting:), not by putting
         // originalTweetId on the comment: add_comment.js would then create the quote tweet
@@ -469,6 +470,9 @@ struct ReplyEditorView: View {
             print("DEBUG: Reply scheduled for upload with \(itemData.count) attachments")
         } catch {
             print("DEBUG: Error preparing reply item data: \(error)")
+            // The editor is already closed, so the failure goes to the app's toast.
+            NotificationCenter.default.post(name: .commentPublishFailed, object: nil,
+                                            userInfo: ["error": ErrorMessageHelper.userFriendlyMessage(from: error)])
         }
     }
     

@@ -27,7 +27,9 @@
 "Are you sure you want to cancel this upload? This action cannot be undone." = "このアップロードをキャンセルしてもよろしいですか？この操作は元に戻せません。";
 "Continue" = "続ける";
 "Posting Tweet" = "ツイートを投稿中";
-"Retweeting…" = "リツイート中…";
+"Retweeting in the background…" = "バックグラウンドでリツイート中…";
+"Posting tweet in the background…" = "バックグラウンドでツイートを投稿中…";
+"Posting comment in the background…" = "バックグラウンドでコメントを投稿中…";
 "Posting Comment" = "コメントを投稿中";
 "Updating Tweet" = "ツイートを更新中";
 "Sending Message" = "メッセージを送信中";

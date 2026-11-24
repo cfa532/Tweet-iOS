@@ -142,14 +142,9 @@ struct TweetApp: App {
             .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
                 presentError(notification, fallback: NSLocalizedString("Background upload failed.", comment: "Background upload error"))
             }
-            .onReceive(NotificationCenter.default.publisher(for: .tweetPublishFailed)) { notification in
-                presentError(notification, fallback: NSLocalizedString("Failed to publish tweet.", comment: "Tweet publish error"))
-            }
+            // Tweet and comment publication failures are dismissible toasts in ContentView.
             .onReceive(NotificationCenter.default.publisher(for: .tweetDeleteFailed)) { notification in
                 presentError(notification, fallback: NSLocalizedString("Failed to delete tweet.", comment: "Tweet delete error"))
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .commentPublishFailed)) { notification in
-                presentError(notification, fallback: NSLocalizedString("Failed to publish comment.", comment: "Comment publish error"))
             }
             .onReceive(NotificationCenter.default.publisher(for: .commentDeleteFailed)) { notification in
                 presentError(notification, fallback: NSLocalizedString("Failed to delete comment.", comment: "Comment delete error"))

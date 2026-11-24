@@ -230,6 +230,7 @@ struct ComposeTweetView: View {
             defer { preparingDraft = false }
             do {
                 try await viewModel.postTweet()
+                ToastView.announceBackgroundPost(ToastView.postingTweetMessage)
                 viewModel.clearForm()
                 dismiss()
             } catch {

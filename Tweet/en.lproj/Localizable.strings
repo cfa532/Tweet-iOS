@@ -27,7 +27,9 @@
 "Are you sure you want to cancel this upload? This action cannot be undone." = "Are you sure you want to cancel this upload? This action cannot be undone.";
 "Continue" = "Continue";
 "Posting Tweet" = "Posting Tweet";
-"Retweeting…" = "Retweeting…";
+"Retweeting in the background…" = "Retweeting in the background…";
+"Posting tweet in the background…" = "Posting tweet in the background…";
+"Posting comment in the background…" = "Posting comment in the background…";
 "Posting Comment" = "Posting Comment";
 "Updating Tweet" = "Updating Tweet";
 "Sending Message" = "Sending Message";

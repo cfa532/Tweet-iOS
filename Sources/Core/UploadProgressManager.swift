@@ -125,9 +125,9 @@ final class UploadProgressManager: ObservableObject {
                         ? ErrorMessageHelper.userFriendlyMessage(from: error)
                         : NSLocalizedString("Upload unfinished. You can retry when you return.", comment: "Upload pending")
                     failUpload(message: message)
-                    if pending.type == "tweet" {
+                    if pending.type == "tweet" || pending.type == "comment" {
                         NotificationCenter.default.post(
-                            name: .tweetPublishFailed, object: nil,
+                            name: pending.type == "tweet" ? .tweetPublishFailed : .commentPublishFailed, object: nil,
                             userInfo: ["error": ErrorMessageHelper.userFriendlyMessage(from: error)]
                         )
                     } else if pending.type == "edit", entry.completion == nil {

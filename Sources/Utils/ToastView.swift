@@ -2,13 +2,23 @@ import SwiftUI
 
 @available(iOS 16.0, *)
 struct ToastView: View {
-    static let retweetingMessage = NSLocalizedString("Retweeting…", comment: "Retweet started toast")
+    static let retweetingMessage = NSLocalizedString("Retweeting in the background…", comment: "Retweet started toast")
+    static let postingTweetMessage = NSLocalizedString("Posting tweet in the background…", comment: "Tweet publication started toast")
+    static let postingCommentMessage = NSLocalizedString("Posting comment in the background…", comment: "Comment publication started toast")
 
     let message: String
     let type: ToastType
-    
+    /// When set, the toast shows a close button and stays until the user taps it.
+    var onDismiss: (() -> Void)? = nil
+
     enum ToastType { case success, error, warning, info }
-    
+
+    /// Tells the user a post has been handed to background publication.
+    @MainActor
+    static func announceBackgroundPost(_ message: String) {
+        NotificationCenter.default.post(name: .backgroundPostStarted, object: nil, userInfo: ["message": message])
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: iconName)
@@ -17,6 +27,15 @@ struct ToastView: View {
             Text(message)
                 .font(.system(size: 16, weight: .medium))
                 .foregroundColor(textColor)
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(Color(.secondaryLabel))
+                        .padding(4)
+                }
+                .accessibilityLabel(NSLocalizedString("Dismiss", comment: "Dismiss toast button"))
+            }
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 12)

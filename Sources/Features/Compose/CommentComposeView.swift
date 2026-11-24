@@ -295,7 +295,8 @@ struct CommentComposeView: View {
             print("DEBUG: Comment validation failed - empty content and no attachments")
             return
         }
-        
+        ToastView.announceBackgroundPost(ToastView.postingCommentMessage)
+
         // Keep the comment relationship separate from quote/retweet fields.
         let comment = Tweet.getInstance(
             mid: UUID().uuidString,
@@ -318,6 +319,9 @@ struct CommentComposeView: View {
             )
         } catch {
             print("DEBUG: Error preparing comment item data: \(error)")
+            // The composer is already closed, so the failure goes to the app's toast.
+            NotificationCenter.default.post(name: .commentPublishFailed, object: nil,
+                                            userInfo: ["error": ErrorMessageHelper.userFriendlyMessage(from: error)])
             return
         }
         
