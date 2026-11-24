@@ -3939,7 +3939,9 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             try await bindLegacyAccount(loginMid, username: loginUsername!, password: loginPassword!, root: root)
         }
 
-        OwnerCredentialStore.save(.init(username: loginUsername!, password: loginPassword!), for: loginMid)
+        // The credential is kept only once a session is open (bindLegacyAccount,
+        // sessionLogin): when the root's Leither refuses this guest, every write
+        // would otherwise sign in again and fail. Android and TweetWeb do the same.
         await MainActor.run {
             self.preferenceHelper?.setUserId(loginMid)
             self.appUser = loginUser
@@ -4061,6 +4063,7 @@ final class HproseInstance: ObservableObject, @unchecked Sendable {
             ])
         }
         _ = try await accountForSession(signedIn.sid, username: username, password: password, using: root.client)
+        OwnerCredentialStore.save(.init(username: username, password: password), for: accountID)
         await UserSessionStore.shared.setSession(signedIn.sid, accountID: accountID, node: root.node)
     }
 

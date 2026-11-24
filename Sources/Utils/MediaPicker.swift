@@ -414,11 +414,31 @@ struct MediaUploadHelper {
         // Process PhotosPicker items (videos and images)
         for item in selectedItems {
             do {
-                if let data = try await item.loadTransferable(type: Data.self) {
+                if var data = try await item.loadTransferable(type: Data.self) {
                     print("DEBUG: Successfully loaded media data: \(data.count) bytes")
-                    
+
                     // Get the type identifier and determine file extension
-                    let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                    var typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+
+                    // HEIC/HEIF, the iPhone photo format, cannot be shown by Chrome,
+                    // Edge or Firefox. Post it as JPEG at 80%, as camera shots below
+                    // are, and as TweetWeb and Android post it.
+                    if let type = UTType(typeIdentifier), type.conforms(to: .heic) || type.conforms(to: .heif) {
+                        let heic = data
+                        guard let jpeg = await Task.detached(operation: {
+                            UIImage(data: heic)?.jpegData(compressionQuality: 0.8)
+                        }).value else {
+                            throw NSError(domain: "MediaUpload", code: -1, userInfo: [
+                                NSLocalizedDescriptionKey: NSLocalizedString(
+                                    "Could not convert this photo to JPEG.",
+                                    comment: "HEIC photo could not be re-encoded for upload"
+                                )
+                            ])
+                        }
+                        print("📎 [MediaUpload] HEIC \(data.count) bytes -> JPEG \(jpeg.count) bytes")
+                        data = jpeg
+                        typeIdentifier = UTType.jpeg.identifier
+                    }
                     let fileExtension = getFileExtension(for: typeIdentifier)
                     print("📎 [MediaUpload] Prepared picker item: typeIdentifier=\(typeIdentifier), extension=\(fileExtension), size=\(data.count) bytes")
                     
