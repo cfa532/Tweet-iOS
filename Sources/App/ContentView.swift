@@ -303,6 +303,9 @@ struct ContentView: View {
                 }
             }
             .padding(.bottom, 60) // Position to overlap tab bar
+            // Stay with the tab bar, which ignores the keyboard; a closing composer's
+            // keyboard would otherwise lift the toast far above it.
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .animation(.easeInOut(duration: 0.3), value: showToast)
             .animation(.easeInOut(duration: 0.3), value: startToast)
             .animation(.easeInOut(duration: 0.3), value: publishErrors)
